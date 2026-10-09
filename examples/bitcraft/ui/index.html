@@ -1,0 +1,1729 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bitcraft Inventory</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --pane-header-bg: #f5f5f5;
+    --border: #d4d4d4;
+    --text: #1f1f1f;
+    --muted: #6b6b6b;
+    --row-hover: #f0f0f0;
+    --row-selected: #cce4ff;
+    --error: #b00020;
+    --link: #0b57d0;
+    --action-name: #6d28d9;
+    --run-in-progress: #fff6cc;
+    --run-failed: #fde4e2;
+    --run-succeeded: #e3f4df;
+    --object-unknown: #9a9a9a;
+    --object-pending: #a16207;
+    --object-held: #9a9a9a;
+    --row-flash: #ffe58a;
+    /* Blank strip kept below the last row of a full list, so a click on
+       empty space to clear the selection always has a target. */
+    --list-trailing-space: 48px;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    margin: 0;
+  }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex;
+  }
+  .pane {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    height: 100%;
+  }
+  #left-column {
+    display: flex;
+    flex-direction: column;
+    width: 40%;
+    min-width: 280px;
+    height: 100%;
+    border-right: 1px solid var(--border);
+  }
+  #objects-pane,
+  #execute-pane {
+    flex: 1;
+    min-height: 0;
+  }
+  #execute-pane {
+    border-top: 1px solid var(--border);
+  }
+  #action-list {
+    flex: 1;
+    overflow-y: auto;
+    margin: 0;
+    padding: 0 0 var(--list-trailing-space);
+    list-style: none;
+  }
+  .list-header {
+    flex: none;
+    padding: 3px 10px;
+    background: var(--pane-header-bg);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  #run-list-header { border-top: 1px solid var(--border); }
+  #run-list {
+    flex: none;
+    max-height: 40%;
+    overflow-y: auto;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .action-row,
+  .run-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    border-bottom: 1px solid var(--row-hover);
+    cursor: default;
+    user-select: none;
+  }
+  .run-row.in-progress { background: var(--run-in-progress); }
+  .run-row.failed { background: var(--run-failed); }
+  .run-row.succeeded { background: var(--run-succeeded); }
+  .action-row:hover,
+  .run-row:hover { background: var(--row-hover); }
+  .action-row.selected,
+  .run-row.selected { background: var(--row-selected); }
+  .action-name,
+  .details-title.action-name {
+    color: var(--action-name);
+    font-weight: 500;
+  }
+  .row-text {
+    flex: 1;
+    min-width: 0;
+  }
+  .run-detail {
+    font-size: 11px;
+    color: var(--muted);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .circle-button {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: var(--bg);
+    color: var(--text);
+  }
+  .circle-button:hover:not(:disabled) { background: var(--row-hover); }
+  .circle-button:disabled {
+    color: var(--border);
+    cursor: default;
+  }
+  .action-source {
+    margin: 6px 0 0;
+    padding: 8px;
+    background: var(--pane-header-bg);
+    border: 1px solid var(--border);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    overflow-x: auto;
+  }
+  .subsection-list { margin-top: 4px; }
+  .path-line {
+    display: flex;
+    gap: 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    word-break: break-all;
+  }
+  .path-label {
+    flex: none;
+    color: var(--muted);
+  }
+  .field-table.run-log td {
+    padding: 2px 12px 2px 0;
+    vertical-align: top;
+    font-family: inherit;
+    word-break: normal;
+  }
+  .field-table.run-log td:nth-child(-n + 4) {
+    white-space: nowrap;
+    color: var(--muted);
+  }
+  .sub-subsection-title {
+    margin-top: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  .action-detail {
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .action-path {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    /* Puts the ellipsis at the start so the file name stays visible. */
+    direction: rtl;
+    text-align: left;
+  }
+  #details-pane {
+    flex: 1;
+  }
+  .pane-header {
+    flex: none;
+    padding: 6px 10px;
+    background: var(--pane-header-bg);
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #object-list {
+    flex: 1;
+    overflow-y: auto;
+    margin: 0;
+    padding: 0 0 var(--list-trailing-space);
+    list-style: none;
+  }
+  .object-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    cursor: default;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .object-row:hover { background: var(--row-hover); }
+  .object-row.selected { background: var(--row-selected); }
+  .object-row.unknown { color: var(--object-unknown); }
+  .object-row.pending { color: var(--object-pending); }
+  .object-row.held { color: var(--object-held); }
+  @keyframes row-flash {
+    from { background: var(--row-flash); }
+  }
+  .object-row svg { flex: none; }
+  .icon-tile {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+    overflow: hidden;
+    background: var(--bg);
+    box-shadow: 0 1px 1.5px rgba(0, 0, 0, 0.28);
+  }
+  .class-label { white-space: nowrap; }
+  .class-label > .icon-tile,
+  .class-label > svg {
+    display: inline-block;
+    vertical-align: middle;
+    margin: -2px 5px 0 0;
+  }
+  .action-icon-slot {
+    flex: none;
+    width: 32px;
+    height: 32px;
+  }
+  .action-icon {
+    position: relative;
+    flex: none;
+  }
+  .action-icon > img {
+    position: absolute;
+    image-rendering: pixelated;
+  }
+  .action-icon-tile {
+    position: absolute;
+    background: var(--bg);
+  }
+  .action-icon > svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  .icon-tile img {
+    display: block;
+    width: 16px;
+    height: 16px;
+    image-rendering: pixelated;
+  }
+  .object-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .message {
+    padding: 8px 10px;
+    color: var(--muted);
+  }
+  .message.error { color: var(--error); }
+  #details-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 14px;
+  }
+  .details-icon {
+    display: flex;
+    justify-content: center;
+    padding: 16px 0 20px;
+  }
+  .icon-stack { position: relative; }
+  .large-page-icon { position: relative; }
+  .large-page-icon svg { display: block; }
+  /* The 16px art at 6x, centered across the page and placed just below the
+     folded corner, lower than the page's vertical center. */
+  .large-class-icon {
+    position: absolute;
+    left: 16px;
+    top: 40px;
+    width: 96px;
+    height: 96px;
+    image-rendering: pixelated;
+  }
+  .icon-stack svg { position: absolute; }
+  .details-title {
+    font-size: 16px;
+    font-weight: 600;
+    word-break: break-all;
+  }
+  .details-meta {
+    margin-top: 2px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .details-meta a { color: var(--link); }
+  .field-table {
+    margin-top: 12px;
+    border-collapse: collapse;
+    width: 100%;
+  }
+  /* One label width for every labelled table, so values line up across
+     tables whatever their contents. */
+  .field-table:not(.run-log) { table-layout: fixed; }
+  .field-table th {
+    width: 9em;
+    text-align: left;
+    font-weight: normal;
+    color: var(--muted);
+    padding: 2px 12px 2px 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: top;
+  }
+  .field-table td {
+    padding: 2px 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    word-break: break-all;
+  }
+  .hidden-value { cursor: pointer; }
+  .subsection-title {
+    margin-top: 16px;
+    padding-bottom: 2px;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+  }
+  .collapsible-section > summary {
+    cursor: default;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+  <div id="left-column">
+    <section id="objects-pane" class="pane">
+      <div id="objects-dir" class="pane-header">&nbsp;</div>
+      <ul id="object-list"></ul>
+    </section>
+    <section id="execute-pane" class="pane">
+      <div class="pane-header">Execute</div>
+      <div id="action-list-header" class="list-header">(0 objects selected) Available actions</div>
+      <ul id="action-list"></ul>
+      <div id="run-list-header" class="list-header">Active and completed jobs</div>
+      <ul id="run-list"></ul>
+    </section>
+  </div>
+  <section id="details-pane" class="pane">
+    <div class="pane-header">Details</div>
+    <div id="details-body"></div>
+  </section>
+
+<template id="file-icon">
+  <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M3.5 1.5h6l3 3v10h-9z" fill="#fff" stroke="#8a8a8a"/>
+    <path d="M9.5 1.5v3h3" fill="none" stroke="#8a8a8a"/>
+  </svg>
+</template>
+
+<!-- Action icon badges, drawn on the 32x32 action icon grid in its
+     top-right corner, with a white outline so they read over any art. -->
+<template id="badge-plus">
+  <svg viewBox="0 0 32 32" shape-rendering="crispEdges" aria-hidden="true">
+    <path d="M24 0h5v3h3v5h-3v3h-5v-3h-3v-5h3z" fill="#fff"/>
+    <path d="M25 1h3v3h3v3h-3v3h-3v-3h-3v-3h3z" fill="#16a34a"/>
+  </svg>
+</template>
+
+<template id="badge-up">
+  <svg viewBox="0 0 32 32" aria-hidden="true">
+    <path d="M22.5 8.5l4-4 4 4" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M22.5 8.5l4-4 4 4" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</template>
+
+<template id="badge-down">
+  <svg viewBox="0 0 32 32" aria-hidden="true">
+    <path d="M22.5 4.5l4 4 4-4" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M22.5 4.5l4 4 4-4" fill="none" stroke="#dc2626" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</template>
+
+<template id="play-icon">
+  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+    <path d="M4 2.5v7l5.5-3.5z" fill="currentColor"/>
+  </svg>
+</template>
+
+<template id="clear-icon">
+  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+    <path d="M3.5 3.5l5 5M8.5 3.5l-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+  </svg>
+</template>
+
+<template id="large-file-icon">
+  <svg width="128" height="160" viewBox="0 0 128 160" aria-hidden="true">
+    <defs>
+      <filter id="large-file-icon-shadow" x="-10%" y="-10%" width="120%" height="120%">
+        <feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-color="#000" flood-opacity="0.18"/>
+      </filter>
+    </defs>
+    <path d="M6 4h80l36 36v114H6z" fill="#fff" stroke="#d0d0d0" filter="url(#large-file-icon-shadow)"/>
+    <path d="M86 4v28a8 8 0 0 0 8 8h28" fill="#f2f2f2" stroke="#d0d0d0"/>
+  </svg>
+</template>
+
+<script>
+  const DOBJD_URL = "http://127.0.0.1:7717";
+
+  // ---- Bitcraft-specific rules. Every entry here is listed in
+  // BITCRAFT_SPECIFIC_RULES.md; keep the two in step.
+
+  const PLUGIN_NAME = "bitcraft";
+
+  // Constraints an action places on its inputs beyond their classes, which
+  // the HTTP API does not report. An action whose name matches `actions` is
+  // offered only when `accepts` returns true for the selected objects; the
+  // regex match is passed along so a rule can read values out of the name.
+  const ACTION_INPUT_RULES = [
+    {
+      actions: /^UseQuarry(\d+)$/,
+      accepts: (inputs, match) => inputFieldEquals(inputs, "Quarry", "level", match[1]),
+    },
+    {
+      actions: /^UseMiningDrill(\d+)$/,
+      accepts: (inputs, match) => inputFieldEquals(inputs, "MiningDrill", "level", match[1]),
+    },
+    {
+      actions: /^(BucketOf(?:Wood|Stone|Iron))Take1$/,
+      accepts: (inputs, match) => inputFieldAtLeast(inputs, match[1], "n", 1),
+    },
+  ];
+
+  // Maps each class name to its icon's path relative to this page, or to
+  // null for a class with no icon.
+  const CLASS_ICONS_URL = "class-icons.json";
+  let classIconPaths = {};
+
+  // Ordered rules for each action's 32x32 graphic; the first rule whose
+  // `actions` pattern matches the action name applies.
+  const ACTION_ICONS_URL = "action-icons.json";
+  let actionIconRules = [];
+
+  // ---- End of bitcraft-specific rules.
+
+  const objectsDirHeader = document.getElementById("objects-dir");
+  const objectList = document.getElementById("object-list");
+  const fileIconTemplate = document.getElementById("file-icon");
+  const actionBadgeTemplates = {
+    plus: document.getElementById("badge-plus"),
+    up: document.getElementById("badge-up"),
+    down: document.getElementById("badge-down"),
+  };
+  const largeFileIconTemplate = document.getElementById("large-file-icon");
+  const detailsBody = document.getElementById("details-body");
+  const actionList = document.getElementById("action-list");
+  const runList = document.getElementById("run-list");
+  const runListHeader = document.getElementById("run-list-header");
+  const actionListHeader = document.getElementById("action-list-header");
+  const playIconTemplate = document.getElementById("play-icon");
+  const clearIconTemplate = document.getElementById("clear-icon");
+
+  const NOT_AVAILABLE = "n/a";
+  const MAX_STACKED_ICONS = 3;
+  const HIDDEN_KEY_TEXT = "\u2022".repeat(16) + " (click to reveal)";
+  const NON_PROPERTY_KEYS = new Set(["stable_identifier", "type", "key"]);
+
+  const selectedFileNames = new Set();
+  const objectsByFileName = new Map();
+  // The state each file was last shown in; null until the first load.
+  let lastShownStates = null;
+  // When each row's current flash began: a file appearing for the first
+  // time, or a file's shown state changing.
+  const flashStartedAt = new Map();
+  const ROW_FLASH_MS = 1500;
+  let objectReloadInFlight = false;
+  let objectReloadQueued = false;
+  let pluginActions = [];
+  let objectsDirPath = "";
+  let selectedActionName = null;
+  // The action whose source the Details pane shows expanded, so a redraw
+  // keeps it open; any other action's source starts collapsed.
+  let expandedSourceActionName = null;
+  // Runs started from this page, newest first. At most one of
+  // `selectedActionName` and `selectedRunId` is set: the Execute pane
+  // holds a single selection across both of its lists.
+  let runs = [];
+  let nextRunClientId = 1;
+  let selectedRunId = null;
+  const rowsByFileName = new Map();
+  const IS_MAC = /Mac/.test(navigator.platform);
+  // The boundary a shift-click selects from, and the selection as it stood
+  // when that boundary was set. A shift-click replaces any range selected by
+  // an earlier shift-click from the same anchor.
+  let anchorFileName = null;
+  let selectionAtAnchor = new Set();
+
+  function fieldEntries(object) {
+    const kvs = object.fields && object.fields.kvs;
+    return Array.isArray(kvs) ? kvs : [];
+  }
+
+  // A pod2 value serializes as a single-entry object tagged with its type.
+  function displayValue(value) {
+    if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+      const tags = Object.keys(value);
+      if (tags.length === 1 && typeof value[tags[0]] !== "object") {
+        return String(value[tags[0]]);
+      }
+    }
+    return typeof value === "string" ? value : JSON.stringify(value);
+  }
+
+  function inputFieldEquals(inputs, className, fieldName, expected) {
+    const input = inputs.find((object) => object.class.name === className);
+    return input !== undefined && fieldValue(input, fieldName) === expected;
+  }
+
+  function inputFieldAtLeast(inputs, className, fieldName, minimum) {
+    const input = inputs.find((object) => object.class.name === className);
+    return input !== undefined && Number(fieldValue(input, fieldName)) >= minimum;
+  }
+
+  function passesActionInputRules(action, inputs) {
+    return ACTION_INPUT_RULES.every((rule) => {
+      const match = rule.actions.exec(action.action.name);
+      return match === null || rule.accepts(inputs, match);
+    });
+  }
+
+  function fieldValue(object, name) {
+    const entry = fieldEntries(object).find(([key]) => key === name);
+    return entry ? displayValue(entry[1]) : null;
+  }
+
+  function rawObjectUrl(fileName) {
+    return `${DOBJD_URL}/objects/${encodeURIComponent(fileName)}/raw`;
+  }
+
+  function formatFileSize(bytes) {
+    if (typeof bytes !== "number") {
+      return NOT_AVAILABLE;
+    }
+    if (bytes < 1024) {
+      return `${bytes} B`;
+    }
+    if (bytes < 1024 * 1024) {
+      return `${(bytes / 1024).toFixed(1)} KB`;
+    }
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function appendFieldRow(table, label, value) {
+    const row = table.insertRow();
+    const header = document.createElement("th");
+    header.textContent = label;
+    header.title = label;
+    row.append(header);
+    const cell = row.insertCell();
+    cell.textContent = value ?? NOT_AVAILABLE;
+    return cell;
+  }
+
+  // A class's art on a rounded tile, or the plain page icon for a class
+  // without art.
+  function smallClassIcon(className) {
+    const classIconPath = classIconPaths[className];
+    if (!classIconPath) {
+      return fileIconTemplate.content.cloneNode(true).querySelector("svg");
+    }
+    const tile = document.createElement("span");
+    tile.className = "icon-tile";
+    const classIcon = document.createElement("img");
+    classIcon.src = classIconPath;
+    classIcon.alt = "";
+    tile.append(classIcon);
+    return tile;
+  }
+
+  // What the first matching rule draws for an action, with `$1`-style
+  // references in its class names filled from the pattern's match; null
+  // when no rule matches.
+  function actionIconSpec(actionName) {
+    for (const rule of actionIconRules) {
+      const match = new RegExp(rule.actions).exec(actionName);
+      if (match === null) {
+        continue;
+      }
+      const fill = (template) =>
+        template?.replace(/\$(\d)/g, (_, group) => match[Number(group)] ?? "") ?? null;
+      return {
+        icon: fill(rule.icon),
+        badge: rule.badge ?? null,
+        cornerIcon: fill(rule.cornerIcon),
+      };
+    }
+    return null;
+  }
+
+  // The action's graphic, laid out on a 32x32 grid and drawn `scale` CSS px
+  // per grid unit: an app-style rounded tile with the art centered on it.
+  // Null when no rule matches or its main class has no art.
+  function actionIcon(actionName, scale) {
+    const spec = actionIconSpec(actionName);
+    const iconPath = spec && classIconPaths[spec.icon];
+    if (!iconPath) {
+      return null;
+    }
+    const icon = document.createElement("div");
+    icon.className = "action-icon";
+    icon.style.width = `${32 * scale}px`;
+    icon.style.height = `${32 * scale}px`;
+    // The tile spans grid units 2-30, with macOS's ~22% corner radius.
+    const tile = document.createElement("div");
+    tile.className = "action-icon-tile";
+    tile.style.left = `${2 * scale}px`;
+    tile.style.top = `${2 * scale}px`;
+    tile.style.width = `${28 * scale}px`;
+    tile.style.height = `${28 * scale}px`;
+    tile.style.borderRadius = `${6.25 * scale}px`;
+    tile.style.boxShadow = [
+      `inset 0 0 0 ${0.25 * scale}px rgba(0, 0, 0, 0.08)`,
+      `0 ${0.5 * scale}px ${scale}px rgba(0, 0, 0, 0.3)`,
+    ].join(", ");
+    icon.append(tile);
+    const layer = (path, gridX, gridY, gridSize) => {
+      const image = document.createElement("img");
+      image.src = path;
+      image.alt = "";
+      image.style.left = `${gridX * scale}px`;
+      image.style.top = `${gridY * scale}px`;
+      image.style.width = `${gridSize * scale}px`;
+      image.style.height = `${gridSize * scale}px`;
+      return image;
+    };
+    icon.append(layer(iconPath, 8, 8, 16));
+    const cornerPath = spec.cornerIcon && classIconPaths[spec.cornerIcon];
+    if (cornerPath) {
+      icon.append(layer(cornerPath, 20, 20, 8));
+    }
+    const badgeTemplate = actionBadgeTemplates[spec.badge];
+    if (badgeTemplate) {
+      icon.append(badgeTemplate.content.cloneNode(true).querySelector("svg"));
+    }
+    return icon;
+  }
+
+  // A class's qualified name with its small icon to the left.
+  function classLabel(qualifiedName) {
+    const label = document.createElement("span");
+    label.className = "class-label";
+    label.append(smallClassIcon(qualifiedName.name), qualifiedClassName(qualifiedName));
+    return label;
+  }
+
+  function summaryLine(object, leadingParts) {
+    const parts = [
+      ...leadingParts,
+      object.class ? classLabel(object.class) : NOT_AVAILABLE,
+      formatFileSize(object.fileSize),
+      object.status ?? NOT_AVAILABLE,
+    ];
+    const line = document.createElement("div");
+    line.className = "details-meta";
+    for (const part of parts) {
+      line.append(part, " \u00b7 ");
+    }
+    const rawLink = document.createElement("a");
+    rawLink.href = rawObjectUrl(object.fileName);
+    rawLink.target = "_blank";
+    rawLink.rel = "noopener";
+    rawLink.textContent = "View raw";
+    line.append(rawLink);
+    return line;
+  }
+
+  function stackedFileIcons(count) {
+    const iconWidth = 128;
+    const iconHeight = 160;
+    const offset = 12;
+    const stack = document.createElement("div");
+    stack.className = "icon-stack";
+    stack.style.width = `${iconWidth + offset * (count - 1)}px`;
+    stack.style.height = `${iconHeight + offset * (count - 1)}px`;
+    // Earlier icons sit further back, up and to the right.
+    for (let depth = count - 1; depth >= 0; depth--) {
+      const fragment = largeFileIconTemplate.content.cloneNode(true);
+      const svg = fragment.querySelector("svg");
+      svg.style.left = `${offset * depth}px`;
+      svg.style.top = `${offset * (count - 1 - depth)}px`;
+      stack.append(svg);
+    }
+    return stack;
+  }
+
+  function renderMultipleDetails() {
+    const icon = document.createElement("div");
+    icon.className = "details-icon";
+    icon.append(stackedFileIcons(Math.min(selectedFileNames.size, MAX_STACKED_ICONS)));
+
+    const title = document.createElement("div");
+    title.className = "details-title";
+    title.textContent = `${selectedFileNames.size} objects`;
+
+    detailsBody.append(icon, title);
+    let index = 1;
+    for (const fileName of selectedFileNames) {
+      detailsBody.append(summaryLine(objectsByFileName.get(fileName), [`#${index}`]));
+      index++;
+    }
+  }
+
+  function qualifiedClassName(qualifiedName) {
+    return `${qualifiedName.pluginName}::${qualifiedName.name}`;
+  }
+
+  // Order-independent key for a multiset of class names.
+  function classMultisetKey(classNames) {
+    return [...classNames].sort().join("\n");
+  }
+
+  function renderActions() {
+    actionList.replaceChildren();
+    const selectedObjects = [...selectedFileNames].map((fileName) => objectsByFileName.get(fileName));
+    const selectedKey = classMultisetKey(
+      selectedObjects.map((object) => qualifiedClassName(object.class)),
+    );
+    const matchingActions = pluginActions.filter((action) => {
+      const inputKey = classMultisetKey(
+        action.totalInputs.map((input) => qualifiedClassName(input.class)),
+      );
+      return inputKey === selectedKey && passesActionInputRules(action, selectedObjects);
+    });
+    const stillOffered = matchingActions.some(
+      (action) => qualifiedClassName(action.action) === selectedActionName,
+    );
+    if (!stillOffered) {
+      selectedActionName = null;
+    }
+    const selectedCount = selectedObjects.length;
+    actionListHeader.textContent =
+      `(${selectedCount} object${selectedCount === 1 ? "" : "s"} selected) Available actions`;
+
+    if (matchingActions.length === 0) {
+      const count = selectedObjects.length;
+      const message = document.createElement("li");
+      message.className = "message";
+      message.textContent = count === 1
+        ? "No available actions can be executed with this input."
+        : `No available actions can be executed with these ${count} inputs.`;
+      actionList.append(message);
+      return;
+    }
+
+    for (const action of matchingActions) {
+      const actionName = qualifiedClassName(action.action);
+      const row = document.createElement("li");
+      row.className = "action-row";
+      row.classList.toggle("selected", actionName === selectedActionName);
+      row.addEventListener("mousedown", (event) => {
+        if (event.button !== 0 || (IS_MAC && event.ctrlKey)) {
+          return;
+        }
+        const toggleKeyHeld = IS_MAC ? event.metaKey : event.ctrlKey;
+        if (actionName === selectedActionName) {
+          if (toggleKeyHeld) {
+            selectedActionName = null;
+            showSelection();
+          }
+          return;
+        }
+        selectedActionName = actionName;
+        selectedRunId = null;
+        showSelection();
+      });
+
+      const name = document.createElement("div");
+      name.className = "action-name";
+      name.textContent = qualifiedClassName(action.action);
+
+      const path = document.createElement("div");
+      path.className = "action-detail action-path";
+      path.title = action.sourcePath;
+      // Marks keep the leading "/" in place under right-to-left layout.
+      path.textContent = `\u200e${action.sourcePath || NOT_AVAILABLE}\u200e`;
+
+      const text = document.createElement("div");
+      text.className = "row-text";
+      text.append(name, path);
+
+      const playButton = circleButton(playIconTemplate, `Run ${actionName}`);
+      playButton.disabled = runs.some(isRunInProgress);
+      playButton.addEventListener("click", () => startRun(action));
+
+      const iconSlot = document.createElement("span");
+      iconSlot.className = "action-icon-slot";
+      const rowIcon = actionIcon(action.action.name, 1);
+      if (rowIcon) {
+        iconSlot.append(rowIcon);
+      }
+      row.append(iconSlot, text, playButton);
+      actionList.append(row);
+    }
+  }
+
+  function circleButton(iconTemplate, label) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "circle-button";
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.append(iconTemplate.content.cloneNode(true));
+    // Keeps a press on the button from also selecting its row.
+    button.addEventListener("mousedown", (event) => event.stopPropagation());
+    return button;
+  }
+
+  function isRunInProgress(run) {
+    if (run.requestError !== null) {
+      return false;
+    }
+    const status = run.state?.status;
+    return status !== "succeeded" && status !== "failed";
+  }
+
+  function newRun(action, inputFileNames) {
+    return {
+      id: nextRunClientId++,
+      action,
+      inputFileNames,
+      runId: null,
+      state: null,
+      requestError: null,
+      eventSource: null,
+      clientStartedAt: Date.now(),
+      clientEndedAt: null,
+      elapsedElement: null,
+      detailsElapsedElement: null,
+      latestEventDurationElement: null,
+    };
+  }
+
+  async function startRun(action) {
+    const inputFileNames = assignInputSlots(action, [...selectedFileNames])
+      .map((object) => object.fileName);
+    const run = newRun(action, inputFileNames);
+    runs.unshift(run);
+    showSelection();
+
+    try {
+      const accepted = await postJson("/actions/run", {
+        input: { action: action.action, inputObjectPaths: inputFileNames },
+      });
+      run.runId = accepted.runId;
+      run.state = { status: accepted.status, progress: [], createdAtMs: accepted.createdAtMs };
+      followRun(run);
+    } catch (error) {
+      run.requestError = error.message;
+      run.clientEndedAt = Date.now();
+    }
+    renderRuns();
+    renderActions();
+    if (run.id === selectedRunId) {
+      renderDetails();
+    }
+  }
+
+  // Each event on the run's stream prompts a re-read of the run's state,
+  // which is also how the terminal status (absent from the events) arrives.
+  function followRun(run) {
+    const runPath = `/actions/runs/${encodeURIComponent(run.runId)}`;
+    const source = new EventSource(`${DOBJD_URL}${runPath}/events`);
+    run.eventSource = source;
+    const refresh = async () => {
+      const wasInProgress = isRunInProgress(run);
+      try {
+        run.state = await fetchJson(runPath);
+      } catch (error) {
+        if (error.status !== 404) {
+          return;
+        }
+        run.requestError = "dobjd no longer has this run.";
+      }
+      if (!isRunInProgress(run)) {
+        run.clientEndedAt ??= Date.now();
+        source.close();
+        renderActions();
+      }
+      // A run's inputs become held and its outputs appear (pending, then
+      // live) while it runs, so the object list is re-read as it progresses.
+      if (wasInProgress) {
+        reloadObjects();
+      }
+      renderRuns();
+      if (run.id === selectedRunId) {
+        renderDetails();
+      }
+    };
+    source.onmessage = refresh;
+    source.onerror = refresh;
+  }
+
+  // Uses dobjd's timestamps once it has reported them. The page's own clock
+  // covers the moment before dobjd replies, and runs dobjd cannot report on.
+  function elapsedText(run) {
+    const startMs = run.state?.createdAtMs || run.clientStartedAt;
+    const endMs = run.state?.finishedAtMs ?? run.clientEndedAt ?? Date.now();
+    return formatDuration(Math.max(0, endMs - startMs));
+  }
+
+  // Rebuilds the job list from the runs dobjd still has in
+  // progress, so a reload does not lose them. Runs that finished before the
+  // page loaded are left out, as are runs this page already tracks.
+  async function restoreRuns() {
+    let retainedRuns;
+    try {
+      retainedRuns = await fetchJson("/actions/runs?status=active");
+    } catch (error) {
+      console.warn("Could not list runs:", error);
+      return;
+    }
+    for (const state of retainedRuns) {
+      const alreadyTracked = runs.some((run) => run.runId === state.runId);
+      if (state.action.pluginName !== PLUGIN_NAME || alreadyTracked) {
+        continue;
+      }
+      const action = pluginActions.find(
+        (candidate) => qualifiedClassName(candidate.action) === qualifiedClassName(state.action),
+      ) ?? { action: state.action };
+      const run = newRun(action, state.inputObjectPaths ?? []);
+      run.runId = state.runId;
+      run.state = state;
+      runs.unshift(run);
+      if (isRunInProgress(run)) {
+        followRun(run);
+      }
+    }
+    renderRuns();
+    renderActions();
+  }
+
+  setInterval(() => {
+    for (const run of runs) {
+      if (!isRunInProgress(run)) {
+        continue;
+      }
+      if (run.elapsedElement !== null) {
+        run.elapsedElement.textContent = elapsedText(run);
+      }
+      if (run.id === selectedRunId && run.detailsElapsedElement?.isConnected) {
+        run.detailsElapsedElement.textContent = elapsedText(run);
+      }
+      if (run.id === selectedRunId && run.latestEventDurationElement?.isConnected) {
+        const latestEventIndex = (run.state?.progress ?? []).length - 1;
+        run.latestEventDurationElement.textContent = eventDurationText(run, latestEventIndex);
+      }
+    }
+  }, 1000);
+
+  function clearRun(run) {
+    run.eventSource?.close();
+    runs = runs.filter((candidate) => candidate !== run);
+    if (selectedRunId === run.id) {
+      clearSelection();
+    } else {
+      renderRuns();
+    }
+  }
+
+  function renderRuns() {
+    runList.replaceChildren();
+    runListHeader.hidden = runs.length === 0;
+    for (const run of runs) {
+      const row = document.createElement("li");
+      row.className = "run-row";
+      row.classList.toggle("selected", run.id === selectedRunId);
+      row.classList.toggle("in-progress", isRunInProgress(run));
+      row.classList.toggle("failed", runStatus(run) === "failed");
+      row.classList.toggle("succeeded", runStatus(run) === "succeeded");
+      row.addEventListener("mousedown", (event) => {
+        if (event.button !== 0 || (IS_MAC && event.ctrlKey)) {
+          return;
+        }
+        const toggleKeyHeld = IS_MAC ? event.metaKey : event.ctrlKey;
+        if (run.id === selectedRunId) {
+          if (toggleKeyHeld) {
+            selectedRunId = null;
+            showSelection();
+          }
+          return;
+        }
+        selectedRunId = run.id;
+        selectedActionName = null;
+        selectedFileNames.clear();
+        anchorFileName = null;
+        selectionAtAnchor = new Set();
+        showSelection();
+      });
+
+      const heading = document.createElement("div");
+      const jobName = document.createElement("span");
+      jobName.textContent = run.runId === null ? "Job" : `Job ${run.runId.slice(0, 4)}`;
+      const status = run.requestError !== null ? "failed" : run.state?.status;
+      const runDetail = document.createElement("span");
+      runDetail.className = "action-detail";
+      run.elapsedElement = document.createElement("span");
+      run.elapsedElement.textContent = elapsedText(run);
+      runDetail.append(
+        ` ${qualifiedClassName(run.action.action)} \u00b7 `,
+        run.elapsedElement,
+      );
+      if (status) {
+        runDetail.append(` \u00b7 ${status}`);
+      }
+      heading.append(jobName, runDetail);
+
+      const latestMessage = document.createElement("div");
+      latestMessage.className = "run-detail";
+      latestMessage.textContent = run.requestError ?? run.state?.progress?.at(-1)?.message ?? "";
+
+      const text = document.createElement("div");
+      text.className = "row-text";
+      text.append(heading, latestMessage);
+      row.append(text);
+
+      if (!isRunInProgress(run)) {
+        const clearButton = circleButton(clearIconTemplate, "Clear this run");
+        clearButton.addEventListener("click", () => clearRun(run));
+        row.append(clearButton);
+      }
+      runList.append(row);
+    }
+  }
+
+  // Puts each signature argument on its own line; statements in the body are
+  // already one per line. Anything not shaped like a single predicate
+  // definition is shown unchanged.
+  function formatPredicateSource(source) {
+    const [signature, ...body] = source.split("\n");
+    const match = /^(\w+)\((.*)\) = (AND|OR)\($/.exec(signature);
+    if (match === null) {
+      return source;
+    }
+    const [, predicateName, argumentList, connective] = match;
+    const [publicArgs, privateArgs] = argumentList.split(/,?\s*private:\s*/);
+    const argumentLines = publicArgs.split(", ").map((arg) => `  ${arg},`);
+    if (privateArgs !== undefined) {
+      argumentLines.push("private:");
+      argumentLines.push(...privateArgs.split(", ").map((arg) => `  ${arg},`));
+    }
+    const lastArgument = argumentLines.length - 1;
+    argumentLines[lastArgument] = argumentLines[lastArgument].replace(/,$/, "");
+    return [`${predicateName}(`, ...argumentLines, `) = ${connective}(`, ...body].join("\n");
+  }
+
+  function subsection(titleText) {
+    const title = document.createElement("div");
+    title.className = "subsection-title";
+    title.textContent = titleText;
+    return title;
+  }
+
+  // Pairs each of the action's input slots, in order, with a selected object
+  // of that slot's class, taking selected objects in selection order.
+  function assignInputSlots(action, fileNames) {
+    const unassigned = fileNames.map((fileName) => objectsByFileName.get(fileName));
+    return action.totalInputs.map((input) => {
+      const className = qualifiedClassName(input.class);
+      const position = unassigned.findIndex((object) => qualifiedClassName(object.class) === className);
+      return unassigned.splice(position, 1)[0];
+    });
+  }
+
+  function subSubsection(titleText) {
+    const title = document.createElement("div");
+    title.className = "sub-subsection-title";
+    title.textContent = titleText;
+    return title;
+  }
+
+  // Each builder receives its "#N" label; an empty list renders "None".
+  function numberedLines(lineBuilders) {
+    const list = document.createElement("div");
+    lineBuilders.forEach((buildLine, index) => list.append(buildLine(`#${index + 1}`)));
+    if (lineBuilders.length === 0) {
+      const none = document.createElement("div");
+      none.className = "details-meta";
+      none.textContent = "None";
+      list.append(none);
+    }
+    return list;
+  }
+
+  // The Details pane's icon for an action: its graphic at 4x, or the blank
+  // page when it has none.
+  function largeActionIcon(actionName) {
+    const icon = document.createElement("div");
+    icon.className = "details-icon";
+    icon.append(actionIcon(actionName, 4) ?? largeFileIconTemplate.content.cloneNode(true));
+    return icon;
+  }
+
+  function renderActionDetails(action) {
+    const icon = largeActionIcon(action.action.name);
+
+    const title = document.createElement("div");
+    title.className = "details-title action-name";
+    title.textContent = qualifiedClassName(action.action);
+
+    const meta = document.createElement("div");
+    meta.className = "details-meta";
+    meta.textContent = "executable action";
+
+    const hashTable = document.createElement("table");
+    hashTable.className = "field-table";
+    appendFieldRow(hashTable, "hash", action.hash || null);
+
+    const source = document.createElement("pre");
+    source.className = "action-source";
+    source.textContent = formatPredicateSource(action.predicateSource);
+
+    const mutatedObjects = action.mutatedObjects ?? [];
+    const mutatedInputSlots = new Set(mutatedObjects.map((slots) => slots.inputIndex));
+    const mutatedOutputSlots = new Set(mutatedObjects.map((slots) => slots.outputIndex));
+    const objectsBySlot = assignInputSlots(action, [...selectedFileNames]);
+    const consumedObjects = objectsBySlot.filter((_, slot) => !mutatedInputSlots.has(slot));
+    const mutatedInputObjects = objectsBySlot.filter((_, slot) => mutatedInputSlots.has(slot));
+
+    const inputs = document.createElement("div");
+    inputs.className = "subsection-list";
+    if (consumedObjects.length > 0) {
+      inputs.append(
+        subSubsection("Will be consumed"),
+        numberedLines(consumedObjects.map((object) => (prefix) => summaryLine(object, [prefix]))),
+      );
+    }
+    if (mutatedInputObjects.length > 0) {
+      inputs.append(
+        subSubsection("Will be mutated"),
+        numberedLines(mutatedInputObjects.map((object) => (prefix) => summaryLine(object, [prefix]))),
+      );
+    }
+
+    const newOutputs = action.totalOutputs.filter((_, slot) => !mutatedOutputSlots.has(slot));
+    const outputs = document.createElement("div");
+    outputs.className = "subsection-list";
+    outputs.append(numberedLines(newOutputs.map((output) => (prefix) => {
+      const line = document.createElement("div");
+      line.className = "details-meta";
+      line.append(prefix, " \u00b7 ", classLabel(output.class));
+      return line;
+    })));
+
+    detailsBody.append(icon, title, meta, hashTable);
+    if (objectsBySlot.length > 0) {
+      detailsBody.append(subsection("Selected Inputs"), inputs);
+    }
+    if (newOutputs.length > 0) {
+      detailsBody.append(subsection("Expected Outputs"), outputs);
+    }
+    const actionName = qualifiedClassName(action.action);
+    if (expandedSourceActionName !== actionName) {
+      expandedSourceActionName = null;
+    }
+    const sourceSection = document.createElement("details");
+    sourceSection.className = "collapsible-section";
+    sourceSection.open = expandedSourceActionName === actionName;
+    sourceSection.addEventListener("toggle", () => {
+      expandedSourceActionName = sourceSection.open ? actionName : null;
+    });
+    const sourceTitle = document.createElement("summary");
+    sourceTitle.className = "subsection-title";
+    sourceTitle.textContent = "Action Source";
+    sourceSection.append(sourceTitle, source);
+    detailsBody.append(sourceSection);
+  }
+
+  function formatDuration(milliseconds) {
+    return `${Math.floor(milliseconds / 1000)}s`;
+  }
+
+  // How long the run spent at an event: until the next event, or, for the
+  // latest event, until the run finished (until now while it is running).
+  function eventDurationText(run, eventIndex) {
+    const events = run.state?.progress ?? [];
+    const startMs = events[eventIndex]?.atMs;
+    const nextEvent = events[eventIndex + 1];
+    const endMs = nextEvent
+      ? nextEvent.atMs
+      : run.state?.finishedAtMs ?? run.clientEndedAt ?? Date.now();
+    if (!startMs || !endMs) {
+      return NOT_AVAILABLE;
+    }
+    return formatDuration(Math.max(0, endMs - startMs));
+  }
+
+  function runStatus(run) {
+    return run.requestError !== null ? "failed" : run.state?.status;
+  }
+
+  function formatTimestamp(milliseconds) {
+    return milliseconds ? new Date(milliseconds).toLocaleString() : null;
+  }
+
+  // Spent inputs move into the hidden `.nullified/` folder once the run has
+  // succeeded and its nullifiers are on-chain.
+  function inputFilePath(run, fileName) {
+    const spent = run.state?.status === "succeeded"
+      && (run.state.result?.nullifiedFiles ?? []).includes(fileName);
+    return `${objectsDirPath}/${spent ? ".nullified/" : ""}${fileName}`;
+  }
+
+  // The result names the outputs once the run succeeds; before that, the
+  // commit phase's progress events report them as they are written.
+  function runOutputFiles(run) {
+    if (run.state?.result) {
+      return run.state.result.outputFiles;
+    }
+    const withOutputs = (run.state?.progress ?? []).filter((event) => event.outputFiles);
+    return withOutputs.at(-1)?.outputFiles ?? [];
+  }
+
+  function pathList(paths) {
+    const list = document.createElement("div");
+    list.className = "subsection-list";
+    paths.forEach((path, index) => {
+      const line = document.createElement("div");
+      line.className = "path-line";
+      const label = document.createElement("span");
+      label.className = "path-label";
+      label.textContent = `#${index + 1}`;
+      line.append(label, path);
+      list.append(line);
+    });
+    if (paths.length === 0) {
+      const none = document.createElement("div");
+      none.className = "details-meta";
+      none.textContent = "None";
+      list.append(none);
+    }
+    return list;
+  }
+
+  function renderRunDetails(run) {
+    const icon = largeActionIcon(run.action.action.name);
+
+    const title = document.createElement("div");
+    title.className = "details-title";
+    title.textContent = run.runId === null ? "Job" : `Job ${run.runId}`;
+
+    const meta = document.createElement("div");
+    meta.className = "details-meta";
+    meta.textContent = [qualifiedClassName(run.action.action), runStatus(run)]
+      .filter((part) => part)
+      .join(" \u00b7 ");
+
+    const properties = document.createElement("table");
+    properties.className = "field-table";
+    appendFieldRow(
+      properties,
+      "started",
+      formatTimestamp(run.state?.createdAtMs || run.clientStartedAt),
+    );
+    run.detailsElapsedElement = appendFieldRow(properties, "duration", elapsedText(run));
+    const result = run.state?.result;
+    if (result) {
+      appendFieldRow(properties, "old root", result.oldRoot);
+      appendFieldRow(properties, "new root", result.newRoot);
+    }
+    const error = run.requestError ?? run.state?.error;
+    if (error) {
+      appendFieldRow(properties, "error", error);
+    }
+
+    const inputFileNames = run.state?.inputObjectPaths ?? run.inputFileNames;
+    const inputs = pathList(inputFileNames.map((fileName) => inputFilePath(run, fileName)));
+    const outputs = pathList(
+      runOutputFiles(run).map((fileName) => `${objectsDirPath}/${fileName}`),
+    );
+
+    const log = document.createElement("table");
+    log.className = "field-table run-log";
+    const events = run.state?.progress ?? [];
+    run.latestEventDurationElement = null;
+    for (let eventIndex = events.length - 1; eventIndex >= 0; eventIndex--) {
+      const event = events[eventIndex];
+      const row = log.insertRow();
+      const cells = [
+        formatTimestamp(event.atMs) ?? NOT_AVAILABLE,
+        eventDurationText(run, eventIndex),
+        event.phase,
+        event.status,
+        event.message,
+      ].map((text) => {
+        const cell = row.insertCell();
+        cell.textContent = text;
+        return cell;
+      });
+      if (eventIndex === events.length - 1) {
+        run.latestEventDurationElement = cells[1];
+      }
+    }
+    if (events.length === 0) {
+      log.insertRow().insertCell().textContent = "None";
+    }
+
+    detailsBody.append(
+      icon,
+      title,
+      meta,
+      properties,
+      subsection("Inputs"),
+      inputs,
+      subsection("Outputs"),
+      outputs,
+      subsection("Log"),
+      log,
+    );
+  }
+
+  function renderDetails() {
+    detailsBody.replaceChildren();
+    const selectedRun = runs.find((run) => run.id === selectedRunId);
+    if (selectedRun !== undefined) {
+      renderRunDetails(selectedRun);
+      return;
+    }
+    const selectedAction = pluginActions.find(
+      (action) => qualifiedClassName(action.action) === selectedActionName,
+    );
+    if (selectedAction !== undefined) {
+      renderActionDetails(selectedAction);
+      return;
+    }
+    if (selectedFileNames.size === 0) {
+      const message = document.createElement("div");
+      message.className = "message";
+      message.textContent = "Select an item to view details.";
+      detailsBody.append(message);
+      return;
+    }
+    if (selectedFileNames.size > 1) {
+      renderMultipleDetails();
+      return;
+    }
+
+    const [fileName] = selectedFileNames;
+    const object = objectsByFileName.get(fileName);
+
+    const icon = document.createElement("div");
+    icon.className = "details-icon";
+    const page = document.createElement("div");
+    page.className = "large-page-icon";
+    page.append(largeFileIconTemplate.content.cloneNode(true));
+    const classIconPath = classIconPaths[object.class.name];
+    if (classIconPath) {
+      const classIcon = document.createElement("img");
+      classIcon.className = "large-class-icon";
+      classIcon.src = classIconPath;
+      classIcon.alt = "";
+      page.append(classIcon);
+    }
+    icon.append(page);
+
+    const title = document.createElement("div");
+    title.className = "details-title";
+    title.textContent = object.fileName;
+
+    const meta = summaryLine(object, []);
+
+    const identityTable = document.createElement("table");
+    identityTable.className = "field-table";
+    appendFieldRow(identityTable, "stable_identifier", fieldValue(object, "stable_identifier"));
+    appendFieldRow(identityTable, "contentHash", object.contentHash);
+    appendFieldRow(identityTable, "classHash", object.classHash || null);
+
+    const key = fieldValue(object, "key");
+    const keyCell = appendFieldRow(identityTable, "key", key);
+    if (key !== null) {
+      let keyRevealed = false;
+      keyCell.textContent = HIDDEN_KEY_TEXT;
+      keyCell.className = "hidden-value";
+      keyCell.addEventListener("click", () => {
+        keyRevealed = !keyRevealed;
+        keyCell.textContent = keyRevealed ? key : HIDDEN_KEY_TEXT;
+      });
+    }
+
+    const propertiesTitle = subsection("Properties");
+
+    const propertiesTable = document.createElement("table");
+    propertiesTable.className = "field-table";
+    for (const [name, value] of fieldEntries(object)) {
+      if (!NON_PROPERTY_KEYS.has(name)) {
+        appendFieldRow(propertiesTable, name, displayValue(value));
+      }
+    }
+
+    detailsBody.append(icon, title, meta, identityTable, propertiesTitle, propertiesTable);
+  }
+
+  async function fetchJson(path, options) {
+    const response = await fetch(DOBJD_URL + path, options);
+    if (!response.ok) {
+      const error = new Error(`${path}: HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+    return response.json();
+  }
+
+  function postJson(path, body) {
+    return fetchJson(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  function showMessage(text, isError) {
+    objectList.replaceChildren();
+    const item = document.createElement("li");
+    item.className = isError ? "message error" : "message";
+    item.textContent = text;
+    objectList.append(item);
+  }
+
+  // Splits a file name so that, when it overflows, only the head is cut
+  // short and the tail stays visible: the extension plus the characters
+  // just before it, as Finder truncates.
+  function splitForMiddleTruncation(fileName) {
+    const charactersBeforeExtension = 8;
+    const extensionStart = fileName.lastIndexOf(".");
+    const tailStart = Math.max(
+      0,
+      (extensionStart > 0 ? extensionStart : fileName.length) - charactersBeforeExtension,
+    );
+    return [fileName.slice(0, tailStart), fileName.slice(tailStart)];
+  }
+
+  const nameMeasureContext = document.createElement("canvas").getContext("2d");
+
+  function renderObjects(objects) {
+    objectList.replaceChildren();
+    rowsByFileName.clear();
+    for (const object of objects) {
+      const row = document.createElement("li");
+      row.className = "object-row";
+      row.title = object.fileName;
+      row.classList.toggle("selected", selectedFileNames.has(object.fileName));
+      const state = shownState(object);
+      row.classList.toggle("unknown", state === "unknown");
+      row.classList.toggle("pending", state === "pending");
+      row.classList.toggle("held", state === "held");
+      const flashElapsed = Date.now() - (flashStartedAt.get(object.fileName) ?? -Infinity);
+      if (flashElapsed < ROW_FLASH_MS) {
+        // A redraw mid-flash resumes the animation rather than restarting it.
+        row.classList.add("flashing");
+        row.style.animation = `row-flash ${ROW_FLASH_MS}ms ease-out -${flashElapsed}ms`;
+      }
+      row.append(smallClassIcon(object.class.name));
+
+      const name = document.createElement("span");
+      name.className = "object-name";
+      row.append(name);
+
+      // A ctrl-click on macOS is a context-menu click and leaves the
+      // selection alone.
+      row.addEventListener("mousedown", (event) => {
+        if (event.button === 0 && !(IS_MAC && event.ctrlKey)) {
+          selectWithClick(object.fileName, event);
+        }
+      });
+      row.addEventListener("dblclick", () => {
+        window.open(rawObjectUrl(object.fileName), "_blank", "noopener");
+      });
+      rowsByFileName.set(object.fileName, row);
+      objectList.append(row);
+    }
+    fitObjectNames();
+  }
+
+  // Writes each row's file name, cut in the middle to fit its row.
+  function fitObjectNames() {
+    const firstName = objectList.querySelector(".object-name");
+    if (firstName === null) {
+      return;
+    }
+    nameMeasureContext.font = getComputedStyle(firstName).font;
+    for (const [fileName, row] of rowsByFileName) {
+      const name = row.querySelector(".object-name");
+      name.textContent = fitFileName(fileName, name.clientWidth);
+    }
+  }
+
+  // The longest form of the name that fits `availableWidth`: the whole name,
+  // or as much of its head as fits ahead of an ellipsis and its tail.
+  function fitFileName(fileName, availableWidth) {
+    const measure = (text) => nameMeasureContext.measureText(text).width;
+    if (measure(fileName) <= availableWidth) {
+      return fileName;
+    }
+    const [head, tail] = splitForMiddleTruncation(fileName);
+    const shortened = (headLength) => `${head.slice(0, headLength)}\u2026${tail}`;
+    let fittingHeadLength = 0;
+    let tooLongHeadLength = head.length;
+    while (tooLongHeadLength - fittingHeadLength > 1) {
+      const middle = Math.floor((fittingHeadLength + tooLongHeadLength) / 2);
+      if (measure(shortened(middle)) <= availableWidth) {
+        fittingHeadLength = middle;
+      } else {
+        tooLongHeadLength = middle;
+      }
+    }
+    return shortened(fittingHeadLength);
+  }
+
+  function selectWithClick(fileName, event) {
+    // A selected job is always the only selection.
+    selectedRunId = null;
+    const toggleKeyHeld = IS_MAC ? event.metaKey : event.ctrlKey;
+    if (event.shiftKey && selectedFileNames.size > 0 && anchorFileName !== null) {
+      const fileNames = [...objectsByFileName.keys()];
+      const anchorIndex = fileNames.indexOf(anchorFileName);
+      const clickedIndex = fileNames.indexOf(fileName);
+      const start = Math.min(anchorIndex, clickedIndex);
+      const end = Math.max(anchorIndex, clickedIndex);
+      selectedFileNames.clear();
+      for (const keptFileName of selectionAtAnchor) {
+        selectedFileNames.add(keptFileName);
+      }
+      for (const rangeFileName of fileNames.slice(start, end + 1)) {
+        selectedFileNames.add(rangeFileName);
+      }
+    } else if (toggleKeyHeld) {
+      if (selectedFileNames.has(fileName)) {
+        selectedFileNames.delete(fileName);
+      } else {
+        selectedFileNames.add(fileName);
+      }
+      anchorFileName = fileName;
+      selectionAtAnchor = new Set(selectedFileNames);
+    } else {
+      if (selectedFileNames.size === 1 && selectedFileNames.has(fileName)) {
+        return;
+      }
+      selectedFileNames.clear();
+      selectedFileNames.add(fileName);
+      anchorFileName = fileName;
+      selectionAtAnchor = new Set(selectedFileNames);
+    }
+    showSelection();
+  }
+
+  function clearSelection() {
+    selectedFileNames.clear();
+    anchorFileName = null;
+    selectionAtAnchor = new Set();
+    selectedActionName = null;
+    selectedRunId = null;
+    showSelection();
+  }
+
+  function showSelection() {
+    for (const [rowFileName, row] of rowsByFileName) {
+      row.classList.toggle("selected", selectedFileNames.has(rowFileName));
+    }
+    renderRuns();
+    renderActions();
+    renderDetails();
+  }
+
+  async function load() {
+    showMessage("Loading...", false);
+    try {
+      const [objectsDir, objects, actions, iconPaths, actionIcons] = await Promise.all([
+        fetchJson("/objects/dir"),
+        fetchJson("/objects/unspent"),
+        fetchJson("/actions"),
+        loadUiDataFile(CLASS_ICONS_URL, {}),
+        loadUiDataFile(ACTION_ICONS_URL, { rules: [] }),
+      ]);
+      classIconPaths = iconPaths;
+      actionIconRules = actionIcons.rules;
+      pluginActions = actions.filter((action) => action.action.pluginName === PLUGIN_NAME);
+      objectsDirPath = objectsDir.path;
+      objectsDirHeader.textContent = objectsDir.path;
+      objectsDirHeader.title = objectsDir.path;
+      showObjects(objects);
+      await restoreRuns();
+    } catch (error) {
+      showMessage(`Could not reach dobjd at ${DOBJD_URL}: ${error.message}`, true);
+    }
+  }
+
+  // Reads a JSON file served next to this page, not by dobjd, or returns
+  // `fallback` if it cannot be read.
+  async function loadUiDataFile(url, fallback) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      return await response.json();
+    } catch (error) {
+      console.warn(`Could not load ${url}:`, error);
+      return fallback;
+    }
+  }
+
+  // Keeps the current list on failure; the next completed run retries.
+  async function reloadObjects() {
+    if (objectReloadInFlight) {
+      objectReloadQueued = true;
+      return;
+    }
+    objectReloadInFlight = true;
+    try {
+      showObjects(await fetchJson("/objects/unspent"));
+    } catch (error) {
+      console.warn("Could not reload objects:", error);
+    } finally {
+      objectReloadInFlight = false;
+      if (objectReloadQueued) {
+        objectReloadQueued = false;
+        reloadObjects();
+      }
+    }
+  }
+
+  // The state a row's colour shows. `pending` takes precedence over being
+  // held by a run, which takes precedence over the remaining statuses.
+  function shownState(object) {
+    if (object.status === "pending") {
+      return "pending";
+    }
+    return object.heldByRunId != null ? "held" : object.status;
+  }
+
+  // Replaces the object list, keeping the selection of any objects that are
+  // still held and dropping the rest. A row flashes when its file is new to
+  // the page or its shown state changed; nothing flashes on the first load.
+  function showObjects(objects) {
+    const heldObjects = objects
+      .filter((object) => object.class.pluginName === PLUGIN_NAME)
+      .sort((left, right) => left.fileName.localeCompare(right.fileName));
+    const now = Date.now();
+    for (const object of heldObjects) {
+      const state = shownState(object);
+      if (lastShownStates !== null && lastShownStates.get(object.fileName) !== state) {
+        flashStartedAt.set(object.fileName, now);
+      }
+    }
+    lastShownStates ??= new Map();
+    for (const object of heldObjects) {
+      lastShownStates.set(object.fileName, shownState(object));
+    }
+    objectsByFileName.clear();
+    for (const object of heldObjects) {
+      objectsByFileName.set(object.fileName, object);
+    }
+    for (const fileName of [...selectedFileNames]) {
+      if (!objectsByFileName.has(fileName)) {
+        selectedFileNames.delete(fileName);
+      }
+    }
+    selectionAtAnchor = new Set(
+      [...selectionAtAnchor].filter((fileName) => objectsByFileName.has(fileName)),
+    );
+    if (anchorFileName !== null && !objectsByFileName.has(anchorFileName)) {
+      anchorFileName = null;
+    }
+
+    if (heldObjects.length === 0) {
+      rowsByFileName.clear();
+      showMessage("No objects.", false);
+    } else {
+      renderObjects(heldObjects);
+    }
+    showSelection();
+  }
+
+  function isPlainPress(event) {
+    return event.button === 0
+      && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey;
+  }
+
+  objectList.addEventListener("mousedown", (event) => {
+    if (event.target === objectList && isPlainPress(event)) {
+      clearSelection();
+    }
+  });
+
+  for (const executeList of [runList, actionList]) {
+    executeList.addEventListener("mousedown", (event) => {
+      if (event.target === executeList && isPlainPress(event)) {
+        clearSelection();
+      }
+    });
+  }
+
+  new ResizeObserver(() => fitObjectNames()).observe(objectList);
+
+  renderDetails();
+  load();
+</script>
+</body>
+</html>
