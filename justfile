@@ -323,6 +323,11 @@ test-e2e:
 throughput-test N:
     cargo run -p tests --bin throughput --release -- {{N}}
 
+# Prove one FindLog, submit it to the relayer and wait for the synchronizer to
+# land it. Reads RELAYER_URL and SYNCHRONIZER_URL from devtools/tests/.env.
+client-e2e:
+    cargo run -p tests --bin client-e2e --release
+
 # Build all workspace crates
 build:
     cargo build --workspace
