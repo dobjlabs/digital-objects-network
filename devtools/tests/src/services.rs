@@ -61,8 +61,8 @@ impl Services {
         }
     }
 
-    /// A witness that only pins the current state root, enough for actions without inputs.
-    pub fn grounding_witness_without_inputs(&self) -> GroundingWitness {
+    /// A witness grounding the given input objects in the current state root.
+    pub fn grounding_witness(&self, input_commitments: &[Hash]) -> GroundingWitness {
         let response: GroundingWitnessResponse = self
             .http
             .post(format!(
@@ -70,7 +70,7 @@ impl Services {
                 self.synchronizer_url
             ))
             .json(&GroundingWitnessRequest {
-                object_commitments: Vec::new(),
+                object_commitments: input_commitments.to_vec(),
             })
             .send()
             .unwrap()
@@ -87,10 +87,22 @@ impl Services {
             response.prior_state_history_root,
         );
         assert_eq!(state_header.hash(), response.state_root);
-        GroundingWitness::new(state_header, HashMap::new())
+        assert_eq!(response.created_proofs.len(), input_commitments.len());
+        let created_proofs: HashMap<_, _> = response
+            .created_proofs
+            .into_iter()
+            .map(|entry| {
+                assert!(entry.present, "input {} is not created", entry.commitment);
+                (
+                    entry.commitment,
+                    (entry.index.unwrap(), entry.proof.unwrap()),
+                )
+            })
+            .collect();
+        GroundingWitness::new(state_header, created_proofs)
     }
 
-    pub fn submit(&self, tx: PreparedTx) -> SubmittedTx {
+    pub fn submit(&self, tx: &PreparedTx) -> SubmittedTx {
         let response: SubmitProofResponse = self
             .http
             .post(format!("{}/api/v1/proofs", self.relayer_url))
@@ -112,8 +124,12 @@ impl Services {
         );
         SubmittedTx {
             job_id: response.job_id,
-            created: tx.created,
-            nullifiers: tx.nullifiers,
+            created: tx
+                .outputs
+                .iter()
+                .map(|output| output.obj.commitment())
+                .collect(),
+            nullifiers: tx.nullifiers.clone(),
             landed_after: None,
         }
     }

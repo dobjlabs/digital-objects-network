@@ -4,5 +4,5 @@
 mod prover;
 mod services;
 
-pub use prover::{PreparedTx, Prover, find_log_action};
+pub use prover::{PreparedTx, Prover, burn_logs_action, find_log_action};
 pub use services::{Services, SubmittedTx};

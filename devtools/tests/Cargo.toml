@@ -17,3 +17,6 @@ sdk = { path = "../../libs/sdk" }
 toml = { workspace = true }
 txlib = { path = "../../libs/txlib" }
 wire-types = { workspace = true, features = ["chain"] }
+
+[dev-dependencies]
+payload = { path = "../../libs/payload", features = ["test-utils"] }
