@@ -52,6 +52,7 @@ All routes return JSON unless noted; errors come back as
 | `GET`  | `/settings`                     | `load_settings`                                              |
 | `PUT`  | `/settings`                     | `save_settings`                                              |
 | `POST` | `/actions/run`                  | starts a run, returns `202 { runId, status }` (non-blocking) |
+| `GET`  | `/actions/runs`                 | retained runs, oldest first (`?status=active`: in-flight)    |
 | `GET`  | `/actions/runs/{run_id}`        | run status + result/error + progress log (poll)              |
 | `GET`  | `/actions/runs/{run_id}/events` | per-run SSE: replays buffered progress then tails live       |
 | `GET`  | `/actions/{id}`                 | `get_action`                                                 |

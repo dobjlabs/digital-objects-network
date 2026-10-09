@@ -35,6 +35,13 @@ pub struct ActionList {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct RunList {
+    /// Runs the daemon still holds, oldest first.
+    pub runs: Vec<RunState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ClassList {
     /// All known object classes.
     pub classes: Vec<ClassSummary>,

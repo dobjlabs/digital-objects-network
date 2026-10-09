@@ -12,8 +12,9 @@
 //! on this state surviving -- `sync_objects` reconciles those independently.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use driver::{
     Driver, ExecuteActionInput, ExecuteActionResult, ExecutionReporter, ExecutionStepContext,
@@ -30,6 +31,15 @@ pub const RUN_RETENTION: Duration = Duration::from_secs(600);
 /// How often the reaper sweeps for expired terminal runs.
 pub const REAP_INTERVAL: Duration = Duration::from_secs(60);
 
+/// Wall-clock time in Unix epoch milliseconds, for the timestamps clients
+/// read. Reaping uses the monotonic `Instant` in `RunInner::finished_at`.
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 struct RunInner {
     status: RunStatus,
     progress: Vec<RunActionProgress>,
@@ -39,26 +49,43 @@ struct RunInner {
     /// mutators assert it is `None` on entry, so updating a finished run is a
     /// loud bug rather than a silent no-op.
     finished_at: Option<Instant>,
+    started_at_ms: Option<u64>,
+    finished_at_ms: Option<u64>,
 }
 
 /// One run's mutable state plus its identity.
 pub struct RunEntry {
     run_id: String,
     action: QualifiedName,
+    input_object_paths: Vec<String>,
+    created_at_ms: u64,
+    /// Registration order; breaks ties between runs created in the same
+    /// millisecond when listing oldest first.
+    sequence: u64,
     inner: Mutex<RunInner>,
 }
 
 impl RunEntry {
-    fn new(run_id: String, action: QualifiedName) -> Self {
+    fn new(
+        run_id: String,
+        action: QualifiedName,
+        input_object_paths: Vec<String>,
+        sequence: u64,
+    ) -> Self {
         Self {
             run_id,
             action,
+            input_object_paths,
+            created_at_ms: now_ms(),
+            sequence,
             inner: Mutex::new(RunInner {
                 status: RunStatus::Queued,
                 progress: Vec::new(),
                 result: None,
                 error: None,
                 finished_at: None,
+                started_at_ms: None,
+                finished_at_ms: None,
             }),
         }
     }
@@ -76,6 +103,7 @@ impl RunEntry {
             ExecutionPhase::GenerateProof => RunStatus::GenerateProof,
             ExecutionPhase::Commit => RunStatus::Committing,
         };
+        inner.started_at_ms.get_or_insert(progress.at_ms);
         inner.progress.push(progress);
     }
 
@@ -88,6 +116,7 @@ impl RunEntry {
         inner.status = RunStatus::Succeeded;
         inner.result = Some(result);
         inner.finished_at = Some(Instant::now());
+        inner.finished_at_ms = Some(now_ms());
     }
 
     /// Record terminal failure: append a `Failed` event tagged with the phase
@@ -115,11 +144,14 @@ impl RunEntry {
             output_files: None,
             output_status: None,
             nullified_files: None,
+            at_ms: now_ms(),
         };
+        inner.started_at_ms.get_or_insert(event.at_ms);
         inner.progress.push(event.clone());
         inner.status = RunStatus::Failed;
         inner.error = Some(message);
         inner.finished_at = Some(Instant::now());
+        inner.finished_at_ms = Some(event.at_ms);
         event
     }
 
@@ -143,10 +175,18 @@ impl RunEntry {
             run_id: self.run_id.clone(),
             action: self.action.clone(),
             status: inner.status,
+            input_object_paths: self.input_object_paths.clone(),
+            created_at_ms: self.created_at_ms,
+            started_at_ms: inner.started_at_ms,
+            finished_at_ms: inner.finished_at_ms,
             result: inner.result.clone(),
             error: inner.error.clone(),
             progress: inner.progress.clone(),
         }
+    }
+
+    fn is_finished(&self) -> bool {
+        self.inner.lock().unwrap().finished_at.is_some()
     }
 
     fn expired(&self, ttl: Duration) -> bool {
@@ -163,6 +203,7 @@ impl RunEntry {
 pub struct RunRegistry {
     runs: Arc<RwLock<HashMap<String, Arc<RunEntry>>>>,
     execution_gate: Arc<tokio::sync::Mutex<()>>,
+    next_sequence: Arc<AtomicU64>,
 }
 
 impl RunRegistry {
@@ -172,14 +213,40 @@ impl RunRegistry {
 
     /// Register a fresh run and return its entry. `run_id` is a daemon-minted
     /// UUID, so it never collides with an existing run.
-    fn start(&self, run_id: String, action: QualifiedName) -> Arc<RunEntry> {
-        let entry = Arc::new(RunEntry::new(run_id.clone(), action));
+    fn start(
+        &self,
+        run_id: String,
+        action: QualifiedName,
+        input_object_paths: Vec<String>,
+    ) -> Arc<RunEntry> {
+        let sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
+        let entry = Arc::new(RunEntry::new(
+            run_id.clone(),
+            action,
+            input_object_paths,
+            sequence,
+        ));
         self.runs.write().unwrap().insert(run_id, entry.clone());
         entry
     }
 
     pub fn get(&self, run_id: &str) -> Option<Arc<RunEntry>> {
         self.runs.read().unwrap().get(run_id).cloned()
+    }
+
+    /// Every retained run, oldest first: in-flight runs plus terminal runs
+    /// not yet reaped. `active_only` keeps just the in-flight ones.
+    pub fn list(&self, active_only: bool) -> Vec<RunState> {
+        let mut entries: Vec<Arc<RunEntry>> = self
+            .runs
+            .read()
+            .unwrap()
+            .values()
+            .filter(|entry| !(active_only && entry.is_finished()))
+            .cloned()
+            .collect();
+        entries.sort_by_key(|entry| entry.sequence);
+        entries.iter().map(|entry| entry.snapshot()).collect()
     }
 
     /// Drop terminal runs older than [`RUN_RETENTION`].
@@ -249,6 +316,7 @@ impl ExecutionReporter for RunReporter {
                 output_files: None,
                 output_status: None,
                 nullified_files: None,
+                at_ms: now_ms(),
             },
             ExecutionPhase::Commit => RunActionProgress {
                 run_id: self.run_id.clone(),
@@ -260,6 +328,7 @@ impl ExecutionReporter for RunReporter {
                 output_files: (!ctx.output_files.is_empty()).then(|| ctx.output_files.clone()),
                 output_status: ctx.output_status,
                 nullified_files: None,
+                at_ms: now_ms(),
             },
         };
         self.emit(progress);
@@ -277,6 +346,7 @@ impl ExecutionReporter for RunReporter {
                 output_files: None,
                 output_status: None,
                 nullified_files: None,
+                at_ms: now_ms(),
             },
             ExecutionPhase::Commit => match result {
                 Some(result) => RunActionProgress {
@@ -289,6 +359,7 @@ impl ExecutionReporter for RunReporter {
                     output_files: Some(result.output_files.clone()),
                     output_status: Some(ObjectStatus::Live),
                     nullified_files: Some(result.nullified_files.clone()),
+                    at_ms: now_ms(),
                 },
                 None => return,
             },
@@ -310,9 +381,9 @@ pub fn spawn_run(
 ) -> anyhow::Result<RunAccepted> {
     let exec_input = ExecuteActionInput {
         action: action.clone(),
-        input_objects,
+        input_objects: input_objects.clone(),
     };
-    spawn_worker(registry, events, action, move |reporter| {
+    spawn_worker(registry, events, action, input_objects, move |reporter| {
         driver.execute_with_reporter(exec_input, reporter)
     })
 }
@@ -321,6 +392,7 @@ fn spawn_worker<F>(
     registry: &RunRegistry,
     events: EventTx,
     action: QualifiedName,
+    input_object_paths: Vec<String>,
     execute: F,
 ) -> anyhow::Result<RunAccepted>
 where
@@ -332,7 +404,8 @@ where
         .try_lock_owned()
         .map_err(|_| driver::DriverError::Conflict("another action is already running".into()))?;
     let run_id = uuid::Uuid::new_v4().to_string();
-    let entry = registry.start(run_id.clone(), action);
+    let entry = registry.start(run_id.clone(), action, input_object_paths);
+    let created_at_ms = entry.created_at_ms;
 
     let reporter = RunReporter::new(events, entry, run_id.clone());
 
@@ -356,6 +429,7 @@ where
     Ok(RunAccepted {
         run_id,
         status: RunStatus::Queued,
+        created_at_ms,
     })
 }
 
@@ -394,6 +468,7 @@ mod tests {
             output_files: None,
             output_status: None,
             nullified_files: None,
+            at_ms: now_ms(),
         }
     }
 
@@ -447,6 +522,7 @@ mod tests {
             &registry,
             events.clone(),
             action("first"),
+            Vec::new(),
             move |reporter| {
                 reporter.on_step(
                     ExecutionPhase::Commit,
@@ -459,9 +535,15 @@ mod tests {
             },
         )
         .unwrap();
-        let rejected = spawn_worker(&registry.clone(), events.clone(), action("early"), |_| {
-            panic!("rejected action must not execute");
-        })
+        let rejected = spawn_worker(
+            &registry.clone(),
+            events.clone(),
+            action("early"),
+            Vec::new(),
+            |_| {
+                panic!("rejected action must not execute");
+            },
+        )
         .unwrap_err();
         assert!(matches!(
             rejected.downcast_ref::<driver::DriverError>(),
@@ -472,9 +554,15 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let rejected = spawn_worker(&registry.clone(), events.clone(), action("second"), |_| {
-            panic!("rejected action must not execute");
-        })
+        let rejected = spawn_worker(
+            &registry.clone(),
+            events.clone(),
+            action("second"),
+            Vec::new(),
+            |_| {
+                panic!("rejected action must not execute");
+            },
+        )
         .unwrap_err();
         assert!(matches!(
             rejected.downcast_ref::<driver::DriverError>(),
@@ -496,7 +584,7 @@ mod tests {
             wait_terminal(&registry, &first).await.status,
             RunStatus::Succeeded
         );
-        let second = spawn_worker(&registry, events, action("second"), |_| {
+        let second = spawn_worker(&registry, events, action("second"), Vec::new(), |_| {
             Ok(execution_result())
         })
         .unwrap();
@@ -510,27 +598,34 @@ mod tests {
     async fn errors_and_panics_release_the_execution_gate() {
         let registry = RunRegistry::new();
         let (events, _receiver) = crate::events::channel();
-        let timed_out = spawn_worker(&registry, events.clone(), action("timeout"), |_| {
-            Err(anyhow::anyhow!("synchronizer timeout"))
-        })
+        let timed_out = spawn_worker(
+            &registry,
+            events.clone(),
+            action("timeout"),
+            Vec::new(),
+            |_| Err(anyhow::anyhow!("synchronizer timeout")),
+        )
         .unwrap();
         assert_eq!(
             wait_terminal(&registry, &timed_out).await.error.as_deref(),
             Some("synchronizer timeout")
         );
-        let panicked = spawn_worker(&registry, events.clone(), action("panic"), |_| {
-            panic!("worker panic");
-        })
+        let panicked = spawn_worker(
+            &registry,
+            events.clone(),
+            action("panic"),
+            Vec::new(),
+            |_| {
+                panic!("worker panic");
+            },
+        )
         .unwrap();
         let state = wait_terminal(&registry, &panicked).await;
         assert_eq!(state.status, RunStatus::Failed);
         assert!(state.error.unwrap().contains("worker panic"));
-        let next = spawn_worker(
-            &registry,
-            events,
-            action("next"),
-            |_| Ok(execution_result()),
-        )
+        let next = spawn_worker(&registry, events, action("next"), Vec::new(), |_| {
+            Ok(execution_result())
+        })
         .unwrap();
         assert_eq!(
             wait_terminal(&registry, &next).await.status,
@@ -540,7 +635,7 @@ mod tests {
 
     #[test]
     fn progress_advances_status_and_indexes_events() {
-        let entry = RunEntry::new("r1".to_string(), action("A"));
+        let entry = RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0);
         assert_eq!(entry.status(), RunStatus::Queued);
 
         entry.push_progress(step(
@@ -573,7 +668,7 @@ mod tests {
 
     #[test]
     fn succeed_is_terminal() {
-        let entry = RunEntry::new("r1".to_string(), action("A"));
+        let entry = RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0);
         entry.push_progress(step(
             ExecutionPhase::GenerateProof,
             ProofProgressStatus::Running,
@@ -593,7 +688,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "mutated after it finished")]
     fn mutating_a_finished_run_panics() {
-        let entry = RunEntry::new("r1".to_string(), action("A"));
+        let entry = RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0);
         entry.succeed(ok_result());
         // A progress event after the run finished is a logic bug, not a no-op.
         entry.push_progress(step(
@@ -605,7 +700,7 @@ mod tests {
 
     #[test]
     fn fail_records_terminal_event_and_error() {
-        let entry = RunEntry::new("r1".to_string(), action("A"));
+        let entry = RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0);
         let event = entry.fail("boom".to_string());
         assert_eq!(event.status, ProofProgressStatus::Failed);
 
@@ -620,14 +715,14 @@ mod tests {
     #[test]
     fn fail_event_is_tagged_with_the_phase_the_run_was_in() {
         // No step has run yet -> attributed to proof generation, not commit.
-        let queued = RunEntry::new("r1".to_string(), action("A"));
+        let queued = RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0);
         assert_eq!(
             queued.fail("early".to_string()).phase,
             ExecutionPhase::GenerateProof
         );
 
         // Failing during proof generation -> GenerateProof.
-        let proving = RunEntry::new("r2".to_string(), action("A"));
+        let proving = RunEntry::new("r2".to_string(), action("A"), Vec::new(), 0);
         proving.push_progress(step(
             ExecutionPhase::GenerateProof,
             ProofProgressStatus::Running,
@@ -639,7 +734,7 @@ mod tests {
         );
 
         // Failing during commit -> Commit.
-        let committing = RunEntry::new("r3".to_string(), action("A"));
+        let committing = RunEntry::new("r3".to_string(), action("A"), Vec::new(), 0);
         committing.push_progress(step(
             ExecutionPhase::Commit,
             ProofProgressStatus::Running,
@@ -653,7 +748,7 @@ mod tests {
 
     #[test]
     fn expired_only_after_terminal() {
-        let entry = RunEntry::new("r1".to_string(), action("A"));
+        let entry = RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0);
         // In-flight runs are never reaped, even at zero TTL.
         assert!(!entry.expired(Duration::from_secs(0)));
         entry.succeed(ok_result());
@@ -665,8 +760,8 @@ mod tests {
     #[test]
     fn reaper_keeps_in_flight_and_recent_terminal_runs() {
         let registry = RunRegistry::new();
-        let _live = registry.start("live".to_string(), action("A"));
-        let done = registry.start("done".to_string(), action("A"));
+        let _live = registry.start("live".to_string(), action("A"), Vec::new());
+        let done = registry.start("done".to_string(), action("A"), Vec::new());
         done.succeed(ok_result());
         // RUN_RETENTION has not elapsed, so nothing is dropped yet.
         registry.reap();
@@ -675,9 +770,69 @@ mod tests {
     }
 
     #[test]
+    fn timestamps_follow_the_run_lifecycle() {
+        let entry = RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0);
+        let queued = entry.snapshot();
+        assert!(queued.created_at_ms > 0);
+        assert_eq!(queued.started_at_ms, None);
+        assert_eq!(queued.finished_at_ms, None);
+
+        let first = step(
+            ExecutionPhase::GenerateProof,
+            ProofProgressStatus::Running,
+            "gen",
+        );
+        let first_at_ms = first.at_ms;
+        entry.push_progress(first);
+        entry.push_progress(step(
+            ExecutionPhase::Commit,
+            ProofProgressStatus::Running,
+            "commit",
+        ));
+        let running = entry.snapshot();
+        assert_eq!(running.started_at_ms, Some(first_at_ms));
+        assert_eq!(running.finished_at_ms, None);
+
+        entry.succeed(ok_result());
+        let finished = entry.snapshot().finished_at_ms.unwrap();
+        assert!(finished >= first_at_ms);
+    }
+
+    #[test]
+    fn failure_records_finish_time_even_when_queued() {
+        let entry = RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0);
+        let event = entry.fail("boom".to_string());
+        let snapshot = entry.snapshot();
+        assert_eq!(snapshot.started_at_ms, Some(event.at_ms));
+        assert_eq!(snapshot.finished_at_ms, Some(event.at_ms));
+    }
+
+    #[test]
+    fn snapshot_reports_input_paths() {
+        let inputs = vec!["a.dobj".to_string(), "b.dobj".to_string()];
+        let entry = RunEntry::new("r1".to_string(), action("A"), inputs.clone(), 0);
+        assert_eq!(entry.snapshot().input_object_paths, inputs);
+    }
+
+    #[test]
+    fn list_is_oldest_first_and_can_keep_only_active_runs() {
+        let registry = RunRegistry::new();
+        for run_id in ["first", "second", "third"] {
+            registry.start(run_id.to_string(), action("A"), Vec::new());
+        }
+        registry.get("second").unwrap().succeed(ok_result());
+
+        let run_ids = |runs: Vec<RunState>| -> Vec<String> {
+            runs.into_iter().map(|run| run.run_id).collect()
+        };
+        assert_eq!(run_ids(registry.list(false)), ["first", "second", "third"]);
+        assert_eq!(run_ids(registry.list(true)), ["first", "third"]);
+    }
+
+    #[test]
     fn reporter_drives_entry_through_lifecycle() {
         let (events, _rx) = crate::events::channel();
-        let entry = Arc::new(RunEntry::new("r1".to_string(), action("A")));
+        let entry = Arc::new(RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0));
         let reporter = RunReporter::new(events, entry.clone(), "r1".to_string());
 
         let ctx = ExecutionStepContext::default();
@@ -715,7 +870,7 @@ mod tests {
     #[test]
     fn reporter_failure_is_terminal_and_logged() {
         let (events, _rx) = crate::events::channel();
-        let entry = Arc::new(RunEntry::new("r1".to_string(), action("A")));
+        let entry = Arc::new(RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0));
         let reporter = RunReporter::new(events, entry.clone(), "r1".to_string());
 
         reporter.finish_failure("kaboom".to_string());

@@ -72,6 +72,7 @@ production implementation lives in
 | `check_feasibility`                                   | Whether an action can run with current objects; missing inputs                 |
 | `run_action`                                          | Start an action; returns a `runId` immediately (non-blocking)                  |
 | `get_run`                                             | Poll a run's status, result/error, and progress log by `runId`                 |
+| `list_runs`                                           | Runs the daemon still holds, oldest first; `active_only` for in-progress runs  |
 | `get_state_root`                                      | Current state root from the synchronizer                                       |
 | `import_object_file`                                  | Adopt an external `.dobj` from a local path into objects                       |
 | `read_settings` / `write_settings`                    | Synchronizer + relayer URLs and the `mcpEnabled` toggle (partial writes merge) |

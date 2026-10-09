@@ -54,6 +54,7 @@ pub fn router(app_state: AppState, access: WebAccess) -> Router {
             post(actions::install_plugin)
                 .layer(DefaultBodyLimit::max(driver::MAX_PEXE_BYTES as usize)),
         )
+        .route("/actions/runs", get(actions::list_runs))
         .route("/actions/runs/{run_id}", get(actions::get_run))
         .route("/actions/{id}", get(actions::inspect_action))
         .route("/actions/{id}/feasibility", get(actions::check_feasibility))

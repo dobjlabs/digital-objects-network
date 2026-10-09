@@ -16,6 +16,9 @@ pub trait DobjOps: Send + Sync + 'static {
     fn run_action(&self, input: RunActionInput) -> anyhow::Result<RunAccepted>;
     /// Current state of a previously-started run, by its run id.
     fn get_run(&self, run_id: &str) -> anyhow::Result<RunState>;
+    /// Every run the host still holds, oldest first. `active_only` keeps
+    /// just the runs that have not succeeded or failed.
+    fn list_runs(&self, active_only: bool) -> anyhow::Result<Vec<RunState>>;
     fn check_feasibility(&self, action: &QualifiedName) -> anyhow::Result<FeasibilityReport>;
 
     /// Import an external `.dobj` object — one not produced by this driver —
