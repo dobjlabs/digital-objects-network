@@ -234,7 +234,7 @@ pub(crate) fn save_results(
     for (index, output) in action.total_outputs.iter().enumerate() {
         let spendable = spendable_outputs.obj(index);
         let content_hash = spendable.obj.commitment();
-        let file_name = object_file_name(&output.class, &spendable.obj);
+        let file_name = object_file_name(&output.class, &spendable.obj)?;
         output_files.push(file_name.clone());
 
         let live_record = StoredObjectRecord {

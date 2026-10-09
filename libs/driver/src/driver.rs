@@ -482,7 +482,8 @@ impl Driver {
         //    trust the sender's. The content hash is self-certifying -- it IS
         //    the commitment.
         let commitment = record.obj.commitment();
-        let file_name = object_file_name(&record.class, &record.obj);
+        let file_name = object_file_name(&record.class, &record.obj)
+            .map_err(|err| DriverError::InvalidInput(format!("imported {err:#}")))?;
         record.content_hash = commitment;
 
         // 3. Reject if we already hold this object (live or nullified).
