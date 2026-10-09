@@ -29,6 +29,7 @@ export interface QualifiedNamePayload {
 export interface ObjectSummaryPayload {
   contentHash: string;
   fileName: string;
+  fileSize?: number | null;
   class: QualifiedNamePayload;
   classHash: string;
   emoji: string;

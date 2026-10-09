@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use axum::{
     Json,
     extract::{Path, State},
+    http::header,
+    response::IntoResponse,
 };
 use wire_types::{ImportObjectRequest, ObjectSummary, ObjectsDirInfo};
 
@@ -31,6 +33,20 @@ pub async fn inspect_object(
             .await
             .map_err(|err| anyhow::anyhow!("inspect_object task panicked: {err}"))??;
     Ok(Json(summary))
+}
+
+/// `GET /objects/{file_name}/raw` -- the object file's bytes verbatim, served
+/// as JSON. Resolves `file_name` the same way as `GET /objects/{file_name}`.
+pub async fn read_object_raw(
+    State(state): State<AppState>,
+    Path(file_name): Path<String>,
+) -> ApiResult<impl IntoResponse> {
+    let driver = state.driver.clone();
+    let contents =
+        tokio::task::spawn_blocking(move || driver.read_object_raw(&PathBuf::from(&file_name)))
+            .await
+            .map_err(|err| anyhow::anyhow!("read_object_raw task panicked: {err}"))??;
+    Ok(([(header::CONTENT_TYPE, "application/json")], contents))
 }
 
 /// `POST /objects/import` — adopt an external `.dobj` (one not produced by

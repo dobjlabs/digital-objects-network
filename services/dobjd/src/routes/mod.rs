@@ -36,6 +36,7 @@ pub fn router(app_state: AppState, access: WebAccess) -> Router {
         .route("/objects/dir", get(objects::get_objects_dir))
         .route("/objects/import", post(objects::import_object))
         .route("/objects/{file_name}", get(objects::inspect_object))
+        .route("/objects/{file_name}/raw", get(objects::read_object_raw))
         .route("/classes", get(classes::list_classes))
         .route("/classes/{name}", get(classes::inspect_class))
         .route(

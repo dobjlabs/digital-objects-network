@@ -460,6 +460,31 @@ fn test_import_ungrounded_object_is_unknown() {
     assert_eq!(summary.status, ObjectStatus::Unknown);
 }
 
+#[test]
+fn test_read_object_raw_returns_stored_file() {
+    let (json, source_tx, _nullifier) = make_importable_log();
+    let driver = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
+    let summary = driver.import_object(&json).unwrap();
+    let raw = driver
+        .read_object_raw(std::path::Path::new(&summary.file_name))
+        .unwrap();
+    let on_disk =
+        std::fs::read_to_string(driver.paths().objects_dir.join(&summary.file_name)).unwrap();
+    assert_eq!(raw, on_disk);
+}
+
+#[test]
+fn test_read_object_raw_missing_file_is_not_found() {
+    let driver = import_driver(HashSet::new(), HashSet::new(), false);
+    let err = driver
+        .read_object_raw(std::path::Path::new("missing.dobj"))
+        .unwrap_err();
+    assert!(matches!(
+        err.downcast_ref::<crate::error::DriverError>(),
+        Some(crate::error::DriverError::ObjectFileNotFound(_))
+    ));
+}
+
 /// A driver with an empty catalog and mock chain deps. `install_plugin` only
 /// touches the actions dir and the catalog, so the mocks are never exercised.
 fn empty_catalog_driver() -> Driver {
