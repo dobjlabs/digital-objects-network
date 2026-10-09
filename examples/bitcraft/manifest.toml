@@ -1,0 +1,346 @@
+[plugin]
+name = "bitcraft"
+version = "0.1.0"
+# Rewritten by `cargo run -p pexe -- build game`.
+module_hash = "94fdc66d9db7b23c9a8970596c5a3146ec2590328b455139ef6c6f008b6c3a73"
+
+[[classes]]
+name = "Wood"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Stone"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Iron"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Stick"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "BucketOfWood"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "BucketOfStone"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "BucketOfIron"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "WoodAxe"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "StoneAxe"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "IronAxe"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Quarry"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "MiningDrill"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Bit"
+emoji = "🌲"
+description = "-"
+
+[[actions]]
+name = "GatherWood"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "GatherStone"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "GatherIron"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "CraftBucketOfWood"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "CraftBucketOfStone"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "CraftBucketOfIron"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfWoodAdd1"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfWoodAdd5"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfWoodAdd10"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfWoodAdd50"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfWoodTake1"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfStoneAdd1"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfStoneAdd5"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfStoneAdd10"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfStoneAdd50"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfStoneTake1"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfIronAdd1"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfIronAdd5"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfIronAdd10"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfIronAdd50"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfIronTake1"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "CraftStick"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "CraftWoodAxe"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "CraftStoneAxe"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "CraftIronAxe"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseWoodAxe"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseStoneAxe"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseIronAxe"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseQuarry1"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseMiningDrill1"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseQuarry2"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseMiningDrill2"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseQuarry3"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseMiningDrill3"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseQuarry4"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseMiningDrill4"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseQuarry5"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseMiningDrill5"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseQuarry6"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseMiningDrill6"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BuildQuarry"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BuildMiningDrill"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpQuarry1"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpMiningDrill1"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpQuarry2"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpMiningDrill2"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpQuarry3"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpMiningDrill3"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpQuarry4"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpMiningDrill4"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpQuarry5"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpMiningDrill5"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BitsFromWood"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BitsFromStone"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BitsFromIron"
+emoji = "⛏️"
+description = "-"
+

@@ -34,6 +34,7 @@ The workspace is declared in `Cargo.toml`. Crate-by-crate:
 | `libs/intro-pods/vdfpod`         | VDF intro pod (PoW gating via iterated hashing).                                                                                                                                                     |
 | `libs/intro-pods/lt-eq-u256-pod` | 256-bit `<=` intro pod (PoW difficulty checks). Crate name `lt-eq-u256-pod`.                                                                                                                         |
 | `examples/*`                     | Example plugin sources: `craft-basics` (Log, Wood, Stick, Stone, WoodPick, StonePick + 9 actions), `craft-rocket`, and `nanoverse` (one action per SDK feature; see its README).                     |
+| `examples/bitcraft/ui`           | Static bitcraft web UI over the dobjd HTTP API. Its bitcraft-specific rules are listed in `BITCRAFT_SPECIFIC_RULES.md`; update that with any UI change or `bitcraft/plugin.rhai` constraint change.  |
 | `devtools/beacon-shim`           | **Dev only, never shipped.** Beacon REST shim over a local anvil devnet; backs `just dev-local`. Keep it out of `images.yml` and `deploy/compose.yaml`.                                              |
 
 ## Build / test / dev
