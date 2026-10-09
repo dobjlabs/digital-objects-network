@@ -1,0 +1,79 @@
+{
+  "rules": [
+    {
+      "category": "tool interaction",
+      "description": "Creating a bucket: the bucket, with a green plus",
+      "actions": "^Craft(BucketOf(?:Wood|Stone|Iron))$",
+      "icon": "$1",
+      "badge": "plus"
+    },
+    {
+      "category": "tool interaction",
+      "description": "Creating an axe: the axe, with a green plus",
+      "actions": "^Craft(WoodAxe|StoneAxe|IronAxe)$",
+      "icon": "$1",
+      "badge": "plus"
+    },
+    {
+      "category": "tool interaction",
+      "description": "Creating a quarry or drill: the machine, with a green plus",
+      "actions": "^Build(Quarry|MiningDrill)$",
+      "icon": "$1",
+      "badge": "plus"
+    },
+    {
+      "category": "tool interaction",
+      "description": "Adding to a bucket: the bucket, with a green up chevron",
+      "actions": "^(BucketOf(?:Wood|Stone|Iron))Add\\d+$",
+      "icon": "$1",
+      "badge": "up"
+    },
+    {
+      "category": "tool interaction",
+      "description": "Taking from a bucket: the bucket, with a red down chevron",
+      "actions": "^(BucketOf(?:Wood|Stone|Iron))Take\\d+$",
+      "icon": "$1",
+      "badge": "down"
+    },
+    {
+      "category": "tool interaction",
+      "description": "Using an axe to produce wood: the axe, no badge",
+      "actions": "^Use(WoodAxe|StoneAxe|IronAxe)$",
+      "icon": "$1"
+    },
+    {
+      "category": "tool interaction",
+      "description": "Using a quarry or drill (any level) to produce stone or iron: the machine, no badge",
+      "actions": "^Use(Quarry|MiningDrill)\\d+$",
+      "icon": "$1"
+    },
+    {
+      "category": "tool interaction",
+      "description": "Upgrading a quarry or drill: the machine, with a green up chevron",
+      "actions": "^LevelUp(Quarry|MiningDrill)\\d+$",
+      "icon": "$1",
+      "badge": "up"
+    },
+    {
+      "category": "material creation",
+      "description": "Creating sticks from wood: the stick, with a green plus",
+      "actions": "^Craft(Stick)$",
+      "icon": "$1",
+      "badge": "plus"
+    },
+    {
+      "category": "material creation",
+      "description": "Creating bits from wood, stone or iron: the bit, with a green plus",
+      "actions": "^BitsFrom(?:Wood|Stone|Iron)$",
+      "icon": "Bit",
+      "badge": "plus"
+    },
+    {
+      "category": "raw resource gathering",
+      "description": "Gathering wood, stone or iron: the resource, with a green plus",
+      "actions": "^Gather(Wood|Stone|Iron)$",
+      "icon": "$1",
+      "badge": "plus"
+    }
+  ]
+}

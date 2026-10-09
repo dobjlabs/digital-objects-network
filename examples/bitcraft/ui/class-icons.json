@@ -1,0 +1,15 @@
+{
+  "Wood": "assets/wood.png",
+  "Stone": "assets/stone.png",
+  "Iron": "assets/iron.png",
+  "Stick": "assets/stick.png",
+  "BucketOfWood": "assets/bucket.png",
+  "BucketOfStone": "assets/bucket.png",
+  "BucketOfIron": "assets/bucket.png",
+  "WoodAxe": "assets/wood-axe.png",
+  "StoneAxe": "assets/stone-axe.png",
+  "IronAxe": "assets/iron-axe.png",
+  "Quarry": "assets/quarry.png",
+  "MiningDrill": "assets/mining-drill.png",
+  "Bit": "assets/bit.png"
+}

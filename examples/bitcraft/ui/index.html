@@ -15,6 +15,10 @@
     --row-selected: #cce4ff;
     --error: #b00020;
     --link: #0b57d0;
+    --action-name: #6d28d9;
+    --run-in-progress: #fff6cc;
+    --run-failed: #fde4e2;
+    --run-succeeded: #e3f4df;
     --object-unknown: #9a9a9a;
     --object-pending: #a16207;
     --object-held: #9a9a9a;
@@ -72,6 +76,7 @@
     font-weight: 600;
     color: var(--muted);
   }
+  #run-list-header { border-top: 1px solid var(--border); }
   #run-list {
     flex: none;
     max-height: 40%;
@@ -90,10 +95,18 @@
     cursor: default;
     user-select: none;
   }
+  .run-row.in-progress { background: var(--run-in-progress); }
+  .run-row.failed { background: var(--run-failed); }
+  .run-row.succeeded { background: var(--run-succeeded); }
   .action-row:hover,
   .run-row:hover { background: var(--row-hover); }
   .action-row.selected,
   .run-row.selected { background: var(--row-selected); }
+  .action-name,
+  .details-title.action-name {
+    color: var(--action-name);
+    font-weight: 500;
+  }
   .row-text {
     flex: 1;
     min-width: 0;
@@ -211,9 +224,55 @@
     from { background: var(--row-flash); }
   }
   .object-row svg { flex: none; }
-  .object-name {
+  .icon-tile {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
     overflow: hidden;
-    text-overflow: ellipsis;
+    background: var(--bg);
+    box-shadow: 0 1px 1.5px rgba(0, 0, 0, 0.28);
+  }
+  .class-label { white-space: nowrap; }
+  .class-label > .icon-tile,
+  .class-label > svg {
+    display: inline-block;
+    vertical-align: middle;
+    margin: -2px 5px 0 0;
+  }
+  .action-icon-slot {
+    flex: none;
+    width: 32px;
+    height: 32px;
+  }
+  .action-icon {
+    position: relative;
+    flex: none;
+  }
+  .action-icon > img {
+    position: absolute;
+    image-rendering: pixelated;
+  }
+  .action-icon-tile {
+    position: absolute;
+    background: var(--bg);
+  }
+  .action-icon > svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  .icon-tile img {
+    display: block;
+    width: 16px;
+    height: 16px;
+    image-rendering: pixelated;
+  }
+  .object-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
   }
   .message {
     padding: 8px 10px;
@@ -231,6 +290,18 @@
     padding: 16px 0 20px;
   }
   .icon-stack { position: relative; }
+  .large-page-icon { position: relative; }
+  .large-page-icon svg { display: block; }
+  /* The 16px art at 6x, centered across the page and placed just below the
+     folded corner, lower than the page's vertical center. */
+  .large-class-icon {
+    position: absolute;
+    left: 16px;
+    top: 40px;
+    width: 96px;
+    height: 96px;
+    image-rendering: pixelated;
+  }
   .icon-stack svg { position: absolute; }
   .details-title {
     font-size: 16px;
@@ -248,12 +319,18 @@
     border-collapse: collapse;
     width: 100%;
   }
+  /* One label width for every labelled table, so values line up across
+     tables whatever their contents. */
+  .field-table:not(.run-log) { table-layout: fixed; }
   .field-table th {
+    width: 9em;
     text-align: left;
     font-weight: normal;
     color: var(--muted);
     padding: 2px 12px 2px 0;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     vertical-align: top;
   }
   .field-table td {
@@ -269,6 +346,10 @@
     border-bottom: 1px solid var(--border);
     font-weight: 600;
   }
+  .collapsible-section > summary {
+    cursor: default;
+    user-select: none;
+  }
 </style>
 </head>
 <body>
@@ -279,10 +360,10 @@
     </section>
     <section id="execute-pane" class="pane">
       <div class="pane-header">Execute</div>
-      <div id="run-list-header" class="list-header">Currently running</div>
-      <ul id="run-list"></ul>
-      <div id="action-list-header" class="list-header">Available actions</div>
+      <div id="action-list-header" class="list-header">(0 objects selected) Available actions</div>
       <ul id="action-list"></ul>
+      <div id="run-list-header" class="list-header">Active and completed jobs</div>
+      <ul id="run-list"></ul>
     </section>
   </div>
   <section id="details-pane" class="pane">
@@ -294,6 +375,29 @@
   <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
     <path d="M3.5 1.5h6l3 3v10h-9z" fill="#fff" stroke="#8a8a8a"/>
     <path d="M9.5 1.5v3h3" fill="none" stroke="#8a8a8a"/>
+  </svg>
+</template>
+
+<!-- Action icon badges, drawn on the 32x32 action icon grid in its
+     top-right corner, with a white outline so they read over any art. -->
+<template id="badge-plus">
+  <svg viewBox="0 0 32 32" shape-rendering="crispEdges" aria-hidden="true">
+    <path d="M24 0h5v3h3v5h-3v3h-5v-3h-3v-5h3z" fill="#fff"/>
+    <path d="M25 1h3v3h3v3h-3v3h-3v-3h-3v-3h3z" fill="#16a34a"/>
+  </svg>
+</template>
+
+<template id="badge-up">
+  <svg viewBox="0 0 32 32" aria-hidden="true">
+    <path d="M22.5 8.5l4-4 4 4" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M22.5 8.5l4-4 4 4" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</template>
+
+<template id="badge-down">
+  <svg viewBox="0 0 32 32" aria-hidden="true">
+    <path d="M22.5 4.5l4 4 4-4" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M22.5 4.5l4 4 4-4" fill="none" stroke="#dc2626" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
   </svg>
 </template>
 
@@ -344,11 +448,26 @@
     },
   ];
 
+  // Maps each class name to its icon's path relative to this page, or to
+  // null for a class with no icon.
+  const CLASS_ICONS_URL = "class-icons.json";
+  let classIconPaths = {};
+
+  // Ordered rules for each action's 32x32 graphic; the first rule whose
+  // `actions` pattern matches the action name applies.
+  const ACTION_ICONS_URL = "action-icons.json";
+  let actionIconRules = [];
+
   // ---- End of bitcraft-specific rules.
 
   const objectsDirHeader = document.getElementById("objects-dir");
   const objectList = document.getElementById("object-list");
   const fileIconTemplate = document.getElementById("file-icon");
+  const actionBadgeTemplates = {
+    plus: document.getElementById("badge-plus"),
+    up: document.getElementById("badge-up"),
+    down: document.getElementById("badge-down"),
+  };
   const largeFileIconTemplate = document.getElementById("large-file-icon");
   const detailsBody = document.getElementById("details-body");
   const actionList = document.getElementById("action-list");
@@ -376,6 +495,9 @@
   let pluginActions = [];
   let objectsDirPath = "";
   let selectedActionName = null;
+  // The action whose source the Details pane shows expanded, so a redraw
+  // keeps it open; any other action's source starts collapsed.
+  let expandedSourceActionName = null;
   // Runs started from this page, newest first. At most one of
   // `selectedActionName` and `selectedRunId` is set: the Execute pane
   // holds a single selection across both of its lists.
@@ -444,25 +566,117 @@
     const row = table.insertRow();
     const header = document.createElement("th");
     header.textContent = label;
+    header.title = label;
     row.append(header);
     const cell = row.insertCell();
     cell.textContent = value ?? NOT_AVAILABLE;
     return cell;
   }
 
+  // A class's art on a rounded tile, or the plain page icon for a class
+  // without art.
+  function smallClassIcon(className) {
+    const classIconPath = classIconPaths[className];
+    if (!classIconPath) {
+      return fileIconTemplate.content.cloneNode(true).querySelector("svg");
+    }
+    const tile = document.createElement("span");
+    tile.className = "icon-tile";
+    const classIcon = document.createElement("img");
+    classIcon.src = classIconPath;
+    classIcon.alt = "";
+    tile.append(classIcon);
+    return tile;
+  }
+
+  // What the first matching rule draws for an action, with `$1`-style
+  // references in its class names filled from the pattern's match; null
+  // when no rule matches.
+  function actionIconSpec(actionName) {
+    for (const rule of actionIconRules) {
+      const match = new RegExp(rule.actions).exec(actionName);
+      if (match === null) {
+        continue;
+      }
+      const fill = (template) =>
+        template?.replace(/\$(\d)/g, (_, group) => match[Number(group)] ?? "") ?? null;
+      return {
+        icon: fill(rule.icon),
+        badge: rule.badge ?? null,
+        cornerIcon: fill(rule.cornerIcon),
+      };
+    }
+    return null;
+  }
+
+  // The action's graphic, laid out on a 32x32 grid and drawn `scale` CSS px
+  // per grid unit: an app-style rounded tile with the art centered on it.
+  // Null when no rule matches or its main class has no art.
+  function actionIcon(actionName, scale) {
+    const spec = actionIconSpec(actionName);
+    const iconPath = spec && classIconPaths[spec.icon];
+    if (!iconPath) {
+      return null;
+    }
+    const icon = document.createElement("div");
+    icon.className = "action-icon";
+    icon.style.width = `${32 * scale}px`;
+    icon.style.height = `${32 * scale}px`;
+    // The tile spans grid units 2-30, with macOS's ~22% corner radius.
+    const tile = document.createElement("div");
+    tile.className = "action-icon-tile";
+    tile.style.left = `${2 * scale}px`;
+    tile.style.top = `${2 * scale}px`;
+    tile.style.width = `${28 * scale}px`;
+    tile.style.height = `${28 * scale}px`;
+    tile.style.borderRadius = `${6.25 * scale}px`;
+    tile.style.boxShadow = [
+      `inset 0 0 0 ${0.25 * scale}px rgba(0, 0, 0, 0.08)`,
+      `0 ${0.5 * scale}px ${scale}px rgba(0, 0, 0, 0.3)`,
+    ].join(", ");
+    icon.append(tile);
+    const layer = (path, gridX, gridY, gridSize) => {
+      const image = document.createElement("img");
+      image.src = path;
+      image.alt = "";
+      image.style.left = `${gridX * scale}px`;
+      image.style.top = `${gridY * scale}px`;
+      image.style.width = `${gridSize * scale}px`;
+      image.style.height = `${gridSize * scale}px`;
+      return image;
+    };
+    icon.append(layer(iconPath, 8, 8, 16));
+    const cornerPath = spec.cornerIcon && classIconPaths[spec.cornerIcon];
+    if (cornerPath) {
+      icon.append(layer(cornerPath, 20, 20, 8));
+    }
+    const badgeTemplate = actionBadgeTemplates[spec.badge];
+    if (badgeTemplate) {
+      icon.append(badgeTemplate.content.cloneNode(true).querySelector("svg"));
+    }
+    return icon;
+  }
+
+  // A class's qualified name with its small icon to the left.
+  function classLabel(qualifiedName) {
+    const label = document.createElement("span");
+    label.className = "class-label";
+    label.append(smallClassIcon(qualifiedName.name), qualifiedClassName(qualifiedName));
+    return label;
+  }
+
   function summaryLine(object, leadingParts) {
-    const className = object.class
-      ? `${object.class.pluginName}::${object.class.name}`
-      : NOT_AVAILABLE;
     const parts = [
       ...leadingParts,
-      className,
+      object.class ? classLabel(object.class) : NOT_AVAILABLE,
       formatFileSize(object.fileSize),
       object.status ?? NOT_AVAILABLE,
     ];
     const line = document.createElement("div");
     line.className = "details-meta";
-    line.textContent = parts.join(" \u00b7 ") + " \u00b7 ";
+    for (const part of parts) {
+      line.append(part, " \u00b7 ");
+    }
     const rawLink = document.createElement("a");
     rawLink.href = rawObjectUrl(object.fileName);
     rawLink.target = "_blank";
@@ -535,7 +749,9 @@
     if (!stillOffered) {
       selectedActionName = null;
     }
-    actionListHeader.textContent = `Available actions (${matchingActions.length})`;
+    const selectedCount = selectedObjects.length;
+    actionListHeader.textContent =
+      `(${selectedCount} object${selectedCount === 1 ? "" : "s"} selected) Available actions`;
 
     if (matchingActions.length === 0) {
       const count = selectedObjects.length;
@@ -571,6 +787,7 @@
       });
 
       const name = document.createElement("div");
+      name.className = "action-name";
       name.textContent = qualifiedClassName(action.action);
 
       const path = document.createElement("div");
@@ -587,7 +804,13 @@
       playButton.disabled = runs.some(isRunInProgress);
       playButton.addEventListener("click", () => startRun(action));
 
-      row.append(text, playButton);
+      const iconSlot = document.createElement("span");
+      iconSlot.className = "action-icon-slot";
+      const rowIcon = actionIcon(action.action.name, 1);
+      if (rowIcon) {
+        iconSlot.append(rowIcon);
+      }
+      row.append(iconSlot, text, playButton);
       actionList.append(row);
     }
   }
@@ -634,12 +857,6 @@
       .map((object) => object.fileName);
     const run = newRun(action, inputFileNames);
     runs.unshift(run);
-
-    selectedFileNames.clear();
-    anchorFileName = null;
-    selectionAtAnchor = new Set();
-    selectedActionName = null;
-    selectedRunId = run.id;
     showSelection();
 
     try {
@@ -703,7 +920,7 @@
     return formatDuration(Math.max(0, endMs - startMs));
   }
 
-  // Rebuilds the Currently running list from the runs dobjd still has in
+  // Rebuilds the job list from the runs dobjd still has in
   // progress, so a reload does not lose them. Runs that finished before the
   // page loaded are left out, as are runs this page already tracks.
   async function restoreRuns() {
@@ -769,6 +986,9 @@
       const row = document.createElement("li");
       row.className = "run-row";
       row.classList.toggle("selected", run.id === selectedRunId);
+      row.classList.toggle("in-progress", isRunInProgress(run));
+      row.classList.toggle("failed", runStatus(run) === "failed");
+      row.classList.toggle("succeeded", runStatus(run) === "succeeded");
       row.addEventListener("mousedown", (event) => {
         if (event.button !== 0 || (IS_MAC && event.ctrlKey)) {
           return;
@@ -883,13 +1103,20 @@
     return list;
   }
 
-  function renderActionDetails(action) {
+  // The Details pane's icon for an action: its graphic at 4x, or the blank
+  // page when it has none.
+  function largeActionIcon(actionName) {
     const icon = document.createElement("div");
     icon.className = "details-icon";
-    icon.append(largeFileIconTemplate.content.cloneNode(true));
+    icon.append(actionIcon(actionName, 4) ?? largeFileIconTemplate.content.cloneNode(true));
+    return icon;
+  }
+
+  function renderActionDetails(action) {
+    const icon = largeActionIcon(action.action.name);
 
     const title = document.createElement("div");
-    title.className = "details-title";
+    title.className = "details-title action-name";
     title.textContent = qualifiedClassName(action.action);
 
     const meta = document.createElement("div");
@@ -913,12 +1140,18 @@
 
     const inputs = document.createElement("div");
     inputs.className = "subsection-list";
-    inputs.append(
-      subSubsection("Will be consumed"),
-      numberedLines(consumedObjects.map((object) => (prefix) => summaryLine(object, [prefix]))),
-      subSubsection("Will be mutated"),
-      numberedLines(mutatedInputObjects.map((object) => (prefix) => summaryLine(object, [prefix]))),
-    );
+    if (consumedObjects.length > 0) {
+      inputs.append(
+        subSubsection("Will be consumed"),
+        numberedLines(consumedObjects.map((object) => (prefix) => summaryLine(object, [prefix]))),
+      );
+    }
+    if (mutatedInputObjects.length > 0) {
+      inputs.append(
+        subSubsection("Will be mutated"),
+        numberedLines(mutatedInputObjects.map((object) => (prefix) => summaryLine(object, [prefix]))),
+      );
+    }
 
     const newOutputs = action.totalOutputs.filter((_, slot) => !mutatedOutputSlots.has(slot));
     const outputs = document.createElement("div");
@@ -926,22 +1159,32 @@
     outputs.append(numberedLines(newOutputs.map((output) => (prefix) => {
       const line = document.createElement("div");
       line.className = "details-meta";
-      line.textContent = [prefix, qualifiedClassName(output.class)].join(" \u00b7 ");
+      line.append(prefix, " \u00b7 ", classLabel(output.class));
       return line;
     })));
 
-    detailsBody.append(
-      icon,
-      title,
-      meta,
-      hashTable,
-      subsection("Selected Inputs"),
-      inputs,
-      subsection("Expected Outputs"),
-      outputs,
-      subsection("Action Source"),
-      source,
-    );
+    detailsBody.append(icon, title, meta, hashTable);
+    if (objectsBySlot.length > 0) {
+      detailsBody.append(subsection("Selected Inputs"), inputs);
+    }
+    if (newOutputs.length > 0) {
+      detailsBody.append(subsection("Expected Outputs"), outputs);
+    }
+    const actionName = qualifiedClassName(action.action);
+    if (expandedSourceActionName !== actionName) {
+      expandedSourceActionName = null;
+    }
+    const sourceSection = document.createElement("details");
+    sourceSection.className = "collapsible-section";
+    sourceSection.open = expandedSourceActionName === actionName;
+    sourceSection.addEventListener("toggle", () => {
+      expandedSourceActionName = sourceSection.open ? actionName : null;
+    });
+    const sourceTitle = document.createElement("summary");
+    sourceTitle.className = "subsection-title";
+    sourceTitle.textContent = "Action Source";
+    sourceSection.append(sourceTitle, source);
+    detailsBody.append(sourceSection);
   }
 
   function formatDuration(milliseconds) {
@@ -1011,6 +1254,8 @@
   }
 
   function renderRunDetails(run) {
+    const icon = largeActionIcon(run.action.action.name);
+
     const title = document.createElement("div");
     title.className = "details-title";
     title.textContent = run.runId === null ? "Job" : `Job ${run.runId}`;
@@ -1072,6 +1317,7 @@
     }
 
     detailsBody.append(
+      icon,
       title,
       meta,
       properties,
@@ -1115,7 +1361,18 @@
 
     const icon = document.createElement("div");
     icon.className = "details-icon";
-    icon.append(largeFileIconTemplate.content.cloneNode(true));
+    const page = document.createElement("div");
+    page.className = "large-page-icon";
+    page.append(largeFileIconTemplate.content.cloneNode(true));
+    const classIconPath = classIconPaths[object.class.name];
+    if (classIconPath) {
+      const classIcon = document.createElement("img");
+      classIcon.className = "large-class-icon";
+      classIcon.src = classIconPath;
+      classIcon.alt = "";
+      page.append(classIcon);
+    }
+    icon.append(page);
 
     const title = document.createElement("div");
     title.className = "details-title";
@@ -1180,6 +1437,21 @@
     objectList.append(item);
   }
 
+  // Splits a file name so that, when it overflows, only the head is cut
+  // short and the tail stays visible: the extension plus the characters
+  // just before it, as Finder truncates.
+  function splitForMiddleTruncation(fileName) {
+    const charactersBeforeExtension = 8;
+    const extensionStart = fileName.lastIndexOf(".");
+    const tailStart = Math.max(
+      0,
+      (extensionStart > 0 ? extensionStart : fileName.length) - charactersBeforeExtension,
+    );
+    return [fileName.slice(0, tailStart), fileName.slice(tailStart)];
+  }
+
+  const nameMeasureContext = document.createElement("canvas").getContext("2d");
+
   function renderObjects(objects) {
     objectList.replaceChildren();
     rowsByFileName.clear();
@@ -1198,11 +1470,10 @@
         row.classList.add("flashing");
         row.style.animation = `row-flash ${ROW_FLASH_MS}ms ease-out -${flashElapsed}ms`;
       }
-      row.append(fileIconTemplate.content.cloneNode(true));
+      row.append(smallClassIcon(object.class.name));
 
       const name = document.createElement("span");
       name.className = "object-name";
-      name.textContent = object.fileName;
       row.append(name);
 
       // A ctrl-click on macOS is a context-menu click and leaves the
@@ -1218,6 +1489,42 @@
       rowsByFileName.set(object.fileName, row);
       objectList.append(row);
     }
+    fitObjectNames();
+  }
+
+  // Writes each row's file name, cut in the middle to fit its row.
+  function fitObjectNames() {
+    const firstName = objectList.querySelector(".object-name");
+    if (firstName === null) {
+      return;
+    }
+    nameMeasureContext.font = getComputedStyle(firstName).font;
+    for (const [fileName, row] of rowsByFileName) {
+      const name = row.querySelector(".object-name");
+      name.textContent = fitFileName(fileName, name.clientWidth);
+    }
+  }
+
+  // The longest form of the name that fits `availableWidth`: the whole name,
+  // or as much of its head as fits ahead of an ellipsis and its tail.
+  function fitFileName(fileName, availableWidth) {
+    const measure = (text) => nameMeasureContext.measureText(text).width;
+    if (measure(fileName) <= availableWidth) {
+      return fileName;
+    }
+    const [head, tail] = splitForMiddleTruncation(fileName);
+    const shortened = (headLength) => `${head.slice(0, headLength)}\u2026${tail}`;
+    let fittingHeadLength = 0;
+    let tooLongHeadLength = head.length;
+    while (tooLongHeadLength - fittingHeadLength > 1) {
+      const middle = Math.floor((fittingHeadLength + tooLongHeadLength) / 2);
+      if (measure(shortened(middle)) <= availableWidth) {
+        fittingHeadLength = middle;
+      } else {
+        tooLongHeadLength = middle;
+      }
+    }
+    return shortened(fittingHeadLength);
   }
 
   function selectWithClick(fileName, event) {
@@ -1278,11 +1585,15 @@
   async function load() {
     showMessage("Loading...", false);
     try {
-      const [objectsDir, objects, actions] = await Promise.all([
+      const [objectsDir, objects, actions, iconPaths, actionIcons] = await Promise.all([
         fetchJson("/objects/dir"),
         fetchJson("/objects/unspent"),
         fetchJson("/actions"),
+        loadUiDataFile(CLASS_ICONS_URL, {}),
+        loadUiDataFile(ACTION_ICONS_URL, { rules: [] }),
       ]);
+      classIconPaths = iconPaths;
+      actionIconRules = actionIcons.rules;
       pluginActions = actions.filter((action) => action.action.pluginName === PLUGIN_NAME);
       objectsDirPath = objectsDir.path;
       objectsDirHeader.textContent = objectsDir.path;
@@ -1291,6 +1602,21 @@
       await restoreRuns();
     } catch (error) {
       showMessage(`Could not reach dobjd at ${DOBJD_URL}: ${error.message}`, true);
+    }
+  }
+
+  // Reads a JSON file served next to this page, not by dobjd, or returns
+  // `fallback` if it cannot be read.
+  async function loadUiDataFile(url, fallback) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      return await response.json();
+    } catch (error) {
+      console.warn(`Could not load ${url}:`, error);
+      return fallback;
     }
   }
 
@@ -1384,6 +1710,8 @@
       }
     });
   }
+
+  new ResizeObserver(() => fitObjectNames()).observe(objectList);
 
   renderDetails();
   load();
