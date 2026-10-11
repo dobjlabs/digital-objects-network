@@ -59,8 +59,6 @@ export interface ActionArgPayload {
   name: string;
   /** Required pod2 value type, such as Raw or Int. */
   type: string;
-  /** Default generator label: random, pow_obj_grind, or arithmetic. */
-  default: string;
 }
 
 export interface ActionPayload {
@@ -89,8 +87,6 @@ export interface RunActionResult {
   newRoot: string;
   outputFiles: string[];
   nullifiedFiles: string[];
-  /** Resolved arguments of the selected action, including computed defaults. */
-  args?: ActionArgValues;
 }
 
 /** `POST /actions/run` response: the run was accepted and is executing in the

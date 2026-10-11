@@ -194,7 +194,6 @@ impl DobjOps for MockDobjOps {
                 new_root: "0xmocknewroot".to_string(),
                 output_files: vec!["craft-basics__wood_0xnew.dobj".to_string()],
                 nullified_files: vec![],
-                args: Default::default(),
             }),
             error: None,
             progress: vec![],

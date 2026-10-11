@@ -604,7 +604,7 @@ export function ContextPanel({
                 <div className="method-arg-row">
                   <span
                     className="method-arg-label"
-                    title={`${arg.type}; default: ${arg.default}`}
+                    title={arg.type}
                   >
                     {arg.name}: {arg.type}
                   </span>
@@ -612,7 +612,7 @@ export function ContextPanel({
                     type="text"
                     className={`method-arg-input ${err ? "error" : ""}`.trim()}
                     value={typedArgs[arg.name]}
-                    placeholder={`default: ${arg.default}`}
+                    placeholder="Use script default"
                     disabled={proofRunning}
                     spellCheck={false}
                     onChange={(event) => {

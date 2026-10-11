@@ -292,12 +292,6 @@ pub async fn run(
                     println!("  - {f}");
                 }
             }
-            if !result.args.is_empty() {
-                println!("arguments:");
-                for (name, value) in &result.args {
-                    println!("  {name} = {}", render_arg_value(value));
-                }
-            }
             Ok(())
         }
         RunStatus::Failed => Err(anyhow!(
@@ -355,17 +349,6 @@ fn parse_action_args(action: &ActionSummary, raw: &[String]) -> Result<ActionArg
         }
     }
     Ok(args)
-}
-
-fn render_arg_value(value: &Value) -> String {
-    if let Some(hex) = value.get("Raw").and_then(Value::as_str) {
-        let trimmed = hex.trim_start_matches('0');
-        return format!("0x{}", if trimmed.is_empty() { "0" } else { trimmed });
-    }
-    if let Some(n) = value.get("Int").and_then(Value::as_str) {
-        return n.to_string();
-    }
-    value.to_string()
 }
 
 /// Poll `GET /actions/runs/{run_id}` until the run reaches a terminal state,
@@ -549,10 +532,7 @@ pub async fn inspect_action(client: &DobjdClient, id: String, json: bool) -> Res
     if !action.args.is_empty() {
         println!("arguments:");
         for arg in &action.args {
-            println!(
-                "  {}: {} (default: {})",
-                arg.name, arg.type_name, arg.default
-            );
+            println!("  {}: {}", arg.name, arg.type_name);
         }
     }
     if !action.predicate_source.is_empty() {
@@ -690,7 +670,6 @@ mod tests {
                 .map(|(name, typ)| ActionArgSummary {
                     name: name.to_string(),
                     type_name: typ.to_string(),
-                    default: "random".to_string(),
                 })
                 .collect(),
         }
@@ -722,14 +701,5 @@ mod tests {
         let twice = ["n=1", "n=2"].map(str::to_string);
         let err = parse_action_args(&action, &twice).unwrap_err().to_string();
         assert!(err.contains("more than once"), "{err}");
-    }
-
-    #[test]
-    fn render_arg_value_is_compact() {
-        let raw = |hex: &str| serde_json::json!({"Raw": format!("{hex:0>64}")});
-        assert_eq!(render_arg_value(&raw("beef")), "0xbeef");
-        assert_eq!(render_arg_value(&raw("")), "0x0");
-        assert_eq!(render_arg_value(&serde_json::json!({"Int": "42"})), "42");
-        assert_eq!(render_arg_value(&serde_json::json!("hi")), "\"hi\"");
     }
 }

@@ -52,8 +52,6 @@ pub struct ExecuteActionResult {
     pub relayer_job_id: String,
     pub tx_hash: Option<String>,
     pub block_number: Option<i64>,
-    /// Resolved arguments of the selected action, including computed defaults.
-    pub args: ActionArgValues,
 }
 
 /// Optional context passed alongside execution progress steps.

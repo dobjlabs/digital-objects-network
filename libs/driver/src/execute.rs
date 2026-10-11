@@ -162,12 +162,6 @@ pub(crate) fn decode_action_args(args: &ActionArgValues) -> Result<ActionArgs> {
         .collect()
 }
 
-pub(crate) fn encode_action_args(args: &ActionArgs) -> Result<ActionArgValues> {
-    args.iter()
-        .map(|(name, value)| Ok((name.clone(), serde_json::to_value(value)?)))
-        .collect()
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedInput {
     pub(crate) file_name: String,
@@ -351,7 +345,6 @@ mod action_args_tests {
                 .map(|(name, typ)| ActionArgSummary {
                     name: name.to_string(),
                     type_name: typ.to_string(),
-                    default: "random".to_string(),
                 })
                 .collect(),
         }
@@ -379,7 +372,7 @@ mod action_args_tests {
     }
 
     #[test]
-    fn argument_values_round_trip_through_json() {
+    fn argument_values_decode_from_json() {
         let json: ActionArgValues = [
             (
                 "key".to_string(),
@@ -390,7 +383,7 @@ mod action_args_tests {
         .into();
         let decoded = decode_action_args(&json).unwrap();
         assert_eq!(decoded["n"], Value::from(42));
-        assert_eq!(encode_action_args(&decoded).unwrap(), json);
+        assert_eq!(serde_json::to_value(&decoded["key"]).unwrap(), json["key"]);
 
         let bad: ActionArgValues = [("key".to_string(), serde_json::json!({"Int": 7}))].into();
         let err = decode_action_args(&bad).unwrap_err().to_string();

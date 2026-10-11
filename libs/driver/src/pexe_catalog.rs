@@ -218,7 +218,6 @@ impl PexeCatalog {
                     .map(|a| ActionArgSummary {
                         name: a.name.clone(),
                         type_name: a.type_name(),
-                        default: a.default.to_string(),
                     })
                     .collect();
                 all_actions.push(ActionSummary {

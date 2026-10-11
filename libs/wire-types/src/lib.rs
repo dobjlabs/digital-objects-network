@@ -231,8 +231,6 @@ pub struct ActionArgSummary {
     /// Required pod2 value type, such as Raw or Int.
     #[serde(rename = "type")]
     pub type_name: String,
-    /// Default generator label: random, pow_obj_grind, or arithmetic.
-    pub default: String,
 }
 
 /// Argument values by name, in pod2's JSON form for a value: a Raw is
@@ -339,9 +337,6 @@ pub struct RunActionResult {
     pub new_root: String,
     pub output_files: Vec<String>,
     pub nullified_files: Vec<String>,
-    /// Resolved arguments of the selected action, including computed defaults.
-    #[serde(default)]
-    pub args: ActionArgValues,
 }
 
 /// Lifecycle state of a run tracked in the daemon's run registry.
