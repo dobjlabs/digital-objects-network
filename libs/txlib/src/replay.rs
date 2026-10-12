@@ -1104,10 +1104,7 @@ mod tests {
         frontend::MultiPodBuilder,
         middleware::{Params, VDSet},
     };
-    use std::{
-        panic::{AssertUnwindSafe, catch_unwind},
-        sync::Arc,
-    };
+    use std::sync::Arc;
 
     fn context() -> BuildContext {
         BuildContext::new(
@@ -1119,81 +1116,185 @@ mod tests {
         )
     }
 
+    fn apply_replay_predicate(
+        ctx: &mut BuildContext,
+        name: &str,
+        arguments: Vec<Value>,
+        statements: Vec<Statement>,
+    ) -> anyhow::Result<Statement> {
+        let predicate = ctx.modules[1].predicate_ref_by_name(name).unwrap();
+        ctx.builder
+            .op(
+                false,
+                arguments.into_iter().enumerate().collect(),
+                Operation::custom(predicate, statements),
+            )
+            .map_err(Into::into)
+    }
+
+    fn mutation_evidence(
+        ctx: &mut BuildContext,
+        source_key: &str,
+        read_after_insert: bool,
+    ) -> (Vec<Value>, Vec<Statement>) {
+        let old = dict!({"key" => 1_i64});
+        let new = if read_after_insert {
+            old.clone()
+        } else {
+            dict!({"key" => 2_i64})
+        };
+        let empty = set!();
+        let source = set!(old);
+        let zero = empty.commitment();
+        let inputs = if source_key == "inputs" {
+            &source
+        } else {
+            &empty
+        };
+        let nullifiers = if source_key == "nullifiers" {
+            &source
+        } else {
+            &empty
+        };
+        let before = build_tx(inputs, &empty, nullifiers, zero, zero);
+        let created = set!(new);
+        let mid = tx_with(&before, "created", Value::from(created.clone()));
+        let mut next_nullifiers = nullifiers.clone();
+        next_nullifiers
+            .insert(&Value::from(crate::compute_nullifier(&old)))
+            .unwrap();
+        let after = tx_with(&mid, "nullifiers", Value::from(next_nullifiers.clone()));
+        let nullify = Replayer::new(ctx, &mut TxStats::new()).build_replay_nullify(
+            &old,
+            &mid,
+            &after,
+            &next_nullifiers,
+            &source,
+        );
+
+        // Every premise is valid on its own. Only the custom predicate can
+        // detect that its shared key or pre-mutation dictionary does not match.
+        let allowed_key = if source_key == "nullifiers" {
+            "inputs"
+        } else {
+            source_key
+        };
+        let whitelist = ctx
+            .builder
+            .priv_op(op!(SetContains(set!("inputs", "created"), allowed_key)))
+            .unwrap();
+        let source_tx = if read_after_insert { &mid } else { &before };
+        let read = ctx
+            .builder
+            .priv_op(op!(DictContains(source_tx, source_key, source)))
+            .unwrap();
+        let insert = ctx
+            .builder
+            .priv_op(op!(SetInsert(
+                entry(&before, "created").unwrap(),
+                new,
+                created
+            )))
+            .unwrap();
+        let update = ctx
+            .builder
+            .priv_op(op!(DictUpdate(before, "created", created, mid)))
+            .unwrap();
+        (
+            vec![before.into(), after.into(), old.into(), new.into()],
+            vec![whitelist, read, insert, update, nullify],
+        )
+    }
+
     #[test]
     fn rejects_unapproved_source_field() {
-        let old = dict!({"key" => 1_i64});
-        let new = dict!({"key" => 2_i64});
-        let empty = set!();
-        let forged_source = set!(old);
-        let zero = empty.commitment();
-        let frame = ReplayFrame {
-            inputs: &empty,
-            created: &empty,
-            nullifiers: &forged_source,
-            chain_start: zero,
-            chain_end: zero,
-        };
-        let mut scratch = frame.mutate_scratch(&old, &new).unwrap();
-        scratch.source_key = "nullifiers";
-        scratch.source = forged_source;
         let mut ctx = context();
-        let mut stats = TxStats::new();
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            Replayer::new(&mut ctx, &mut stats).build_replay_mutate_event(&new, &old, &scratch)
-        }));
+        let (arguments, statements) = mutation_evidence(&mut ctx, "inputs", false);
+        apply_replay_predicate(&mut ctx, "ReplayMutateEvent", arguments, statements).unwrap();
+
+        let (arguments, statements) = mutation_evidence(&mut ctx, "nullifiers", false);
         assert!(
-            result.is_err(),
-            "nullifiers must not be usable as an existence source"
+            apply_replay_predicate(&mut ctx, "ReplayMutateEvent", arguments, statements).is_err()
         );
-        assert_eq!(stats.get("ReplayNullify"), Some(&1));
-        assert!(!stats.contains_key("ReplayMutateEvent"));
     }
 
     #[test]
     fn rejects_mutation_using_its_own_output_as_source() {
-        let object = dict!({"key" => 1_i64});
-        let empty = set!();
-        let zero = empty.commitment();
-        let frame = ReplayFrame {
-            inputs: &empty,
-            created: &empty,
-            nullifiers: &empty,
-            chain_start: zero,
-            chain_end: zero,
-        };
-        let mut scratch = frame.mutate_scratch(&object, &object).unwrap();
-        scratch.source = scratch.new_created.clone();
         let mut ctx = context();
-        let mut stats = TxStats::new();
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            Replayer::new(&mut ctx, &mut stats)
-                .build_replay_mutate_event(&object, &object, &scratch)
-        }));
+        let (arguments, statements) = mutation_evidence(&mut ctx, "created", true);
         assert!(
-            result.is_err(),
-            "the source must be bound to the pre-mutation context"
+            apply_replay_predicate(&mut ctx, "ReplayMutateEvent", arguments, statements).is_err()
         );
-        assert_eq!(stats.get("ReplayNullify"), Some(&1));
-        assert!(!stats.contains_key("ReplayMutateEvent"));
     }
 
     #[test]
     fn rejects_second_consumption_even_when_source_still_contains_state() {
+        let mut ctx = context();
         let old = dict!({"key" => 1_i64});
         let source = set!(old);
         let empty = set!();
         let zero = empty.commitment();
-        let before_tx = build_tx(&empty, &source, &empty, zero, zero);
-        let nullifiers = set!(crate::compute_nullifier(&old));
-        let after_tx = tx_with(&before_tx, "nullifiers", Value::from(nullifiers.clone()));
-        let mut ctx = context();
-        let mut stats = TxStats::new();
-        let mut replayer = Replayer::new(&mut ctx, &mut stats);
-        replayer.build_replay_nullify(&old, &before_tx, &after_tx, &nullifiers, &source);
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            replayer.build_replay_nullify(&old, &after_tx, &after_tx, &nullifiers, &source)
-        }));
-        assert!(result.is_err(), "SetInsert must require a fresh nullifier");
-        assert_eq!(stats.get("ReplayNullify"), Some(&1));
+        let before = build_tx(&empty, &source, &empty, zero, zero);
+        let key_hash = object_key_hash(&old).unwrap();
+        let nullifier = object_nullifier_from_key_hash(key_hash);
+        let nullifiers = set!(nullifier);
+        let after = tx_with(&before, "nullifiers", Value::from(nullifiers.clone()));
+        let contains = ctx.builder.priv_op(op!(SetContains(source, old))).unwrap();
+        let hash_key = ctx
+            .builder
+            .priv_op(op!(Hash(old, entry(&old, "key").unwrap(), key_hash)))
+            .unwrap();
+        let hash_nullifier = ctx
+            .builder
+            .priv_op(op!(Hash(key_hash, OBJECT_NULLIFIER_VERSION, nullifier)))
+            .unwrap();
+        let insert = ctx
+            .builder
+            .priv_op(op!(SetInsert(
+                entry(&before, "nullifiers").unwrap(),
+                nullifier,
+                nullifiers
+            )))
+            .unwrap();
+        let update = ctx
+            .builder
+            .priv_op(op!(DictUpdate(before, "nullifiers", nullifiers, after)))
+            .unwrap();
+        let statements = vec![contains, hash_key, hash_nullifier, insert, update];
+        apply_replay_predicate(
+            &mut ctx,
+            "ReplayNullify",
+            vec![
+                before.into(),
+                after.clone().into(),
+                old.clone().into(),
+                source.clone().into(),
+            ],
+            statements.clone(),
+        )
+        .unwrap();
+
+        // The insertion proves freshness against the empty set, while this
+        // update starts from a dictionary that already contains the nullifier.
+        let repeated_update = ctx
+            .builder
+            .priv_op(op!(DictUpdate(after, "nullifiers", nullifiers, after)))
+            .unwrap();
+        let mut statements = statements;
+        statements[4] = repeated_update;
+        assert!(
+            apply_replay_predicate(
+                &mut ctx,
+                "ReplayNullify",
+                vec![
+                    after.clone().into(),
+                    after.into(),
+                    old.into(),
+                    source.into()
+                ],
+                statements,
+            )
+            .is_err()
+        );
     }
 }

@@ -1515,6 +1515,62 @@ mod tests {
     }
 
     #[test]
+    fn grounding_rejects_membership_in_a_different_nullifier_set() {
+        let (mut ctx, guard_type) = replay_test_context();
+        let mut state = TestState::empty(0);
+        let inputs = grounded_replay_inputs(&mut state, guard_type, 1);
+        let input = &inputs[0];
+        let witness = state.grounding_witness(&inputs);
+        let membership =
+            prove_obj_in_created(&mut ctx, state.created.commitment(), &witness, input);
+        let empty = set!();
+        let input_set = set!(input);
+        let key_hash = object_key_hash(input).unwrap();
+        let nullifier = object_nullifier_from_key_hash(key_hash);
+        let nullifiers = set!(nullifier);
+        let insert = ctx
+            .builder
+            .priv_op(op!(SetInsert(empty, input, input_set)))
+            .unwrap();
+        let hash_key = ctx
+            .builder
+            .priv_op(op!(Hash(input, entry(input, "key").unwrap(), key_hash)))
+            .unwrap();
+        let hash_nullifier = ctx
+            .builder
+            .priv_op(op!(Hash(key_hash, OBJECT_NULLIFIER_VERSION, nullifier)))
+            .unwrap();
+        let spent = ctx
+            .builder
+            .priv_op(op!(SetContains(nullifiers, nullifier)))
+            .unwrap();
+        let premises = vec![membership, insert, hash_key, hash_nullifier, spent];
+        let predicate = ctx.modules[1]
+            .predicate_ref_by_name("InputGroundedAndSpent")
+            .unwrap();
+        let arguments = vec![
+            (0, Value::from(empty.clone())),
+            (1, Value::from(input_set)),
+            (2, Value::from(state.created.commitment())),
+            (3, Value::from(nullifiers)),
+        ];
+        ctx.builder
+            .op(
+                false,
+                arguments.clone(),
+                Operation::custom(predicate.clone(), premises.clone()),
+            )
+            .unwrap();
+        let mut arguments = arguments;
+        arguments[3].1 = Value::from(empty);
+        assert!(
+            ctx.builder
+                .op(false, arguments, Operation::custom(predicate, premises))
+                .is_err()
+        );
+    }
+
+    #[test]
     fn rejects_unspent_inputs_including_stale_grounding() {
         for count in [1, 2, 3, 4, 5, 8] {
             for unspent_index in [0, count - 1] {

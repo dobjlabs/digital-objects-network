@@ -303,6 +303,7 @@ pub(crate) fn build_relayer_payload(
     old_state_root: &Hash,
     action_output: &SpendableObjects,
 ) -> Result<Vec<u8>> {
+    Payload::validate_tx(&action_output.tx)?;
     let params = Params::default();
     let shrunk_main_pod = ShrunkMainPodSetup::new(&params)
         .build()
@@ -316,7 +317,7 @@ pub(crate) fn build_relayer_payload(
         *old_state_root,
     )?;
 
-    Ok(payload.to_bytes())
+    payload.to_bytes()
 }
 
 #[cfg(test)]

@@ -347,7 +347,12 @@ impl ActionCatalog for PexeCatalog {
                 )
             })?;
         let executor = module.executor(self.mock_proofs, Arc::new(grounding_witness));
-        Ok(executor.action_with_args(&action.name, inputs, args)?)
+        Ok(executor.action_with_args_and_validation(
+            &action.name,
+            inputs,
+            args,
+            payload::payload::Payload::validate_tx,
+        )?)
     }
 
     fn generated_podlang(&self) -> Option<String> {

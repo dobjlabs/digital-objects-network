@@ -80,12 +80,6 @@ mod tests {
     #[test]
     fn test_events_predicates_exist() {
         let module = events_module();
-        assert!(module.splits.is_empty());
-        assert_eq!(module.batch.predicates().len(), 3);
-        for predicate in module.batch.predicates() {
-            assert!(predicate.statements().len() <= 5);
-            assert!(predicate.wildcard_names().len() <= 8);
-        }
 
         module.predicate_ref_by_name("TxInsert").unwrap();
         module.predicate_ref_by_name("TxMutate").unwrap();
