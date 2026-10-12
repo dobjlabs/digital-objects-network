@@ -13,6 +13,7 @@ import type {
 } from "./wireTypes";
 
 export type {
+  ActionArgValues,
   ActionPayload,
   AppSettingsPayload,
   ObjectSummaryPayload,

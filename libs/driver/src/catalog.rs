@@ -1,6 +1,6 @@
 use anyhow::Result;
 use pod2::middleware::Hash;
-use sdk::{SpendableObject, SpendableObjects};
+use sdk::{ActionArgs, SpendableObject, SpendableObjects};
 use txlib::GroundingWitness;
 
 use wire_types::{ActionSummary, QualifiedName};
@@ -26,11 +26,13 @@ pub trait ActionCatalog: Send + Sync {
     fn list_classes(&self) -> Vec<CatalogClass>;
     fn get_class(&self, class: &QualifiedName) -> Option<CatalogClass>;
     fn get_class_by_hash(&self, class_hash: &Hash) -> Option<CatalogClass>;
+    /// Omitted arguments use their script defaults.
     fn execute_action(
         &self,
         action: QualifiedName,
         grounding_witness: GroundingWitness,
         inputs: Vec<SpendableObject>,
+        args: &ActionArgs,
     ) -> Result<SpendableObjects>;
     fn generated_podlang(&self) -> Option<String> {
         None

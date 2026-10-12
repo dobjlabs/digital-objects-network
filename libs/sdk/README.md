@@ -70,6 +70,46 @@ block, allowing the operators to emit constraints elsewhere would make their
 behavior depend on the caller. Keeping them unsafe-only gives them one
 consistent meaning: compute a witness without constraining it.
 
+## Prover-supplied arguments
+
+An action may compute a witness such as a proof-of-work key, a random nonce, or the result of an `unsafe` computation. Declaring it as a named argument lets callers supply their own value, for example a proof-of-work key computed by an external service.
+
+`var $ident$ = unsafe { arg($name$) ?? $expr$ }` declares a named argument with a default. `$name$` is the string callers use to supply the value, and `$ident$` names the private wildcard. Replacing a plain `var` declaration with this form, using the same binding and unsafe computation, preserves the predicate, its public arguments and the module hash. Each unsafe expression is evaluated once per phase. During Load, the default is evaluated symbolically to determine the argument's type. During Execute, it runs only when the caller has not supplied a value.
+
+```rhai
+fn CraftWood(action) {
+    var log = action.input("Log");
+    var wood = action.output("Wood");
+    let target = action.top_limb_u256(9007199254740992);
+    var key = unsafe { arg("key") ?? action.pow_obj_grind(wood, target) };
+    wood.update("key", key);
+    action.intro_lt_eq_u256(wood, target);
+}
+```
+
+`arg(name)` must be called inside an explicit `unsafe` expression. It returns `()` when no value is supplied, so Rhai's built-in `??` operator evaluates the default only when needed. The default can be a helper call:
+
+```rhai
+fn generate_key(action, obj, target) {
+    action.pow_obj_grind(obj, target)
+}
+
+// Inside an action:
+var key = unsafe { arg("key") ?? generate_key(action, wood, target) };
+```
+
+An unsafe expression that reads a named argument may read only one and must return one freshly generated value, such as `action.random()`, `action.pow_obj_grind(...)`, or a single integer operation on existing `var` values. For example, `arg("count") ?? obj.count - 1` is valid. Literals, existing variables, and compound operations such as `obj.count - 1 - 1` are rejected so supplying a value replaces exactly one private wildcard. When a value is supplied, Execute requires the expression to return the exact witness created by `arg()`. Discarding it, transforming it, or returning one of its fields is rejected. Load evaluates only the default path, so errors specific to the supplied-value path are detected when that path is executed. Nested unsafe expressions are rejected.
+
+Unsafe expressions cannot emit proof statements, declare object inputs/outputs/mutations, update objects, or invoke sub-actions. These restrictions also apply to helpers called from unsafe expressions. `pow_obj_grind` requires unsafe even when no named argument is used.
+
+As with any witness, constrain the argument after declaring it. In the example, `intro_lt_eq_u256` checks the updated object's commitment against the target, whether the key was supplied or computed. A key that fails this check causes execution to fail in real proof mode. In mock mode, `pow_obj_grind` skips grinding and the mock `LtEqU256` pod does not compare its operands, so this constraint is not checked.
+
+Argument names must be non-empty and unique within an action. The name can be any string-valued expression, so a helper can accept it as a parameter and declare a differently named argument for each calling action.
+
+`ActionMeta::args()` lists the names and types of arguments declared by the selected action. Sub-actions use their defaults. To supply arguments to an action that is normally called as a sub-action, execute that action directly. The SDK does not expose descriptions of default computations; clients can prompt users to leave an argument blank to use the script default.
+
+`Executor::action_with_args` accepts values by argument name. Unknown names and values of the wrong type are rejected before the action runs. Omitted arguments use their defaults.
+
 ## Native statements
 
 Each `action.st_*` method emits one pod2 native statement. Arguments follow
@@ -192,7 +232,7 @@ neither declares a wildcard):
 
 ```rhai
 let target = action.top_limb_u256(9007199254740992);
-var key = action.pow_obj_grind(wood, target);
+var key = unsafe { action.pow_obj_grind(wood, target) };
 wood.update("key", key);
 action.intro_lt_eq_u256(wood, target);
 ```

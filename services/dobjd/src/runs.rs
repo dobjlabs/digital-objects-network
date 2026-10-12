@@ -21,8 +21,8 @@ use driver::{
     Driver, ExecuteActionInput, ExecuteActionResult, ExecutionReporter, ExecutionStepContext,
 };
 use wire_types::{
-    ExecutionPhase, ObjectStatus, ObjectSummary, ProofProgressStatus, QualifiedName, RunAccepted,
-    RunActionProgress, RunActionResult, RunState, RunStatus,
+    ActionArgValues, ExecutionPhase, ObjectStatus, ObjectSummary, ProofProgressStatus,
+    QualifiedName, RunAccepted, RunActionProgress, RunActionResult, RunState, RunStatus,
 };
 
 use crate::events::{Event, EventTx};
@@ -415,10 +415,12 @@ pub fn spawn_run(
     events: EventTx,
     action: QualifiedName,
     input_objects: Vec<String>,
+    args: ActionArgValues,
 ) -> anyhow::Result<RunAccepted> {
     let exec_input = ExecuteActionInput {
         action: action.clone(),
         input_objects: input_objects.clone(),
+        args,
     };
     spawn_worker(registry, events, action, input_objects, move |reporter| {
         driver.execute_with_reporter(exec_input, reporter)

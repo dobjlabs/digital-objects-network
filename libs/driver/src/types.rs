@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use pod2::middleware::Hash;
 use serde::{Deserialize, Serialize};
-use wire_types::{ExecutionPhase, ObjectStatus, QualifiedName};
+use wire_types::{ActionArgValues, ExecutionPhase, ObjectStatus, QualifiedName};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverPaths {
@@ -38,6 +38,8 @@ pub struct ExecuteActionInput {
     /// (`Wood.dobj`) or a longer path — only the file name is used, and
     /// it must resolve to a live object inside `~/.dobj/objects/`.
     pub input_objects: Vec<String>,
+    /// Overrides by name in pod2 JSON format. Omitted arguments use defaults.
+    pub args: ActionArgValues,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

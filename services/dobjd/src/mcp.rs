@@ -219,6 +219,7 @@ impl DobjOps for DobjdOps {
             self.events.clone(),
             input.action,
             input_objects,
+            input.args,
         )
     }
 

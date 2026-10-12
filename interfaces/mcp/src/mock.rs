@@ -390,6 +390,7 @@ fn make_action(name: &str, description: &str, inputs: &[&str], outputs: &[&str])
         source_path: String::new(),
         mutated_objects: Vec::new(),
         predicate_source: action_predicate_source_for(name),
+        args: vec![],
     }
 }
 
@@ -606,6 +607,7 @@ mod tests {
         let accepted = mock
             .run_action(RunActionInput {
                 action: qname("CraftWood"),
+                args: Default::default(),
                 input_object_paths: vec!["craft-basics__log_0xabc1.dobj".to_string()],
             })
             .unwrap();
@@ -632,6 +634,7 @@ mod tests {
                 std::thread::spawn(move || {
                     mock.run_action(RunActionInput {
                         action: qname("FindLog"),
+                        args: Default::default(),
                         input_object_paths: vec![],
                     })
                 })
@@ -649,6 +652,7 @@ mod tests {
         let mock = MockDobjOps::new();
         let result = mock.run_action(RunActionInput {
             action: qname("CraftDiamond"),
+            args: Default::default(),
             input_object_paths: vec![],
         });
         assert!(result.is_err());
