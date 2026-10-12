@@ -28,7 +28,7 @@ use sdk::{ActionArgs, Sdk, SpendableObject, SpendableObjects, manifest::Manifest
 use txlib::GroundingWitness;
 
 use crate::catalog::{ActionCatalog, CatalogClass, extract_predicate};
-use wire_types::{ActionArgSummary, ActionSummary, ClassRef, MutatedObjectSlots, QualifiedName};
+use wire_types::{ActionSummary, ClassRef, MutatedObjectSlots, QualifiedName};
 
 struct Plugin {
     path: PathBuf,
@@ -212,14 +212,6 @@ impl PexeCatalog {
                 // prefix like classes get).
                 let predicate_source = extract_predicate(&podlang_src, &bare)
                     .unwrap_or_else(|| format!("{bare}(state) = AND(...)"));
-                let args = action
-                    .args()
-                    .iter()
-                    .map(|a| ActionArgSummary {
-                        name: a.name.clone(),
-                        type_name: a.type_name(),
-                    })
-                    .collect();
                 all_actions.push(ActionSummary {
                     action: qname,
                     emoji: meta.map_or("⚙️", |m| m.emoji.as_str()).to_string(),
@@ -239,7 +231,7 @@ impl PexeCatalog {
                         })
                         .collect(),
                     predicate_source,
-                    args,
+                    args: action.args().to_vec(),
                 });
             }
 
@@ -563,7 +555,7 @@ mod tests {
 fn MakeFoo(action) {
     var foo = action.output("Foo");
     foo.set([["durability", 100]]);
-    var key = action.random();
+    var key = unsafe { action.random() };
     foo.update("key", key);
 }
 
@@ -571,7 +563,7 @@ fn ConsumeFoo(action) {
     var foo = action.input("Foo");
     var bar = action.output("Bar");
     bar.set([["durability", 100]]);
-    var key = action.random();
+    var key = unsafe { action.random() };
     bar.update("key", key);
 }
 "#;
@@ -580,7 +572,7 @@ fn ConsumeFoo(action) {
 fn MakeFoo(action) {
     var foo = action.output("Foo");
     foo.set([["durability", 200]]);
-    var key = action.random();
+    var key = unsafe { action.random() };
     foo.update("key", key);
 }
 
@@ -588,7 +580,7 @@ fn ConsumeFoo(action) {
     var foo = action.input("Foo");
     var bar = action.output("Bar");
     bar.set([["durability", 200]]);
-    var key = action.random();
+    var key = unsafe { action.random() };
     bar.update("key", key);
 }
 "#;

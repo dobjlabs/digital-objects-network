@@ -111,11 +111,10 @@ enum Cmd {
         /// Input object filenames or paths. Filenames must exist in
         /// `~/.dobj/objects/` (the driver looks them up by basename).
         inputs: Vec<String>,
-        /// Supply an argument as NAME=VALUE. Repeat for multiple arguments.
-        /// Use hex for Raw values and decimal for Int values. Omitted
-        /// arguments use their script defaults. Run `dobj inspect-action
-        /// PLUGIN::ACTION` to list the accepted arguments.
-        #[arg(long = "arg", value_name = "NAME=VALUE")]
+        /// Supply caller data as NAME=JSON, using POD2 JSON values.
+        /// Repeat for multiple values. For example: --arg 'count={"Int":"42"}' or
+        /// --arg 'label="hello"'. Omitted values are absent from arg().
+        #[arg(long = "arg", value_name = "NAME=JSON")]
         args: Vec<String>,
         /// Don't print per-step progress messages.
         #[arg(long)]

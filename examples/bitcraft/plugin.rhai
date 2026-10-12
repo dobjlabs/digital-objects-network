@@ -43,7 +43,7 @@ fn CraftBucketOfIron(action) {
 fn BucketOfWoodAdd1(action) {
   var wood000 = action.input("Wood");
   var woodbucket = action.mutate("BucketOfWood");
-  var key = action.random();
+  var key = unsafe { action.random() };
   woodbucket.update("key", key);
   var n = unsafe { woodbucket.n + 1 };
   action.st_sum(woodbucket.n, 1, n);
@@ -57,7 +57,7 @@ fn BucketOfWoodAdd5(action) {
   var wood003 = action.input("Wood");
   var wood004 = action.input("Wood");
   var woodbucket = action.mutate("BucketOfWood");
-  var key = action.random();
+  var key = unsafe { action.random() };
   woodbucket.update("key", key);
   var n = unsafe { woodbucket.n + 5 };
   action.st_sum(woodbucket.n, 5, n);
@@ -76,7 +76,7 @@ fn BucketOfWoodAdd10(action) {
   var wood008 = action.input("Wood");
   var wood009 = action.input("Wood");
   var woodbucket = action.mutate("BucketOfWood");
-  var key = action.random();
+  var key = unsafe { action.random() };
   woodbucket.update("key", key);
   var n = unsafe { woodbucket.n + 10 };
   action.st_sum(woodbucket.n, 10, n);
@@ -135,7 +135,7 @@ fn BucketOfWoodAdd50(action) {
   var wood048 = action.input("Wood");
   var wood049 = action.input("Wood");
   var woodbucket = action.mutate("BucketOfWood");
-  var key = action.random();
+  var key = unsafe { action.random() };
   woodbucket.update("key", key);
   var n = unsafe { woodbucket.n + 50 };
   action.st_sum(woodbucket.n, 50, n);
@@ -145,7 +145,7 @@ fn BucketOfWoodAdd50(action) {
 fn BucketOfWoodTake1(action) {
   var wood000 = action.output("Wood");
   var woodbucket = action.mutate("BucketOfWood");
-  var key = action.random();
+  var key = unsafe { action.random() };
   woodbucket.update("key", key);
   action.st_gt_eq(woodbucket.n, 1);
   var n = unsafe { woodbucket.n - 1 };
@@ -156,7 +156,7 @@ fn BucketOfWoodTake1(action) {
 fn BucketOfStoneAdd1(action) {
   var stone000 = action.input("Stone");
   var stonebucket = action.mutate("BucketOfStone");
-  var key = action.random();
+  var key = unsafe { action.random() };
   stonebucket.update("key", key);
   var n = unsafe { stonebucket.n + 1 };
   action.st_sum(stonebucket.n, 1, n);
@@ -170,7 +170,7 @@ fn BucketOfStoneAdd5(action) {
   var stone003 = action.input("Stone");
   var stone004 = action.input("Stone");
   var stonebucket = action.mutate("BucketOfStone");
-  var key = action.random();
+  var key = unsafe { action.random() };
   stonebucket.update("key", key);
   var n = unsafe { stonebucket.n + 5 };
   action.st_sum(stonebucket.n, 5, n);
@@ -189,7 +189,7 @@ fn BucketOfStoneAdd10(action) {
   var stone008 = action.input("Stone");
   var stone009 = action.input("Stone");
   var stonebucket = action.mutate("BucketOfStone");
-  var key = action.random();
+  var key = unsafe { action.random() };
   stonebucket.update("key", key);
   var n = unsafe { stonebucket.n + 10 };
   action.st_sum(stonebucket.n, 10, n);
@@ -248,7 +248,7 @@ fn BucketOfStoneAdd50(action) {
   var stone048 = action.input("Stone");
   var stone049 = action.input("Stone");
   var stonebucket = action.mutate("BucketOfStone");
-  var key = action.random();
+  var key = unsafe { action.random() };
   stonebucket.update("key", key);
   var n = unsafe { stonebucket.n + 50 };
   action.st_sum(stonebucket.n, 50, n);
@@ -258,7 +258,7 @@ fn BucketOfStoneAdd50(action) {
 fn BucketOfStoneTake1(action) {
   var stone000 = action.output("Stone");
   var stonebucket = action.mutate("BucketOfStone");
-  var key = action.random();
+  var key = unsafe { action.random() };
   stonebucket.update("key", key);
   action.st_gt_eq(stonebucket.n, 1);
   var n = unsafe { stonebucket.n - 1 };
@@ -269,7 +269,7 @@ fn BucketOfStoneTake1(action) {
 fn BucketOfIronAdd1(action) {
   var iron000 = action.input("Iron");
   var ironbucket = action.mutate("BucketOfIron");
-  var key = action.random();
+  var key = unsafe { action.random() };
   ironbucket.update("key", key);
   var n = unsafe { ironbucket.n + 1 };
   action.st_sum(ironbucket.n, 1, n);
@@ -283,7 +283,7 @@ fn BucketOfIronAdd5(action) {
   var iron003 = action.input("Iron");
   var iron004 = action.input("Iron");
   var ironbucket = action.mutate("BucketOfIron");
-  var key = action.random();
+  var key = unsafe { action.random() };
   ironbucket.update("key", key);
   var n = unsafe { ironbucket.n + 5 };
   action.st_sum(ironbucket.n, 5, n);
@@ -302,7 +302,7 @@ fn BucketOfIronAdd10(action) {
   var iron008 = action.input("Iron");
   var iron009 = action.input("Iron");
   var ironbucket = action.mutate("BucketOfIron");
-  var key = action.random();
+  var key = unsafe { action.random() };
   ironbucket.update("key", key);
   var n = unsafe { ironbucket.n + 10 };
   action.st_sum(ironbucket.n, 10, n);
@@ -361,7 +361,7 @@ fn BucketOfIronAdd50(action) {
   var iron048 = action.input("Iron");
   var iron049 = action.input("Iron");
   var ironbucket = action.mutate("BucketOfIron");
-  var key = action.random();
+  var key = unsafe { action.random() };
   ironbucket.update("key", key);
   var n = unsafe { ironbucket.n + 50 };
   action.st_sum(ironbucket.n, 50, n);
@@ -371,7 +371,7 @@ fn BucketOfIronAdd50(action) {
 fn BucketOfIronTake1(action) {
   var iron000 = action.output("Iron");
   var ironbucket = action.mutate("BucketOfIron");
-  var key = action.random();
+  var key = unsafe { action.random() };
   ironbucket.update("key", key);
   action.st_gt_eq(ironbucket.n, 1);
   var n = unsafe { ironbucket.n - 1 };
@@ -454,7 +454,7 @@ fn UseIronAxe(action) {
 
 fn UseQuarry1(action) {
   var quarry = action.mutate("Quarry");
-  var key = action.random();
+  var key = unsafe { action.random() };
   quarry.update("key", key);
   action.st_equal(quarry.level, 1);
   var stone000 = action.output("Stone");
@@ -467,7 +467,7 @@ fn UseQuarry1(action) {
 
 fn UseMiningDrill1(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var key = action.random();
+  var key = unsafe { action.random() };
   miningdrill.update("key", key);
   action.st_equal(miningdrill.level, 1);
   var wood000 = action.input("Wood");
@@ -485,7 +485,7 @@ fn UseMiningDrill1(action) {
 
 fn UseQuarry2(action) {
   var quarry = action.mutate("Quarry");
-  var key = action.random();
+  var key = unsafe { action.random() };
   quarry.update("key", key);
   action.st_equal(quarry.level, 2);
   var stone000 = action.output("Stone");
@@ -499,7 +499,7 @@ fn UseQuarry2(action) {
 
 fn UseMiningDrill2(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var key = action.random();
+  var key = unsafe { action.random() };
   miningdrill.update("key", key);
   action.st_equal(miningdrill.level, 2);
   var wood000 = action.input("Wood");
@@ -518,7 +518,7 @@ fn UseMiningDrill2(action) {
 
 fn UseQuarry3(action) {
   var quarry = action.mutate("Quarry");
-  var key = action.random();
+  var key = unsafe { action.random() };
   quarry.update("key", key);
   action.st_equal(quarry.level, 3);
   var stone000 = action.output("Stone");
@@ -533,7 +533,7 @@ fn UseQuarry3(action) {
 
 fn UseMiningDrill3(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var key = action.random();
+  var key = unsafe { action.random() };
   miningdrill.update("key", key);
   action.st_equal(miningdrill.level, 3);
   var wood000 = action.input("Wood");
@@ -553,7 +553,7 @@ fn UseMiningDrill3(action) {
 
 fn UseQuarry4(action) {
   var quarry = action.mutate("Quarry");
-  var key = action.random();
+  var key = unsafe { action.random() };
   quarry.update("key", key);
   action.st_equal(quarry.level, 4);
   var stone000 = action.output("Stone");
@@ -569,7 +569,7 @@ fn UseQuarry4(action) {
 
 fn UseMiningDrill4(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var key = action.random();
+  var key = unsafe { action.random() };
   miningdrill.update("key", key);
   action.st_equal(miningdrill.level, 4);
   var wood000 = action.input("Wood");
@@ -590,7 +590,7 @@ fn UseMiningDrill4(action) {
 
 fn UseQuarry5(action) {
   var quarry = action.mutate("Quarry");
-  var key = action.random();
+  var key = unsafe { action.random() };
   quarry.update("key", key);
   action.st_equal(quarry.level, 5);
   var stone000 = action.output("Stone");
@@ -607,7 +607,7 @@ fn UseQuarry5(action) {
 
 fn UseMiningDrill5(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var key = action.random();
+  var key = unsafe { action.random() };
   miningdrill.update("key", key);
   action.st_equal(miningdrill.level, 5);
   var wood000 = action.input("Wood");
@@ -629,7 +629,7 @@ fn UseMiningDrill5(action) {
 
 fn UseQuarry6(action) {
   var quarry = action.mutate("Quarry");
-  var key = action.random();
+  var key = unsafe { action.random() };
   quarry.update("key", key);
   action.st_equal(quarry.level, 6);
   var stone000 = action.output("Stone");
@@ -647,7 +647,7 @@ fn UseQuarry6(action) {
 
 fn UseMiningDrill6(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var key = action.random();
+  var key = unsafe { action.random() };
   miningdrill.update("key", key);
   action.st_equal(miningdrill.level, 6);
   var wood000 = action.input("Wood");
