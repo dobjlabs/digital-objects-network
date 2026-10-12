@@ -328,7 +328,7 @@ impl Node {
         beacon_block_header: &BlockHeader,
     ) -> Result<()> {
         let slot = beacon_block_header.slot;
-        let beacon_block = self.get_block(slot, beacon_block_header.root).await?;
+        let beacon_block = self.get_block(beacon_block_header.root).await?;
         match beacon_block.execution_payload {
             ExecutionPayloadRef::Embedded { .. } => {
                 self.process_payload_blobs(beacon_block_header, beacon_block)
@@ -338,9 +338,7 @@ impl Node {
             // blobs are archived only once a child builds on it, still under the root of the
             // block that committed to them.
             ExecutionPayloadRef::Bid { .. } => {
-                let parent_block = self
-                    .get_block(slot, beacon_block_header.parent_root)
-                    .await?;
+                let parent_block = self.get_block(beacon_block_header.parent_root).await?;
                 // This will happen if the current block builds on top of a payload older than
                 // the one referenced in the previous block because the previous block's payload
                 // was not included in the consensus (it may have been withheld, revealed too
@@ -360,16 +358,12 @@ impl Node {
         }
     }
 
-    /// We already hold a header for `root`, so a None body is a transient miss at the head, not
-    /// an empty slot. Fail instead of committing the slot with no blobs; the restart reprocesses
-    /// it once the body lands.
-    async fn get_block(&self, slot: u32, root: B256) -> Result<Block> {
+    /// We expect this block to exists (the slot is not empty)
+    async fn get_block(&self, root: B256) -> Result<Block> {
         self.beacon_cli
             .get_block(BlockId::Hash(root))
             .await?
-            .ok_or_else(|| {
-                anyhow!("Beacon header exists for slot {slot} but full block {root} was not found")
-            })
+            .ok_or_else(|| anyhow!("Beacon full block {root} was not found"))
     }
 
     /// Archive the filtered blobs of the payload `beacon_block` committed to.

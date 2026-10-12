@@ -45,7 +45,7 @@ pub async fn fetch_batch(node: &Node, slots: &[u32]) -> Vec<Result<FetchedSlot>>
                 let root = header.root;
                 let header_clone = header.clone();
                 block_futures.push(async move {
-                    let block = node.get_beacon_block_by_hash_with_retry(slot, root).await?;
+                    let block = node.get_beacon_block_by_hash_with_retry(root).await?;
                     Ok::<_, anyhow::Error>((slot, header_clone, block))
                 });
                 // Placeholder — will be filled from block_futures results.

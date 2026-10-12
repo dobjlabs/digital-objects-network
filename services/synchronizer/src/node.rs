@@ -248,21 +248,16 @@ impl Node {
 
     pub(crate) async fn get_beacon_block_by_hash_with_retry(
         &self,
-        slot: u32,
         beacon_block_root: B256,
     ) -> Result<Block> {
         self.retry_rpc(
             "beacon block",
-            format!("slot {slot}, block_root {beacon_block_root}"),
+            format!("block_root {beacon_block_root}"),
             || async {
                 self.beacon_cli
                     .get_block(BlockId::Hash(beacon_block_root))
                     .await?
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "Beacon header exists for slot {slot}, but full beacon block {beacon_block_root} was not found"
-                        )
-                    })
+                    .ok_or_else(|| anyhow!("Full beacon block {beacon_block_root} was not found"))
             },
         )
         .await
@@ -277,7 +272,7 @@ impl Node {
         };
 
         let block = self
-            .get_beacon_block_by_hash_with_retry(slot, header.root)
+            .get_beacon_block_by_hash_with_retry(header.root)
             .await?;
         let payload = self.canonical_payload(&header, &block).await?;
 
@@ -333,7 +328,7 @@ impl Node {
             ExecutionPayloadRef::Embedded { .. } => (beacon_block_header.root, beacon_block),
             ExecutionPayloadRef::Bid { .. } => {
                 parent_block = self
-                    .get_beacon_block_by_hash_with_retry(slot, beacon_block.parent_root)
+                    .get_beacon_block_by_hash_with_retry(beacon_block.parent_root)
                     .await?;
                 if !beacon_block.builds_on_payload_of(&parent_block) {
                     debug!(slot, "Block does not build on its parent's payload");
@@ -382,7 +377,7 @@ impl Node {
     /// Fetch the full beacon block for a header, then build the `SlotContext`.
     async fn fetch_slot_context(&self, beacon_block_header: &BlockHeader) -> Result<SlotContext> {
         let beacon_block = self
-            .get_beacon_block_by_hash_with_retry(beacon_block_header.slot, beacon_block_header.root)
+            .get_beacon_block_by_hash_with_retry(beacon_block_header.root)
             .await?;
         self.slot_context_from_block(beacon_block_header, &beacon_block)
             .await
