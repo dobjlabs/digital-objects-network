@@ -289,7 +289,8 @@ impl Node {
     pub(crate) async fn process_beacon_block_header(
         &self,
         beacon_block_header: &BlockHeader,
-    ) -> Result<()> {
+        parent_block: Option<(B256, Block)>,
+    ) -> Result<(B256, Block)> {
         // Create the path with the symlink to the block dir, indexed by slot
         let slot_path = self.store.slot_dir(beacon_block_header.slot);
         let mut slot_mid_path = slot_path.clone();
@@ -315,37 +316,45 @@ impl Node {
         let mut file_tmp = File::create(&header_path_tmp)?;
         file_tmp.write_all(&header_json)?;
 
-        self.process_beacon_block_blobs(beacon_block_header).await?;
+        let beacon_block = self
+            .process_beacon_block_blobs(beacon_block_header, parent_block)
+            .await?;
 
         let mut header_path = root_dir.clone();
         header_path.push("header.json");
         rename(header_path_tmp, header_path)?;
-        Ok(())
+        Ok(beacon_block)
     }
 
     pub(crate) async fn process_beacon_block_blobs(
         &self,
         beacon_block_header: &BlockHeader,
-    ) -> Result<()> {
+        parent_block: Option<(B256, Block)>,
+    ) -> Result<(B256, Block)> {
         let slot = beacon_block_header.slot;
-        let beacon_block = self.get_block(beacon_block_header.root).await?;
+        let beacon_block_root = beacon_block_header.root;
+        let beacon_block = self.get_block(beacon_block_root).await?;
         match beacon_block.execution_payload {
             ExecutionPayloadRef::Embedded { .. } => {
-                self.process_payload_blobs(beacon_block_header, beacon_block)
-                    .await
+                self.process_payload_blobs(beacon_block_header, beacon_block.clone())
+                    .await?;
+                Ok((beacon_block_root, beacon_block))
             }
             // The payload a Gloas block bids on is revealed later and may be withheld, so its
             // blobs are archived only once a child builds on it, still under the root of the
             // block that committed to them.
             ExecutionPayloadRef::Bid { .. } => {
-                let parent_block = self.get_block(beacon_block_header.parent_root).await?;
+                let parent_block = match parent_block {
+                    Some(block) if block.0 == beacon_block_header.parent_root => block.1,
+                    _ => self.get_block(beacon_block_header.parent_root).await?,
+                };
                 // This will happen if the current block builds on top of a payload older than
                 // the one referenced in the previous block because the previous block's payload
                 // was not included in the consensus (it may have been withheld, revealed too
                 // late or been invalid)
                 if !beacon_block.builds_on_payload_of(&parent_block) {
                     debug!("slot {} does not build on its parent's payload", slot);
-                    return Ok(());
+                    return Ok((beacon_block_root, beacon_block));
                 }
                 let parent_header = BlockHeader {
                     root: beacon_block_header.parent_root,
@@ -353,7 +362,8 @@ impl Node {
                     slot: parent_block.slot,
                 };
                 self.process_payload_blobs(&parent_header, parent_block)
-                    .await
+                    .await?;
+                Ok((beacon_block_root, beacon_block))
             }
         }
     }

@@ -47,6 +47,7 @@ async fn main() -> Result<()> {
         .as_ref()
         .map(|h| h.slot + 1)
         .unwrap_or(node.config.init_start_slot);
+    let mut parent_block = None;
     loop {
         debug!("checking slot {}", slot);
         let some_beacon_block_header = if slot <= head.slot {
@@ -113,8 +114,10 @@ async fn main() -> Result<()> {
             }
         }
 
-        node.process_beacon_block_header(&beacon_block_header)
-            .await?;
+        parent_block = Some(
+            node.process_beacon_block_header(&beacon_block_header, parent_block)
+                .await?,
+        );
         prev_beacon_block_header = Some(beacon_block_header);
         *last_header.write().await = prev_beacon_block_header.clone();
 
