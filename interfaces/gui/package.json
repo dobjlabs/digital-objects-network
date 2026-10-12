@@ -7,8 +7,7 @@
     "dev": "vite",
     "build": "tsc -p tsconfig.node.json --noEmit && tsc && vite build",
     "preview": "vite preview",
-    "test": "node --test tests/*.test.mjs",
-    "test:proxy": "node --test tests/proxy.test.mjs"
+    "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "react": "^19.1.0",
