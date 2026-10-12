@@ -1,0 +1,7 @@
+[package]
+name = "bitcraft-pexe-gen"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+strum_macros = "0.28"

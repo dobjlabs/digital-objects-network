@@ -1,7 +1,7 @@
 fn GatherWood(action) {
   var wood000 = action.output("Wood");
   let target = action.top_limb_u256(8339694957348);
-  var grind_key = action.pow_obj_grind(wood000, target);
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(wood000, target) };
   wood000.update("key", grind_key);
   action.intro_lt_eq_u256(wood000, target);
 }
@@ -9,7 +9,7 @@ fn GatherWood(action) {
 fn GatherStone(action) {
   var stone000 = action.output("Stone");
   let target = action.top_limb_u256(5040314377883);
-  var grind_key = action.pow_obj_grind(stone000, target);
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone000, target) };
   stone000.update("key", grind_key);
   action.intro_lt_eq_u256(stone000, target);
 }
@@ -17,7 +17,7 @@ fn GatherStone(action) {
 fn GatherIron(action) {
   var iron000 = action.output("Iron");
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = action.pow_obj_grind(iron000, target);
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron000, target) };
   iron000.update("key", grind_key);
   action.intro_lt_eq_u256(iron000, target);
 }
@@ -416,7 +416,7 @@ fn UseWoodAxe(action) {
   var wood000 = action.output("Wood");
   var wood001 = action.output("Wood");
   let target = action.top_limb_u256(8339694957348);
-  var grind_key = action.pow_obj_grind(wood001, target);
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(wood001, target) };
   wood001.update("key", grind_key);
   action.intro_lt_eq_u256(wood001, target);
 }
@@ -431,7 +431,7 @@ fn UseStoneAxe(action) {
   var wood001 = action.output("Wood");
   var wood002 = action.output("Wood");
   let target = action.top_limb_u256(8339694957348);
-  var grind_key = action.pow_obj_grind(wood002, target);
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(wood002, target) };
   wood002.update("key", grind_key);
   action.intro_lt_eq_u256(wood002, target);
 }
@@ -447,7 +447,7 @@ fn UseIronAxe(action) {
   var wood002 = action.output("Wood");
   var wood003 = action.output("Wood");
   let target = action.top_limb_u256(8339694957348);
-  var grind_key = action.pow_obj_grind(wood003, target);
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(wood003, target) };
   wood003.update("key", grind_key);
   action.intro_lt_eq_u256(wood003, target);
 }
@@ -460,7 +460,7 @@ fn UseQuarry1(action) {
   var stone000 = action.output("Stone");
   var stone001 = action.output("Stone");
   let target = action.top_limb_u256(5040314377883);
-  var grind_key = action.pow_obj_grind(stone001, target);
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone001, target) };
   stone001.update("key", grind_key);
   action.intro_lt_eq_u256(stone001, target);
 }
@@ -478,7 +478,7 @@ fn UseMiningDrill1(action) {
   var iron000 = action.output("Iron");
   var iron001 = action.output("Iron");
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = action.pow_obj_grind(iron001, target);
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron001, target) };
   iron001.update("key", grind_key);
   action.intro_lt_eq_u256(iron001, target);
 }
@@ -492,7 +492,7 @@ fn UseQuarry2(action) {
   var stone001 = action.output("Stone");
   var stone002 = action.output("Stone");
   let target = action.top_limb_u256(5040314377883);
-  var grind_key = action.pow_obj_grind(stone002, target);
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone002, target) };
   stone002.update("key", grind_key);
   action.intro_lt_eq_u256(stone002, target);
 }
@@ -511,7 +511,7 @@ fn UseMiningDrill2(action) {
   var iron001 = action.output("Iron");
   var iron002 = action.output("Iron");
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = action.pow_obj_grind(iron002, target);
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron002, target) };
   iron002.update("key", grind_key);
   action.intro_lt_eq_u256(iron002, target);
 }
@@ -526,7 +526,7 @@ fn UseQuarry3(action) {
   var stone002 = action.output("Stone");
   var stone003 = action.output("Stone");
   let target = action.top_limb_u256(5040314377883);
-  var grind_key = action.pow_obj_grind(stone003, target);
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone003, target) };
   stone003.update("key", grind_key);
   action.intro_lt_eq_u256(stone003, target);
 }
@@ -546,7 +546,7 @@ fn UseMiningDrill3(action) {
   var iron002 = action.output("Iron");
   var iron003 = action.output("Iron");
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = action.pow_obj_grind(iron003, target);
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron003, target) };
   iron003.update("key", grind_key);
   action.intro_lt_eq_u256(iron003, target);
 }
@@ -562,7 +562,7 @@ fn UseQuarry4(action) {
   var stone003 = action.output("Stone");
   var stone004 = action.output("Stone");
   let target = action.top_limb_u256(5040314377883);
-  var grind_key = action.pow_obj_grind(stone004, target);
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone004, target) };
   stone004.update("key", grind_key);
   action.intro_lt_eq_u256(stone004, target);
 }
@@ -583,7 +583,7 @@ fn UseMiningDrill4(action) {
   var iron003 = action.output("Iron");
   var iron004 = action.output("Iron");
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = action.pow_obj_grind(iron004, target);
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron004, target) };
   iron004.update("key", grind_key);
   action.intro_lt_eq_u256(iron004, target);
 }
@@ -600,7 +600,7 @@ fn UseQuarry5(action) {
   var stone004 = action.output("Stone");
   var stone005 = action.output("Stone");
   let target = action.top_limb_u256(5040314377883);
-  var grind_key = action.pow_obj_grind(stone005, target);
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone005, target) };
   stone005.update("key", grind_key);
   action.intro_lt_eq_u256(stone005, target);
 }
@@ -622,7 +622,7 @@ fn UseMiningDrill5(action) {
   var iron004 = action.output("Iron");
   var iron005 = action.output("Iron");
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = action.pow_obj_grind(iron005, target);
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron005, target) };
   iron005.update("key", grind_key);
   action.intro_lt_eq_u256(iron005, target);
 }
@@ -640,7 +640,7 @@ fn UseQuarry6(action) {
   var stone005 = action.output("Stone");
   var stone006 = action.output("Stone");
   let target = action.top_limb_u256(5040314377883);
-  var grind_key = action.pow_obj_grind(stone006, target);
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone006, target) };
   stone006.update("key", grind_key);
   action.intro_lt_eq_u256(stone006, target);
 }
@@ -663,7 +663,7 @@ fn UseMiningDrill6(action) {
   var iron005 = action.output("Iron");
   var iron006 = action.output("Iron");
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = action.pow_obj_grind(iron006, target);
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron006, target) };
   iron006.update("key", grind_key);
   action.intro_lt_eq_u256(iron006, target);
 }
