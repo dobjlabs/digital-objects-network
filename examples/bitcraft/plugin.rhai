@@ -897,7 +897,6 @@ fn BitsFromWood(action) {
   var wood000 = action.input("Wood");
   var bit000 = action.output("Bit");
   var work = action.intro_vdf(2, bit000);
-  bit000.update("work", work);
 }
 
 fn BitsFromStone(action) {
@@ -905,7 +904,6 @@ fn BitsFromStone(action) {
   var bit000 = action.output("Bit");
   var bit001 = action.output("Bit");
   var work = action.intro_vdf(2, bit001);
-  bit001.update("work", work);
 }
 
 fn BitsFromIron(action) {
@@ -916,6 +914,5 @@ fn BitsFromIron(action) {
   var bit003 = action.output("Bit");
   var bit004 = action.output("Bit");
   var work = action.intro_vdf(2, bit004);
-  bit004.update("work", work);
 }
 
