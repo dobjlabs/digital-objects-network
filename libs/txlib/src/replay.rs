@@ -3,12 +3,12 @@
 //! At finalize time the recorded events form a tree (actions containing
 //! events and sub-actions). This module walks that tree and builds the
 //! POD2 predicate statements that prove each event's hash step, update
-//! the live/nullifier sets, and dispatch each event to its object-type
+//! the created/nullifier sets, and dispatch each event to its object-type
 //! guard.
 //!
 //! The walker is a `Replayer` that owns the long-lived mutable builder
 //! state (`BuildContext` + `TxStats`). A `ReplayFrame` carries the
-//! per-step immutable world view -- the current live/nullifier sets
+//! per-step immutable world view -- the current created/nullifier sets
 //! plus the chain-scope bounds -- and threads through the recursion.
 //! Only `Replayer::build_replay_actions` is `pub(crate)`; every other
 //! method here is a private helper it delegates to.
@@ -20,7 +20,7 @@ use pod2::{
         containers::{Dictionary, Set},
     },
 };
-use pod2utils::{dict, macros::BuildContext, map, op, st_custom};
+use pod2utils::{dict, macros::BuildContext, map, op, set, st_custom};
 
 use crate::{
     ChainEvent, OBJECT_NULLIFIER_VERSION, TxStats, build_tx, object_key_hash,
@@ -34,11 +34,12 @@ pub(crate) struct Replayer<'a> {
     stats: &'a mut TxStats,
 }
 
-/// Per-step immutable world view: the live/nullifier sets and the
+/// Per-step immutable world view: the created/nullifier sets and the
 /// chain-scope bounds at the current point in the replay walk.
 #[derive(Clone, Copy)]
 pub(crate) struct ReplayFrame<'a> {
-    pub(crate) live: &'a Set,
+    pub(crate) inputs: &'a Set,
+    pub(crate) created: &'a Set,
     pub(crate) nullifiers: &'a Set,
     pub(crate) chain_start: Hash,
     pub(crate) chain_end: Hash,
@@ -46,13 +47,14 @@ pub(crate) struct ReplayFrame<'a> {
 
 impl<'a> ReplayFrame<'a> {
     /// Derive the next frame after a non-mutating step that only changes the
-    /// live set (Insert).
-    pub(crate) fn with_live<'b>(self, live: &'b Set) -> ReplayFrame<'b>
+    /// created set (Insert).
+    pub(crate) fn with_created<'b>(self, created: &'b Set) -> ReplayFrame<'b>
     where
         'a: 'b,
     {
         ReplayFrame {
-            live,
+            inputs: self.inputs,
+            created,
             nullifiers: self.nullifiers,
             chain_start: self.chain_start,
             chain_end: self.chain_end,
@@ -61,12 +63,13 @@ impl<'a> ReplayFrame<'a> {
 
     /// Derive the next frame after a step that updates both sets (Mutate,
     /// Delete, Action, or the top-level `ReplayActions` step).
-    pub(crate) fn advance<'b>(self, live: &'b Set, nullifiers: &'b Set) -> ReplayFrame<'b>
+    pub(crate) fn advance<'b>(self, created: &'b Set, nullifiers: &'b Set) -> ReplayFrame<'b>
     where
         'a: 'b,
     {
         ReplayFrame {
-            live,
+            inputs: self.inputs,
+            created,
             nullifiers,
             chain_start: self.chain_start,
             chain_end: self.chain_end,
@@ -84,43 +87,47 @@ impl<'a> ReplayFrame<'a> {
 
     /// Build the tx-context dictionary that this frame represents.
     pub(crate) fn to_tx_dict(self) -> Dictionary {
-        build_tx(self.live, self.nullifiers, self.chain_start, self.chain_end)
+        build_tx(
+            self.inputs,
+            self.created,
+            self.nullifiers,
+            self.chain_start,
+            self.chain_end,
+        )
     }
 }
 
-/// Derived state needed to build a Mutate event's replay clauses.
-/// `btx` is the pre-mutate tx-context dict; `live_minus_old` is the
-/// live set with `old` removed; `new_live` is `live_minus_old` with
-/// `new` inserted; `new_nullifiers` is the nullifiers set with
-/// `nullifier(old)` accumulated. Owned because the caller also needs
-/// `new_live` / `new_nullifiers` to thread into the recursive tail
-/// frame.
 pub(crate) struct MutateScratch {
     pub(crate) btx: Dictionary,
-    pub(crate) live_minus_old: Set,
-    pub(crate) new_live: Set,
+    pub(crate) new_created: Set,
     pub(crate) new_nullifiers: Set,
+    source_key: &'static str,
+    source: Set,
 }
 
 impl<'a> ReplayFrame<'a> {
-    /// Compute the pre-mutate tx context + post-mutate set snapshots
-    /// for a `(old -> new)` mutate.
+    fn source_for(self, old: &Dictionary) -> (&'static str, &'a Set) {
+        if self.inputs.contains(&Value::from(old.clone())).unwrap() {
+            ("inputs", self.inputs)
+        } else {
+            ("created", self.created)
+        }
+    }
+
     pub(crate) fn mutate_scratch(self, old: &Dictionary, new: &Dictionary) -> MutateScratch {
         let btx = self.to_tx_dict();
-        let mut live_minus_old = self.live.clone();
-        live_minus_old
-            .delete(&Value::from(old.commitment()))
-            .unwrap();
-        let mut new_live = live_minus_old.clone();
-        new_live.insert(&Value::from(new.clone())).unwrap();
+        let (source_key, source) = self.source_for(old);
+        let mut new_created = self.created.clone();
+        new_created.insert(&Value::from(new.clone())).unwrap();
         let nul = object_nullifier_from_key_hash(object_key_hash(old).unwrap());
         let mut new_nullifiers = self.nullifiers.clone();
         new_nullifiers.insert(&Value::from(nul)).unwrap();
         MutateScratch {
             btx,
-            live_minus_old,
-            new_live,
+            new_created,
             new_nullifiers,
+            source_key,
+            source: source.clone(),
         }
     }
 }
@@ -171,7 +178,7 @@ impl<'a> Replayer<'a> {
             };
 
             if let [ChainEvent::Insert { .. }] = contents.as_slice() {
-                let (st_inner, new_live, new_nulls) =
+                let (st_inner, new_created, new_nulls) =
                     self.build_replay_action_insert(contents, frame);
                 let st = st_custom!(
                     self.ctx,
@@ -179,10 +186,10 @@ impl<'a> Replayer<'a> {
                 )
                 .unwrap();
                 self.record("ReplayActions");
-                return (st, *chain_after, new_live, new_nulls);
+                return (st, *chain_after, new_created, new_nulls);
             }
 
-            let (st_action, new_live, new_nulls) =
+            let (st_action, new_created, new_nulls) =
                 self.build_replay_action(contents, chain, frame, *chain_after);
             let st = st_custom!(
                 self.ctx,
@@ -190,15 +197,15 @@ impl<'a> Replayer<'a> {
             )
             .unwrap();
             self.record("ReplayActions");
-            return (st, *chain_after, new_live, new_nulls);
+            return (st, *chain_after, new_created, new_nulls);
         }
 
         // Step: first action + recursive tail.
         let (first, rest) = events.split_first().unwrap();
-        let (st_action, next_chain, next_live, next_nulls) =
+        let (st_action, next_chain, next_created, next_nulls) =
             self.build_top_level_action(first, chain, frame);
-        let (st_rest, final_chain, final_live, final_nulls) =
-            self.build_replay_actions(rest, next_chain, frame.advance(&next_live, &next_nulls));
+        let (st_rest, final_chain, final_created, final_nulls) =
+            self.build_replay_actions(rest, next_chain, frame.advance(&next_created, &next_nulls));
         let st_step = st_custom!(self.ctx, ReplayActionsStep() = (st_action, st_rest)).unwrap();
         self.record("ReplayActionsStep");
         let st = st_custom!(
@@ -207,7 +214,7 @@ impl<'a> Replayer<'a> {
         )
         .unwrap();
         self.record("ReplayActions");
-        (st, final_chain, final_live, final_nulls)
+        (st, final_chain, final_created, final_nulls)
     }
 
     /// Extract an action from a top-level `ChainEvent` and delegate to
@@ -223,9 +230,9 @@ impl<'a> Replayer<'a> {
                 chain_after,
                 contents,
             } => {
-                let (st, new_live, new_null) =
+                let (st, new_created, new_null) =
                     self.build_replay_action(contents, chain, frame, *chain_after);
-                (st, *chain_after, new_live, new_null)
+                (st, *chain_after, new_created, new_null)
             }
             ChainEvent::Insert { .. } | ChainEvent::Mutate { .. } | ChainEvent::Delete { .. } => {
                 panic!(
@@ -251,7 +258,7 @@ impl<'a> Replayer<'a> {
         );
 
         if events.len() == 1 {
-            let (st_elem, next_chain, next_live, next_nulls) =
+            let (st_elem, next_chain, next_created, next_nulls) =
                 self.build_replay_element(&events[0], chain, frame);
             let st = st_custom!(
                 self.ctx,
@@ -265,18 +272,11 @@ impl<'a> Replayer<'a> {
             )
             .unwrap();
             self.record("ReplayContents");
-            return (st, next_chain, next_live, next_nulls);
+            return (st, next_chain, next_created, next_nulls);
         }
 
-        // K>=2 step: peel off head, dispatch on its type, recurse on tail.
-        // For Insert and Mutate the Replay<X> body is inlined into the
-        // ReplayContentsStep<X> predicate, with `new`/`new_live` (Insert)
-        // or `old`/`new` (Mutate) packed into a small private dict so the
-        // wildcard count stays at the pod2 limit. Delete keeps its
-        // ReplayDelete wrapping (already at the 5-sub-stmt limit), and
-        // Action is opaque to this dispatch.
         let (first, rest) = events.split_first().unwrap();
-        let (st_step, tag, final_chain, final_live, final_nulls) = match first {
+        let (st_step, tag, final_chain, final_created, final_nulls) = match first {
             ChainEvent::Insert {
                 new,
                 initial,
@@ -289,10 +289,10 @@ impl<'a> Replayer<'a> {
                     .clone()
                     .expect("missing guard evidence for insert");
 
-                let (st_head, next_live) =
+                let (st_head, next_created) =
                     self.build_replay_insert(initial, new, frame, tx_stmt.clone(), evidence);
-                let (st_rest, final_chain, final_live, final_nulls) =
-                    self.build_replay_contents(rest, *chain_after, frame.with_live(&next_live));
+                let (st_rest, final_chain, final_created, final_nulls) = self
+                    .build_replay_contents(rest, *chain_after, frame.with_created(&next_created));
                 let st = self
                     .ctx
                     .apply_custom_pred_simple(
@@ -302,7 +302,13 @@ impl<'a> Replayer<'a> {
                     )
                     .unwrap();
                 self.record("ReplayContentsStepInsert");
-                (st, EventTag::Insert, final_chain, final_live, final_nulls)
+                (
+                    st,
+                    EventTag::Insert,
+                    final_chain,
+                    final_created,
+                    final_nulls,
+                )
             }
             ChainEvent::Mutate {
                 new,
@@ -316,13 +322,14 @@ impl<'a> Replayer<'a> {
                     .clone()
                     .expect("missing guard evidence for mutate");
 
-                let (st_head, next_live, next_nulls) =
+                let (st_head, next_created, next_nulls) =
                     self.build_replay_mutate(new, old, frame, tx_stmt.clone(), evidence);
-                let (st_rest, final_chain, final_live, final_nulls) = self.build_replay_contents(
-                    rest,
-                    *chain_after,
-                    frame.advance(&next_live, &next_nulls),
-                );
+                let (st_rest, final_chain, final_created, final_nulls) = self
+                    .build_replay_contents(
+                        rest,
+                        *chain_after,
+                        frame.advance(&next_created, &next_nulls),
+                    );
                 let st = self
                     .ctx
                     .apply_custom_pred_simple(
@@ -332,7 +339,13 @@ impl<'a> Replayer<'a> {
                     )
                     .unwrap();
                 self.record("ReplayContentsStepMutate");
-                (st, EventTag::Mutate, final_chain, final_live, final_nulls)
+                (
+                    st,
+                    EventTag::Mutate,
+                    final_chain,
+                    final_created,
+                    final_nulls,
+                )
             }
             ChainEvent::Delete {
                 old,
@@ -344,13 +357,14 @@ impl<'a> Replayer<'a> {
                 let evidence = guard_evidence
                     .clone()
                     .expect("missing guard evidence for delete");
-                let (st_head, next_live, next_nulls) =
+                let (st_head, next_created, next_nulls) =
                     self.build_replay_delete(old, frame, tx_stmt.clone(), evidence);
-                let (st_rest, final_chain, final_live, final_nulls) = self.build_replay_contents(
-                    rest,
-                    *chain_after,
-                    frame.advance(&next_live, &next_nulls),
-                );
+                let (st_rest, final_chain, final_created, final_nulls) = self
+                    .build_replay_contents(
+                        rest,
+                        *chain_after,
+                        frame.advance(&next_created, &next_nulls),
+                    );
                 let st = self
                     .ctx
                     .apply_custom_pred_simple(
@@ -360,20 +374,27 @@ impl<'a> Replayer<'a> {
                     )
                     .unwrap();
                 self.record("ReplayContentsStepDelete");
-                (st, EventTag::Delete, final_chain, final_live, final_nulls)
+                (
+                    st,
+                    EventTag::Delete,
+                    final_chain,
+                    final_created,
+                    final_nulls,
+                )
             }
             ChainEvent::Action {
                 chain_after,
                 contents,
                 ..
             } => {
-                let (st_head, next_live, next_nulls) =
+                let (st_head, next_created, next_nulls) =
                     self.build_replay_action(contents, chain, frame, *chain_after);
-                let (st_rest, final_chain, final_live, final_nulls) = self.build_replay_contents(
-                    rest,
-                    *chain_after,
-                    frame.advance(&next_live, &next_nulls),
-                );
+                let (st_rest, final_chain, final_created, final_nulls) = self
+                    .build_replay_contents(
+                        rest,
+                        *chain_after,
+                        frame.advance(&next_created, &next_nulls),
+                    );
                 let st = self
                     .ctx
                     .apply_custom_pred_simple(
@@ -383,7 +404,13 @@ impl<'a> Replayer<'a> {
                     )
                     .unwrap();
                 self.record("ReplayContentsStepAction");
-                (st, EventTag::Action, final_chain, final_live, final_nulls)
+                (
+                    st,
+                    EventTag::Action,
+                    final_chain,
+                    final_created,
+                    final_nulls,
+                )
             }
         };
 
@@ -431,7 +458,7 @@ impl<'a> Replayer<'a> {
         }
         .unwrap();
         self.record("ReplayContents");
-        (st, final_chain, final_live, final_nulls)
+        (st, final_chain, final_created, final_nulls)
     }
 
     /// Build the inner `Replay<X>` statement for one event, returning
@@ -457,13 +484,13 @@ impl<'a> Replayer<'a> {
                 let evidence = guard_evidence
                     .clone()
                     .expect("missing guard evidence for insert");
-                let (st, new_live) =
+                let (st, new_created) =
                     self.build_replay_insert(initial, new, frame, tx_stmt.clone(), evidence);
                 (
                     st,
                     EventTag::Insert,
                     *chain_after,
-                    new_live,
+                    new_created,
                     frame.nullifiers.clone(),
                 )
             }
@@ -478,9 +505,9 @@ impl<'a> Replayer<'a> {
                 let evidence = guard_evidence
                     .clone()
                     .expect("missing guard evidence for mutate");
-                let (st, new_live, new_null) =
+                let (st, new_created, new_null) =
                     self.build_replay_mutate(new, old, frame, tx_stmt.clone(), evidence);
-                (st, EventTag::Mutate, *chain_after, new_live, new_null)
+                (st, EventTag::Mutate, *chain_after, new_created, new_null)
             }
             ChainEvent::Delete {
                 old,
@@ -492,18 +519,18 @@ impl<'a> Replayer<'a> {
                 let evidence = guard_evidence
                     .clone()
                     .expect("missing guard evidence for delete");
-                let (st, new_live, new_null) =
+                let (st, new_created, new_null) =
                     self.build_replay_delete(old, frame, tx_stmt.clone(), evidence);
-                (st, EventTag::Delete, *chain_after, new_live, new_null)
+                (st, EventTag::Delete, *chain_after, new_created, new_null)
             }
             ChainEvent::Action {
                 chain_after,
                 contents,
                 ..
             } => {
-                let (st, new_live, new_null) =
+                let (st, new_created, new_null) =
                     self.build_replay_action(contents, chain, frame, *chain_after);
-                (st, EventTag::Action, *chain_after, new_live, new_null)
+                (st, EventTag::Action, *chain_after, new_created, new_null)
             }
         }
     }
@@ -514,7 +541,7 @@ impl<'a> Replayer<'a> {
         chain: Hash,
         frame: ReplayFrame<'_>,
     ) -> (Statement, Hash, Set, Set) {
-        let (st_inner, tag, next_chain, next_live, next_nulls) =
+        let (st_inner, tag, next_chain, next_created, next_nulls) =
             self.build_replay_event(event, chain, frame);
         let st = match tag {
             EventTag::Insert => st_custom!(
@@ -536,7 +563,7 @@ impl<'a> Replayer<'a> {
         }
         .unwrap();
         self.record("ReplayElement");
-        (st, next_chain, next_live, next_nulls)
+        (st, next_chain, next_created, next_nulls)
     }
 
     fn build_replay_insert(
@@ -550,13 +577,13 @@ impl<'a> Replayer<'a> {
         // ReplayInsert's `initial` private wildcard is bound by the
         // TxInsert sub-statement we pass in; no standalone op needed.
         let btx = frame.to_tx_dict();
-        let mut new_live = frame.live.clone();
-        new_live.insert(&Value::from(new.clone())).unwrap();
-        let atx = tx_with(&btx, "live", Value::from(new_live.clone()));
+        let mut new_created = frame.created.clone();
+        new_created.insert(&Value::from(new.clone())).unwrap();
+        let atx = tx_with(&btx, "created", Value::from(new_created.clone()));
 
         let pair = dict!({
             "initial" => initial.clone(),
-            "new_live" => new_live.clone()
+            "new_created" => new_created.clone()
         });
 
         let tx_stmt_wrapped = self
@@ -578,9 +605,9 @@ impl<'a> Replayer<'a> {
             .ctx
             .builder
             .priv_op(op!(SetInsert(
-                entry(&btx, "live").expect("referenced container entry exists"),
+                entry(&btx, "created").expect("referenced container entry exists"),
                 new,
-                entry(&pair, "new_live").expect("referenced container entry exists")
+                entry(&pair, "new_created").expect("referenced container entry exists")
             )))
             .unwrap();
         let op_du = self
@@ -588,8 +615,8 @@ impl<'a> Replayer<'a> {
             .builder
             .priv_op(op!(DictUpdate(
                 btx,
-                "live",
-                entry(&pair, "new_live").expect("referenced container entry exists"),
+                "created",
+                entry(&pair, "new_created").expect("referenced container entry exists"),
                 atx
             )))
             .unwrap();
@@ -615,7 +642,7 @@ impl<'a> Replayer<'a> {
             )
             .unwrap();
         self.record("ReplayInsert");
-        (st, new_live)
+        (st, new_created)
     }
 
     fn build_replay_mutate(
@@ -658,26 +685,26 @@ impl<'a> Replayer<'a> {
             .unwrap();
         self.record("ReplayMutate");
         let MutateScratch {
-            new_live,
+            new_created,
             new_nullifiers,
             ..
         } = scratch;
-        (st, new_live, new_nullifiers)
+        (st, new_created, new_nullifiers)
     }
 
-    /// Build a `ReplayNullify` statement: derives the object key hash
-    /// and nullifier from `old`, then accumulates the nullifier into
-    /// the tx's nullifiers set. `mid_tx` is the tx state with the new
-    /// live set already in place; `after_tx` is `mid_tx` with
-    /// `nullifiers` updated to `new_nullifiers`. Used by both mutate and delete
-    /// replay.
     fn build_replay_nullify(
         &mut self,
         old: &Dictionary,
         mid_tx: &Dictionary,
         after_tx: &Dictionary,
         new_nullifiers: &Set,
+        source: &Set,
     ) -> Statement {
+        let op_contains = self
+            .ctx
+            .builder
+            .priv_op(op!(SetContains(source, old)))
+            .unwrap();
         let okh = object_key_hash(old).unwrap();
         let nul = object_nullifier_from_key_hash(okh);
         let op_h1 = self
@@ -718,18 +745,13 @@ impl<'a> Replayer<'a> {
             .apply_custom_pred_simple(
                 false,
                 "ReplayNullify",
-                vec![op_h1, op_h2, op_si, op_du_null],
+                vec![op_contains, op_h1, op_h2, op_si, op_du_null],
             )
             .unwrap();
         self.record("ReplayNullify");
         st
     }
 
-    /// Build `ReplayMutateEvent` (and its inner `ReplayNullify`).
-    /// Shared between `build_replay_mutate` and
-    /// `build_replay_step_mutate` (these inner predicates don't
-    /// reference `new`/`old` via anchored keys -- they take the dicts
-    /// directly as wildcards).
     fn build_replay_mutate_event(
         &mut self,
         new: &Dictionary,
@@ -738,41 +760,45 @@ impl<'a> Replayer<'a> {
     ) -> Statement {
         let MutateScratch {
             btx,
-            live_minus_old,
-            new_live,
+            source_key,
+            source,
+            new_created,
             new_nullifiers,
         } = scratch;
-        let m1 = tx_with(btx, "live", Value::from(new_live.clone()));
+        let m1 = tx_with(btx, "created", Value::from(new_created.clone()));
         let atx = tx_with(&m1, "nullifiers", Value::from(new_nullifiers.clone()));
-        let st_nullify = self.build_replay_nullify(old, &m1, &atx, new_nullifiers);
+        let st_nullify = self.build_replay_nullify(old, &m1, &atx, new_nullifiers, source);
 
-        // Live swap + nullify; chain/event-hash work is delegated to the
-        // parent's TxMutate statement.
-        let op_sd = self
+        let op_source_key = self
             .ctx
             .builder
-            .priv_op(op!(SetDelete(
-                entry(btx, "live").expect("referenced container entry exists"),
-                old,
-                live_minus_old
-            )))
+            .priv_op(op!(SetContains(set!("inputs", "created"), *source_key)))
+            .unwrap();
+        let op_source = self
+            .ctx
+            .builder
+            .priv_op(op!(DictContains(btx, *source_key, source)))
             .unwrap();
         let op_si = self
             .ctx
             .builder
-            .priv_op(op!(SetInsert(live_minus_old, new, new_live)))
+            .priv_op(op!(SetInsert(
+                entry(btx, "created").unwrap(),
+                new,
+                new_created
+            )))
             .unwrap();
-        let op_du_live = self
+        let op_du_created = self
             .ctx
             .builder
-            .priv_op(op!(DictUpdate(btx, "live", new_live, m1)))
+            .priv_op(op!(DictUpdate(btx, "created", new_created, m1)))
             .unwrap();
         let st_event = self
             .ctx
             .apply_custom_pred_simple(
                 false,
                 "ReplayMutateEvent",
-                vec![op_sd, op_si, op_du_live, st_nullify],
+                vec![op_source_key, op_source, op_si, op_du_created, st_nullify],
             )
             .unwrap();
         self.record("ReplayMutateEvent");
@@ -788,50 +814,39 @@ impl<'a> Replayer<'a> {
     ) -> (Statement, Set, Set) {
         let btx = frame.to_tx_dict();
 
-        let mut new_live = frame.live.clone();
-        new_live.delete(&Value::from(old.commitment())).unwrap();
+        let (source_key, source) = frame.source_for(old);
         let nul = object_nullifier_from_key_hash(object_key_hash(old).unwrap());
         let mut new_nullifiers = frame.nullifiers.clone();
         new_nullifiers.insert(&Value::from(nul)).unwrap();
-        let m1 = tx_with(&btx, "live", Value::from(new_live.clone()));
-        let atx = tx_with(&m1, "nullifiers", Value::from(new_nullifiers.clone()));
-
+        let atx = tx_with(&btx, "nullifiers", Value::from(new_nullifiers.clone()));
         let pair = dict!({
-            "new_live" => new_live.clone(),
-            "mid_tx" => m1.clone()
+            "source_key" => source_key,
+            "source" => source.clone()
         });
-
-        let st_nullify = self.build_replay_nullify(old, &m1, &atx, &new_nullifiers);
+        let st_nullify = self.build_replay_nullify(old, &btx, &atx, &new_nullifiers, source);
         let st_nullify_wrapped = self
             .ctx
             .builder
             .priv_op(Operation::replace_value_with_entry(
-                vec![
-                    Some(entry(&pair, "mid_tx").expect("referenced container entry exists")),
-                    None,
-                    None,
-                ],
-                st_nullify.clone(),
+                vec![None, None, None, Some(entry(&pair, "source").unwrap())],
+                st_nullify,
             ))
             .unwrap();
-
-        let op_sd = self
+        let op_source_key = self
             .ctx
             .builder
-            .priv_op(op!(SetDelete(
-                entry(&btx, "live").expect("referenced container entry exists"),
-                old,
-                entry(&pair, "new_live").expect("referenced container entry exists")
+            .priv_op(op!(SetContains(
+                set!("inputs", "created"),
+                entry(&pair, "source_key").unwrap()
             )))
             .unwrap();
-        let op_du_live = self
+        let op_source = self
             .ctx
             .builder
-            .priv_op(op!(DictUpdate(
+            .priv_op(op!(DictContains(
                 btx,
-                "live",
-                entry(&pair, "new_live").expect("referenced container entry exists"),
-                entry(&pair, "mid_tx").expect("referenced container entry exists")
+                entry(&pair, "source_key").unwrap(),
+                entry(&pair, "source").unwrap()
             )))
             .unwrap();
         let rebound_evidence = self
@@ -854,20 +869,20 @@ impl<'a> Replayer<'a> {
                 "ReplayDelete",
                 vec![
                     tx_stmt,
-                    op_sd,
-                    op_du_live,
+                    op_source_key,
+                    op_source,
                     st_nullify_wrapped,
                     rebound_evidence,
                 ],
             )
             .unwrap();
         self.record("ReplayDelete");
-        (st, new_live, new_nullifiers)
+        (st, frame.created.clone(), new_nullifiers)
     }
 
     /// Build `ReplayAction`: open the action scope (rebind
     /// `chain_start`/`chain_end` in the tx context), replay the inner
-    /// contents in a child frame, then copy the resulting live and
+    /// contents in a child frame, then copy the resulting created and
     /// nullifier sets back into the parent's tx state.
     fn build_replay_action(
         &mut self,
@@ -881,12 +896,18 @@ impl<'a> Replayer<'a> {
         let ms = tx_with(&btx, "chain_start", Value::from(chain));
         let itx = tx_with(&ms, "chain_end", Value::from(chain_after));
 
-        let (st_contents, _next_chain, next_live, next_nulls) =
+        let (st_contents, _next_chain, next_created, next_nulls) =
             self.build_replay_contents(contents, chain, parent.rescope(chain, chain_after));
 
-        let etx = build_tx(&next_live, &next_nulls, chain, chain_after);
+        let etx = build_tx(
+            parent.inputs,
+            &next_created,
+            &next_nulls,
+            chain,
+            chain_after,
+        );
 
-        let fm1 = tx_with(&btx, "live", Value::from(next_live.clone()));
+        let fm1 = tx_with(&btx, "created", Value::from(next_created.clone()));
         let atx = tx_with(&fm1, "nullifiers", Value::from(next_nulls.clone()));
 
         let pair = dict!({
@@ -894,7 +915,7 @@ impl<'a> Replayer<'a> {
             "mid" => fm1.clone()
         });
 
-        // ReplayAction (scope setup + contents + live/nullifier copy-back)
+        // ReplayAction (scope setup + contents + created/nullifier copy-back)
         let op_scope1 = self
             .ctx
             .builder
@@ -920,8 +941,8 @@ impl<'a> Replayer<'a> {
             .builder
             .priv_op(op!(DictUpdate(
                 btx,
-                "live",
-                entry(&etx, "live").expect("referenced container entry exists"),
+                "created",
+                entry(&etx, "created").expect("referenced container entry exists"),
                 entry(&pair, "mid").expect("referenced container entry exists")
             )))
             .unwrap();
@@ -945,7 +966,7 @@ impl<'a> Replayer<'a> {
             )
             .unwrap();
         self.record("ReplayAction");
-        (st, next_live, next_nulls)
+        (st, next_created, next_nulls)
     }
 
     /// Build a `ReplayActionInsert` statement: the K=1 fast path for a
@@ -984,13 +1005,13 @@ impl<'a> Replayer<'a> {
             .expect("missing guard evidence for insert");
 
         let btx = parent.to_tx_dict();
-        let mut new_live = parent.live.clone();
-        new_live.insert(&Value::from(new.clone())).unwrap();
-        let atx = tx_with(&btx, "live", Value::from(new_live.clone()));
+        let mut new_created = parent.created.clone();
+        new_created.insert(&Value::from(new.clone())).unwrap();
+        let atx = tx_with(&btx, "created", Value::from(new_created.clone()));
 
         let pair = dict!({
             "initial" => initial.clone(),
-            "new_live" => new_live.clone()
+            "new_created" => new_created.clone()
         });
 
         let tx_stmt_wrapped = self
@@ -1012,9 +1033,9 @@ impl<'a> Replayer<'a> {
             .ctx
             .builder
             .priv_op(op!(SetInsert(
-                entry(&btx, "live").expect("referenced container entry exists"),
+                entry(&btx, "created").expect("referenced container entry exists"),
                 new,
-                entry(&pair, "new_live").expect("referenced container entry exists")
+                entry(&pair, "new_created").expect("referenced container entry exists")
             )))
             .unwrap();
         let op_du = self
@@ -1022,8 +1043,8 @@ impl<'a> Replayer<'a> {
             .builder
             .priv_op(op!(DictUpdate(
                 btx,
-                "live",
-                entry(&pair, "new_live").expect("referenced container entry exists"),
+                "created",
+                entry(&pair, "new_created").expect("referenced container entry exists"),
                 atx
             )))
             .unwrap();
@@ -1036,7 +1057,7 @@ impl<'a> Replayer<'a> {
             )
             .unwrap();
         self.record("ReplayActionInsert");
-        (st, new_live, parent.nullifiers.clone())
+        (st, new_created, parent.nullifiers.clone())
     }
 }
 
@@ -1048,4 +1069,105 @@ enum EventTag {
     Mutate,
     Delete,
     Action,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pod2::{
+        frontend::MultiPodBuilder,
+        middleware::{Params, VDSet},
+    };
+    use std::{
+        panic::{AssertUnwindSafe, catch_unwind},
+        sync::Arc,
+    };
+
+    fn context() -> BuildContext {
+        BuildContext::new(
+            MultiPodBuilder::new(&Params::default(), &VDSet::new(&[])),
+            vec![
+                Arc::new(crate::predicates::events_module()),
+                Arc::new(crate::predicates::module()),
+            ],
+        )
+    }
+
+    #[test]
+    fn rejects_unapproved_source_field() {
+        let old = dict!({"key" => 1_i64});
+        let new = dict!({"key" => 2_i64});
+        let empty = set!();
+        let forged_source = set!(old);
+        let zero = empty.commitment();
+        let frame = ReplayFrame {
+            inputs: &empty,
+            created: &empty,
+            nullifiers: &forged_source,
+            chain_start: zero,
+            chain_end: zero,
+        };
+        let mut scratch = frame.mutate_scratch(&old, &new);
+        scratch.source_key = "nullifiers";
+        scratch.source = forged_source;
+        let mut ctx = context();
+        let mut stats = TxStats::new();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            Replayer::new(&mut ctx, &mut stats).build_replay_mutate_event(&new, &old, &scratch)
+        }));
+        assert!(
+            result.is_err(),
+            "nullifiers must not be usable as an existence source"
+        );
+        assert_eq!(stats.get("ReplayNullify"), Some(&1));
+        assert!(!stats.contains_key("ReplayMutateEvent"));
+    }
+
+    #[test]
+    fn rejects_mutation_using_its_own_output_as_source() {
+        let object = dict!({"key" => 1_i64});
+        let empty = set!();
+        let zero = empty.commitment();
+        let frame = ReplayFrame {
+            inputs: &empty,
+            created: &empty,
+            nullifiers: &empty,
+            chain_start: zero,
+            chain_end: zero,
+        };
+        let mut scratch = frame.mutate_scratch(&object, &object);
+        scratch.source = scratch.new_created.clone();
+        let mut ctx = context();
+        let mut stats = TxStats::new();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            Replayer::new(&mut ctx, &mut stats)
+                .build_replay_mutate_event(&object, &object, &scratch)
+        }));
+        assert!(
+            result.is_err(),
+            "the source must be bound to the pre-mutation context"
+        );
+        assert_eq!(stats.get("ReplayNullify"), Some(&1));
+        assert!(!stats.contains_key("ReplayMutateEvent"));
+    }
+
+    #[test]
+    fn rejects_second_consumption_even_when_source_still_contains_state() {
+        let old = dict!({"key" => 1_i64});
+        let source = set!(old);
+        let empty = set!();
+        let zero = empty.commitment();
+        let before_tx = build_tx(&empty, &source, &empty, zero, zero);
+        let nullifiers = set!(crate::compute_nullifier(&old));
+        let after_tx = tx_with(&before_tx, "nullifiers", Value::from(nullifiers.clone()));
+        let mut ctx = context();
+        let mut stats = TxStats::new();
+        let mut replayer = Replayer::new(&mut ctx, &mut stats);
+        replayer.build_replay_nullify(&old, &before_tx, &after_tx, &nullifiers, &source);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            replayer.build_replay_nullify(&old, &after_tx, &after_tx, &nullifiers, &source)
+        }));
+        assert!(result.is_err(), "SetInsert must require a fresh nullifier");
+        assert_eq!(stats.get("ReplayNullify"), Some(&1));
+    }
 }

@@ -8,7 +8,7 @@
   file. This file is the rest, organized in three layers, bottom-up:
 
   1. Replay -- walks the recorded chain, verifying each event's
-     hash step, updating the live/nullifier sets, and calling the
+     hash step, updating the created/nullifier sets, and calling the
      affected object's type guard to authorize the event.
 
   2. InputsGrounded -- proves each input object is present in the
@@ -16,7 +16,7 @@
 
   3. TxFinalized -- the public entry point. Ties input grounding,
      chain seeding, and full replay together. Exposes
-     (state_header, tx_final, nullifiers, live) publicly.
+     (state_header, tx_final, nullifiers, created) publicly.
 
   State convention: most predicates thread four public arguments:
   (before_tx, after_tx, before_chain, after_chain). Each step
@@ -25,7 +25,8 @@
   "before".
 
   Tx = {
-    live: set,            // objects currently alive
+    inputs: set,          // immutable grounded inputs
+    created: set,         // all states produced so far
     nullifiers: set,      // accumulated nullifiers (double-spend prevention)
     chain_start: hash,    // enclosing action's chain start (for guard dispatch)
     chain_end: hash       // enclosing action's chain end (for guard dispatch)
@@ -126,18 +127,18 @@ ReplayElement(state_header, before_tx, after_tx, before_chain, after_chain) = OR
 //   1. Write the action's chain range into tx as chain_start/chain_end
 //      (so guard dispatch knows which action scope to match).
 //   2. Replay the action's contents (events and sub-actions).
-//   3. Copy inner live/nullifier changes back to the outer tx
+//   3. Copy inner created/nullifier changes back to the outer tx
 //      (restoring the parent's chain_start/chain_end automatically,
 //      since after_tx derives from before_tx, not inner_tx).
 
-// Set chain_start/chain_end in tx, replay contents, copy live/nullifiers
+// Set chain_start/chain_end in tx, replay contents, copy created/nullifiers
 // back to outer tx (which restores the parent's chain_start/chain_end).
 ReplayAction(state_header, before_tx, after_tx, before_chain, after_chain,
     private: pair, inner_tx, end_tx) = AND(
   DictUpdate(before_tx, "chain_start", before_chain, pair.scope_mid)
   DictUpdate(pair.scope_mid, "chain_end", after_chain, inner_tx)
   ReplayContents(state_header, inner_tx, end_tx, before_chain, after_chain)
-  DictUpdate(before_tx, "live", end_tx.live, pair.mid)
+  DictUpdate(before_tx, "created", end_tx.created, pair.mid)
   DictUpdate(pair.mid, "nullifiers", end_tx.nullifiers, after_tx)
 )
 
@@ -181,8 +182,8 @@ ReplayActionsStep(state_header, before_tx, after_tx, before_chain, after_chain,
 ReplayActionInsert(state_header, before_tx, after_tx, before_chain, after_chain,
     private: new, pair, guard) = AND(
   tx::TxInsert(before_chain, after_chain, pair.initial, new, guard)
-  SetInsert(before_tx.live, new, pair.new_live)
-  DictUpdate(before_tx, "live", pair.new_live, after_tx)
+  SetInsert(before_tx.created, new, pair.new_created)
+  DictUpdate(before_tx, "created", pair.new_created, after_tx)
   guard(new, state_header, before_chain, after_chain)
 )
 
@@ -190,19 +191,19 @@ ReplayActionInsert(state_header, before_tx, after_tx, before_chain, after_chain,
 // Replay: Insert
 // ========================================================
 
-// Full insert replay: chain step (via TxInsert) + live update +
+// Full insert replay: chain step (via TxInsert) + created update +
 // guard dispatch. Referencing TxInsert instead of re-proving the
 // Hash equations lets the prover reuse the record-time statement
 // that it already built for the application's action predicate.
 // To stay within pod2's 8-wildcard limit, some private wildcards are packed
 // into a small private dict and accessed via anchored keys:
-// `pair.initial`/`pair.new_live` for Insert, `pair.new_live`/`pair.mid_tx` for
-// Delete.
+// `pair.initial`/`pair.new_created` for Insert, `pair.source_key`/`pair.source`
+// for Delete.
 ReplayInsert(state_header, before_tx, after_tx, before_chain, after_chain,
     private: new, pair, guard) = AND(
   tx::TxInsert(before_chain, after_chain, pair.initial, new, guard)
-  SetInsert(before_tx.live, new, pair.new_live)
-  DictUpdate(before_tx, "live", pair.new_live, after_tx)
+  SetInsert(before_tx.created, new, pair.new_created)
+  DictUpdate(before_tx, "created", pair.new_created, after_tx)
   guard(new, state_header, before_tx.chain_start, before_tx.chain_end)
 )
 
@@ -213,22 +214,25 @@ ReplayInsert(state_header, before_tx, after_tx, before_chain, after_chain,
 // Nullifier computation and accumulation. Shared by mutate and
 // delete to prevent double-spending of the consumed object.
 // nullifier = H(H(obj, obj.key), "txlib-nullifier-v1")
-ReplayNullify(mid_tx, after_tx, old,
+ReplayNullify(mid_tx, after_tx, old, source,
     private: obj_key_hash, nullifier, new_nullifiers) = AND(
+  SetContains(source, old)
   Hash(old, old.key, obj_key_hash)
   Hash(obj_key_hash, "txlib-nullifier-v1", nullifier)
   SetInsert(mid_tx.nullifiers, nullifier, new_nullifiers)
   DictUpdate(mid_tx, "nullifiers", new_nullifiers, after_tx)
 )
 
-// Live-set swap + nullifier accumulation. Chain/event-hash work is
-// delegated to TxMutate in the ReplayMutate parent.
+// The source is selected from the pre-mutation context: an output cannot
+// establish its own input's existence. ReplayNullify checks membership and
+// rejects a second consumption by requiring a fresh nullifier.
 ReplayMutateEvent(before_tx, after_tx, old, new,
-    private: new_live, live_mid, mid_tx) = AND(
-  SetDelete(before_tx.live, old, live_mid)
-  SetInsert(live_mid, new, new_live)
-  DictUpdate(before_tx, "live", new_live, mid_tx)
-  ReplayNullify(mid_tx, after_tx, old)
+    private: new_created, mid_tx, source_key, source) = AND(
+  SetContains(#["inputs", "created"], source_key)
+  DictContains(before_tx, source_key, source)
+  SetInsert(before_tx.created, new, new_created)
+  DictUpdate(before_tx, "created", new_created, mid_tx)
+  ReplayNullify(mid_tx, after_tx, old, source)
 )
 
 // Full mutate replay: chain step (via TxMutate) + state update +
@@ -245,14 +249,13 @@ ReplayMutate(state_header, before_tx, after_tx, before_chain, after_chain,
 // Replay: Delete
 // ========================================================
 
-// Full delete replay: chain step (via TxDelete) + live-set removal
-// + nullifier accumulation + guard dispatch.
+// Full delete replay: chain step, input availability, nullification, and guard.
 ReplayDelete(state_header, before_tx, after_tx, before_chain, after_chain,
     private: old, guard, pair) = AND(
   tx::TxDelete(before_chain, after_chain, old, guard)
-  SetDelete(before_tx.live, old, pair.new_live)
-  DictUpdate(before_tx, "live", pair.new_live, pair.mid_tx)
-  ReplayNullify(pair.mid_tx, after_tx, old)
+  SetContains(#["inputs", "created"], pair.source_key)
+  DictContains(before_tx, pair.source_key, pair.source)
+  ReplayNullify(before_tx, after_tx, old, pair.source)
   guard(old, state_header, before_tx.chain_start, before_tx.chain_end)
 )
 
@@ -311,12 +314,12 @@ InputsGroundedRecursive(inputs, created,
 // certificate: it attests to the final state without revealing the
 // event sequence that produced it.
 
-// Exposes (state_header, tx_final, nullifiers, live) publicly. The
+// Exposes (state_header, tx_final, nullifiers, created) publicly. The
 // verifier sees `state_header` as a single hash -- the commitment of the
 // `StateHeader` record.
 // tx_final is the after_tx dictionary commitment, which binds the
-// live set, nullifiers, and final chain_start/chain_end together. Both
-// the nullifier set and the final live set are also surfaced as their
+// inputs, created set, nullifiers, and final chain_start/chain_end together. Both
+// the nullifier set and the final created set are also surfaced as their
 // own public args (via TxFinalBindings) so the synchronizer can fold
 // them into its global nullifier and created sets; the chain stays
 // private. The top-level walker is ReplayActions, so every top-level
@@ -329,17 +332,17 @@ InputsGroundedRecursive(inputs, created,
 // malleability that would otherwise let the prover witness arbitrary
 // values for those two fields (they pass through ReplayActions
 // verbatim into `tx_final`, since ReplayAction only updates the
-// `live` and `nullifiers` keys).
-TxFinalBindings(tx_final, nullifiers, live) = AND(
+// `created` and `nullifiers` keys).
+TxFinalBindings(tx_final, nullifiers, created) = AND(
   DictContains(tx_final, "nullifiers", nullifiers)
-  DictContains(tx_final, "live", live)
+  DictContains(tx_final, "created", created)
 )
 
-TxFinalized(state_header StateHeader, tx_final, nullifiers, live,
+TxFinalized(state_header StateHeader, tx_final, nullifiers, created,
      private: before_tx, chain_start, chain_final) = AND(
-  InputsGrounded(before_tx.live, state_header.created)
-  Hash(before_tx.live, {}, chain_start)
-  DictInsert({"nullifiers": {}, "chain_start": {}, "chain_end": {}}, "live", before_tx.live, before_tx)
-  TxFinalBindings(tx_final, nullifiers, live)
+  InputsGrounded(before_tx.inputs, state_header.created)
+  Hash(before_tx.inputs, {}, chain_start)
+  DictInsert({"created": {}, "nullifiers": {}, "chain_start": {}, "chain_end": {}}, "inputs", before_tx.inputs, before_tx)
+  TxFinalBindings(tx_final, nullifiers, created)
   ReplayActions(state_header, before_tx, tx_final, chain_start, chain_final)
 )

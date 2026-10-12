@@ -87,6 +87,31 @@ mod tests {
     }
 
     #[test]
+    fn replay_fits_manual_predicate_budget() {
+        let module = module();
+        assert!(
+            module.splits.is_empty(),
+            "unexpected automatic predicate split"
+        );
+        assert_eq!(module.batch.predicates().len(), 22);
+        for predicate in module.batch.predicates() {
+            assert!(predicate.statements().len() <= 5, "{}", predicate.name);
+            assert!(predicate.wildcard_names().len() <= 8, "{}", predicate.name);
+        }
+        for name in ["ReplayMutateEvent", "ReplayDelete", "ReplayNullify"] {
+            assert_eq!(
+                module
+                    .predicate_ref_by_name(name)
+                    .unwrap()
+                    .predicate()
+                    .statements()
+                    .len(),
+                5
+            );
+        }
+    }
+
+    #[test]
     fn test_predicates_exist() {
         let module = module();
         println!("txlib id: {:#}", module.batch.id());
