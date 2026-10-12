@@ -4,8 +4,8 @@
 //! Usage: `client-e2e <action>`, with `RELAYER_URL` and `SYNCHRONIZER_URL` set in this crate's
 //! `.env` (see `.env.example`). `<action>` is one of:
 //! - `FindLog`: creates one log.
-//! - `BurnLogs`: creates the logs BurnLogs spends with one FindLog each, lands them, then burns
-//!   them in a single transaction.
+//! - `BurnLogs`: creates the logs BurnLogs spends with one FindLog each, landing them in
+//!   batches, then burns them in a single transaction.
 
 use std::{
     env,
@@ -18,6 +18,9 @@ use tests::{PreparedTx, Prover, Services, burn_logs_action, find_log_action};
 
 /// The number of inputs the BurnLogs script declares.
 const BURN_LOGS_INPUTS: usize = 50;
+/// FindLogs proved before a batch is landed, so that the batch is still grounded on a recent
+/// state root when it is submitted.
+const FIND_LOGS_BATCH: usize = 10;
 
 fn main() {
     env_logger::init();
@@ -68,7 +71,12 @@ fn find_logs(services: &Services, prover: &Prover, count: usize) -> Vec<Spendabl
 }
 
 fn burn_logs(services: &Services, prover: &Prover) {
-    let logs = find_logs(services, prover, BURN_LOGS_INPUTS);
+    let logs: Vec<SpendableObject> = (0..BURN_LOGS_INPUTS.div_ceil(FIND_LOGS_BATCH))
+        .flat_map(|batch| {
+            let batch_size = FIND_LOGS_BATCH.min(BURN_LOGS_INPUTS - batch * FIND_LOGS_BATCH);
+            find_logs(services, prover, batch_size)
+        })
+        .collect();
     let log_commitments: Vec<Hash> = logs.iter().map(|log| log.obj.commitment()).collect();
 
     let proving_started = Instant::now();

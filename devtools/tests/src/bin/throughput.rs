@@ -1,5 +1,9 @@
 //! Proves `n` FindLog transactions up front, then measures how long the relayer and the
-//! synchronizer take to land all of them.
+//! synchronizer take to land all of them.  In order to prepare all transaction up front we need to
+//! fetch the grounding witness at the beginning, which implicitly adds a deadline to tx submission
+//! as the synchronizer rejects txs that use state roots which are too old.  Our local devnet is
+//! set up for faster block times which means that the maximum `n` value before txs are rejected
+//! will be smaller than in a regular devnet or mainnet.
 //!
 //! Usage: `throughput <n>`, with `RELAYER_URL` and `SYNCHRONIZER_URL` set in this crate's
 //! `.env` (see `.env.example`).
