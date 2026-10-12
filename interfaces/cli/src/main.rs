@@ -113,7 +113,7 @@ enum Cmd {
         inputs: Vec<String>,
         /// Supply an argument as NAME=VALUE. Repeat for multiple arguments.
         /// Use hex for Raw values and decimal for Int values. Omitted
-        /// arguments use their script defaults. Run `dobj action
+        /// arguments use their script defaults. Run `dobj inspect-action
         /// PLUGIN::ACTION` to list the accepted arguments.
         #[arg(long = "arg", value_name = "NAME=VALUE")]
         args: Vec<String>,

@@ -581,7 +581,12 @@ struct ActionContext {
     /// Declarations in evaluation order.
     args: Vec<ActionArg>,
     supplied_args: ActionArgs,
-    unsafe_arg: Option<String>,
+    unsafe_arg: Option<UnsafeArg>,
+}
+
+struct UnsafeArg {
+    name: String,
+    supplied: Option<Ref>,
 }
 
 impl ActionContext {
@@ -871,21 +876,33 @@ impl ActionHandle {
             ctx.vars.len()
         };
         let result = eval();
-        let name = {
+        let declaration = {
             let mut ctx = self.0.borrow_mut();
             ctx.unsafe_block = false;
             ctx.unsafe_arg.take()
         };
         let value = result?;
-        if let Some(name) = name {
+        if let Some(UnsafeArg { name, supplied }) = declaration {
+            let arg = value.clone().try_cast::<ArgHandle>();
+            if let Some(supplied) = supplied {
+                let ctx = self.0.borrow();
+                let returns_supplied = arg.as_ref().is_some_and(|arg| {
+                    Rc::ptr_eq(&arg.arg, &supplied)
+                        && matches!(&*arg.arg.borrow(), VarOrValue::Var(var)
+                            if var.value.as_ref() == ctx.supplied_args.get(&name))
+                });
+                if !returns_supplied {
+                    return Err(format!(
+                        "arg {name}: a supplied value must be returned unchanged, as in `arg(name) ?? default`"
+                    )
+                    .into());
+                }
+            }
             let fresh_error = || -> Box<EvalAltResult> {
                 format!("arg {name}: the unsafe expression must return a freshly generated value")
                     .into()
             };
-            let arg = value
-                .clone()
-                .try_cast::<ArgHandle>()
-                .ok_or_else(fresh_error)?;
+            let arg = arg.ok_or_else(fresh_error)?;
             let mut ctx = self.0.borrow_mut();
             let witness = arg.arg.borrow();
             let VarOrValue::Var(var) = &*witness else {
@@ -1707,8 +1724,11 @@ impl ActionHandle {
         if ctx.args.iter().any(|arg| arg.name == name) {
             return Err(format!("arg {name}: declared twice in this action").into());
         }
-        ctx.unsafe_arg = Some(name.clone());
         let Some(value) = ctx.supplied_args.get(&name).cloned() else {
+            ctx.unsafe_arg = Some(UnsafeArg {
+                name,
+                supplied: None,
+            });
             return Ok(Dynamic::UNIT);
         };
         let typ = ctx
@@ -1724,6 +1744,10 @@ impl ActionHandle {
             .clone();
         let var = ctx.fresh_var("arg", typ);
         var.borrow_mut().set_value(value);
+        ctx.unsafe_arg = Some(UnsafeArg {
+            name,
+            supplied: Some(var.clone()),
+        });
         Ok(Dynamic::from(ArgHandle::new(self.clone(), var)))
     }
     fn random(self) -> RuntimeResult<ArgHandle> {

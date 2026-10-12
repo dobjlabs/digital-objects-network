@@ -2248,6 +2248,96 @@ fn test_arg_declaration_errors() {
 }
 
 #[test]
+fn test_supplied_arg_must_be_returned_unchanged() {
+    for (expression, value) in [
+        (r#"arg("n"); action.random()"#, Value::from(42)),
+        (
+            r#"let supplied = arg("n");
+                if supplied == () { action.random() } else { 42 }"#,
+            Value::from(42),
+        ),
+        (
+            r#"let supplied = arg("n");
+                if supplied == () { state_header.block_number * 0 } else { supplied + 1 }"#,
+            Value::from(42),
+        ),
+        (
+            r#"let supplied = arg("n") ?? action.random();
+                var_assign(supplied, 0); supplied"#,
+            Value::from(42),
+        ),
+        (
+            r#"let supplied = arg("n");
+                if supplied == () { action.random() } else { supplied.field }"#,
+            Value::from(dict!({ "field" => 42 })),
+        ),
+    ] {
+        let src = format!(
+            r#"
+            fn Main(action) {{
+                var out = action.output("Ore");
+                var n = unsafe {{ {expression} }};
+                out.update("key", n);
+            }}
+        "#
+        );
+        let module = Sdk::default()
+            .load_module_from_src_actions(&src, &["Main"])
+            .unwrap();
+        let state = TestState::default();
+        let executor = module.executor(true, grounding_witness(&state, &[]));
+        executor.action("Main", vec![]).unwrap();
+        let args = ActionArgs::from([("n".to_string(), value)]);
+        for error in [
+            executor.action_with_args("Main", vec![], &args).err(),
+            executor.plan_action_with_args("Main", vec![], &args).err(),
+        ] {
+            let error = error
+                .expect("supplied witness must be returned unchanged")
+                .to_string();
+            assert!(
+                error.contains("returned unchanged"),
+                "{expression}: {error}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_arg_evaluation_preserves_scope_and_handles() {
+    let src = r#"
+        fn Main(action) {
+            var out = action.output("Ore");
+            let count = 0;
+            let saved = ();
+            var key = unsafe { count += 1; saved = arg("key") ?? action.random(); saved };
+            out.set([["count", count], ["witness", key], ["saved", saved]]);
+        }
+    "#;
+    let sdk = Sdk::default();
+    let module = sdk.load_module_from_src_actions(src, &["Main"]).unwrap();
+    let plain = sdk
+        .load_module_from_src_actions(&src.replace("arg(\"key\") ?? ", ""), &["Main"])
+        .unwrap();
+    assert_eq!(module.podlang_src(), plain.podlang_src());
+    let state = TestState::default();
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    for args in [
+        ActionArgs::new(),
+        ActionArgs::from([("key".to_string(), Value::from(42))]),
+    ] {
+        let result = executor.action_with_args("Main", vec![], &args).unwrap();
+        let obj = result.obj(0);
+        let field = |name: &str| obj.obj.get(&StrKey::from(name)).unwrap().unwrap();
+        assert_eq!(field("count"), Value::from(1));
+        assert_eq!(field("saved"), field("witness"));
+        if let Some(supplied) = args.get("key") {
+            assert_eq!(field("witness"), *supplied);
+        }
+    }
+}
+
+#[test]
 fn test_unsafe_rejects_object_and_subaction_instructions() {
     for operation in [
         "action.input(\"Ore\")",
