@@ -1,3 +1,5 @@
+#![allow(clippy::useless_format)]
+
 use std::fs::File;
 use std::io::{self, Write as _};
 
@@ -10,7 +12,7 @@ enum Resource {
     Bit,
 }
 
-static BUCKET_RESOURCES: &'static [Resource] = &[Resource::Wood, Resource::Stone, Resource::Iron];
+static BUCKET_RESOURCES: &[Resource] = &[Resource::Wood, Resource::Stone, Resource::Iron];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum_macros::Display)]
 enum Tool {
