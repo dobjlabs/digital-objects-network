@@ -430,7 +430,7 @@ impl Node {
             .parse_blobs(blob_payloads, slot, block_meta.number);
         let candidates: Vec<Hash> = parsed
             .iter()
-            .flat_map(|(_, payload)| payload.live.iter().copied())
+            .flat_map(|(_, payload)| payload.created.iter().copied())
             .collect();
         let prior_indices = self.sync_db.created_indices(&candidates).await?;
         self.state_machine.derive_slot_head(

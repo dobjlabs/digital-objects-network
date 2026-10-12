@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use crate::{
     payload::{Payload, PayloadProof},
     shrink::cache_get_shrunk_main_pod_circuit_data,
@@ -10,18 +8,9 @@ use pod2::{
     backends::plonky2::{basetypes::DEFAULT_VD_SET, mainpod::public_inputs},
     middleware::{
         CommonCircuitData, CustomPredicateRef, Hash, Params, Statement, Value, VerifierCircuitData,
-        containers::{Array, Set},
+        containers::Array,
     },
 };
-
-fn hashes_to_set(hashes: &[Hash]) -> Set {
-    Set::new(
-        hashes
-            .iter()
-            .map(|h| Value::from(*h))
-            .collect::<HashSet<_>>(),
-    )
-}
 
 /// Decodes and validates a raw blob payload.
 ///
@@ -37,7 +26,7 @@ pub trait BlobParser: Send + Sync {
 // MockBlobParser
 // ---------------------------------------------------------------------------
 
-/// Mock parser: accepts JSON `{ "tx_final": "0x...", "nullifiers": [...], "live": [...], "state_root": "0x..." }`
+/// Mock parser: accepts JSON `{ "tx_final": "0x...", "nullifiers": [...], "created": [...], "state_root": "0x..." }`
 /// Hash bytes serialized as lowercase hex strings.
 /// Returns a `Payload` with a dummy empty `PayloadProof` since no real proof
 /// is needed for mock testing.
@@ -49,7 +38,7 @@ pub struct MockBlobParser;
 struct MockProofJson {
     tx_final: String,
     nullifiers: Vec<String>,
-    live: Vec<String>,
+    created: Vec<String>,
     state_root: String,
 }
 
@@ -67,8 +56,8 @@ impl BlobParser for MockBlobParser {
             .iter()
             .map(|s| decode_hash_hex(s))
             .collect::<Result<Vec<_>>>()?;
-        let live = json
-            .live
+        let created = json
+            .created
             .iter()
             .map(|s| decode_hash_hex(s))
             .collect::<Result<Vec<_>>>()?;
@@ -78,7 +67,7 @@ impl BlobParser for MockBlobParser {
             tx_final,
             state_root,
             nullifiers,
-            live,
+            created,
         }))
     }
 }
@@ -146,26 +135,13 @@ impl ProofParser {
 
 impl BlobParser for ProofParser {
     fn parse_blob(&self, blob_bytes: &[u8]) -> Result<Option<Payload>> {
-        // 1. Decode payload using payload::payload; return None if not our format.
         let payload = match Payload::from_bytes(blob_bytes, &self.common_circuit_data) {
             Ok(p) => p,
             Err(_) => return Ok(None),
         };
 
-        // 2. Rebuild the public statement the proof was made against. The
-        //    nullifier and live sets travel as plain hash lists, so the set
-        //    commitments have to be reconstructed before they can be matched.
-        let statement = Statement::Custom(
-            self.txn_finalized_pred.clone(),
-            vec![
-                Value::from(payload.state_root).into(),
-                Value::from(payload.tx_final).into(),
-                Value::from(hashes_to_set(&payload.nullifiers)).into(),
-                Value::from(hashes_to_set(&payload.live)).into(),
-            ],
-        );
+        let statement = payload.finalized_statement(self.txn_finalized_pred.clone());
 
-        // 3. Verify the proof against the statement.
         self.verify_shrunk_main_pod(payload.proof.clone(), statement)?;
 
         Ok(Some(payload))
@@ -199,7 +175,7 @@ mod tests {
         let sr_hex = format!("0x{}", hash_to_hex(&state_root));
 
         let json = format!(
-            r#"{{"tx_final":"{}","nullifiers":["{}"],"live":[],"state_root":"{}"}}"#,
+            r#"{{"tx_final":"{}","nullifiers":["{}"],"created":[],"state_root":"{}"}}"#,
             tx_hex, null_hex, sr_hex
         );
 
@@ -227,7 +203,7 @@ mod tests {
         let tx_hex = hash_to_hex(&tx_final); // no "0x" prefix
 
         let json = format!(
-            r#"{{"tx_final":"{}","nullifiers":[],"live":[],"state_root":"{}"}}"#,
+            r#"{{"tx_final":"{}","nullifiers":[],"created":[],"state_root":"{}"}}"#,
             tx_hex, tx_hex
         );
 

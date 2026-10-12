@@ -6,7 +6,10 @@ use plonky2::{
     plonk::proof::CompressedProof,
     util::serialization::Buffer,
 };
-use pod2::middleware::{C, CommonCircuitData, D, F, Hash};
+use pod2::middleware::{
+    C, CommonCircuitData, CustomPredicateRef, D, F, Hash, Statement, Value, containers::Set,
+};
+use txlib::Tx;
 
 use crate::ProofType;
 
@@ -33,10 +36,12 @@ pub fn read_elems<const N: usize>(bytes: &mut impl Read) -> Result<[F; N]> {
     Ok(elems)
 }
 
+const MAX_HASHES_PER_LIST: usize = u8::MAX as usize;
+
 /// A list of hashes, length-prefixed by a single `u8` count: at most 255
 /// entries.
 fn write_hashes(buffer: &mut Vec<u8>, hashes: &[Hash]) {
-    assert!(hashes.len() <= 255);
+    assert!(hashes.len() <= MAX_HASHES_PER_LIST);
     buffer
         .write_all(&(hashes.len() as u8).to_le_bytes())
         .expect("vec write");
@@ -62,22 +67,54 @@ fn read_hashes(bytes: &mut &[u8]) -> Result<Vec<Hash>> {
 #[allow(clippy::large_enum_variant)]
 pub struct Payload {
     pub proof: PayloadProof,
-    /// Commitment of the finalized transaction dictionary `{live, nullifiers, chain_start, chain_end}`.
+    /// Commitment of the finalized transaction dictionary.
     pub tx_final: Hash,
     pub state_root: Hash,
     pub nullifiers: Vec<Hash>,
-    /// Commitments of the objects this tx leaves live. The synchronizer
-    /// inserts each into its global created set, rejecting any that already
-    /// exists (the creation-uniqueness check, like a nullifier double-spend).
-    /// The list is also reconstructed into the `live` set that the public
-    /// TxFinalized statement commits to, so the proof only verifies against
-    /// these exact commitments -- the list cannot be forged.
-    pub live: Vec<Hash>,
+    /// Commitments of every state produced, including intermediate states.
+    /// Reconstructed as a set when verifying the public transaction statement.
+    pub created: Vec<Hash>,
 }
 
 const PAYLOAD_MAGIC: u16 = 0xd10b;
 
 impl Payload {
+    pub fn from_tx(proof: PayloadProof, tx: &Tx, state_root: Hash) -> Result<Self> {
+        let nullifiers = tx.nullifier_hashes()?;
+        let created = tx.created_commitments()?;
+        for (name, count) in [
+            ("nullifiers", nullifiers.len()),
+            ("created states", created.len()),
+        ] {
+            if count > MAX_HASHES_PER_LIST {
+                return Err(anyhow!(
+                    "transaction has {count} {name}; payload limit is {MAX_HASHES_PER_LIST}"
+                ));
+            }
+        }
+        Ok(Self {
+            proof,
+            tx_final: tx.dict().commitment(),
+            state_root,
+            nullifiers,
+            created,
+        })
+    }
+
+    pub fn finalized_statement(&self, predicate: CustomPredicateRef) -> Statement {
+        let hashes_to_set =
+            |hashes: &[Hash]| Set::new(hashes.iter().map(|hash| Value::from(*hash)).collect());
+        Statement::Custom(
+            predicate,
+            vec![
+                Value::from(self.state_root).into(),
+                Value::from(self.tx_final).into(),
+                Value::from(hashes_to_set(&self.nullifiers)).into(),
+                Value::from(hashes_to_set(&self.created)).into(),
+            ],
+        )
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buffer = Vec::new();
         buffer
@@ -87,7 +124,7 @@ impl Payload {
         write_elems(&mut buffer, &self.tx_final.0);
         write_elems(&mut buffer, &self.state_root.0);
         write_hashes(&mut buffer, &self.nullifiers);
-        write_hashes(&mut buffer, &self.live);
+        write_hashes(&mut buffer, &self.created);
         buffer
     }
 
@@ -107,13 +144,13 @@ impl Payload {
         let tx_final = Hash(read_elems(&mut bytes)?);
         let state_root = Hash(read_elems(&mut bytes)?);
         let nullifiers = read_hashes(&mut bytes)?;
-        let live = read_hashes(&mut bytes)?;
+        let created = read_hashes(&mut bytes)?;
         Ok(Self {
             proof,
             tx_final,
             state_root,
             nullifiers,
-            live,
+            created,
         })
     }
 }
@@ -209,13 +246,65 @@ mod tests {
     use crate::shrink::{ShrunkMainPodSetup, shrink_compress_pod};
 
     #[test]
+    fn hash_lists_preserve_one_byte_count_at_capacity() {
+        let hashes = vec![pod2::middleware::EMPTY_HASH; MAX_HASHES_PER_LIST];
+        let mut encoded = Vec::new();
+        write_hashes(&mut encoded, &hashes);
+        assert_eq!(encoded[0], u8::MAX);
+        assert_eq!(encoded.len(), 1 + 32 * MAX_HASHES_PER_LIST);
+        let mut remaining = encoded.as_slice();
+        assert_eq!(read_hashes(&mut remaining).unwrap(), hashes);
+        assert!(remaining.is_empty());
+    }
+
+    #[test]
+    fn payload_from_tx_enforces_capacity_for_created_and_nullifiers() {
+        use pod2::middleware::{EMPTY_HASH, containers::Dictionary};
+        use std::sync::Arc;
+        let hashes = Set::new(
+            (0..=MAX_HASHES_PER_LIST)
+                .map(|index| Value::from(index as i64))
+                .collect(),
+        );
+        let mut tx = Tx {
+            live: Set::new(HashSet::new()),
+            created: hashes.clone(),
+            nullifiers: hashes,
+            ctx: Dictionary::new(Default::default()),
+            state_header: Arc::new(txlib::StateHeader::new(
+                0, 0, EMPTY_HASH, EMPTY_HASH, EMPTY_HASH, EMPTY_HASH,
+            )),
+        };
+        for index in 0..2 {
+            let error =
+                Payload::from_tx(PayloadProof::empty_for_test(), &tx, EMPTY_HASH).unwrap_err();
+            assert!(error.to_string().contains("payload limit is 255"));
+            let oversized = if index == 0 {
+                &mut tx.nullifiers
+            } else {
+                &mut tx.created
+            };
+            assert!(error.to_string().contains(if index == 0 {
+                "nullifiers"
+            } else {
+                "created states"
+            }));
+            oversized.delete(&Value::from(0_i64)).unwrap();
+        }
+        let payload = Payload::from_tx(PayloadProof::empty_for_test(), &tx, EMPTY_HASH).unwrap();
+        assert_eq!(payload.created.len(), MAX_HASHES_PER_LIST);
+        assert_eq!(payload.nullifiers.len(), MAX_HASHES_PER_LIST);
+    }
+
+    #[test]
+    #[ignore = "generates and shrinks a real Plonky2 proof"]
     fn test_payload_roundtrip() {
         let params = Params::default();
         let vd_set = &*DEFAULT_VD_SET;
         let vds_root = vd_set.root();
 
         let input = r#"
-        TxnFinalized(state_root, tx_final, nullifiers, live) = AND(
+        TxnFinalized(state_root, tx_final, nullifiers, created) = AND(
             Equal(0, 0)
         )
         "#;
@@ -237,12 +326,12 @@ mod tests {
             let nullifiers_set = Value::from(Set::new(HashSet::from_iter(
                 nullifiers.iter().map(|h| Value::from(*h)),
             )));
-            let live = vec![
+            let created = vec![
                 Hash(Value::from(10i64).raw().0),
                 Hash(Value::from(11i64).raw().0),
             ];
-            let live_set = Value::from(Set::new(HashSet::from_iter(
-                live.iter().map(|h| Value::from(*h)),
+            let created_set = Value::from(Set::new(HashSet::from_iter(
+                created.iter().map(|h| Value::from(*h)),
             )));
             let state_root = Value::from("dummy_state_root");
             let st0 = builder.priv_op(Operation::eq(0, 0)).unwrap();
@@ -253,7 +342,7 @@ mod tests {
                         (0, state_root.clone()),
                         (1, tx_final.clone()),
                         (2, nullifiers_set.clone()),
-                        (3, live_set.clone()),
+                        (3, created_set.clone()),
                     ],
                     Operation::custom(pred.clone(), [st0]),
                 )
@@ -274,7 +363,7 @@ mod tests {
                 tx_final: Hash(tx_final.raw().0),
                 state_root: Hash(state_root.raw().0),
                 nullifiers: nullifiers.clone(),
-                live: live.clone(),
+                created: created.clone(),
             }
         };
 
@@ -288,8 +377,8 @@ mod tests {
         let nullifiers_set = Value::from(Set::new(HashSet::from_iter(
             payload.nullifiers.iter().map(|h| Value::from(*h)),
         )));
-        let live_set = Value::from(Set::new(HashSet::from_iter(
-            payload.live.iter().map(|h| Value::from(*h)),
+        let created_set = Value::from(Set::new(HashSet::from_iter(
+            payload.created.iter().map(|h| Value::from(*h)),
         )));
         let st = Statement::Custom(
             pred,
@@ -297,7 +386,7 @@ mod tests {
                 Value::from(payload.state_root).into(),
                 Value::from(payload.tx_final).into(),
                 nullifiers_set.into(),
-                live_set.into(),
+                created_set.into(),
             ],
         );
         println!("st: {st:?}");

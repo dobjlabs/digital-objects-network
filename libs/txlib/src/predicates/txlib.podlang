@@ -317,8 +317,8 @@ InputsGroundedRecursive(inputs, created,
 // Exposes (state_header, tx_final, nullifiers, created) publicly. The
 // verifier sees `state_header` as a single hash -- the commitment of the
 // `StateHeader` record.
-// tx_final is the after_tx dictionary commitment, which binds the
-// inputs, created set, nullifiers, and final chain_start/chain_end together. Both
+// tx_final commits to the final dictionary with private inputs removed.
+// It binds only created, nullifiers, and the zeroed scope fields. Both
 // the nullifier set and the final created set are also surfaced as their
 // own public args (via TxFinalBindings) so the synchronizer can fold
 // them into its global nullifier and created sets; the chain stays
@@ -333,16 +333,17 @@ InputsGroundedRecursive(inputs, created,
 // values for those two fields (they pass through ReplayActions
 // verbatim into `tx_final`, since ReplayAction only updates the
 // `created` and `nullifiers` keys).
-TxFinalBindings(tx_final, nullifiers, created) = AND(
+TxFinalBindings(after_tx, tx_final, nullifiers, created) = AND(
+  DictDelete(after_tx, "inputs", tx_final)
   DictContains(tx_final, "nullifiers", nullifiers)
   DictContains(tx_final, "created", created)
 )
 
 TxFinalized(state_header StateHeader, tx_final, nullifiers, created,
-     private: before_tx, chain_start, chain_final) = AND(
+     private: before_tx, after_tx, chain_start, chain_final) = AND(
   InputsGrounded(before_tx.inputs, state_header.created)
   Hash(before_tx.inputs, {}, chain_start)
   DictInsert({"created": {}, "nullifiers": {}, "chain_start": {}, "chain_end": {}}, "inputs", before_tx.inputs, before_tx)
-  TxFinalBindings(tx_final, nullifiers, created)
-  ReplayActions(state_header, before_tx, tx_final, chain_start, chain_final)
+  TxFinalBindings(after_tx, tx_final, nullifiers, created)
+  ReplayActions(state_header, before_tx, after_tx, chain_start, chain_final)
 )

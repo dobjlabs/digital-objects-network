@@ -310,16 +310,11 @@ pub(crate) fn build_relayer_payload(
     let compressed = shrink_compress_pod(&shrunk_main_pod, action_output.tx_pod.clone())
         .map_err(|err| anyhow!("failed to shrink/compress tx proof: {err}"))?;
 
-    let tx_final = action_output.tx.dict().commitment();
-    let nullifiers = action_output.tx.nullifier_hashes()?;
-    let live = action_output.tx.live_commitments()?;
-    let payload = Payload {
-        proof: PayloadProof::Plonky2(Box::new(compressed)),
-        tx_final,
-        state_root: *old_state_root,
-        nullifiers,
-        live,
-    };
+    let payload = Payload::from_tx(
+        PayloadProof::Plonky2(Box::new(compressed)),
+        &action_output.tx,
+        *old_state_root,
+    )?;
 
     Ok(payload.to_bytes())
 }

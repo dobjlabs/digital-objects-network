@@ -5,7 +5,7 @@ use txlib::StateHeader;
 
 fn apply_tx(state: &mut TestState, tx: &Tx) {
     state.apply_tx(
-        tx.live_commitments().unwrap(),
+        tx.created_commitments().unwrap(),
         tx.nullifier_hashes().unwrap(),
     );
 }
