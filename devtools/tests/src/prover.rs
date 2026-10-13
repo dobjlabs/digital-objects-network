@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use driver::{DriverActionCatalog, PexeCatalog};
 use payload::{
     payload::{Payload, PayloadProof},
-    shrink::{ShrunkMainPodBuild, ShrunkMainPodSetup, shrink_compress_pod},
+    shrink::{shrink_compress_pod, ShrunkMainPodBuild, ShrunkMainPodSetup},
 };
 use pod2::middleware::{Hash, Params};
 use sdk::{SpendableObject, SpendableObjects};
@@ -54,7 +54,7 @@ impl Prover {
         let state_root = witness.state_header.hash();
         let outputs = self
             .catalog
-            .execute_action(action.clone(), witness, inputs)
+            .execute_action(action.clone(), witness, inputs, &Default::default())
             .unwrap();
         prepare_tx(&self.shrink_build, state_root, &outputs)
     }
