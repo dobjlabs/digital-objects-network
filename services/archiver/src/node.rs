@@ -18,6 +18,8 @@ use std::{
 
 use alloy::network::Ethereum;
 use alloy::providers::{Provider, RootProvider};
+use alloy::rpc::client::ClientBuilder;
+use alloy::transports::layers::RetryBackoffLayer;
 use alloy::{
     consensus::Transaction,
     eips::{self as alloy_eips, eip4844::kzg_to_versioned_hash},
@@ -270,13 +272,26 @@ impl Node {
             .connect_timeout(Duration::from_secs(8))
             .build()?;
 
-        let exp_backoff = Some(ExponentialBackoffBuilder::default().build());
+        let exp_backoff = ExponentialBackoffBuilder::default().build();
         let beacon_cli_config = beacon::Config {
             base_url: config.beacon_url.clone(),
-            exp_backoff,
+            exp_backoff: Some(exp_backoff.clone()),
         };
         let beacon_cli = BeaconClient::try_with_client(http_cli, beacon_cli_config)?;
-        let rpc_cli = RootProvider::<Ethereum>::new_http(config.rpc_url.parse()?);
+        // The execution layer retries at a fixed interval rather than a growing one, so it waits
+        // the beacon policy's initial interval as many times as fit in its total retry time.
+        let initial_backoff = exp_backoff.initial_interval;
+        let max_retry_time = exp_backoff.max_elapsed_time.expect("default sets a limit");
+        let rpc_retry_layer = RetryBackoffLayer::new(
+            (max_retry_time.as_millis() / initial_backoff.as_millis()).try_into()?,
+            initial_backoff.as_millis().try_into()?,
+            // Requests are not throttled ahead of a rate limit, as on the beacon side.
+            u64::MAX,
+        );
+        let rpc_client = ClientBuilder::default()
+            .layer(rpc_retry_layer)
+            .http(config.rpc_url.parse()?);
+        let rpc_cli = RootProvider::<Ethereum>::new(rpc_client);
 
         Ok(Self {
             beacon_cli,
