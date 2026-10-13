@@ -338,14 +338,13 @@ impl Node {
             ExecutionPayloadRef::Embedded { .. } => {
                 self.process_payload_blobs(beacon_block_header, beacon_block.clone())
                     .await?;
-                Ok((beacon_block_root, beacon_block))
             }
             // The payload a Gloas block bids on is revealed later and may be withheld, so its
             // blobs are archived only once a child builds on it, still under the root of the
             // block that committed to them.
             ExecutionPayloadRef::Bid { .. } => {
                 let parent_block = match parent_block {
-                    Some(block) if block.0 == beacon_block_header.parent_root => block.1,
+                    Some(parent) if parent.0 == beacon_block_header.parent_root => parent.1,
                     _ => self.get_block(beacon_block_header.parent_root).await?,
                 };
                 // This will happen if the current block builds on top of a payload older than
@@ -363,9 +362,9 @@ impl Node {
                 };
                 self.process_payload_blobs(&parent_header, parent_block)
                     .await?;
-                Ok((beacon_block_root, beacon_block))
             }
         }
+        Ok((beacon_block_root, beacon_block))
     }
 
     /// We expect this block to exists (the slot is not empty)

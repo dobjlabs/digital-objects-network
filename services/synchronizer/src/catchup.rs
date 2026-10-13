@@ -45,7 +45,9 @@ pub async fn fetch_batch(node: &Node, slots: &[u32]) -> Result<Vec<FetchedSlot>>
         let Some((header, block)) = fetched else {
             return Ok(FetchedSlot::Missing { slot: *slot });
         };
-        let parent_block = blocks_by_root.get(&block.parent_root).copied();
+        let parent_block = blocks_by_root
+            .get(&block.parent_root)
+            .map(|b| (block.parent_root, *b));
         let context = node.fetch_slot_context(header, block, parent_block).await?;
         Ok::<_, anyhow::Error>(FetchedSlot::Present {
             slot: *slot,

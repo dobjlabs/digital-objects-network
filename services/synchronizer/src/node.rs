@@ -301,7 +301,7 @@ impl Node {
         &self,
         beacon_block_header: &BlockHeader,
         beacon_block: &Block,
-        parent_block: Option<&Block>,
+        parent_block: Option<(B256, &Block)>,
     ) -> Result<Option<CanonicalPayload>> {
         let slot = beacon_block_header.slot;
         let fetched_parent_block;
@@ -309,8 +309,8 @@ impl Node {
             ExecutionPayloadRef::Embedded { .. } => (beacon_block_header.root, beacon_block),
             ExecutionPayloadRef::Bid { .. } => {
                 let parent_block = match parent_block {
-                    Some(parent_block) => parent_block,
-                    None => {
+                    Some(parent) if parent.0 == beacon_block_header.parent_root => &parent.1,
+                    _ => {
                         fetched_parent_block = self
                             .get_beacon_block_by_hash_with_retry(beacon_block.parent_root)
                             .await?;
@@ -447,7 +447,7 @@ impl Node {
         &self,
         beacon_block_header: &BlockHeader,
         beacon_block: &Block,
-        parent_block: Option<&Block>,
+        parent_block: Option<(B256, &Block)>,
     ) -> Result<SlotContext> {
         let slot = beacon_block_header.slot;
         let payload = self
