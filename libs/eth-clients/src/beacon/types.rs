@@ -71,7 +71,7 @@ pub struct Spec {
     )]
     pub deposit_network_id: u64,
 }
-#[derive(Clone, Deserialize, Debug)]
+#[derive(Deserialize, Debug)]
 pub struct Block {
     /// Commitments to the blobs of the payload in `execution_payload`.
     pub blob_kzg_commitments: Vec<KzgCommitment>,

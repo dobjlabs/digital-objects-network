@@ -336,7 +336,7 @@ impl Node {
         let beacon_block = self.get_block(beacon_block_root).await?;
         match beacon_block.execution_payload {
             ExecutionPayloadRef::Embedded { .. } => {
-                self.process_payload_blobs(beacon_block_header, beacon_block.clone())
+                self.process_payload_blobs(beacon_block_header, &beacon_block)
                     .await?;
             }
             // The payload a Gloas block bids on is revealed later and may be withheld, so its
@@ -363,7 +363,7 @@ impl Node {
                     parent_root: parent_block.parent_root,
                     slot: parent_block.slot,
                 };
-                self.process_payload_blobs(&parent_header, parent_block)
+                self.process_payload_blobs(&parent_header, &parent_block)
                     .await?;
             }
         }
@@ -385,7 +385,7 @@ impl Node {
     async fn process_payload_blobs(
         &self,
         beacon_block_header: &BlockHeader,
-        beacon_block: Block,
+        beacon_block: &Block,
     ) -> Result<()> {
         let beacon_block_root = beacon_block_header.root;
         let slot = beacon_block_header.slot;
@@ -397,8 +397,8 @@ impl Node {
 
         let kzg_blob_commitments: Vec<_> = beacon_block
             .blob_kzg_commitments
-            .into_iter()
-            .map(|c| (kzg_to_versioned_hash(c.as_ref()), c))
+            .iter()
+            .map(|c| (kzg_to_versioned_hash(c.as_ref()), *c))
             .collect();
         if kzg_blob_commitments.is_empty() {
             debug!("slot {} has no blobs", slot);
