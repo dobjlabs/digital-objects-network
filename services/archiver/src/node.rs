@@ -329,7 +329,7 @@ impl Node {
     pub(crate) async fn process_beacon_block_blobs(
         &self,
         beacon_block_header: &BlockHeader,
-        parent_block: Option<(B256, Block)>,
+        prev_block: Option<(B256, Block)>,
     ) -> Result<(B256, Block)> {
         let slot = beacon_block_header.slot;
         let beacon_block_root = beacon_block_header.root;
@@ -343,8 +343,8 @@ impl Node {
             // blobs are archived only once a child builds on it, still under the root of the
             // block that committed to them.
             ExecutionPayloadRef::Bid { .. } => {
-                let parent_block = match parent_block {
-                    Some(parent) if parent.0 == beacon_block_header.parent_root => parent.1,
+                let parent_block = match prev_block {
+                    Some(block) if block.0 == beacon_block_header.parent_root => block.1,
                     _ => self.get_block(beacon_block_header.parent_root).await?,
                 };
                 // This will happen if the current block builds on top of a payload older than
