@@ -103,7 +103,7 @@ pub async fn run_sync_loop(
                     FetchedSlot::Present {
                         slot,
                         header,
-                        block,
+                        context,
                     } => {
                         if let Some(rewind_slot) =
                             handle_reorgs_for_present_slot(&node, slot, &header).await?
@@ -113,7 +113,7 @@ pub async fn run_sync_loop(
                             break;
                         }
 
-                        let processed = node.derive_slot_update_with_block(&header, &block).await?;
+                        let processed = node.derive_from_context(*context).await?;
                         node.commit_slot(&processed).await?;
                         next_slot = slot + 1;
                     }

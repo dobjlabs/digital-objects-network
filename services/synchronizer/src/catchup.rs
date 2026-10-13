@@ -1,99 +1,80 @@
-use anyhow::Result;
+use std::collections::HashMap;
+
+use alloy::primitives::B256;
+use anyhow::{anyhow, Result};
 use futures_util::future::join_all;
 use tracing::{info, warn};
 
-use crate::node::Node;
+use crate::node::{Node, SlotContext};
 use eth_clients::beacon::types::{Block, BlockHeader};
 
 /// Pre-fetched data for a single slot in a catch-up batch.
 pub enum FetchedSlot {
     /// Slot had no block produced (skipped slot on beacon chain).
     Missing { slot: u32 },
-    /// Slot had a block; header and full beacon block are available.
+    /// Slot had a block; everything needed to derive it has been fetched.
     Present {
         slot: u32,
         header: BlockHeader,
-        block: Block,
+        context: Box<SlotContext>,
     },
 }
 
-/// Fetch beacon headers and full blocks for a batch of slots concurrently.
+/// Fetch everything a batch of slots needs to be derived, concurrently, so that processing
+/// the batch makes no further network calls.
 ///
 /// Returns results in slot order. Individual slot fetch failures are returned as `Err` entries
 /// so the caller can decide how to handle them (e.g. stop the batch at the first failure).
 pub async fn fetch_batch(node: &Node, slots: &[u32]) -> Vec<Result<FetchedSlot>> {
-    // Phase 1: fetch all headers concurrently.
-    let header_futures: Vec<_> = slots
+    // Phase 1: fetch the header and full block of every slot concurrently.
+    let blocks = join_all(slots.iter().map(|&slot| async move {
+        let Some(header) = node.get_beacon_slot_header_with_retry(slot).await? else {
+            return Ok((slot, None));
+        };
+        let block = node
+            .get_beacon_block_by_hash_with_retry(header.root)
+            .await?;
+        Ok::<_, anyhow::Error>((slot, Some((header, block))))
+    }))
+    .await;
+
+    // Phase 2: resolve payloads and blobs concurrently. A block whose parent is in the batch
+    // reuses it, so a parent is fetched again only when it precedes the batch.
+    let blocks_by_root: HashMap<B256, &Block> = blocks
         .iter()
-        .map(|&slot| async move {
-            let header = node.get_beacon_slot_header_with_retry(slot).await?;
-            Ok::<_, anyhow::Error>((slot, header))
+        .filter_map(|result| match result {
+            Ok((_, Some((header, block)))) => Some((header.root, block)),
+            _ => None,
         })
         .collect();
-
-    let header_results = join_all(header_futures).await;
-
-    // Phase 2: for present headers, fetch full beacon blocks concurrently.
-    // Build futures only for slots that have headers.
-    let mut block_futures = Vec::new();
-    let mut slot_states: Vec<Option<Result<FetchedSlot>>> = Vec::with_capacity(slots.len());
-
-    for result in &header_results {
+    let slot_states: Vec<Result<FetchedSlot>> = join_all(blocks.iter().map(|result| async {
         match result {
-            Ok((slot, Some(header))) => {
-                let slot = *slot;
-                let root = header.root;
-                let header_clone = header.clone();
-                block_futures.push(async move {
-                    let block = node.get_beacon_block_by_hash_with_retry(root).await?;
-                    Ok::<_, anyhow::Error>((slot, header_clone, block))
-                });
-                // Placeholder — will be filled from block_futures results.
-                slot_states.push(None);
+            Ok((slot, None)) => Ok(FetchedSlot::Missing { slot: *slot }),
+            Ok((slot, Some((header, block)))) => {
+                let parent_block = blocks_by_root.get(&block.parent_root).copied();
+                let context = node.fetch_slot_context(header, block, parent_block).await?;
+                Ok(FetchedSlot::Present {
+                    slot: *slot,
+                    header: header.clone(),
+                    context: Box::new(context),
+                })
             }
-            Ok((slot, None)) => {
-                slot_states.push(Some(Ok(FetchedSlot::Missing { slot: *slot })));
-            }
-            Err(err) => {
-                // Propagate the error. We can't move out of the borrowed result, so
-                // re-create an error with the same message.
-                slot_states.push(Some(Err(anyhow::anyhow!("{err:#}"))));
-            }
+            // The error cannot be moved out of the borrowed result, so carry its message.
+            Err(err) => Err(anyhow!("{err:#}")),
         }
-    }
-
-    let block_results = join_all(block_futures).await;
-
-    // Merge block results back into slot_states in order.
-    let mut block_iter = block_results.into_iter();
-    for state in slot_states.iter_mut() {
-        if state.is_none() {
-            // This was a Present slot waiting for its block fetch.
-            let block_result = block_iter.next().expect("block futures count matches");
-            *state = Some(match block_result {
-                Ok((slot, header, block)) => Ok(FetchedSlot::Present {
-                    slot,
-                    header,
-                    block,
-                }),
-                Err(err) => Err(err),
-            });
-        }
-    }
+    }))
+    .await;
 
     let batch_size = slots.len();
     let present_count = slot_states
         .iter()
-        .filter(|s| matches!(s, Some(Ok(FetchedSlot::Present { .. }))))
+        .filter(|s| matches!(s, Ok(FetchedSlot::Present { .. })))
         .count();
     let missing_count = slot_states
         .iter()
-        .filter(|s| matches!(s, Some(Ok(FetchedSlot::Missing { .. }))))
+        .filter(|s| matches!(s, Ok(FetchedSlot::Missing { .. })))
         .count();
-    let error_count = slot_states
-        .iter()
-        .filter(|s| matches!(s, Some(Err(_))))
-        .count();
+    let error_count = slot_states.iter().filter(|s| s.is_err()).count();
 
     info!(
         batch_size,
@@ -109,5 +90,5 @@ pub async fn fetch_batch(node: &Node, slots: &[u32]) -> Vec<Result<FetchedSlot>>
         warn!(error_count, "Some slots in batch failed to fetch");
     }
 
-    slot_states.into_iter().map(|s| s.unwrap()).collect()
+    slot_states
 }
