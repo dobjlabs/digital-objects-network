@@ -176,10 +176,9 @@ impl GroundingWitness {
 }
 
 /// Output of a finalized transaction. Created states and nullifiers are public
-/// proof outputs; live states are retained for local bookkeeping.
+/// proof outputs.
 #[derive(Clone, Debug)]
 pub struct Tx {
-    pub live: Set,
     pub created: Set,
     pub nullifiers: Set,
     /// The public final dictionary. Its commitment is tx_final (the value the
@@ -194,14 +193,6 @@ impl Tx {
     /// the value the relayer publishes for this transaction.
     pub fn dict(&self) -> Dictionary {
         self.ctx.clone()
-    }
-
-    /// Commitments of the objects this tx leaves live.
-    pub fn live_commitments(&self) -> anyhow::Result<Vec<Hash>> {
-        self.live
-            .iter()
-            .map(|entry| Ok(Hash(entry?.raw().0)))
-            .collect()
     }
 
     /// Commitments of all states produced, including subsequently consumed states.
@@ -224,7 +215,6 @@ impl Tx {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TxSerde {
-    live: Set,
     created: Set,
     nullifiers: Set,
     ctx: Dictionary,
@@ -237,7 +227,6 @@ impl Serialize for Tx {
         S: Serializer,
     {
         TxSerde {
-            live: self.live.clone(),
             created: self.created.clone(),
             nullifiers: self.nullifiers.clone(),
             ctx: self.ctx.clone(),
@@ -254,7 +243,6 @@ impl<'de> Deserialize<'de> for Tx {
     {
         let payload = TxSerde::deserialize(deserializer)?;
         Ok(Self {
-            live: payload.live,
             created: payload.created,
             nullifiers: payload.nullifiers,
             ctx: payload.ctx,
@@ -438,8 +426,6 @@ struct GroundedInput {
 pub struct TxBuilder {
     pub chain: Hash,
     pub chain_start: Hash,
-    live: Set,
-    nullifiers: Set,
     state_header: Arc<StateHeader>,
     grounded_inputs: Vec<GroundedInput>,
     inputs_set: Set,
@@ -534,20 +520,6 @@ impl std::fmt::Display for TxBuilder {
         writeln!(f, "Tx {} -> {}", self.chain_start, self.chain)?;
         fmt_events(f, &self.events, 1)?;
 
-        // Live set
-        let live_items: Vec<_> = self.live.iter().filter_map(|r| r.ok()).collect();
-        if live_items.is_empty() {
-            writeln!(f, "  live: (empty)")?;
-        } else {
-            writeln!(f, "  live: {} object(s)", live_items.len())?;
-        }
-
-        // Nullifiers
-        let null_count = self.nullifiers.iter().filter(|r| r.is_ok()).count();
-        if null_count > 0 {
-            writeln!(f, "  nullifiers: {null_count}")?;
-        }
-
         // Open scopes
         if !self.action_stack.is_empty() {
             writeln!(f, "  ({} open action scope(s))", self.action_stack.len())?;
@@ -589,8 +561,6 @@ impl TxBuilder {
         Self {
             chain: chain_start,
             chain_start,
-            live: inputs_set.clone(),
-            nullifiers: set!(),
             state_header,
             grounded_inputs,
             inputs_set,
@@ -702,7 +672,7 @@ impl TxBuilder {
         }
     }
 
-    /// Record an insertion. Emits TxInsert, updates live set. Must be
+    /// Record an insertion. Emits TxInsert. Must be
     /// called inside an open action scope.
     ///
     /// `initial` is the pre-identity object state; the builder stamps
@@ -724,7 +694,6 @@ impl TxBuilder {
         let prev = self.chain;
         let event_hash = hash_values(&[Value::from(EMPTY_VALUE), Value::from(new.clone())]);
         self.chain = hash_values(&[Value::from(prev), Value::from(event_hash)]);
-        self.live.insert(&Value::from(new.clone())).unwrap();
 
         let new_type = object_type(&new);
         let st_dc = ctx
@@ -770,7 +739,7 @@ impl TxBuilder {
         (new, st, handle)
     }
 
-    /// Record a mutation. Emits TxMutate, updates live set and nullifiers.
+    /// Record a mutation. Emits TxMutate.
     /// Must be called inside an open action scope. Returns the
     /// TxMutate statement and a handle for guard attachment.
     pub fn mutate(
@@ -786,11 +755,6 @@ impl TxBuilder {
         let prev = self.chain;
         let event_hash = hash_values(&[Value::from(old.clone()), Value::from(new.clone())]);
         self.chain = hash_values(&[Value::from(prev), Value::from(event_hash)]);
-        self.live.delete(&Value::from(old.commitment())).unwrap();
-        self.live.insert(&Value::from(new.clone())).unwrap();
-        self.nullifiers
-            .insert(&Value::from(compute_nullifier(old)))
-            .unwrap();
 
         let new_type = object_type(new);
         let old_type = object_type(old);
@@ -855,7 +819,7 @@ impl TxBuilder {
         (st, handle)
     }
 
-    /// Record a deletion. Emits TxDelete, updates live set and nullifiers.
+    /// Record a deletion. Emits TxDelete.
     /// Must be called inside an open action scope. Returns the
     /// TxDelete statement and a handle for guard attachment.
     pub fn delete(&mut self, ctx: &mut BuildContext, old: &Dictionary) -> (Statement, EventHandle) {
@@ -866,10 +830,6 @@ impl TxBuilder {
         let prev = self.chain;
         let event_hash = hash_values(&[Value::from(old.clone()), Value::from(EMPTY_VALUE)]);
         self.chain = hash_values(&[Value::from(prev), Value::from(event_hash)]);
-        self.live.delete(&Value::from(old.commitment())).unwrap();
-        self.nullifiers
-            .insert(&Value::from(compute_nullifier(old)))
-            .unwrap();
 
         let old_type = object_type(old);
         let st_dc = ctx
@@ -932,19 +892,18 @@ impl TxBuilder {
             chain_start: zero,
             chain_end: zero,
         };
-        let (st_replay, _, created, replay_nullifiers) = replay::Replayer::new(ctx, &mut stats)
+        let (st_replay, _, created, nullifiers) = replay::Replayer::new(ctx, &mut stats)
             .build_replay_actions(&self.events, self.chain_start, frame)?;
 
         let (st_inputs_grounded, _) = Self::build_inputs_grounded_and_spent(
             ctx,
             &self.grounded_inputs,
             self.state_header.created_root,
-            &self.nullifiers,
+            &nullifiers,
             &mut stats,
         )?;
 
-        assert_eq!(replay_nullifiers.commitment(), self.nullifiers.commitment());
-        let after_tx = build_tx(&self.inputs_set, &created, &self.nullifiers, zero, zero);
+        let after_tx = build_tx(&self.inputs_set, &created, &nullifiers, zero, zero);
         let mut tx_final = after_tx.clone();
         tx_final.delete(&StrKey::from("inputs"))?;
 
@@ -1033,7 +992,7 @@ impl TxBuilder {
             .priv_op(op!(DictDelete(after_tx, "inputs", tx_final)))?;
         let st_dc_null_after = ctx
             .builder
-            .priv_op(op!(DictContains(tx_final, "nullifiers", self.nullifiers)))
+            .priv_op(op!(DictContains(tx_final, "nullifiers", nullifiers)))
             .unwrap();
         let st_dc_created_after = ctx
             .builder
@@ -1063,9 +1022,8 @@ impl TxBuilder {
         record(&mut stats, "TxFinalized");
 
         let tx = Tx {
-            live: self.live,
             created,
-            nullifiers: self.nullifiers,
+            nullifiers,
             ctx: tx_final,
             state_header: self.state_header,
         };
@@ -1671,7 +1629,6 @@ mod tests {
         let (statement, tx, stats) = builder.finalize(&mut ctx).unwrap();
         let expected_created = set!(first, second, third, survivor, final_state);
         assert_eq!(tx.created.commitment(), expected_created.commitment());
-        assert_eq!(tx.live.commitment(), set!(final_state).commitment());
         assert_eq!(
             statement.args()[3].literal().unwrap(),
             Value::from(tx.created.clone())
@@ -1700,7 +1657,6 @@ mod tests {
 
         let decoded: Tx = serde_json::from_str(&serde_json::to_string(&tx).unwrap()).unwrap();
         assert_eq!(decoded.created.commitment(), tx.created.commitment());
-        assert_eq!(decoded.live.commitment(), tx.live.commitment());
         assert_eq!(decoded.ctx.commitment(), tx.ctx.commitment());
         state.apply_tx(&tx);
         for object in [&first, &second, &third, &survivor, &final_state] {
@@ -1752,6 +1708,119 @@ mod tests {
                 format!(
                     "object state {} was already created in this transaction",
                     first.commitment()
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn inserting_the_same_state_twice_returns_an_error() {
+        let (mut ctx, guard_type) = replay_test_context();
+        let state = TestState::empty(0);
+        let mut builder = TxBuilder::new(&mut ctx, &[], state.grounding_witness(&[]));
+        let start = builder.chain_position();
+        let scope = builder.begin_action();
+        let initial = make_object(guard_type, &[]);
+        let (first, _, first_handle) = builder.insert(&mut ctx, &initial);
+        let (repeated, _, repeated_handle) = builder.insert(&mut ctx, &initial);
+        assert_eq!(repeated.commitment(), first.commitment());
+        attach_guard(&mut ctx, &mut builder, &first, first_handle, start);
+        attach_guard(&mut ctx, &mut builder, &repeated, repeated_handle, start);
+        builder.end_action(scope);
+
+        let err = builder.finalize(&mut ctx).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "object state {} was already created in this transaction",
+                first.commitment()
+            )
+        );
+    }
+
+    #[test]
+    fn consuming_a_state_twice_returns_an_error() {
+        for consumed_is_input in [true, false] {
+            for second_is_mutation in [true, false] {
+                let (mut ctx, guard_type) = replay_test_context();
+                let mut state = TestState::empty(0);
+                let inputs = if consumed_is_input {
+                    grounded_replay_inputs(&mut state, guard_type.clone(), 1)
+                } else {
+                    vec![]
+                };
+                let witness = state.grounding_witness(&inputs);
+                let mut builder = TxBuilder::new(&mut ctx, &inputs, witness);
+                let start = builder.chain_position();
+                let scope = builder.begin_action();
+                let mut guards = vec![];
+                let version_zero = [("version", Value::from(0_i64))];
+                let consumed = if consumed_is_input {
+                    inputs[0].clone()
+                } else {
+                    let (created, _, handle) =
+                        builder.insert(&mut ctx, &make_object(guard_type, &version_zero));
+                    guards.push((created.clone(), handle));
+                    created
+                };
+                let (_, first_handle) = builder.delete(&mut ctx, &consumed);
+                guards.push((consumed.clone(), first_handle));
+                if second_is_mutation {
+                    let mut replacement = tx_with(&consumed, "version", Value::from(1_i64));
+                    rekey(&mut replacement);
+                    let (_, handle) = builder.mutate(&mut ctx, &replacement, &consumed);
+                    guards.push((replacement, handle));
+                } else {
+                    let (_, handle) = builder.delete(&mut ctx, &consumed);
+                    guards.push((consumed.clone(), handle));
+                }
+                for (object, handle) in guards {
+                    attach_guard(&mut ctx, &mut builder, &object, handle, start);
+                }
+                builder.end_action(scope);
+
+                let err = builder.finalize(&mut ctx).unwrap_err();
+                assert_eq!(
+                    err.to_string(),
+                    format!(
+                        "object state {} was already consumed in this transaction",
+                        consumed.commitment()
+                    )
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn consuming_an_unavailable_state_returns_an_error() {
+        for consume_by_mutation in [true, false] {
+            let (mut ctx, guard_type) = replay_test_context();
+            let state = TestState::empty(0);
+            let mut builder = TxBuilder::new(&mut ctx, &[], state.grounding_witness(&[]));
+            let start = builder.chain_position();
+            let scope = builder.begin_action();
+            let unavailable = with_stable_identifier(&make_object(
+                guard_type,
+                &[("version", Value::from(0_i64))],
+            ));
+            let (object, handle) = if consume_by_mutation {
+                let mut replacement = tx_with(&unavailable, "version", Value::from(1_i64));
+                rekey(&mut replacement);
+                let (_, handle) = builder.mutate(&mut ctx, &replacement, &unavailable);
+                (replacement, handle)
+            } else {
+                let (_, handle) = builder.delete(&mut ctx, &unavailable);
+                (unavailable.clone(), handle)
+            };
+            attach_guard(&mut ctx, &mut builder, &object, handle, start);
+            builder.end_action(scope);
+
+            let err = builder.finalize(&mut ctx).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "object state {} is neither a transaction input nor created earlier in this transaction",
+                    unavailable.commitment()
                 )
             );
         }
@@ -2139,9 +2208,9 @@ mod tests {
         ctx.builder.reveal(&st).unwrap();
         solve_and_verify(ctx.builder);
 
-        // Both sticks should be live
-        assert!(tx3_out.live.contains(&Value::from(stick_a)).unwrap());
-        assert!(tx3_out.live.contains(&Value::from(stick_b)).unwrap());
+        // Both sticks should be created
+        assert!(tx3_out.created.contains(&Value::from(stick_a)).unwrap());
+        assert!(tx3_out.created.contains(&Value::from(stick_b)).unwrap());
         // Wood should be nullified
         assert!(
             tx3_out

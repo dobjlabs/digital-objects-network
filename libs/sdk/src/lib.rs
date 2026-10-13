@@ -3036,7 +3036,7 @@ pub struct SpendableObjects {
     /// carry no per-object proof.
     pub objs: Vec<SpendableObject>,
     /// In-flight `Tx` value held by the producer; carries the literal
-    /// live/created/nullifiers/ctx for the SDK's own bookkeeping. Not part of
+    /// created/nullifiers/ctx for the SDK's own bookkeeping. Not part of
     /// the per-output wire format.
     pub tx: Tx,
 }

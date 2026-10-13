@@ -207,7 +207,6 @@ fn payload_commits_to_intermediate_and_deleted_states() {
     let payload =
         Payload::from_tx(PayloadProof::empty_for_test(), &tx, tx.state_header.hash()).unwrap();
     let expected_created = set!(first, second);
-    assert_eq!(tx.live.commitment(), set!().commitment());
     assert_eq!(tx.created.commitment(), expected_created.commitment());
     assert_eq!(payload.created.len(), 2);
     assert_eq!(payload.nullifiers.len(), 2);
@@ -217,7 +216,7 @@ fn payload_commits_to_intermediate_and_deleted_states() {
         vec![payload.finalized_statement(predicate.clone())]
     );
     let mut missing_intermediates = payload.clone();
-    missing_intermediates.created = tx.live_commitments().unwrap();
+    missing_intermediates.created = Vec::new();
     assert_ne!(
         missing_intermediates.finalized_statement(predicate),
         pod.public_statements[0]

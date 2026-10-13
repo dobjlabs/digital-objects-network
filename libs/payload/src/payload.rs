@@ -278,7 +278,6 @@ mod tests {
                 .collect(),
         );
         let mut tx = Tx {
-            live: Set::new(HashSet::new()),
             created: hashes.clone(),
             nullifiers: hashes,
             ctx: Dictionary::new(Default::default()),

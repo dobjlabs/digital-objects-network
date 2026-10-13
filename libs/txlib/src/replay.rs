@@ -98,6 +98,13 @@ impl<'a> ReplayFrame<'a> {
     }
 }
 
+/// Where a consumed state was found and the nullifier set after consuming it.
+struct Consumption<'a> {
+    source_key: &'static str,
+    source: &'a Set,
+    new_nullifiers: Set,
+}
+
 pub(crate) struct MutateScratch {
     pub(crate) btx: Dictionary,
     pub(crate) new_created: Set,
@@ -115,13 +122,42 @@ impl<'a> ReplayFrame<'a> {
         }
     }
 
+    fn consume(self, old: &Dictionary) -> anyhow::Result<Consumption<'a>> {
+        let (source_key, source) = self.source_for(old);
+        if !source.contains(&Value::from(old.clone()))? {
+            anyhow::bail!(
+                "object state {} is neither a transaction input nor created earlier in this transaction",
+                old.commitment()
+            );
+        }
+        let nullifier = object_nullifier_from_key_hash(object_key_hash(old)?);
+        let mut new_nullifiers = self.nullifiers.clone();
+        new_nullifiers
+            .insert(&Value::from(nullifier))
+            .with_context(|| {
+                format!(
+                    "object state {} was already consumed in this transaction",
+                    old.commitment()
+                )
+            })?;
+        Ok(Consumption {
+            source_key,
+            source,
+            new_nullifiers,
+        })
+    }
+
     pub(crate) fn mutate_scratch(
         self,
         old: &Dictionary,
         new: &Dictionary,
     ) -> anyhow::Result<MutateScratch> {
         let btx = self.to_tx_dict();
-        let (source_key, source) = self.source_for(old);
+        let Consumption {
+            source_key,
+            source,
+            new_nullifiers,
+        } = self.consume(old)?;
         let mut new_created = self.created.clone();
         new_created
             .insert(&Value::from(new.clone()))
@@ -131,9 +167,6 @@ impl<'a> ReplayFrame<'a> {
                     new.commitment()
                 )
             })?;
-        let nul = object_nullifier_from_key_hash(object_key_hash(old).unwrap());
-        let mut new_nullifiers = self.nullifiers.clone();
-        new_nullifiers.insert(&Value::from(nul)).unwrap();
         Ok(MutateScratch {
             btx,
             new_created,
@@ -370,7 +403,7 @@ impl<'a> Replayer<'a> {
                     .clone()
                     .expect("missing guard evidence for delete");
                 let (st_head, next_created, next_nulls) =
-                    self.build_replay_delete(old, frame, tx_stmt.clone(), evidence);
+                    self.build_replay_delete(old, frame, tx_stmt.clone(), evidence)?;
                 let (st_rest, final_chain, final_created, final_nulls) = self
                     .build_replay_contents(
                         rest,
@@ -532,7 +565,7 @@ impl<'a> Replayer<'a> {
                     .clone()
                     .expect("missing guard evidence for delete");
                 let (st, new_created, new_null) =
-                    self.build_replay_delete(old, frame, tx_stmt.clone(), evidence);
+                    self.build_replay_delete(old, frame, tx_stmt.clone(), evidence)?;
                 (st, EventTag::Delete, *chain_after, new_created, new_null)
             }
             ChainEvent::Action {
@@ -830,13 +863,14 @@ impl<'a> Replayer<'a> {
         frame: ReplayFrame<'_>,
         tx_stmt: Statement,
         guard_evidence: Statement,
-    ) -> (Statement, Set, Set) {
+    ) -> anyhow::Result<(Statement, Set, Set)> {
         let btx = frame.to_tx_dict();
 
-        let (source_key, source) = frame.source_for(old);
-        let nul = object_nullifier_from_key_hash(object_key_hash(old).unwrap());
-        let mut new_nullifiers = frame.nullifiers.clone();
-        new_nullifiers.insert(&Value::from(nul)).unwrap();
+        let Consumption {
+            source_key,
+            source,
+            new_nullifiers,
+        } = frame.consume(old)?;
         let atx = tx_with(&btx, "nullifiers", Value::from(new_nullifiers.clone()));
         let pair = dict!({
             "source_key" => source_key,
@@ -896,7 +930,7 @@ impl<'a> Replayer<'a> {
             )
             .unwrap();
         self.record("ReplayDelete");
-        (st, frame.created.clone(), new_nullifiers)
+        Ok((st, frame.created.clone(), new_nullifiers))
     }
 
     /// Build `ReplayAction`: open the action scope (rebind

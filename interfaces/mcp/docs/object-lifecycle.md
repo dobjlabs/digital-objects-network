@@ -1,6 +1,6 @@
 # Digital Object Lifecycle
 
-A transaction publishes commitments to every object state it creates, including intermediate states that it later mutates or deletes. It also publishes nullifiers for every state it consumes. The live set is internal bookkeeping: a published state is spendable only while its nullifier is absent from the synchronizer's nullifier set.
+A transaction publishes commitments to every object state it creates, including intermediate states that it later mutates or deletes. It also publishes nullifiers for every state it consumes. A published state is spendable only while its nullifier is absent from the synchronizer's nullifier set.
 
 ## 1. Creation
 
@@ -9,7 +9,7 @@ When an action creates an object, it:
 1. Builds a dictionary containing its fields, including `key` and `type`.
 2. Records a `TxInsert` event and assigns the object's `stable_identifier`.
 3. Proves that the creation is authorized by the object's class predicate.
-4. Adds the state to the transaction's created set and local live set.
+4. Adds the state to the transaction's created set.
 
 The transaction payload includes the state's commitment even if a later event consumes it. Only surviving outputs are returned as spendable objects. After confirmation, the driver marks an output `live` if its commitment is published and its nullifier is absent.
 
@@ -39,7 +39,7 @@ The states have different commitments. If several mutations occur in one transac
 
 ## 4. Consumption
 
-Deletion records a `TxDelete` event, verifies the object's class guard, and publishes its nullifier without creating a replacement state. It removes the object from local live bookkeeping but never removes its commitment from the global created array.
+Deletion records a `TxDelete` event, verifies the object's class guard, and publishes its nullifier without creating a replacement state. It never removes the object's commitment from the global created array.
 
 Every declared transaction input must be consumed by mutation or deletion. An action that only reads an input must still consume and reissue it if the object should remain spendable.
 
