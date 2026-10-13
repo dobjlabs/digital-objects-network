@@ -105,6 +105,12 @@ struct Consumption<'a> {
     new_nullifiers: Set,
 }
 
+/// Derived state needed to build a Mutate event's replay clauses.
+/// `btx` is the pre-mutate tx-context dict; `new_created` is the created
+/// set with `new` inserted; `new_nullifiers` is the nullifiers set with
+/// `nullifier(old)` accumulated; `source_key`/`source` name the set `old`
+/// is consumed from. Owned because the caller also needs `new_created` /
+/// `new_nullifiers` to thread into the recursive tail frame.
 pub(crate) struct MutateScratch {
     pub(crate) btx: Dictionary,
     pub(crate) new_created: Set,
@@ -147,6 +153,8 @@ impl<'a> ReplayFrame<'a> {
         })
     }
 
+    /// Compute the pre-mutate tx context + post-mutate set snapshots
+    /// for a `(old -> new)` mutate.
     pub(crate) fn mutate_scratch(
         self,
         old: &Dictionary,
@@ -744,6 +752,12 @@ impl<'a> Replayer<'a> {
         Ok((st, new_created, new_nullifiers))
     }
 
+    /// Build a `ReplayNullify` statement: proves `old` is in `source`,
+    /// derives the object key hash and nullifier from `old`, then
+    /// accumulates the nullifier into the tx's nullifiers set. `mid_tx` is
+    /// the tx state before the nullifier is added; `after_tx` is `mid_tx`
+    /// with `nullifiers` updated to `new_nullifiers`. Used by both mutate
+    /// and delete replay.
     fn build_replay_nullify(
         &mut self,
         old: &Dictionary,
@@ -821,6 +835,8 @@ impl<'a> Replayer<'a> {
         let atx = tx_with(&m1, "nullifiers", Value::from(new_nullifiers.clone()));
         let st_nullify = self.build_replay_nullify(old, &m1, &atx, new_nullifiers, source);
 
+        // Source selection + created insert + nullify; chain/event-hash work
+        // is delegated to the parent's TxMutate statement.
         let op_source_key = self
             .ctx
             .builder

@@ -65,12 +65,17 @@ fn read_hashes(bytes: &mut &[u8]) -> Result<Vec<Hash>> {
 #[allow(clippy::large_enum_variant)]
 pub struct Payload {
     pub proof: PayloadProof,
-    /// Commitment of the finalized transaction dictionary.
+    /// Commitment of the finalized transaction dictionary `{created, nullifiers, chain_start, chain_end}`.
     pub tx_final: Hash,
     pub state_root: Hash,
     pub nullifiers: Vec<Hash>,
-    /// Commitments of every state produced, including intermediate states.
-    /// Reconstructed as a set when verifying the public transaction statement.
+    /// Commitments of every state this tx creates, including states it later
+    /// consumes. The synchronizer inserts each into its global created set,
+    /// rejecting any that already exists (the creation-uniqueness check, like
+    /// a nullifier double-spend). The list is also reconstructed into the
+    /// `created` set that the public TxFinalized statement commits to, so the
+    /// proof only verifies against these exact commitments -- the list cannot
+    /// be forged.
     pub created: Vec<Hash>,
 }
 

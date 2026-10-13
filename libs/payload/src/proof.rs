@@ -135,13 +135,18 @@ impl ProofParser {
 
 impl BlobParser for ProofParser {
     fn parse_blob(&self, blob_bytes: &[u8]) -> Result<Option<Payload>> {
+        // 1. Decode payload using payload::payload; return None if not our format.
         let payload = match Payload::from_bytes(blob_bytes, &self.common_circuit_data) {
             Ok(p) => p,
             Err(_) => return Ok(None),
         };
 
+        // 2. Rebuild the public statement the proof was made against. The
+        //    nullifier and created sets travel as plain hash lists, so the set
+        //    commitments have to be reconstructed before they can be matched.
         let statement = payload.finalized_statement(self.txn_finalized_pred.clone());
 
+        // 3. Verify the proof against the statement.
         self.verify_shrunk_main_pod(payload.proof.clone(), statement)?;
 
         Ok(Some(payload))
