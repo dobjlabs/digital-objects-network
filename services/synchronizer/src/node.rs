@@ -309,7 +309,7 @@ impl Node {
             ExecutionPayloadRef::Embedded { .. } => (beacon_block_header.root, beacon_block),
             ExecutionPayloadRef::Bid { .. } => {
                 let parent_block = match parent_block {
-                    Some(parent) if parent.0 == beacon_block_header.parent_root => &parent.1,
+                    Some(parent) if parent.0 == beacon_block_header.parent_root => parent.1,
                     _ => {
                         fetched_parent_block = self
                             .get_beacon_block_by_hash_with_retry(beacon_block.parent_root)

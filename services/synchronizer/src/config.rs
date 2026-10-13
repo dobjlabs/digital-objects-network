@@ -20,10 +20,11 @@ const fn default_catchup_batch_size() -> usize {
     (RPC_RATE_LIMIT_PER_SEC as usize) / 2
 }
 
-/// At head, one slot makes ~2 RPC calls. Space them so we stay under the rate limit with margin.
+/// Outside a batch, a slot with a block makes three beacon calls: header, block, and from Gloas on
+/// the parent block. Space slots so those stay under the rate limit with a 30% margin.
 const fn default_sync_delay_ms() -> u64 {
-    // 2 calls per slot, so min interval = 2000/rate_limit. Add 30% margin.
-    (2 * 1000 * 130) / (RPC_RATE_LIMIT_PER_SEC * 100)
+    const BEACON_CALLS_PER_SLOT: u64 = 3;
+    (BEACON_CALLS_PER_SLOT * 1000 * 130) / (RPC_RATE_LIMIT_PER_SEC * 100)
 }
 
 #[derive(Debug)]
