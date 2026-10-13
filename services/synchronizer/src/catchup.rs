@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use alloy::primitives::B256;
-use anyhow::{anyhow, Result};
-use futures_util::future::join_all;
-use tracing::{info, warn};
+use anyhow::Result;
+use futures_util::future::try_join_all;
+use tracing::info;
 
 use crate::node::{Node, SlotContext};
 use eth_clients::beacon::types::{Block, BlockHeader};
@@ -21,13 +21,10 @@ pub enum FetchedSlot {
 }
 
 /// Fetch everything a batch of slots needs to be derived, concurrently, so that processing
-/// the batch makes no further network calls.
-///
-/// Returns results in slot order. Individual slot fetch failures are returned as `Err` entries
-/// so the caller can decide how to handle them (e.g. stop the batch at the first failure).
-pub async fn fetch_batch(node: &Node, slots: &[u32]) -> Vec<Result<FetchedSlot>> {
+/// the batch makes no further network calls. Returns the slots in order, or the first error.
+pub async fn fetch_batch(node: &Node, slots: &[u32]) -> Result<Vec<FetchedSlot>> {
     // Phase 1: fetch the header and full block of every slot concurrently.
-    let blocks = join_all(slots.iter().map(|&slot| async move {
+    let blocks = try_join_all(slots.iter().map(|&slot| async move {
         let Some(header) = node.get_beacon_slot_header_with_retry(slot).await? else {
             return Ok((slot, None));
         };
@@ -36,59 +33,35 @@ pub async fn fetch_batch(node: &Node, slots: &[u32]) -> Vec<Result<FetchedSlot>>
             .await?;
         Ok::<_, anyhow::Error>((slot, Some((header, block))))
     }))
-    .await;
+    .await?;
 
     // Phase 2: resolve payloads and blobs concurrently. A block whose parent is in the batch
     // reuses it, so a parent is fetched again only when it precedes the batch.
     let blocks_by_root: HashMap<B256, &Block> = blocks
         .iter()
-        .filter_map(|result| match result {
-            Ok((_, Some((header, block)))) => Some((header.root, block)),
-            _ => None,
-        })
+        .filter_map(|(_, fetched)| fetched.as_ref().map(|(header, block)| (header.root, block)))
         .collect();
-    let slot_states: Vec<Result<FetchedSlot>> = join_all(blocks.iter().map(|result| async {
-        match result {
-            Ok((slot, None)) => Ok(FetchedSlot::Missing { slot: *slot }),
-            Ok((slot, Some((header, block)))) => {
-                let parent_block = blocks_by_root.get(&block.parent_root).copied();
-                let context = node.fetch_slot_context(header, block, parent_block).await?;
-                Ok(FetchedSlot::Present {
-                    slot: *slot,
-                    header: header.clone(),
-                    context: Box::new(context),
-                })
-            }
-            // The error cannot be moved out of the borrowed result, so carry its message.
-            Err(err) => Err(anyhow!("{err:#}")),
-        }
+    let fetched_slots = try_join_all(blocks.iter().map(|(slot, fetched)| async {
+        let Some((header, block)) = fetched else {
+            return Ok(FetchedSlot::Missing { slot: *slot });
+        };
+        let parent_block = blocks_by_root.get(&block.parent_root).copied();
+        let context = node.fetch_slot_context(header, block, parent_block).await?;
+        Ok::<_, anyhow::Error>(FetchedSlot::Present {
+            slot: *slot,
+            header: header.clone(),
+            context: Box::new(context),
+        })
     }))
-    .await;
-
-    let batch_size = slots.len();
-    let present_count = slot_states
-        .iter()
-        .filter(|s| matches!(s, Ok(FetchedSlot::Present { .. })))
-        .count();
-    let missing_count = slot_states
-        .iter()
-        .filter(|s| matches!(s, Ok(FetchedSlot::Missing { .. })))
-        .count();
-    let error_count = slot_states.iter().filter(|s| s.is_err()).count();
+    .await?;
 
     info!(
-        batch_size,
-        present_count,
-        missing_count,
-        error_count,
+        batch_size = slots.len(),
+        present_count = blocks_by_root.len(),
         first_slot = slots.first().copied().unwrap_or(0),
         last_slot = slots.last().copied().unwrap_or(0),
         "Batch fetch complete"
     );
 
-    if error_count > 0 {
-        warn!(error_count, "Some slots in batch failed to fetch");
-    }
-
-    slot_states
+    Ok(fetched_slots)
 }

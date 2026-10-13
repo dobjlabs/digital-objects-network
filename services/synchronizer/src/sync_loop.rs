@@ -78,16 +78,16 @@ pub async fn run_sync_loop(
                 "Starting batch catch-up"
             );
 
-            let fetched = catchup::fetch_batch(&node, &slots).await;
+            let fetched = catchup::fetch_batch(&node, &slots).await?;
 
             let mut reorg_detected = false;
-            for result in fetched {
+            for fetched_slot in fetched {
                 if *shutdown_rx.borrow() {
                     info!("Sync loop shutting down");
                     return Ok(());
                 }
 
-                match result? {
+                match fetched_slot {
                     FetchedSlot::Missing { slot } => {
                         match handle_missing_slot(&node, slot).await? {
                             MissingSlotAction::Rewound(rewind_slot) => {
