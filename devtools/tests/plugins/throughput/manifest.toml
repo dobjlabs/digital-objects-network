@@ -1,0 +1,20 @@
+[plugin]
+name = "throughput"
+version = "0.1.0"
+# Recomputed from plugin.rhai by the throughput binary when it loads the plugin.
+module_hash = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[classes]]
+name = "Log"
+emoji = "🌲"
+description = "A log found for free, so proving it is as cheap as an action gets."
+
+[[actions]]
+name = "FindLog"
+emoji = "🌲"
+description = "Create a log object without any proof of work."
+
+[[actions]]
+name = "BurnLogs"
+emoji = "🔥"
+description = "Spend 50 logs in one transaction."
