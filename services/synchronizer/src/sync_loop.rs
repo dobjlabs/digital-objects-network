@@ -55,6 +55,7 @@ pub async fn run_sync_loop(
         head: sync_start.head,
         events: None,
     };
+    let mut prev_block = None;
 
     let batch_size = node.config.catchup_batch_size;
 
@@ -165,7 +166,10 @@ pub async fn run_sync_loop(
             continue;
         }
 
-        let processed = node.derive_slot_update(&beacon_block_header).await?;
+        let (block, processed) = node
+            .derive_slot_update(&beacon_block_header, prev_block)
+            .await?;
+        prev_block = Some(block);
         node.commit_slot(&processed).await?;
 
         if wait_or_shutdown(sync_delay, &mut shutdown_rx).await {

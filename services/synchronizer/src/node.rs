@@ -69,6 +69,11 @@ struct TargetBlobTx {
     versioned_hashes: Vec<B256>,
 }
 
+pub struct BlockAndRoot {
+    pub block: Block,
+    pub root: B256,
+}
+
 /// Outcome of processing one beacon slot, ready to be committed.
 pub enum ProcessedSlot {
     /// Beacon produced no block for the slot. With no execution block there is
@@ -301,15 +306,15 @@ impl Node {
         &self,
         beacon_block_header: &BlockHeader,
         beacon_block: &Block,
-        parent_block: Option<(B256, &Block)>,
+        prev_block: Option<BlockAndRoot>,
     ) -> Result<Option<CanonicalPayload>> {
         let slot = beacon_block_header.slot;
         let fetched_parent_block;
         let (committing_block_root, committing_block) = match beacon_block.execution_payload {
             ExecutionPayloadRef::Embedded { .. } => (beacon_block_header.root, beacon_block),
             ExecutionPayloadRef::Bid { .. } => {
-                let parent_block = match parent_block {
-                    Some(parent) if parent.0 == beacon_block_header.parent_root => parent.1,
+                let parent_block = match &prev_block {
+                    Some(block) if block.root == beacon_block_header.parent_root => &block.block,
                     _ => {
                         fetched_parent_block = self
                             .get_beacon_block_by_hash_with_retry(beacon_block.parent_root)
@@ -441,17 +446,17 @@ impl Node {
         Ok(blob_payloads)
     }
 
-    /// Make every network call needed to derive the slot of `beacon_block`. `parent_block`
+    /// Make every network call needed to derive the slot of `beacon_block`. `prev_block`
     /// spares fetching the parent again when the caller already holds it.
     pub(crate) async fn fetch_slot_context(
         &self,
         beacon_block_header: &BlockHeader,
         beacon_block: &Block,
-        parent_block: Option<(B256, &Block)>,
+        prev_block: Option<BlockAndRoot>,
     ) -> Result<SlotContext> {
         let slot = beacon_block_header.slot;
         let payload = self
-            .canonical_payload(beacon_block_header, beacon_block, parent_block)
+            .canonical_payload(beacon_block_header, beacon_block, prev_block)
             .await?;
         let blob_payloads = match &payload {
             Some(payload) => self.fetch_target_blobs(slot, payload).await?,
@@ -470,14 +475,22 @@ impl Node {
     pub async fn derive_slot_update(
         &self,
         beacon_block_header: &BlockHeader,
-    ) -> Result<ProcessedSlot> {
+        prev_block: Option<BlockAndRoot>,
+    ) -> Result<(BlockAndRoot, ProcessedSlot)> {
         let beacon_block = self
             .get_beacon_block_by_hash_with_retry(beacon_block_header.root)
             .await?;
         let slot_ctx = self
-            .fetch_slot_context(beacon_block_header, &beacon_block, None)
+            .fetch_slot_context(beacon_block_header, &beacon_block, prev_block)
             .await?;
-        self.derive_from_context(slot_ctx).await
+        let processed_slot = self.derive_from_context(slot_ctx).await?;
+        Ok((
+            BlockAndRoot {
+                root: beacon_block_header.root,
+                block: beacon_block,
+            },
+            processed_slot,
+        ))
     }
 
     /// Parse the slot's blobs, prefetch the array positions of their created

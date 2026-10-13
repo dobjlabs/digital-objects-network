@@ -5,7 +5,7 @@ use anyhow::Result;
 use futures_util::future::try_join_all;
 use tracing::info;
 
-use crate::node::{Node, SlotContext};
+use crate::node::{BlockAndRoot, Node, SlotContext};
 use eth_clients::beacon::types::{Block, BlockHeader};
 
 /// Pre-fetched data for a single slot in a catch-up batch.
@@ -47,7 +47,10 @@ pub async fn fetch_batch(node: &Node, slots: &[u32]) -> Result<Vec<FetchedSlot>>
         };
         let parent_block = blocks_by_root
             .get(&block.parent_root)
-            .map(|b| (block.parent_root, *b));
+            .map(|b| BlockAndRoot {
+                root: block.parent_root,
+                block: (*b).clone(),
+            });
         let context = node.fetch_slot_context(header, block, parent_block).await?;
         Ok::<_, anyhow::Error>(FetchedSlot::Present {
             slot: *slot,

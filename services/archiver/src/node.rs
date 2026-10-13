@@ -258,6 +258,11 @@ pub struct Node {
     pub config: Config,
 }
 
+pub struct BlockAndRoot {
+    block: Block,
+    root: B256,
+}
+
 impl Node {
     /// Construct network clients and bind shared state/sync stores.
     pub async fn new(config: Config) -> Result<Self> {
@@ -289,8 +294,8 @@ impl Node {
     pub(crate) async fn process_beacon_block_header(
         &self,
         beacon_block_header: &BlockHeader,
-        parent_block: Option<(B256, Block)>,
-    ) -> Result<(B256, Block)> {
+        prev_block: Option<BlockAndRoot>,
+    ) -> Result<BlockAndRoot> {
         // Create the path with the symlink to the block dir, indexed by slot
         let slot_path = self.store.slot_dir(beacon_block_header.slot);
         let mut slot_mid_path = slot_path.clone();
@@ -317,7 +322,7 @@ impl Node {
         file_tmp.write_all(&header_json)?;
 
         let beacon_block = self
-            .process_beacon_block_blobs(beacon_block_header, parent_block)
+            .process_beacon_block_blobs(beacon_block_header, prev_block)
             .await?;
 
         let mut header_path = root_dir.clone();
@@ -329,8 +334,8 @@ impl Node {
     pub(crate) async fn process_beacon_block_blobs(
         &self,
         beacon_block_header: &BlockHeader,
-        prev_block: Option<(B256, Block)>,
-    ) -> Result<(B256, Block)> {
+        prev_block: Option<BlockAndRoot>,
+    ) -> Result<BlockAndRoot> {
         let slot = beacon_block_header.slot;
         let beacon_block_root = beacon_block_header.root;
         let beacon_block = self.get_block(beacon_block_root).await?;
@@ -344,7 +349,7 @@ impl Node {
             // block that committed to them.
             ExecutionPayloadRef::Bid { .. } => {
                 let parent_block = match prev_block {
-                    Some(block) if block.0 == beacon_block_header.parent_root => block.1,
+                    Some(block) if block.root == beacon_block_header.parent_root => block.block,
                     _ => self.get_block(beacon_block_header.parent_root).await?,
                 };
                 // This will happen if the current block builds on top of a payload older than
@@ -353,7 +358,10 @@ impl Node {
                 // late or been invalid)
                 if !beacon_block.builds_on_payload_of(&parent_block) {
                     debug!("slot {} does not build on its parent's payload", slot);
-                    return Ok((beacon_block_root, beacon_block));
+                    return Ok(BlockAndRoot {
+                        root: beacon_block_root,
+                        block: beacon_block,
+                    });
                 }
                 let parent_header = BlockHeader {
                     root: beacon_block_header.parent_root,
@@ -364,7 +372,10 @@ impl Node {
                     .await?;
             }
         }
-        Ok((beacon_block_root, beacon_block))
+        Ok(BlockAndRoot {
+            root: beacon_block_root,
+            block: beacon_block,
+        })
     }
 
     /// We expect this block to exist (the slot is not empty)
