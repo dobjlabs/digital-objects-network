@@ -3,7 +3,7 @@ use std::time::Duration;
 use alloy::eips::eip4844::HeapBlob;
 use eth_clients::beacon::{
     self,
-    types::{Block, BlockHeader, BlockId, ExecutionPayloadRef, KzgCommitment},
+    types::{Block, BlockAndRoot, BlockHeader, BlockId, ExecutionPayloadRef, KzgCommitment},
     BeaconClient,
 };
 use itertools::zip_eq;
@@ -256,11 +256,6 @@ pub struct Node {
     pub rpc_cli: RootProvider,
     pub store: Store,
     pub config: Config,
-}
-
-pub struct BlockAndRoot {
-    block: Block,
-    root: B256,
 }
 
 impl Node {

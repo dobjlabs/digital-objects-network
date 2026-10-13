@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Result};
-use eth_clients::beacon::types::{BlockHeader, HeadEventData, Topic};
+use eth_clients::beacon::types::{BlockAndRoot, BlockHeader, HeadEventData, Topic};
 use futures_util::StreamExt;
 use reqwest_eventsource::{Event, EventSource};
 use tokio::sync::watch;
@@ -166,10 +166,17 @@ pub async fn run_sync_loop(
             continue;
         }
 
-        let (block, processed) = node
-            .derive_slot_update(&beacon_block_header, prev_block)
+        let beacon_block = node
+            .get_beacon_block_by_hash_with_retry(beacon_block_header.root)
             .await?;
-        prev_block = Some(block);
+        let context = node
+            .fetch_slot_context(&beacon_block_header, &beacon_block, prev_block.as_ref())
+            .await?;
+        prev_block = Some(BlockAndRoot {
+            root: beacon_block_header.root,
+            block: beacon_block,
+        });
+        let processed = node.derive_from_context(context).await?;
         node.commit_slot(&processed).await?;
 
         if wait_or_shutdown(sync_delay, &mut shutdown_rx).await {

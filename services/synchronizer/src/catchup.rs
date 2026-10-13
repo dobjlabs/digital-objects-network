@@ -5,8 +5,8 @@ use anyhow::Result;
 use futures_util::future::try_join_all;
 use tracing::info;
 
-use crate::node::{BlockAndRoot, Node, SlotContext};
-use eth_clients::beacon::types::{Block, BlockHeader};
+use crate::node::{Node, SlotContext};
+use eth_clients::beacon::types::{BlockAndRoot, BlockHeader};
 
 /// Pre-fetched data for a single slot in a catch-up batch.
 pub enum FetchedSlot {
@@ -31,27 +31,28 @@ pub async fn fetch_batch(node: &Node, slots: &[u32]) -> Result<Vec<FetchedSlot>>
         let block = node
             .get_beacon_block_by_hash_with_retry(header.root)
             .await?;
+        let block = BlockAndRoot {
+            root: header.root,
+            block,
+        };
         Ok::<_, anyhow::Error>((slot, Some((header, block))))
     }))
     .await?;
 
     // Phase 2: resolve payloads and blobs concurrently. A block whose parent is in the batch
     // reuses it, so a parent is fetched again only when it precedes the batch.
-    let blocks_by_root: HashMap<B256, &Block> = blocks
+    let blocks_by_root: HashMap<B256, &BlockAndRoot> = blocks
         .iter()
-        .filter_map(|(_, fetched)| fetched.as_ref().map(|(header, block)| (header.root, block)))
+        .filter_map(|(_, fetched)| fetched.as_ref().map(|(_, block)| (block.root, block)))
         .collect();
     let fetched_slots = try_join_all(blocks.iter().map(|(slot, fetched)| async {
         let Some((header, block)) = fetched else {
             return Ok(FetchedSlot::Missing { slot: *slot });
         };
-        let parent_block = blocks_by_root
-            .get(&block.parent_root)
-            .map(|b| BlockAndRoot {
-                root: block.parent_root,
-                block: (*b).clone(),
-            });
-        let context = node.fetch_slot_context(header, block, parent_block).await?;
+        let parent_block = blocks_by_root.get(&block.block.parent_root).copied();
+        let context = node
+            .fetch_slot_context(header, &block.block, parent_block)
+            .await?;
         Ok::<_, anyhow::Error>(FetchedSlot::Present {
             slot: *slot,
             header: header.clone(),

@@ -118,6 +118,12 @@ impl Block {
     }
 }
 
+/// A beacon block together with its root, which the block itself does not carry.
+pub struct BlockAndRoot {
+    pub root: B256,
+    pub block: Block,
+}
+
 #[derive(Deserialize, Serialize, Debug)]
 pub struct ExecutionPayload {
     pub block_hash: B256,
