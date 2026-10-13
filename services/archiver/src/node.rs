@@ -367,7 +367,7 @@ impl Node {
         Ok((beacon_block_root, beacon_block))
     }
 
-    /// We expect this block to exists (the slot is not empty)
+    /// We expect this block to exist (the slot is not empty)
     async fn get_block(&self, root: B256) -> Result<Block> {
         self.beacon_cli
             .get_block(BlockId::Hash(root))

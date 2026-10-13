@@ -13,8 +13,9 @@ const DEFAULT_RPC_RETRY_MS: u64 = 1_000;
 /// Known RPC rate limit. Used to derive safe defaults for batch size and sync delay.
 const RPC_RATE_LIMIT_PER_SEC: u64 = 15;
 
-/// Each slot in a batch makes ~2 RPC calls (header + block). Use half the rate limit to leave
-/// headroom for retries and the single-slot path.
+/// Each slot in a batch makes two beacon calls (header and block); a slot with a block adds one
+/// execution call and, with target blobs, one archiver call, each to its own endpoint. Use half
+/// the rate limit to leave headroom for retries and the single-slot path.
 const fn default_catchup_batch_size() -> usize {
     (RPC_RATE_LIMIT_PER_SEC as usize) / 2
 }
