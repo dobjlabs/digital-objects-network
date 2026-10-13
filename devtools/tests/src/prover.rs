@@ -124,7 +124,12 @@ mod tests {
         let catalog = load_catalog(true);
         let run = || {
             let outputs = catalog
-                .execute_action(find_log_action(), dummy_grounding_witness(), Vec::new())
+                .execute_action(
+                    find_log_action(),
+                    dummy_grounding_witness(),
+                    Vec::new(),
+                    &Default::default(),
+                )
                 .unwrap();
             assert_eq!(outputs.objs.len(), 1);
             assert!(outputs.tx.nullifier_hashes().unwrap().is_empty());
@@ -140,7 +145,12 @@ mod tests {
         let logs: Vec<SpendableObject> = (0..50)
             .map(|_| {
                 let outputs = catalog
-                    .execute_action(find_log_action(), dummy_grounding_witness(), Vec::new())
+                    .execute_action(
+                        find_log_action(),
+                        dummy_grounding_witness(),
+                        Vec::new(),
+                        &Default::default(),
+                    )
                     .unwrap();
                 state.apply_tx(
                     outputs.tx.live_commitments().unwrap(),
@@ -168,7 +178,7 @@ mod tests {
         );
 
         let outputs = catalog
-            .execute_action(burn_logs_action(), witness, logs)
+            .execute_action(burn_logs_action(), witness, logs, &Default::default())
             .unwrap();
         assert!(outputs.objs.is_empty());
         assert_eq!(outputs.tx.nullifier_hashes().unwrap().len(), 50);
