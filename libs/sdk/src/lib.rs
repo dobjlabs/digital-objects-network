@@ -3191,27 +3191,6 @@ impl Executor {
         inputs: Vec<SpendableObject>,
         args: &ActionArgs,
     ) -> Result<SpendableObjects, SdkError> {
-        self.action_with_args_and_validation(action, inputs, args, |_| Ok(()))
-    }
-
-    /// Validate a finalized transaction before solving or generating its proof.
-    pub fn action_with_validation(
-        &self,
-        action: &str,
-        inputs: Vec<SpendableObject>,
-        validate: impl FnOnce(&Tx) -> anyhow::Result<()>,
-    ) -> Result<SpendableObjects, SdkError> {
-        self.action_with_args_and_validation(action, inputs, &ActionArgs::new(), validate)
-    }
-
-    /// Execute with argument overrides and validate before solving or proving.
-    pub fn action_with_args_and_validation(
-        &self,
-        action: &str,
-        inputs: Vec<SpendableObject>,
-        args: &ActionArgs,
-        validate: impl FnOnce(&Tx) -> anyhow::Result<()>,
-    ) -> Result<SpendableObjects, SdkError> {
         let exe_rc = self.new_exe_ctx(action, inputs, args)?;
         let action_handle = ActionHandle::new(action.to_string(), Some(exe_rc.clone()));
         action_handle.0.borrow_mut().supplied_args = args.clone();
@@ -3236,7 +3215,6 @@ impl Executor {
             .into_inner();
 
         let (st_tx_finalize, tx, _stats) = tx_builder.finalize(&mut bld)?;
-        validate(&tx)?;
         bld.builder.reveal(&st_tx_finalize).unwrap();
 
         // The action body's `st_action` and any sub-action `st_sub`

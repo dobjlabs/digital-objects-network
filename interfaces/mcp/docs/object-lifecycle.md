@@ -51,7 +51,7 @@ The published payload contains commitments and nullifiers, not the private objec
 
 ## 6. State root grounding
 
-A transaction references a recent state header committing to the created array, nullifier set, prior state history, and block metadata. `InputsGroundedAndSpent` proves both that each input existed in the referenced created array and that its nullifier appears in this transaction's final nullifier set.
+A transaction references a recent state header committing to the created array, nullifier set, prior state history, and block metadata. `InputsGrounded` proves that each input existed in the referenced created array. Every input must also be consumed, so the transaction publishes its nullifier.
 
 Historical creation membership alone does not prove that an input is still live. The synchronizer checks the emitted nullifiers against its current state, rejecting inputs spent since the grounding root. It also rejects grounding roots more than 300 blocks old.
 

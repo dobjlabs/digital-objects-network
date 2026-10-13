@@ -36,18 +36,16 @@ pub fn read_elems<const N: usize>(bytes: &mut impl Read) -> Result<[F; N]> {
     Ok(elems)
 }
 
-const MAX_HASHES_PER_LIST: usize = u8::MAX as usize;
-
 /// A list of hashes, length-prefixed by a single `u8` count: at most 255
 /// entries.
-fn write_hashes(buffer: &mut Vec<u8>, hashes: &[Hash]) -> Result<()> {
-    let count = u8::try_from(hashes.len())
-        .map_err(|_| anyhow!("hash list exceeds payload limit of {MAX_HASHES_PER_LIST}"))?;
-    buffer.write_all(&count.to_le_bytes()).expect("vec write");
+fn write_hashes(buffer: &mut Vec<u8>, hashes: &[Hash]) {
+    assert!(hashes.len() <= 255);
+    buffer
+        .write_all(&(hashes.len() as u8).to_le_bytes())
+        .expect("vec write");
     for hash in hashes {
         write_elems(buffer, &hash.0);
     }
-    Ok(())
 }
 
 fn read_hashes(bytes: &mut &[u8]) -> Result<Vec<Hash>> {
@@ -82,7 +80,6 @@ impl Payload {
     pub fn from_tx(proof: PayloadProof, tx: &Tx, state_root: Hash) -> Result<Self> {
         let nullifiers = tx.nullifier_hashes()?;
         let created = tx.created_commitments()?;
-        Self::validate_counts(nullifiers.len(), created.len())?;
         Ok(Self {
             proof,
             tx_final: tx.dict().commitment(),
@@ -90,25 +87,6 @@ impl Payload {
             nullifiers,
             created,
         })
-    }
-
-    /// Check the wire-format capacities before generating a transaction proof.
-    pub fn validate_tx(tx: &Tx) -> Result<()> {
-        Self::validate_counts(
-            tx.nullifier_hashes()?.len(),
-            tx.created_commitments()?.len(),
-        )
-    }
-
-    fn validate_counts(nullifiers: usize, created: usize) -> Result<()> {
-        for (name, count) in [("nullifiers", nullifiers), ("created states", created)] {
-            if count > MAX_HASHES_PER_LIST {
-                return Err(anyhow!(
-                    "transaction has {count} {name}; payload limit is {MAX_HASHES_PER_LIST}"
-                ));
-            }
-        }
-        Ok(())
     }
 
     pub fn finalized_statement(&self, predicate: CustomPredicateRef) -> Statement {
@@ -125,8 +103,7 @@ impl Payload {
         )
     }
 
-    pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        Self::validate_counts(self.nullifiers.len(), self.created.len())?;
+    pub fn to_bytes(&self) -> Vec<u8> {
         let mut buffer = Vec::new();
         buffer
             .write_all(&PAYLOAD_MAGIC.to_le_bytes())
@@ -134,9 +111,9 @@ impl Payload {
         self.proof.write_bytes(&mut buffer);
         write_elems(&mut buffer, &self.tx_final.0);
         write_elems(&mut buffer, &self.state_root.0);
-        write_hashes(&mut buffer, &self.nullifiers)?;
-        write_hashes(&mut buffer, &self.created)?;
-        Ok(buffer)
+        write_hashes(&mut buffer, &self.nullifiers);
+        write_hashes(&mut buffer, &self.created);
+        buffer
     }
 
     pub fn from_bytes(bytes: &[u8], common_data: &CommonCircuitData) -> Result<Self> {
@@ -257,98 +234,6 @@ mod tests {
     use crate::shrink::{ShrunkMainPodSetup, shrink_compress_pod};
 
     #[test]
-    fn hash_lists_preserve_one_byte_count_at_capacity() {
-        let hashes = vec![pod2::middleware::EMPTY_HASH; MAX_HASHES_PER_LIST];
-        let mut encoded = Vec::new();
-        write_hashes(&mut encoded, &hashes).unwrap();
-        assert_eq!(encoded[0], u8::MAX);
-        assert_eq!(encoded.len(), 1 + 32 * MAX_HASHES_PER_LIST);
-        let mut remaining = encoded.as_slice();
-        assert_eq!(read_hashes(&mut remaining).unwrap(), hashes);
-        assert!(remaining.is_empty());
-    }
-
-    #[test]
-    fn payload_from_tx_enforces_capacity_for_created_and_nullifiers() {
-        use pod2::middleware::{EMPTY_HASH, containers::Dictionary};
-        use std::sync::Arc;
-        let hashes = Set::new(
-            (0..=MAX_HASHES_PER_LIST)
-                .map(|index| Value::from(index as i64))
-                .collect(),
-        );
-        let mut tx = Tx {
-            created: hashes.clone(),
-            nullifiers: hashes,
-            ctx: Dictionary::new(Default::default()),
-            state_header: Arc::new(txlib::StateHeader::new(
-                0, 0, EMPTY_HASH, EMPTY_HASH, EMPTY_HASH, EMPTY_HASH,
-            )),
-        };
-        for index in 0..2 {
-            assert!(
-                Payload::validate_tx(&tx)
-                    .unwrap_err()
-                    .to_string()
-                    .contains("payload limit is 255")
-            );
-            let error =
-                Payload::from_tx(PayloadProof::empty_for_test(), &tx, EMPTY_HASH).unwrap_err();
-            assert!(error.to_string().contains("payload limit is 255"));
-            let oversized = if index == 0 {
-                &mut tx.nullifiers
-            } else {
-                &mut tx.created
-            };
-            assert!(error.to_string().contains(if index == 0 {
-                "nullifiers"
-            } else {
-                "created states"
-            }));
-            oversized.delete(&Value::from(0_i64)).unwrap();
-        }
-        Payload::validate_tx(&tx).unwrap();
-        let payload = Payload::from_tx(PayloadProof::empty_for_test(), &tx, EMPTY_HASH).unwrap();
-        assert_eq!(payload.created.len(), MAX_HASHES_PER_LIST);
-        assert_eq!(payload.nullifiers.len(), MAX_HASHES_PER_LIST);
-    }
-
-    #[test]
-    fn serialization_checks_capacity_for_directly_constructed_payloads() {
-        use pod2::middleware::EMPTY_HASH;
-        let mut payload = Payload {
-            proof: PayloadProof::empty_for_test(),
-            tx_final: EMPTY_HASH,
-            state_root: EMPTY_HASH,
-            nullifiers: vec![EMPTY_HASH; MAX_HASHES_PER_LIST],
-            created: vec![EMPTY_HASH; MAX_HASHES_PER_LIST],
-        };
-        payload.to_bytes().unwrap();
-        payload.nullifiers.push(EMPTY_HASH);
-        assert!(
-            payload
-                .to_bytes()
-                .unwrap_err()
-                .to_string()
-                .contains("256 nullifiers")
-        );
-        payload.nullifiers.pop();
-        payload.created.push(EMPTY_HASH);
-        assert!(
-            payload
-                .to_bytes()
-                .unwrap_err()
-                .to_string()
-                .contains("256 created states")
-        );
-
-        let mut bytes = Vec::new();
-        assert!(write_hashes(&mut bytes, &payload.created).is_err());
-        assert!(bytes.is_empty());
-    }
-
-    #[test]
-    #[ignore = "generates and shrinks a real Plonky2 proof"]
     fn test_payload_roundtrip() {
         let params = Params::default();
         let vd_set = &*DEFAULT_VD_SET;
@@ -419,7 +304,7 @@ mod tests {
         };
 
         println!("Payload roundtrip");
-        let payload_bytes = payload.to_bytes().unwrap();
+        let payload_bytes = payload.to_bytes();
         let payload_decoded = Payload::from_bytes(&payload_bytes, common_data).unwrap();
         assert_eq!(payload, payload_decoded);
 

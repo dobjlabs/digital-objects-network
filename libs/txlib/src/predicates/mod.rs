@@ -93,7 +93,7 @@ mod tests {
             module.splits.is_empty(),
             "unexpected automatic predicate split"
         );
-        assert_eq!(module.batch.predicates().len(), 23);
+        assert_eq!(module.batch.predicates().len(), 22);
         for predicate in module.batch.predicates() {
             assert!(predicate.statements().len() <= 5, "{}", predicate.name);
             assert!(predicate.wildcard_names().len() <= 8, "{}", predicate.name);
@@ -140,20 +140,13 @@ mod tests {
         module.predicate_ref_by_name("ReplayDelete").unwrap();
 
         // Finalization
+        module.predicate_ref_by_name("InputsGrounded").unwrap();
         module
-            .predicate_ref_by_name("InputsGroundedAndSpentTriple")
+            .predicate_ref_by_name("InputsGroundedSingle")
             .unwrap();
+        module.predicate_ref_by_name("InputsGroundedPair").unwrap();
         module
-            .predicate_ref_by_name("InputsGroundedAndSpent")
-            .unwrap();
-        module
-            .predicate_ref_by_name("InputGroundedAndSpent")
-            .unwrap();
-        module
-            .predicate_ref_by_name("InputsGroundedAndSpentPair")
-            .unwrap();
-        module
-            .predicate_ref_by_name("InputsGroundedAndSpentRecursive")
+            .predicate_ref_by_name("InputsGroundedRecursive")
             .unwrap();
         module.predicate_ref_by_name("TxFinalBindings").unwrap();
         module.predicate_ref_by_name("TxFinalized").unwrap();

@@ -11,8 +11,8 @@
      hash step, updating the created/nullifier sets, and calling the
      affected object's type guard to authorize the event.
 
-  2. InputsGroundedAndSpent -- proves each input object is present in
-     the global created set and nullified by this transaction.
+  2. InputsGrounded -- proves each input object is present in the
+     global created set carried by the state root.
 
   3. TxFinalized -- the public entry point. Ties input grounding,
      chain seeding, and full replay together. Exposes
@@ -260,47 +260,50 @@ ReplayDelete(state_header, before_tx, after_tx, before_chain, after_chain,
 )
 
 // ========================================================
-// Inputs Grounded And Spent
+// Inputs Grounded
 // ========================================================
 //
-// Each input must exist in the historical created array and have its
-// nullifier in this transaction's final set, even if the grounding root is stale.
+// InputsGrounded proves each input object is a member of `created`, the
+// global created-object set (every object state ever created, maintained
+// by the synchronizer).
 
 record StateHeader = (block_number, block_timestamp, block_hash, created, nullifiers, prior_state_history)
 
-// The two hashes also appear in ReplayNullify and can reuse its statements.
-// Including the set extension fills all five clauses of this helper.
-InputGroundedAndSpent(prev, inputs, created, nullifiers, private: input, index, key_hash, nullifier) = AND(
-  ArrayContains(created, index, input)
-  SetInsert(prev, input, inputs)
-  Hash(input, input.key, key_hash)
-  Hash(key_hash, "txlib-nullifier-v1", nullifier)
-  SetContains(nullifiers, nullifier)
-)
-InputsGroundedAndSpent(inputs, created, nullifiers) = OR(
+InputsGrounded(inputs, created) = OR(
+  // Base case: empty inputs. `created` is intentionally unconstrained --
+  // an empty-input tx grounds nothing.
   Equal(inputs, {})
-  InputGroundedAndSpent({}, inputs, created, nullifiers)
-  InputsGroundedAndSpentPair(inputs, created, nullifiers)
-  InputsGroundedAndSpentTriple(inputs, created, nullifiers)
-  InputsGroundedAndSpentRecursive(inputs, created, nullifiers)
+  InputsGroundedSingle(inputs, created)
+  InputsGroundedPair(inputs, created)
+  InputsGroundedRecursive(inputs, created)
 )
-InputsGroundedAndSpentPair(inputs, created, nullifiers, private: mid) = AND(
-  InputGroundedAndSpent({}, mid, created, nullifiers)
-  InputGroundedAndSpent(mid, inputs, created, nullifiers)
+
+// Single-input fast path: avoids the cost of a recursive
+// InputsGrounded call.
+InputsGroundedSingle(inputs, created, private: input, index) = AND(
+  ArrayContains(created, index, input)
+  SetInsert({}, input, inputs)
 )
-InputsGroundedAndSpentTriple(inputs, created, nullifiers, private: mid1, mid2) = AND(
-  InputGroundedAndSpent({}, mid1, created, nullifiers)
-  InputGroundedAndSpent(mid1, mid2, created, nullifiers)
-  InputGroundedAndSpent(mid2, inputs, created, nullifiers)
+
+// Two-input fast path: both inputs grounded inline, no sub-predicate
+// dispatch.
+InputsGroundedPair(inputs, created,
+    private: first_input, second_input, set_first, first_index, second_index) = AND(
+  ArrayContains(created, first_index, first_input)
+  SetInsert({}, first_input, set_first)
+  ArrayContains(created, second_index, second_input)
+  SetInsert(set_first, second_input, inputs)
 )
-// Four helpers leave one clause for recursion. Counts divisible by four
-// terminate at the empty branch; other counts use the single/pair/triple leaf.
-InputsGroundedAndSpentRecursive(inputs, created, nullifiers, private: prev, mid1, mid2, mid3) = AND(
-  InputGroundedAndSpent(prev, mid1, created, nullifiers)
-  InputGroundedAndSpent(mid1, mid2, created, nullifiers)
-  InputGroundedAndSpent(mid2, mid3, created, nullifiers)
-  InputGroundedAndSpent(mid3, inputs, created, nullifiers)
-  InputsGroundedAndSpent(prev, created, nullifiers)
+
+// 3+ inputs: ground two inputs, then recurse for the rest. The recursion
+// bottoms out at Single (odd N) or Pair (even N).
+InputsGroundedRecursive(inputs, created,
+    private: first_input, second_input, mid, prev_inputs, first_index, second_index) = AND(
+  ArrayContains(created, first_index, first_input)
+  SetInsert(prev_inputs, first_input, mid)
+  ArrayContains(created, second_index, second_input)
+  SetInsert(mid, second_input, inputs)
+  InputsGrounded(prev_inputs, created)
 )
 
 // ========================================================
@@ -338,7 +341,7 @@ TxFinalBindings(after_tx, tx_final, nullifiers, created) = AND(
 
 TxFinalized(state_header StateHeader, tx_final, nullifiers, created,
      private: before_tx, after_tx, chain_start, chain_final) = AND(
-  InputsGroundedAndSpent(before_tx.inputs, state_header.created, nullifiers)
+  InputsGrounded(before_tx.inputs, state_header.created)
   Hash(before_tx.inputs, {}, chain_start)
   DictInsert({"created": {}, "nullifiers": {}, "chain_start": {}, "chain_end": {}}, "inputs", before_tx.inputs, before_tx)
   TxFinalBindings(after_tx, tx_final, nullifiers, created)

@@ -30,7 +30,6 @@ mod replay;
 use std::sync::LazyLock;
 use std::{collections::HashMap, sync::Arc};
 
-use anyhow::Context;
 use pod2::{
     backends::plonky2::primitives::merkletree::MerkleProof,
     frontend::{Operation, entry},
@@ -418,16 +417,12 @@ pub fn print_stats(stats: &TxStats) {
     }
 }
 
-struct GroundedInput {
-    object: Dictionary,
-    membership: Statement,
-}
-
 pub struct TxBuilder {
     pub chain: Hash,
     pub chain_start: Hash,
     state_header: Arc<StateHeader>,
-    grounded_inputs: Vec<GroundedInput>,
+    inputs: Vec<Dictionary>,
+    st_inputs_grounded: Statement,
     inputs_set: Set,
     events: Vec<ChainEvent>,
     action_stack: Vec<ActionScope>,
@@ -537,22 +532,8 @@ impl TxBuilder {
         inputs: &[Dictionary],
         grounding: Arc<GroundingWitness>,
     ) -> Self {
-        let mut inputs_set = set!();
-        let grounded_inputs = inputs
-            .iter()
-            .map(|object| {
-                inputs_set.insert(&Value::from(object.clone())).unwrap();
-                GroundedInput {
-                    object: object.clone(),
-                    membership: prove_obj_in_created(
-                        ctx,
-                        grounding.state_header.created_root,
-                        &grounding,
-                        object,
-                    ),
-                }
-            })
-            .collect();
+        let (st_inputs_grounded, inputs_set, stats) =
+            Self::build_inputs_grounded(ctx, inputs, &grounding);
         let chain_start = hash_values(&[
             Value::from(inputs_set.commitment()),
             Value::from(EMPTY_VALUE),
@@ -562,12 +543,13 @@ impl TxBuilder {
             chain: chain_start,
             chain_start,
             state_header,
-            grounded_inputs,
+            inputs: inputs.to_vec(),
+            st_inputs_grounded,
             inputs_set,
             events: vec![],
             action_stack: vec![],
             next_scope_id: 0,
-            stats: TxStats::new(),
+            stats,
         }
     }
 
@@ -865,8 +847,8 @@ impl TxBuilder {
     }
 
     /// Build the replay chain and emit TxFinalized.
-    /// Returns an error if an input is not spent or an object state is
-    /// created more than once.
+    /// Returns an error if an input is not consumed, an unavailable or
+    /// already consumed state is consumed, or a state is created more than once.
     pub fn finalize(self, ctx: &mut BuildContext) -> anyhow::Result<(Statement, Tx, TxStats)> {
         assert!(self.action_stack.is_empty(), "unclosed action scopes");
         assert!(
@@ -895,19 +877,17 @@ impl TxBuilder {
         let (st_replay, _, created, nullifiers) = replay::Replayer::new(ctx, &mut stats)
             .build_replay_actions(&self.events, self.chain_start, frame)?;
 
-        let (st_inputs_grounded, _) = Self::build_inputs_grounded_and_spent(
-            ctx,
-            &self.grounded_inputs,
-            self.state_header.created_root,
-            &nullifiers,
-            &mut stats,
-        )?;
+        for input in &self.inputs {
+            if !nullifiers.contains(&Value::from(object_nullifier_hash(input)?))? {
+                anyhow::bail!("input object {} was not spent", input.commitment());
+            }
+        }
 
         let after_tx = build_tx(&self.inputs_set, &created, &nullifiers, zero, zero);
         let mut tx_final = after_tx.clone();
         tx_final.delete(&StrKey::from("inputs"))?;
 
-        // Tie grounding to the public state root: rebind InputsGroundedAndSpent
+        // Tie grounding to the public state root: rebind the InputsGrounded
         // statement's `inputs` to `before_tx.inputs` and
         // its created set to `state_header.created`. The latter is the single
         // state-root array access anchoring the whole grounding tree. Two calls
@@ -919,9 +899,8 @@ impl TxBuilder {
                 vec![
                     Some(entry(&before_tx, "inputs").expect("referenced container entry exists")),
                     None,
-                    None,
                 ],
-                st_inputs_grounded,
+                self.st_inputs_grounded.clone(),
             ))
             .unwrap();
         let state_header_arr = self.state_header.array();
@@ -934,7 +913,6 @@ impl TxBuilder {
                         entry(&state_header_arr, STATE_HEADER_CREATED_SLOT as i64)
                             .expect("referenced container entry exists"),
                     ),
-                    None,
                 ],
                 st_inputs_rebound,
             ))
@@ -1042,87 +1020,122 @@ impl TxBuilder {
         }
     }
 
-    fn build_inputs_grounded_and_spent(
+    fn build_inputs_grounded(
         ctx: &mut BuildContext,
-        inputs: &[GroundedInput],
-        created_root: Hash,
-        nullifiers: &Set,
-        stats: &mut TxStats,
-    ) -> anyhow::Result<(Statement, Set)> {
-        let mut branches = vec![Statement::None; 5];
-        let mut inputs_set = set!();
+        inputs: &[Dictionary],
+        grounding: &GroundingWitness,
+    ) -> (Statement, Set, TxStats) {
+        let mut stats = TxStats::new();
+        // Ground against the created-set commitment as a plain value; TxFinalized
+        // is what ties it back to `state_header.created`.
+        let created_root = grounding.state_header.created_root;
+        let created_value = Value::from(created_root);
+
         if inputs.is_empty() {
-            branches[0] = ctx.builder.priv_op(op!(Equal(set!(), set!())))?;
-        } else {
-            let split = inputs.len().saturating_sub(4);
-            let previous = if inputs.len() >= 4 {
-                let (statement, previous_set) = Self::build_inputs_grounded_and_spent(
-                    ctx,
-                    &inputs[..split],
-                    created_root,
-                    nullifiers,
-                    stats,
-                )?;
-                inputs_set = previous_set;
-                Some(statement)
-            } else {
-                None
-            };
-            let mut statements = Vec::new();
-            for input in &inputs[split..] {
-                let object = &input.object;
-                let key_hash = object_key_hash(object)?;
-                let nullifier = object_nullifier_from_key_hash(key_hash);
-                let spent = ctx
-                    .builder
-                    .priv_op(op!(SetContains(nullifiers, nullifier)))
-                    .with_context(|| {
-                        format!("input object {} was not spent", object.commitment())
-                    })?;
-                let mut next_set = inputs_set.clone();
-                next_set.insert(&Value::from(object.clone()))?;
-                // The builder deduplicates these hashes against ReplayNullify.
-                let statement = st_custom!(
-                    ctx,
-                    InputGroundedAndSpent() = (
-                        input.membership.clone(),
-                        SetInsert(inputs_set, object, next_set),
-                        Hash(object, entry(object, "key")?, key_hash),
-                        Hash(key_hash, OBJECT_NULLIFIER_VERSION, nullifier),
-                        spent
-                    )
-                )?;
-                record(stats, "InputGroundedAndSpent");
-                statements.push(statement);
-                inputs_set = next_set;
-            }
-            let branch = inputs.len().min(4);
-            let statement = if branch == 1 {
-                statements.remove(0)
-            } else {
-                let name = match branch {
-                    2 => "InputsGroundedAndSpentPair",
-                    3 => "InputsGroundedAndSpentTriple",
-                    4 => {
-                        statements.push(previous.expect("recursive grounding has a prefix"));
-                        "InputsGroundedAndSpentRecursive"
-                    }
-                    _ => unreachable!(),
-                };
-                let statement = ctx.apply_custom_pred_simple(false, name, statements)?;
-                record(stats, name);
-                statement
-            };
-            branches[branch] = statement;
+            // Base case: empty inputs. `created` is unconstrained here.
+            let st = st_custom!(
+                ctx,
+                InputsGrounded(created = created_value) = (
+                    Equal(set!(), set!()),
+                    Statement::None,
+                    Statement::None,
+                    Statement::None
+                )
+            )
+            .unwrap();
+            record(&mut stats, "InputsGrounded");
+            return (st, set!(), stats);
         }
-        let statement = ctx.apply_custom_pred(
-            false,
-            "InputsGroundedAndSpent",
-            map!({"created" => Value::from(created_root), "nullifiers" => nullifiers.clone()}),
-            branches,
-        )?;
-        record(stats, "InputsGroundedAndSpent");
-        Ok((statement, inputs_set))
+
+        let extend_set = |set: &Set, obj: &Dictionary| -> Set {
+            let mut new_set = set.clone();
+            new_set.insert(&Value::from(obj.clone())).unwrap();
+            new_set
+        };
+
+        let prove_input = |ctx: &mut BuildContext, obj: &Dictionary| {
+            prove_obj_in_created(ctx, created_root, grounding, obj)
+        };
+
+        // Bottom of the recursion: Single for odd N, Pair (both inputs inline)
+        // for even N. Then peel two inputs per InputsGroundedRecursive level.
+        let (mut st, mut prev_set, mut consumed) = if inputs.len() % 2 == 1 {
+            let obj = &inputs[0];
+            let inputs_set = extend_set(&set!(), obj);
+            let st_live = prove_input(ctx, obj);
+            let st_single = st_custom!(
+                ctx,
+                InputsGroundedSingle() = (st_live, SetInsert(set!(), obj, inputs_set))
+            )
+            .unwrap();
+            record(&mut stats, "InputsGroundedSingle");
+            let st = st_custom!(
+                ctx,
+                InputsGrounded(created = created_value) =
+                    (Statement::None, st_single, Statement::None, Statement::None)
+            )
+            .unwrap();
+            record(&mut stats, "InputsGrounded");
+            (st, inputs_set, 1usize)
+        } else {
+            let first = &inputs[0];
+            let second = &inputs[1];
+            let set_first = extend_set(&set!(), first);
+            let inputs_pair = extend_set(&set_first, second);
+            let st_first = prove_input(ctx, first);
+            let st_second = prove_input(ctx, second);
+            let st_pair = st_custom!(
+                ctx,
+                InputsGroundedPair() = (
+                    st_first,
+                    SetInsert(set!(), first, set_first),
+                    st_second,
+                    SetInsert(set_first, second, inputs_pair)
+                )
+            )
+            .unwrap();
+            record(&mut stats, "InputsGroundedPair");
+            let st = st_custom!(
+                ctx,
+                InputsGrounded(created = created_value) =
+                    (Statement::None, Statement::None, st_pair, Statement::None)
+            )
+            .unwrap();
+            record(&mut stats, "InputsGrounded");
+            (st, inputs_pair, 2usize)
+        };
+
+        // Peel two inputs per recursion level.
+        while consumed < inputs.len() {
+            let first = &inputs[consumed];
+            let second = &inputs[consumed + 1];
+            let mid = extend_set(&prev_set, first);
+            let next_set = extend_set(&mid, second);
+            let st_first = prove_input(ctx, first);
+            let st_second = prove_input(ctx, second);
+            let st_rec = st_custom!(
+                ctx,
+                InputsGroundedRecursive() = (
+                    st_first,
+                    SetInsert(prev_set, first, mid),
+                    st_second,
+                    SetInsert(mid, second, next_set),
+                    st
+                )
+            )
+            .unwrap();
+            record(&mut stats, "InputsGroundedRecursive");
+            prev_set = next_set;
+            consumed += 2;
+            st = st_custom!(
+                ctx,
+                InputsGrounded(created = created_value) =
+                    (Statement::None, Statement::None, Statement::None, st_rec)
+            )
+            .unwrap();
+            record(&mut stats, "InputsGrounded");
+        }
+        (st, prev_set, stats)
     }
 }
 
@@ -1409,167 +1422,35 @@ mod tests {
     }
 
     #[test]
-    fn grounds_and_spends_inputs_across_recursive_boundaries() {
-        for count in (0..=9).chain([16]) {
+    fn rejects_unspent_inputs() {
+        for unspent_index in [0, 1] {
             let (mut ctx, guard_type) = replay_test_context();
             let mut state = TestState::empty(0);
-            let inputs = grounded_replay_inputs(&mut state, guard_type.clone(), count);
+            let inputs = grounded_replay_inputs(&mut state, guard_type.clone(), 2);
             let mut builder = TxBuilder::new(&mut ctx, &inputs, state.grounding_witness(&inputs));
-            let outer_start = builder.chain_position();
-            let outer = builder.begin_action();
-            if inputs.is_empty() {
-                let (object, _, handle) = builder.insert(&mut ctx, &make_object(guard_type, &[]));
-                attach_guard(&mut ctx, &mut builder, &object, handle, outer_start);
-            }
+            let start = builder.chain_position();
+            let scope = builder.begin_action();
+            let (output, _, output_handle) =
+                builder.insert(&mut ctx, &make_object(guard_type, &[]));
+            let mut guards = vec![(output, output_handle)];
             for (index, input) in inputs.iter().enumerate() {
-                let start = builder.chain_position();
-                let child = builder.begin_action();
-                if index % 2 == 0 {
-                    let output = tx_with(input, "version", Value::from(1_i64));
-                    let (_, handle) = builder.mutate(&mut ctx, &output, input);
-                    attach_guard(&mut ctx, &mut builder, &output, handle, start);
-                } else {
+                if index != unspent_index {
                     let (_, handle) = builder.delete(&mut ctx, input);
-                    attach_guard(&mut ctx, &mut builder, input, handle, start);
+                    guards.push((input.clone(), handle));
                 }
-                builder.end_action(child);
             }
-            builder.end_action(outer);
-            let (statement, tx, stats) = builder.finalize(&mut ctx).unwrap();
+            for (object, handle) in guards {
+                attach_guard(&mut ctx, &mut builder, &object, handle, start);
+            }
+            builder.end_action(scope);
+            let error = builder.finalize(&mut ctx).unwrap_err();
             assert_eq!(
-                stats.get("InputGroundedAndSpent").copied().unwrap_or(0),
-                count
+                error.to_string(),
+                format!(
+                    "input object {} was not spent",
+                    inputs[unspent_index].commitment()
+                )
             );
-            assert_eq!(
-                stats
-                    .get("InputsGroundedAndSpentRecursive")
-                    .copied()
-                    .unwrap_or(0),
-                count / 4
-            );
-            assert_eq!(stats["InputsGroundedAndSpent"], count / 4 + 1);
-            for input in &inputs {
-                let key_hash = object_key_hash(input).unwrap();
-                let nullifier = object_nullifier_from_key_hash(key_hash);
-                assert!(tx.nullifiers.contains(&Value::from(nullifier)).unwrap());
-                for hash in [key_hash, nullifier] {
-                    let occurrences = ctx
-                        .builder
-                        .statements()
-                        .iter()
-                        .filter(|statement| {
-                            matches!(statement, Statement::Hash(..))
-                                && statement.args()[2]
-                                    .literal()
-                                    .is_ok_and(|value| value.raw() == Value::from(hash).raw())
-                        })
-                        .count();
-                    assert_eq!(occurrences, 1, "grounding must reuse replay's hashes");
-                }
-            }
-            ctx.builder.reveal(&statement).unwrap();
-            solve_and_verify(ctx.builder);
-        }
-    }
-
-    #[test]
-    fn grounding_rejects_membership_in_a_different_nullifier_set() {
-        let (mut ctx, guard_type) = replay_test_context();
-        let mut state = TestState::empty(0);
-        let inputs = grounded_replay_inputs(&mut state, guard_type, 1);
-        let input = &inputs[0];
-        let witness = state.grounding_witness(&inputs);
-        let membership =
-            prove_obj_in_created(&mut ctx, state.created.commitment(), &witness, input);
-        let empty = set!();
-        let input_set = set!(input);
-        let key_hash = object_key_hash(input).unwrap();
-        let nullifier = object_nullifier_from_key_hash(key_hash);
-        let nullifiers = set!(nullifier);
-        let insert = ctx
-            .builder
-            .priv_op(op!(SetInsert(empty, input, input_set)))
-            .unwrap();
-        let hash_key = ctx
-            .builder
-            .priv_op(op!(Hash(input, entry(input, "key").unwrap(), key_hash)))
-            .unwrap();
-        let hash_nullifier = ctx
-            .builder
-            .priv_op(op!(Hash(key_hash, OBJECT_NULLIFIER_VERSION, nullifier)))
-            .unwrap();
-        let spent = ctx
-            .builder
-            .priv_op(op!(SetContains(nullifiers, nullifier)))
-            .unwrap();
-        let premises = vec![membership, insert, hash_key, hash_nullifier, spent];
-        let predicate = ctx.modules[1]
-            .predicate_ref_by_name("InputGroundedAndSpent")
-            .unwrap();
-        let arguments = vec![
-            (0, Value::from(empty.clone())),
-            (1, Value::from(input_set)),
-            (2, Value::from(state.created.commitment())),
-            (3, Value::from(nullifiers)),
-        ];
-        ctx.builder
-            .op(
-                false,
-                arguments.clone(),
-                Operation::custom(predicate.clone(), premises.clone()),
-            )
-            .unwrap();
-        let mut arguments = arguments;
-        arguments[3].1 = Value::from(empty);
-        assert!(
-            ctx.builder
-                .op(false, arguments, Operation::custom(predicate, premises))
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn rejects_unspent_inputs_including_stale_grounding() {
-        for count in [1, 2, 3, 4, 5, 8] {
-            for unspent_index in [0, count - 1] {
-                for stale in [false, true] {
-                    let (mut ctx, guard_type) = replay_test_context();
-                    let mut state = TestState::empty(0);
-                    let inputs = grounded_replay_inputs(&mut state, guard_type.clone(), count);
-                    let witness = state.grounding_witness(&inputs);
-                    let nullifier = compute_nullifier(&inputs[unspent_index]);
-                    state.nullifiers.insert(&Value::from(nullifier)).unwrap();
-                    let witness = if stale {
-                        witness
-                    } else {
-                        state.grounding_witness(&inputs)
-                    };
-                    let mut builder = TxBuilder::new(&mut ctx, &inputs, witness);
-                    let start = builder.chain_position();
-                    let scope = builder.begin_action();
-                    let (output, _, output_handle) =
-                        builder.insert(&mut ctx, &make_object(guard_type, &[]));
-                    let mut guards = vec![(output, output_handle)];
-                    for (index, input) in inputs.iter().enumerate() {
-                        if index != unspent_index {
-                            let (_, handle) = builder.delete(&mut ctx, input);
-                            guards.push((input.clone(), handle));
-                        }
-                    }
-                    for (object, handle) in guards {
-                        attach_guard(&mut ctx, &mut builder, &object, handle, start);
-                    }
-                    builder.end_action(scope);
-                    let error = builder.finalize(&mut ctx).unwrap_err();
-                    assert_eq!(
-                        error.to_string(),
-                        format!(
-                            "input object {} was not spent",
-                            inputs[unspent_index].commitment()
-                        )
-                    );
-                }
-            }
         }
     }
 
@@ -2220,6 +2101,9 @@ mod tests {
         );
     }
 
+    /// Grounding three inputs exercises InputsGroundedRecursive (peel two per
+    /// level) bottoming out at InputsGroundedSingle -- the N>=3 path that the
+    /// one- and two-input tests never reach.
     #[test]
     fn test_grounds_three_inputs() {
         let events = Arc::new(crate::predicates::events_module());
@@ -2268,7 +2152,7 @@ mod tests {
         }
 
         // Burn all three logs in one tx: TxBuilder::new grounds three inputs,
-        // exercising the three-input grounding leaf.
+        // driving InputsGrounded -> Recursive -> InputsGrounded -> Single.
         let builder = MultiPodBuilder::new(&params, &vd_set);
         let mut ctx = BuildContext { builder, modules };
 
