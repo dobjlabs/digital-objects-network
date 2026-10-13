@@ -1,0 +1,19 @@
+[package]
+name = "tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+dotenvy = { workspace = true }
+driver = { path = "../../libs/driver" }
+env_logger = { workspace = true }
+payload = { path = "../../libs/payload" }
+pexe = { path = "../../libs/pexe" }
+pod2 = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
+sdk = { path = "../../libs/sdk" }
+toml = { workspace = true }
+txlib = { path = "../../libs/txlib" }
+wire-types = { workspace = true, features = ["chain"] }
