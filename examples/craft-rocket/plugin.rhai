@@ -37,7 +37,7 @@ fn wear(action, tool) {
     var durability = unsafe { tool.durability - 1 };
     action.st_sum(durability, 1, tool.durability);
     tool.update("durability", durability);
-    var key = action.random();
+    var key = unsafe { action.random() };
     tool.update("key", key);
 }
 
@@ -68,37 +68,37 @@ fn UsePressureValve(action) {
 
 fn TouchMachineI(action) {
     var m = action.mutate("MachineI");
-    var key = action.random();
+    var key = unsafe { action.random() };
     m.update("key", key);
 }
 
 fn TouchMachineII(action) {
     var m = action.mutate("MachineII");
-    var key = action.random();
+    var key = unsafe { action.random() };
     m.update("key", key);
 }
 
 fn TouchBlastFurnace(action) {
     var s = action.mutate("BlastFurnace");
-    var key = action.random();
+    var key = unsafe { action.random() };
     s.update("key", key);
 }
 
 fn TouchCircuitFab(action) {
     var s = action.mutate("CircuitFab");
-    var key = action.random();
+    var key = unsafe { action.random() };
     s.update("key", key);
 }
 
 fn TouchCrackingUnit(action) {
     var s = action.mutate("CrackingUnit");
-    var key = action.random();
+    var key = unsafe { action.random() };
     s.update("key", key);
 }
 
 fn TouchReactionChamber(action) {
     var s = action.mutate("ReactionChamber");
-    var key = action.random();
+    var key = unsafe { action.random() };
     s.update("key", key);
 }
 

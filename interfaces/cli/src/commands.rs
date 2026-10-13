@@ -10,9 +10,9 @@ use tokio::time::sleep;
 
 use crate::client::DobjdClient;
 use wire_types::{
-    ActionArgSummary, ActionArgValues, ActionSummary, CheckActionReport, ClassRef, ClassSummary,
-    DriverSettings, ImportObjectRequest, ObjectSummary, ObjectsDirInfo, QualifiedName, RunAccepted,
-    RunActionInput, RunActionRequest, RunState, RunStatus,
+    ActionArgValues, ActionSummary, CheckActionReport, ClassRef, ClassSummary, DriverSettings,
+    ImportObjectRequest, ObjectSummary, ObjectsDirInfo, QualifiedName, RunAccepted, RunActionInput,
+    RunActionRequest, RunState, RunStatus,
 };
 
 const MAX_CONSECUTIVE_RUN_POLL_ERRORS: usize = 5;
@@ -194,13 +194,7 @@ pub async fn run(
 ) -> Result<()> {
     let action = parse_qualified(&action_id)?;
 
-    let args = if raw_args.is_empty() {
-        ActionArgValues::new()
-    } else {
-        let path = format!("/actions/{}", urlencoding::encode(&action_id));
-        let summary: ActionSummary = client.get_json(&path).await?;
-        parse_action_args(&summary, &raw_args)?
-    };
+    let args = parse_action_args(&raw_args)?;
 
     // Start the run. dobjd registers it, runs proof generation and commit on a
     // background worker, and returns the run handle immediately.
@@ -302,48 +296,14 @@ pub async fn run(
     }
 }
 
-fn parse_action_args(action: &ActionSummary, raw: &[String]) -> Result<ActionArgValues> {
-    let declared = || {
-        action
-            .args
-            .iter()
-            .map(|a| a.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
+fn parse_action_args(raw: &[String]) -> Result<ActionArgValues> {
     let mut args = BTreeMap::new();
     for item in raw {
         let Some((name, value)) = item.split_once('=') else {
-            bail!("--arg expects NAME=VALUE, got {item:?}");
+            bail!("--arg expects NAME=JSON, got {item:?}");
         };
-        let decl: &ActionArgSummary =
-            action.args.iter().find(|a| a.name == name).ok_or_else(|| {
-                anyhow!(
-                    "{} has no argument `{name}`; declared arguments: [{}]",
-                    action.action,
-                    declared()
-                )
-            })?;
-        let value = value.trim();
-        let json = match decl.type_name.as_str() {
-            "Raw" => {
-                let hex = value.strip_prefix("0x").unwrap_or(value);
-                if hex.is_empty() || hex.len() > 64 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-                    bail!("argument `{name}`: expected up to 64 hex digits, got {value:?}");
-                }
-                serde_json::json!({ "Raw": format!("{:0>64}", hex.to_ascii_lowercase()) })
-            }
-            "Int" => {
-                let n: i64 = value.parse().map_err(|_| {
-                    anyhow!("argument `{name}`: expected an integer, got {value:?}")
-                })?;
-                serde_json::json!({ "Int": n.to_string() })
-            }
-            "Str" => Value::String(value.to_string()),
-            other => serde_json::from_str(value).map_err(|err| {
-                anyhow!("argument `{name}` ({other}): expected a pod2 value in JSON form: {err}")
-            })?,
-        };
+        let json = serde_json::from_str(value)
+            .with_context(|| format!("argument `{name}`: expected a POD2 value in JSON form"))?;
         if args.insert(name.to_string(), json).is_some() {
             bail!("argument `{name}` given more than once");
         }
@@ -531,8 +491,8 @@ pub async fn inspect_action(client: &DobjdClient, id: String, json: bool) -> Res
     println!("outputs:      {}", render_outputs(&action.total_outputs));
     if !action.args.is_empty() {
         println!("arguments:");
-        for arg in &action.args {
-            println!("  {}: {}", arg.name, arg.type_name);
+        for name in &action.args {
+            println!("  {name}");
         }
     }
     if !action.predicate_source.is_empty() {
@@ -654,52 +614,18 @@ fn short_hex(hex: &str) -> String {
 mod tests {
     use super::*;
 
-    fn summary(args: &[(&str, &str)]) -> ActionSummary {
-        ActionSummary {
-            action: QualifiedName::new("p", "A"),
-            emoji: String::new(),
-            hash: String::new(),
-            description: String::new(),
-            total_inputs: vec![],
-            total_outputs: vec![],
-            source_path: String::new(),
-            mutated_objects: vec![],
-            predicate_source: String::new(),
-            args: args
-                .iter()
-                .map(|(name, typ)| ActionArgSummary {
-                    name: name.to_string(),
-                    type_name: typ.to_string(),
-                })
-                .collect(),
-        }
-    }
-
     #[test]
-    fn parse_action_args_by_declared_type() {
-        let action = summary(&[("key", "Raw"), ("n", "Int"), ("label", "Str")]);
-        let raw = ["key=0xBEEF", "n=-3", "label=hi"].map(str::to_string);
-        let args = parse_action_args(&action, &raw).unwrap();
-        assert_eq!(
-            args["key"],
-            serde_json::json!({"Raw": format!("{:0>64}", "beef")})
-        );
+    fn parse_action_args_from_json() {
+        let raw = [r#"n={"Int":"-3"}"#, r#"text="a=b""#, r#"key={"Raw":"00"}"#].map(str::to_string);
+        let args = parse_action_args(&raw).unwrap();
         assert_eq!(args["n"], serde_json::json!({"Int": "-3"}));
-        assert_eq!(args["label"], serde_json::json!("hi"));
-
-        for (bad, expected) in [
-            ("key=xyz", "hex digits"),
-            ("n=1.5", "integer"),
-            ("nonce=1", "no argument `nonce`"),
-            ("key", "NAME=VALUE"),
-        ] {
-            let err = parse_action_args(&action, &[bad.to_string()])
-                .unwrap_err()
-                .to_string();
-            assert!(err.contains(expected), "{bad}: {err}");
-        }
-        let twice = ["n=1", "n=2"].map(str::to_string);
-        let err = parse_action_args(&action, &twice).unwrap_err().to_string();
-        assert!(err.contains("more than once"), "{err}");
+        assert_eq!(args["text"], serde_json::json!("a=b"));
+        assert_eq!(args["key"], serde_json::json!({"Raw": "00"}));
+        assert!(parse_action_args(&["key".to_string()]).is_err());
+        assert!(parse_action_args(&["n=1".to_string(), "n=2".to_string()]).is_err());
+        let err = parse_action_args(&["n=invalid".to_string()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("argument `n`"), "{err}");
     }
 }
