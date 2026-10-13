@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use driver::{DriverActionCatalog, PexeCatalog};
 use payload::{
     payload::{Payload, PayloadProof},
-    shrink::{shrink_compress_pod, ShrunkMainPodBuild, ShrunkMainPodSetup},
+    shrink::{ShrunkMainPodBuild, ShrunkMainPodSetup, shrink_compress_pod},
 };
 use pod2::middleware::{Hash, Params};
 use sdk::{SpendableObject, SpendableObjects};
