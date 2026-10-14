@@ -3,7 +3,9 @@
 A single-page web client (`index.html`, no build step) for the dobjd HTTP
 API, specialised to the `bitcraft` plugin. It talks to dobjd at
 `http://127.0.0.1:7717`; serve it with any static file server, e.g.
-`python3 -m http.server 4170 --bind 127.0.0.1 --directory examples/bitcraft/ui`.
+`python3 -m http.server 4170 --bind 127.0.0.1 --directory apps/bitcraft/ui`.
+
+The `bundled-bitcraft-ui` daemon feature serves this page at `/bitcraft/` and injects its own API origin. The Tauri desktop application displays that daemon-served page in its webview.
 
 ## Bitcraft-specific rules
 

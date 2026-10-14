@@ -26,3 +26,7 @@ target
 *.log
 # Claude Code local config
 /.claude/
+/apps/bitcraft/src-tauri/binaries/
+/apps/bitcraft/src-tauri/runtime/
+/apps/bitcraft/src-tauri/tauri.bundle.conf.json
+/apps/bitcraft/src-tauri/gen/schemas/

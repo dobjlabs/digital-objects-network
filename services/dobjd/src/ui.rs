@@ -12,23 +12,34 @@ include!(concat!(env!("OUT_DIR"), "/bundled_ui.rs"));
 type Assets = &'static [(&'static str, &'static [u8])];
 
 pub fn router() -> Router {
-    assets_router(BUNDLED_ASSETS)
+    assets_router(BUNDLED_ASSETS).merge(mounted_assets_router("/bitcraft", BITCRAFT_ASSETS))
 }
 
 fn assets_router(assets: Assets) -> Router {
     Router::new()
         .route("/", get(|| async { Redirect::temporary("/ui/") }))
-        .route("/ui", get(|| async { Redirect::temporary("/ui/") }))
-        .route("/ui/", get(index))
-        .route("/ui/{*path}", get(asset))
-        .with_state(assets)
+        .merge(mounted_assets_router("/ui", assets))
 }
 
-async fn index(State(assets): State<Assets>) -> Response {
-    serve(assets, "index.html").await
+fn mounted_assets_router(prefix: &'static str, assets: Assets) -> Router {
+    Router::new()
+        .route(
+            prefix,
+            get(move || async move { Redirect::temporary(&format!("{prefix}/")) }),
+        )
+        .route(&format!("{prefix}/"), get(index))
+        .route(&format!("{prefix}/{{*path}}"), get(asset))
+        .with_state((prefix, assets))
 }
 
-async fn asset(State(assets): State<Assets>, Path(path): Path<String>) -> Response {
+async fn index(State((prefix, assets)): State<(&'static str, Assets)>) -> Response {
+    serve(prefix, assets, "index.html").await
+}
+
+async fn asset(
+    State((prefix, assets)): State<(&'static str, Assets)>,
+    Path(path): Path<String>,
+) -> Response {
     // Path is already percent-decoded by axum. Reject Windows separators,
     // drive prefixes, traversal and hidden files on every platform.
     if path.contains(['\\', ':', '\0'])
@@ -42,10 +53,10 @@ async fn asset(State(assets): State<Assets>, Path(path): Path<String>) -> Respon
     } else {
         path
     };
-    serve(assets, &name).await
+    serve(prefix, assets, &name).await
 }
 
-async fn serve(assets: Assets, name: &str) -> Response {
+async fn serve(prefix: &str, assets: Assets, name: &str) -> Response {
     let asset = |name: &str| {
         assets
             .iter()
@@ -72,7 +83,9 @@ async fn serve(assets: Assets, name: &str) -> Response {
         String::from_utf8_lossy(bytes)
             .replacen(
                 "<head>",
-                "<head><base href=\"/ui/\"><meta name=\"dobjd-api-url\" content=\"/\">",
+                &format!(
+                    "<head><base href=\"{prefix}/\"><meta name=\"dobjd-api-url\" content=\"/\">"
+                ),
                 1,
             )
             .into_bytes()
@@ -127,6 +140,61 @@ mod tests {
         ("index.html", b"<html>default</html>"),
         ("assets/app.js", b"console.log('default')"),
     ];
+
+    #[tokio::test]
+    async fn bitcraft_is_mounted_with_same_origin_api_and_its_own_assets() {
+        let app = mounted_assets_router("/bitcraft", BITCRAFT_ASSETS);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/bitcraft/")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        if !cfg!(feature = "bundled-bitcraft-ui") {
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            return;
+        }
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let html = std::str::from_utf8(&html).unwrap();
+        assert!(html.contains("<base href=\"/bitcraft/\">"));
+        assert!(html.contains("name=\"dobjd-api-url\" content=\"/\""));
+        assert!(html.contains("document.querySelector('meta[name=\"dobjd-api-url\"]')"));
+        for (name, bytes) in BITCRAFT_ASSETS
+            .iter()
+            .filter(|(name, _)| *name != "index.html")
+        {
+            let path = format!("/bitcraft/{name}");
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(&path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert_eq!(
+                to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+                *bytes,
+                "{path}"
+            );
+        }
+        for path in [
+            "/bitcraft/missing.png",
+            "/bitcraft/.hidden",
+            "/ui/",
+            "/objects",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+    }
 
     async fn request(assets: Assets, path: &str) -> Response {
         assets_router(assets)

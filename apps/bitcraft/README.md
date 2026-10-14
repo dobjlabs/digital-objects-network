@@ -1,0 +1,81 @@
+# Bitcraft desktop
+
+Bitcraft is one desktop product containing a Tauri host, the game UI, Digital Objects daemon and tools, the Bitcraft plugin, and initial network configuration. All components are built from this repository and delivered together. Digital Objects also remains available as a standalone product.
+
+The host launches its own daemon on `127.0.0.1:7727` (MCP uses `7728` when enabled), verifies its launch identity, then displays the daemon's `/bitcraft/` page in a webview. The game page has no Tauri IPC permissions. Native menus and runtime management stay in Rust. The UI remains a static HTML/JavaScript client with no frontend build step.
+
+## Development
+
+Install the repository's Rust toolchain, Python 3, and Node.js 22+ for the Tauri CLI. On Ubuntu, install `libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf file`. macOS requires Xcode command line tools; Windows requires MSVC build tools and WebView2. See [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
+
+From the repository root:
+
+```sh
+# Fast desktop shell iteration, without creating game state or starting dobjd.
+just bitcraft-shell
+
+# Build the daemon, tools, and plugin, then launch the full application.
+just bitcraft-dev
+
+# Build an unsigned development installer containing the prepared runtime.
+just bitcraft-bundle
+```
+
+`scripts/prepare.py` builds the exact binaries, checks the plugin manifest with `pexe build --check`, and stages them under `src-tauri/binaries` and `src-tauri/runtime`. It generates `src-tauri/tauri.bundle.conf.json`; those outputs are ignored by Git. Run it with `--version VERSION` for a release and `--target TRIPLE` for cross-compilation. The plugin builder runs on the native host even for a cross-compiled package.
+
+The desktop Cargo workspace is separate from the headless workspace to keep GTK/WebKit out of service-only builds. It contains the Tauri host and the `crates/launchers` package, which has no GUI dependencies. It uses the repository toolchain and commits its own lockfile. Both workspaces participate in the same product build.
+
+```sh
+cargo fmt --manifest-path apps/bitcraft/src-tauri/Cargo.toml --all -- --check
+cargo clippy --manifest-path apps/bitcraft/src-tauri/Cargo.toml --workspace --locked --tests --examples -- -D warnings
+cargo test --manifest-path apps/bitcraft/src-tauri/Cargo.toml --workspace --locked --release
+cargo test --release --locked -p dobjd --features bundled-bitcraft-ui ui::tests
+```
+
+The host accepts `--background`, `--no-tray`, `--home PATH`, and `--no-runtime`. Closing the window or pressing Cmd-W hides it when a tray is available. The tray's Open action and a second foreground launch restore it. On macOS, hiding switches to accessory activation policy so the app leaves Cmd-Tab. Linux checks for a registered StatusNotifier host and restores the window if the host disappears. With no tray, closing the window exits normally. Explicit Quit exits the host and stops its child daemon.
+
+Linux lifecycle verification uses `cargo build --manifest-path apps/bitcraft/src-tauri/Cargo.toml --release --locked` followed by `xvfb-run -a dbus-run-session /usr/bin/python3 apps/bitcraft/scripts/smoke_linux.py`. Install `xvfb dbus-x11 xdotool x11-utils python3-dbus python3-gi` first. The test exercises background launch, native tray actions, close-to-tray, second-launch forwarding, tray-host loss, and ordinary close without a host. It runs with `--no-runtime` and checks that no game state was created.
+
+## State and compatibility
+
+The scaffold currently stores writable data in this layout. The default location is an implementation choice that may change:
+
+```text
+~/.bitcraft/environments/<release-id>/state/
+  actions/bitcraft.pexe
+  objects/
+  settings.json
+  dobjd.log
+```
+
+`--home` overrides the default root; the host and wrappers also accept `BITCRAFT_HOME`, with an explicit `--home` taking precedence. Release IDs include the product version and an artifact digest, so a changed runtime gets a fresh environment. Relaunching the same release preserves objects and settings. The bundled plugin is checked before launch; an altered installed plugin causes an error rather than being overwritten. Generic `~/.dobj` state is untouched.
+
+The initial configuration uses the same hosted synchronizer and relayer as the existing Digital Objects releases. MCP starts disabled. Backend compatibility still needs release validation; these URLs alone do not establish a versioned backend contract.
+
+The installer includes `bitcraft-dobjd`, `bitcraft-dobj`, `bitcraft-dobj-mcp-proxy`, and `bitcraft-pexe`. The names avoid collisions with a standalone Digital Objects installation. Bundling does not add commands to PATH or configure AI clients.
+
+`bitcraft-dobj` and `bitcraft-dobj-mcp-proxy` are Rust wrappers around private `-inner` binaries beside them in the app bundle. Once the daemon is ready, the host atomically publishes `<home>/connection.json` with its HTTP and MCP URLs, active state directory, and launch identity. The wrappers verify that identity, supply `--url` and `DOBJ_HOME`, and preserve arguments, stdin/stdout/stderr, and the child exit status. They use explicit sibling paths and never search PATH or fall back to the standalone Digital Objects endpoint. Normal shutdown removes the connection file; a stale file fails the identity/readiness check.
+
+Run these commands using the installed wrappers' full paths until PATH integration is added:
+
+```sh
+bitcraft-dobj objects
+bitcraft-dobj settings set --mcp on
+bitcraft-dobj-mcp-proxy
+
+# Match a host started with a custom state root.
+bitcraft-dobj --home /path/to/bitcraft-data objects
+bitcraft-dobj-mcp-proxy --home /path/to/bitcraft-data
+```
+
+MCP clients can launch the proxy with no port arguments once MCP is enabled in the running app. `--home PATH` must precede tool arguments. Help/version work without a running app. Endpoint overrides are rejected, as are the CLI's standalone `start`, `stop`, `status`, `logs`, `ui`, and `update` commands, whose pid-file and installation assumptions do not match the desktop host. Manage the daemon through Bitcraft. `bitcraft-pexe` remains the packaging tool; it is not a connection-aware wrapper.
+
+## Releases and updates
+
+Tauri's updater plugin is registered in the Rust host. When both `BITCRAFT_UPDATE_ENDPOINT` and `BITCRAFT_UPDATE_PUBLIC_KEY` are supplied, preparation generates updater configuration and enables signed updater artifacts. The endpoint must use HTTPS. Tauri's build also needs `TAURI_SIGNING_PRIVATE_KEY` and, if applicable, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The signing key must correspond to the embedded public key. See [Tauri updater documentation](https://v2.tauri.app/plugin/updater/).
+
+The public updater feed, native update controls, scheduled checks, safe daemon shutdown, and update installation are not implemented yet. Registering the plugin and producing artifacts do not turn on automatic updates. Before enabling replacement of the installed package, retain a complete old runtime if returning to an older environment is supported; retaining its object files alone is insufficient.
+
+Production macOS bundles require Developer ID signing of the app and bundled executables, hardened runtime, notarization, and stapling. Windows requires Authenticode signing of executables and the installer. OS signing and updater signatures are separate. No credentials or public feed are configured here. Start with macOS DMG/app bundles, per-user Windows NSIS, and Linux AppImage; actual packaged tray behaviour needs testing on each platform.
+
+The current Quit path terminates the child process. Safe quiescence of active proofs and pending submissions must precede update installation. Runtime monitoring after startup, log rotation, retained-runtime selection, launch at login, custom MCP docs, and command-line integration are subsequent work.

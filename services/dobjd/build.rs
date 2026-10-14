@@ -13,34 +13,51 @@ fn bundle_ui() {
     use std::{env, fs, path::Path};
 
     let output = Path::new(&env::var("OUT_DIR").unwrap()).join("bundled_ui.rs");
-    let mut source = "pub const BUNDLED_ASSETS: &[(&str, &[u8])] = &[\n".to_string();
-    if env::var_os("CARGO_FEATURE_BUNDLED_UI").is_some() {
-        let root = Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap())
-            .join("../../interfaces/gui/dist")
-            .canonicalize()
-            .expect("bundled-ui requires `pnpm build` in interfaces/gui first");
-        assert!(
-            root.join("index.html").is_file(),
-            "UI build has no index.html"
-        );
-        println!("cargo:rerun-if-changed={}", root.display());
-        let mut files = Vec::new();
-        collect_assets(&root, &mut files);
-        files.sort();
-        for path in files {
-            let name = path
-                .strip_prefix(&root)
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .replace('\\', "/");
-            source.push_str(&format!(
-                "    ({name:?}, include_bytes!({:?})),\n",
-                path.to_str().unwrap()
-            ));
+    let mut source = String::new();
+    for (feature, constant, directory) in [
+        (
+            "CARGO_FEATURE_BUNDLED_UI",
+            "BUNDLED_ASSETS",
+            "../../interfaces/gui/dist",
+        ),
+        (
+            "CARGO_FEATURE_BUNDLED_BITCRAFT_UI",
+            "BITCRAFT_ASSETS",
+            "../../apps/bitcraft/ui",
+        ),
+    ] {
+        source.push_str(&format!("pub const {constant}: &[(&str, &[u8])] = &[\n"));
+        if env::var_os(feature).is_some() {
+            let root = Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap())
+                .join(directory)
+                .canonicalize()
+                .unwrap_or_else(|_| panic!("{feature} requires assets in {directory}"));
+            assert!(
+                root.join("index.html").is_file(),
+                "UI build has no index.html"
+            );
+            println!("cargo:rerun-if-changed={}", root.display());
+            let mut files = Vec::new();
+            collect_assets(&root, &mut files);
+            files.sort();
+            for path in files
+                .into_iter()
+                .filter(|path| path.extension().is_none_or(|ext| ext != "md"))
+            {
+                let name = path
+                    .strip_prefix(&root)
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .replace('\\', "/");
+                source.push_str(&format!(
+                    "    ({name:?}, include_bytes!({:?})),\n",
+                    path.to_str().unwrap()
+                ));
+            }
         }
+        source.push_str("];\n");
     }
-    source.push_str("];\n");
     fs::write(output, source).unwrap();
 }
 

@@ -10,6 +10,7 @@ path = "src/main.rs"
 [features]
 # Release builds require a completed Vite build before enabling this.
 bundled-ui = []
+bundled-bitcraft-ui = []
 
 [dependencies]
 driver = { path = "../../libs/driver" }

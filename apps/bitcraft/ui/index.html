@@ -426,7 +426,10 @@
 </template>
 
 <script>
-  const DOBJD_URL = "http://127.0.0.1:7717";
+  const DOBJD_URL = new URL(
+    document.querySelector('meta[name="dobjd-api-url"]')?.content || "http://127.0.0.1:7717",
+    window.location.href,
+  ).href.replace(/\/$/, "");
 
   // ---- Bitcraft-specific rules. Every entry here is listed in
   // BITCRAFT_SPECIFIC_RULES.md; keep the two in step.

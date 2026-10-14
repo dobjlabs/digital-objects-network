@@ -50,6 +50,18 @@ build-ui:
 build-dobjd: build-ui
     cargo build --release -p dobjd --features bundled-ui
 
+bitcraft-shell:
+    cargo run --manifest-path apps/bitcraft/src-tauri/Cargo.toml --locked -- --no-runtime
+
+bitcraft-prepare:
+    python3 apps/bitcraft/scripts/prepare.py
+
+bitcraft-dev: bitcraft-prepare
+    cd apps/bitcraft && npx --yes @tauri-apps/cli@2.12.2 dev --config src-tauri/tauri.bundle.conf.json
+
+bitcraft-bundle: bitcraft-prepare
+    cd apps/bitcraft && npx --yes @tauri-apps/cli@2.12.2 build --config src-tauri/tauri.bundle.conf.json
+
 # Run the documentation site (Vocs dev server) with hot reload
 docs:
     cd docs && pnpm install && pnpm dev
