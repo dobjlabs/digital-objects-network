@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Archiver monitor</title>
+<style>
+  :root { color-scheme: light dark; --fg: #222; --bg: #fafafa; --muted: #777; --line: #ddd; --bad: #b00020; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #ddd; --bg: #161616; --muted: #888; --line: #333; --bad: #ff6b81; }
+  }
+  body { font: 14px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg);
+         max-width: 760px; margin: 0 auto; padding: 24px 16px; }
+  h1 { font-size: 18px; margin: 0 0 16px; }
+  form { display: grid; grid-template-columns: max-content 1fr; gap: 8px 12px; align-items: center; }
+  input { font: inherit; padding: 4px 6px; width: 100%; box-sizing: border-box; }
+  form button { grid-column: 2; justify-self: start; font: inherit; padding: 4px 12px; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 24px 0; }
+  dt { color: var(--muted); }
+  dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .error { color: var(--bad); }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 2px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: normal; }
+</style>
+</head>
+<body>
+<h1>Archiver monitor</h1>
+
+<form id="settings">
+  <label for="beacon">Beacon node</label>
+  <input id="beacon" type="url" required>
+  <label for="archiver">Archiver</label>
+  <input id="archiver" type="url" required>
+  <button type="submit">Apply and restart</button>
+</form>
+
+<dl>
+  <dt>Status</dt><dd id="status">starting</dd>
+  <dt>Head slot</dt><dd id="head">-</dd>
+  <dt>Archiver slot</dt><dd id="archived">-</dd>
+  <dt>Slots behind</dt><dd id="behind">-</dd>
+  <dt>Archiver rate</dt><dd id="archiver-rate">-</dd>
+  <dt>Head rate</dt><dd id="head-rate">-</dd>
+  <dt>Reaches head in</dt><dd id="eta">needs 2 runs</dd>
+  <dt>Reaches head at</dt><dd id="eta-at">-</dd>
+</dl>
+
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Time</th><th>Head slot</th><th>Archiver slot</th><th>Behind</th></tr></thead>
+    <tbody id="samples"></tbody>
+  </table>
+</div>
+
+<script>
+const POLL_INTERVAL_MS = 30_000;
+const DEFAULT_SETTINGS = {
+  beacon: "https://ethereum-sepolia-beacon-api.publicnode.com",
+  archiver: "http://localhost:3001",
+};
+
+const byId = (id) => document.getElementById(id);
+let samples = [];
+let pollTimer = null;
+let runGeneration = 0;
+
+function loadSettings() {
+  try {
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem("archiver-monitor") || "{}") };
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
+}
+
+function saveSettings(settings) {
+  try { localStorage.setItem("archiver-monitor", JSON.stringify(settings)); } catch {}
+}
+
+const trimSlash = (url) => url.trim().replace(/\/+$/, "");
+
+async function getJson(url) {
+  const response = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+  return response.json();
+}
+
+async function fetchHeadSlot(beaconUrl) {
+  const body = await getJson(`${beaconUrl}/eth/v1/beacon/headers/head`);
+  return Number(body.data.header.message.slot);
+}
+
+async function fetchArchiverSlot(archiverUrl) {
+  const body = await getJson(`${archiverUrl}/header`);
+  return Number(body.slot);
+}
+
+function formatDuration(totalSeconds) {
+  const seconds = Math.round(totalSeconds);
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const parts = [];
+  if (days) parts.push(`${days}d`);
+  if (days || hours) parts.push(`${hours}h`);
+  if (days || hours || minutes) parts.push(`${minutes}m`);
+  parts.push(`${seconds % 60}s`);
+  return parts.join(" ");
+}
+
+const pad2 = (number) => String(number).padStart(2, "0");
+const formatTime = (date) =>
+  `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
+const formatDateTime = (date) =>
+  `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${formatTime(date)}`;
+
+const perMinute = (slotsPerSecond) => `${(slotsPerSecond * 60).toFixed(2)} slots/min`;
+
+function render() {
+  const latest = samples[samples.length - 1];
+  if (!latest) return;
+  const behind = latest.headSlot - latest.archiverSlot;
+  byId("head").textContent = latest.headSlot;
+  byId("archived").textContent = latest.archiverSlot;
+  byId("behind").textContent = `${behind} (${formatDuration(behind * 12)} of chain time)`;
+
+  const row = document.createElement("tr");
+  for (const value of [formatTime(latest.time), latest.headSlot, latest.archiverSlot, behind]) {
+    const cell = document.createElement("td");
+    cell.textContent = value;
+    row.appendChild(cell);
+  }
+  byId("samples").prepend(row);
+
+  if (samples.length < 2) return;
+  // Rates are averaged over every sample since the last restart, so the prediction settles
+  // as more runs come in.
+  const first = samples[0];
+  const elapsedSeconds = (latest.time - first.time) / 1000;
+  const archiverRate = (latest.archiverSlot - first.archiverSlot) / elapsedSeconds;
+  const headRate = (latest.headSlot - first.headSlot) / elapsedSeconds;
+  byId("archiver-rate").textContent = perMinute(archiverRate);
+  byId("head-rate").textContent = perMinute(headRate);
+
+  const closingRate = archiverRate - headRate;
+  if (behind <= 1) {
+    byId("eta").textContent = "at head";
+    byId("eta-at").textContent = "-";
+  } else if (closingRate <= 0) {
+    byId("eta").textContent = "not catching up";
+    byId("eta-at").textContent = "-";
+  } else {
+    const etaSeconds = behind / closingRate;
+    byId("eta").textContent = formatDuration(etaSeconds);
+    byId("eta-at").textContent = formatDateTime(new Date(latest.time.getTime() + etaSeconds * 1000));
+  }
+}
+
+async function poll(settings, generation) {
+  try {
+    byId("status").textContent = "querying beacon node";
+    byId("status").className = "";
+    const headSlot = await fetchHeadSlot(settings.beacon);
+    byId("status").textContent = "querying archiver";
+    const archiverSlot = await fetchArchiverSlot(settings.archiver);
+    if (generation !== runGeneration) return;
+    samples.push({ time: new Date(), headSlot, archiverSlot });
+    render();
+    byId("status").textContent = `run ${samples.length}, next in ${POLL_INTERVAL_MS / 1000}s`;
+  } catch (error) {
+    if (generation !== runGeneration) return;
+    byId("status").textContent = `${error.message}; retrying in ${POLL_INTERVAL_MS / 1000}s`;
+    byId("status").className = "error";
+  }
+}
+
+function start(settings) {
+  runGeneration += 1;
+  const generation = runGeneration;
+  clearInterval(pollTimer);
+  samples = [];
+  byId("samples").replaceChildren();
+  for (const id of ["head", "archived", "behind", "archiver-rate", "head-rate", "eta-at"]) {
+    byId(id).textContent = "-";
+  }
+  byId("eta").textContent = "needs 2 runs";
+  poll(settings, generation);
+  pollTimer = setInterval(() => poll(settings, generation), POLL_INTERVAL_MS);
+}
+
+const settings = loadSettings();
+byId("beacon").value = settings.beacon;
+byId("archiver").value = settings.archiver;
+
+byId("settings").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const updated = { beacon: trimSlash(byId("beacon").value), archiver: trimSlash(byId("archiver").value) };
+  saveSettings(updated);
+  start(updated);
+});
+
+start({ beacon: trimSlash(settings.beacon), archiver: trimSlash(settings.archiver) });
+</script>
+</body>
+</html>
