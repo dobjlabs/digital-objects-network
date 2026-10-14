@@ -2970,11 +2970,11 @@ pub struct SpendableObjects {
     /// via the relayer.
     pub tx_pod: MainPod,
     /// Each produced output object. Grounding when an object is later
-    /// spent is proven against the synchronizer's live set, so outputs
+    /// spent is proven against the synchronizer's created set, so outputs
     /// carry no per-object proof.
     pub objs: Vec<SpendableObject>,
     /// In-flight `Tx` value held by the producer; carries the literal
-    /// live/nullifiers/ctx for the SDK's own bookkeeping. Not part of
+    /// created/nullifiers/ctx for the SDK's own bookkeeping. Not part of
     /// the per-output wire format.
     pub tx: Tx,
 }
@@ -3147,7 +3147,7 @@ impl Executor {
             .expect("unique ExeContext reference after rhai")
             .into_inner();
 
-        let (st_tx_finalize, tx, _stats) = tx_builder.finalize(&mut bld);
+        let (st_tx_finalize, tx, _stats) = tx_builder.finalize(&mut bld)?;
         bld.builder.reveal(&st_tx_finalize).unwrap();
 
         // The action body's `st_action` and any sub-action `st_sub`
@@ -3206,7 +3206,7 @@ impl Executor {
             .expect("unique ExeContext reference after rhai")
             .into_inner();
 
-        let (st_tx_finalize, _tx, _stats) = tx_builder.finalize(&mut bld);
+        let (st_tx_finalize, _tx, _stats) = tx_builder.finalize(&mut bld)?;
         bld.builder.reveal(&st_tx_finalize).unwrap();
 
         // Snapshot the statements + operations before `solve` consumes

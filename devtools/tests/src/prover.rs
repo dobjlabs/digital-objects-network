@@ -91,7 +91,7 @@ fn prepare_tx(
         tx_final: outputs.tx.dict().commitment(),
         state_root,
         nullifiers: nullifiers.clone(),
-        live: outputs.tx.live_commitments().unwrap(),
+        created: outputs.tx.created_commitments().unwrap(),
     };
     PreparedTx {
         payload: payload.to_bytes(),
@@ -153,7 +153,7 @@ mod tests {
                     )
                     .unwrap();
                 state.apply_tx(
-                    outputs.tx.live_commitments().unwrap(),
+                    outputs.tx.created_commitments().unwrap(),
                     outputs.tx.nullifier_hashes().unwrap(),
                 );
                 outputs.objs[0].clone()

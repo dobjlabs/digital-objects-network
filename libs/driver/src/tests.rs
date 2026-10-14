@@ -59,7 +59,7 @@ fn tx_hash(tx: &txlib::Tx) -> Hash {
 
 fn apply_tx(state: &mut TestState, tx: &txlib::Tx) {
     state.apply_tx(
-        tx.live_commitments().unwrap(),
+        tx.created_commitments().unwrap(),
         tx.nullifier_hashes().unwrap(),
     );
 }
@@ -119,6 +119,113 @@ fn make_input_record(file_name: &str) -> (ObjectFileEntry, DriverDeps) {
             payload_builder: Arc::new(MockPayloadBuilder),
         },
     )
+}
+
+#[test]
+fn payload_commits_to_intermediate_and_deleted_states() {
+    use payload::payload::{Payload, PayloadProof};
+    use pod2::{
+        backends::plonky2::mock::mainpod::MockProver,
+        frontend::MultiPodBuilder,
+        middleware::{Params, Predicate, StrKey, VDSet, Value},
+    };
+    use pod2utils::{dict, macros::BuildContext, map, op, set};
+
+    let params = Params::default();
+    let txlib = Arc::new(txlib::predicates::module());
+    // An unrestricted class isolates replay and payload binding from application rules.
+    let guard_module = Arc::new(
+        pod2::lang::load_module(
+            "PayloadTestGuard(obj, state_header, chain_start, chain_end) = AND(Equal(obj, obj))",
+            "payload_test",
+            &params,
+            &[],
+        )
+        .unwrap(),
+    );
+    let guard_type = Value::from(
+        Predicate::Custom(
+            guard_module
+                .predicate_ref_by_name("PayloadTestGuard")
+                .unwrap(),
+        )
+        .hash(),
+    );
+    let mut ctx = BuildContext::new(
+        MultiPodBuilder::new(&params, &VDSet::new(&[])),
+        vec![
+            Arc::new(txlib::predicates::events_module()),
+            txlib.clone(),
+            guard_module,
+        ],
+    );
+    let mut builder = txlib::TxBuilder::new(&mut ctx, &[], Arc::new(dummy_grounding_witness()));
+    let chain_start = builder.chain_position();
+    let scope = builder.begin_action();
+    let initial = dict!({"type" => guard_type, "key" => 1_i64, "version" => 0_i64});
+    let (first, _, insert_handle) = builder.insert(&mut ctx, &initial);
+    let mut second = first.clone();
+    second
+        .update(&StrKey::from("version"), &Value::from(1_i64))
+        .unwrap();
+    txlib::rekey(&mut second);
+    let (_, mutate_handle) = builder.mutate(&mut ctx, &second, &first);
+    let (_, delete_handle) = builder.delete(&mut ctx, &second);
+    for (object, handle) in [
+        (&first, insert_handle),
+        (&second, mutate_handle),
+        (&second, delete_handle),
+    ] {
+        let equal = ctx.builder.priv_op(op!(Equal(object, object))).unwrap();
+        let guard = ctx
+            .apply_custom_pred(
+                false,
+                "PayloadTestGuard",
+                map!({
+                    "state_header" => builder.state_header().array(),
+                    "chain_start" => chain_start,
+                    "chain_end" => builder.chain_position()
+                }),
+                vec![equal],
+            )
+            .unwrap();
+        builder.set_guard(handle, guard);
+    }
+    builder.end_action(scope);
+    let (statement, tx, _) = builder.finalize(&mut ctx).unwrap();
+    ctx.builder.reveal(&statement).unwrap();
+    let pod = ctx
+        .builder
+        .solve()
+        .unwrap()
+        .prove(&MockProver {})
+        .unwrap()
+        .output_pod()
+        .clone();
+    pod.pod.verify().unwrap();
+
+    let payload =
+        Payload::from_tx(PayloadProof::empty_for_test(), &tx, tx.state_header.hash()).unwrap();
+    let expected_created = set!(first, second);
+    assert_eq!(tx.created.commitment(), expected_created.commitment());
+    assert_eq!(payload.created.len(), 2);
+    assert_eq!(payload.nullifiers.len(), 2);
+    let predicate = txlib.predicate_ref_by_name("TxFinalized").unwrap();
+    assert_eq!(
+        pod.public_statements,
+        vec![payload.finalized_statement(predicate.clone())]
+    );
+    let mut missing_intermediates = payload.clone();
+    missing_intermediates.created = Vec::new();
+    assert_ne!(
+        missing_intermediates.finalized_statement(predicate),
+        pod.public_statements[0]
+    );
+
+    let mut state = TestState::default();
+    apply_tx(&mut state, &tx);
+    state.created_membership_proof(first.commitment());
+    state.created_membership_proof(second.commitment());
 }
 
 struct MockPayloadBuilder;

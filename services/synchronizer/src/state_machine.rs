@@ -76,7 +76,7 @@ impl StateMachine {
     /// Fail-soft: malformed or unverifiable blobs are logged and skipped, never
     /// aborting the slot. Verification happens here once so the parsed payloads
     /// can be reused for both the existence prefetch (the caller queries the
-    /// created index for their `live` commitments) and the apply pass in
+    /// created index for their `created` commitments) and the apply pass in
     /// `derive_slot_head`. Each kept payload carries its originating blob index
     /// so the apply pass can attribute a hard error to the right blob.
     pub fn parse_blobs(
@@ -153,8 +153,8 @@ impl StateMachine {
 
         // Pre-check created objects and nullifiers before mutating anything, so a
         // single collision rejects the whole blob with no partial application.
-        let mut payload_created = HashSet::with_capacity(payload.live.len());
-        for obj in &payload.live {
+        let mut payload_created = HashSet::with_capacity(payload.created.len());
+        for obj in &payload.created {
             if !payload_created.insert(*obj) {
                 warn!(
                     slot,
@@ -186,7 +186,7 @@ impl StateMachine {
             }
         }
 
-        for obj in &payload.live {
+        for obj in &payload.created {
             // The created array is 0-indexed: the next object lands at slot
             // `created_count`, which doubles as the true object count.
             let index = state.metadata.created_count as usize;
@@ -374,7 +374,7 @@ mod tests {
     fn mock_txn_bytes(
         tx_final: Hash,
         nullifiers: &[Hash],
-        live: &[Hash],
+        created: &[Hash],
         state_header: Hash,
     ) -> Vec<u8> {
         let hashes_json = |hashes: &[Hash]| {
@@ -385,10 +385,10 @@ mod tests {
                 .join(",")
         };
         format!(
-            r#"{{"tx_final":"{:#}","nullifiers":[{}],"live":[{}],"state_root":"{:#}"}}"#,
+            r#"{{"tx_final":"{:#}","nullifiers":[{}],"created":[{}],"state_root":"{:#}"}}"#,
             tx_final,
             hashes_json(nullifiers),
-            hashes_json(live),
+            hashes_json(created),
             state_header
         )
         .into_bytes()
@@ -455,8 +455,8 @@ mod tests {
 
         let tx_final = unique_hash(10);
         let nullifier = unique_hash(11);
-        let live_obj = unique_hash(12);
-        let blob = mock_txn_bytes(tx_final, &[nullifier], &[live_obj], state_root0);
+        let created_obj = unique_hash(12);
+        let blob = mock_txn_bytes(tx_final, &[nullifier], &[created_obj], state_root0);
         let derived = derive(
             &sm,
             head0,
@@ -468,7 +468,7 @@ mod tests {
         );
         let head1 = derived.head;
         let created_present = app_db
-            .created_exists_for(&head1.roots, &[live_obj], &derived.created_added)
+            .created_exists_for(&head1.roots, &[created_obj], &derived.created_added)
             .unwrap();
         let nullifier_present = app_db
             .nullifier_exists_batch(&head1.roots, &[nullifier])
@@ -479,6 +479,70 @@ mod tests {
         assert_eq!(head1.metadata.state_root_count, 2);
         assert_eq!(created_present, vec![true]);
         assert_eq!(nullifier_present, vec![true]);
+    }
+
+    #[test]
+    fn records_intermediate_states_alongside_their_nullifiers() {
+        use pod2::middleware::{containers::Dictionary, StrKey};
+        let (sm, app_db, _dir) = make_sm();
+        let head0 = seed_state_root0(&sm);
+        let state_root0 = head0.metadata.current_state_root.unwrap();
+        let intermediate = Dictionary::new(HashMap::from([
+            (StrKey::from("key"), Value::from(1_i64)),
+            (StrKey::from("version"), Value::from(0_i64)),
+        ]));
+        let mut final_state = intermediate.clone();
+        final_state
+            .update(&StrKey::from("version"), &Value::from(1_i64))
+            .unwrap();
+        let created = [intermediate.commitment(), final_state.commitment()];
+        let nullifier = txlib::object_nullifier_hash(&intermediate).unwrap();
+        let blob = mock_txn_bytes(unique_hash(70), &[nullifier], &created, state_root0);
+        let derived = derive(
+            &sm,
+            head0,
+            [(state_root0, 0)],
+            1,
+            block_meta(1),
+            &[(0, blob)],
+            &HashMap::new(),
+        );
+        assert_eq!(derived.head.metadata.created_count, 2);
+        assert_eq!(derived.head.metadata.nullifier_count, 1);
+        assert_eq!(
+            app_db
+                .created_exists_for(&derived.head.roots, &created, &derived.created_added)
+                .unwrap(),
+            vec![true, true]
+        );
+        assert_eq!(
+            app_db
+                .nullifier_exists_batch(&derived.head.roots, &[nullifier])
+                .unwrap(),
+            vec![true]
+        );
+
+        let state_root1 = derived.head.metadata.current_state_root.unwrap();
+        let replay = mock_txn_bytes(
+            unique_hash(71),
+            &[],
+            &[intermediate.commitment()],
+            state_root1,
+        );
+        let head2 = derive(
+            &sm,
+            derived.head,
+            [(state_root1, 1)],
+            2,
+            block_meta(2),
+            &[(0, replay)],
+            &derived.created_added,
+        )
+        .head;
+        assert_eq!(
+            head2.metadata.created_count, 2,
+            "spent intermediate states must still reject creation collisions"
+        );
     }
 
     #[test]
@@ -507,8 +571,8 @@ mod tests {
         let head0 = seed_state_root0(&sm);
         let state_root0 = head0.metadata.current_state_root.unwrap();
 
-        let live_obj = unique_hash(32);
-        let blob = mock_txn_bytes(unique_hash(31), &[], &[live_obj], state_root0);
+        let created_obj = unique_hash(32);
+        let blob = mock_txn_bytes(unique_hash(31), &[], &[created_obj], state_root0);
         let derived = derive(
             &sm,
             head0,
@@ -524,10 +588,10 @@ mod tests {
         // The same index cross-checks against each head's root: present under
         // the new head, absent under the old.
         let old_membership = app_db
-            .created_exists_for(&head0.roots, &[live_obj], &indices)
+            .created_exists_for(&head0.roots, &[created_obj], &indices)
             .unwrap();
         let new_membership = app_db
-            .created_exists_for(&head1.roots, &[live_obj], &indices)
+            .created_exists_for(&head1.roots, &[created_obj], &indices)
             .unwrap();
 
         assert_eq!(old_membership, vec![false]);
@@ -540,8 +604,8 @@ mod tests {
         let head0 = seed_state_root0(&sm);
         let state_root0 = head0.metadata.current_state_root.unwrap();
 
-        let live_obj = unique_hash(40);
-        let blob1 = mock_txn_bytes(unique_hash(41), &[], &[live_obj], state_root0);
+        let created_obj = unique_hash(40);
+        let blob1 = mock_txn_bytes(unique_hash(41), &[], &[created_obj], state_root0);
         let derived1 = derive(
             &sm,
             head0,
@@ -557,7 +621,7 @@ mod tests {
         // A second tx in a later slot re-creates the same object. In production
         // slot 1's index row is committed; here it is passed as prior-existing.
         let state_root1 = head1.metadata.current_state_root.unwrap();
-        let blob2 = mock_txn_bytes(unique_hash(42), &[], &[live_obj], state_root1);
+        let blob2 = mock_txn_bytes(unique_hash(42), &[], &[created_obj], state_root1);
         let head2 = derive(
             &sm,
             head1,

@@ -315,7 +315,7 @@ mod tests {
                     tx_final: EMPTY_HASH,
                     state_root: EMPTY_HASH,
                     nullifiers: vec![],
-                    live: vec![],
+                    created: vec![],
                 })),
                 ParseMode::None => Ok(None),
                 ParseMode::Err => Err(anyhow::anyhow!("invalid proof")),
