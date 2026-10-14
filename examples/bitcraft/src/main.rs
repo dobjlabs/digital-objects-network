@@ -270,7 +270,7 @@ fn main() -> Result<(), io::Error> {
             if action.rekey {
                 writeln!(
                     o,
-                    r#"  var key = action.random();
+                    r#"  var key = unsafe {{ action.random() }};
   {name}.update("key", key);"#
                 )?;
             }
@@ -339,7 +339,7 @@ fn main() -> Result<(), io::Error> {
             if action.rekey {
                 writeln!(
                     o,
-                    r#"  var key = action.random();
+                    r#"  var key = unsafe {{ action.random() }};
   {name}.update("key", key);"#
                 )?;
             }

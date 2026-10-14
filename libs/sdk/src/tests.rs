@@ -5,7 +5,7 @@ use txlib::StateHeader;
 
 fn apply_tx(state: &mut TestState, tx: &Tx) {
     state.apply_tx(
-        tx.live_commitments().unwrap(),
+        tx.created_commitments().unwrap(),
         tx.nullifier_hashes().unwrap(),
     );
 }
@@ -76,7 +76,7 @@ fn test_sdk_1() {
             var durability = unsafe { pick.durability - 1 };
             action.st_sum(durability, 1, pick.durability);
             pick.update("durability", durability);
-            var key = action.random();
+            var key = unsafe { action.random() };
             pick.update("key", key);
             var work = action.intro_vdf(vdf_iters, pick);
         }
@@ -414,7 +414,7 @@ fn test_records_form_input_output_update() {
         fn LogToWood(action) {
             var log = action.input("Log");
             var wood = action.output("Wood");
-            var key = action.random();
+            var key = unsafe { action.random() };
             wood.update("key", key);
         }
 "#;
@@ -590,7 +590,7 @@ fn test_subaction_alias_read_mutate() {
 
         fn Descend(action) {
             var probe = action.mutate("Probe");
-            var depth = action.random();
+            var depth = unsafe { action.random() };
             probe.update("depth", depth);
         }
 
@@ -680,7 +680,7 @@ fn test_packed_chain_objects_before_subaction() {
 
         fn BurnFuel(action) {
             var ship = action.mutate("Ship");
-            var fuel = action.random();
+            var fuel = unsafe { action.random() };
             ship.update("fuel", fuel);
         }
 
@@ -1342,7 +1342,7 @@ fn test_set_guards() {
             r#"
         fn SetAfterUpdate(action) {
             var ore = action.output("Ore");
-            var key = action.random();
+            var key = unsafe { action.random() };
             ore.update("key", key);
             ore.set([["grade", 1]]);
         }
@@ -2138,168 +2138,103 @@ fn test_var_array_get_and_var_set_contains() {
 }
 
 #[test]
-fn test_arg_declaration_renders_like_var() {
-    let src_var = r#"
-        fn CraftWood(action) {
-            var log = action.input("Log");
-            var wood = action.output("Wood");
-            let target = action.top_limb_u256(9007199254740992);
-            var key = unsafe { action.pow_obj_grind(wood, target) };
-            wood.update("key", key);
-            action.intro_lt_eq_u256(wood, target);
-        }
-    "#;
-    let src_arg = src_var.replace(
-        "var key = unsafe { action.pow_obj_grind(wood, target) };",
-        "var key = unsafe { arg(\"key\") ?? action.pow_obj_grind(wood, target) };",
-    );
-    assert_ne!(src_var, src_arg);
-    let sdk = Sdk::default();
-    let with_var = sdk
-        .load_module_from_src_actions(src_var, &["CraftWood"])
-        .unwrap();
-    let with_arg = sdk
-        .load_module_from_src_actions(&src_arg, &["CraftWood"])
-        .unwrap();
-    assert_eq!(with_var.podlang_src(), with_arg.podlang_src());
-    assert!(with_var.actions()[0].args().is_empty());
-    let args = with_arg.actions()[0].args();
-    assert_eq!(args.len(), 1);
-    assert_eq!(args[0].name, "key");
-    assert_eq!(args[0].type_name(), "Raw");
-}
-
-#[test]
-fn test_arg_declaration_errors() {
-    let fresh = "freshly generated value";
-    let unsafe_required = "expected unsafe block";
-    for (setup, expression, expected) in [
-        ("", r#"unsafe { arg("n") ?? 5 }"#, fresh),
+fn test_caller_data_and_generators_require_unsafe() {
+    for (expression, expected) in [
+        ("action.random()", "expected unsafe block"),
+        (r#"arg("n") ?? action.random()"#, "expected unsafe block"),
         (
-            "var old = action.random();",
-            r#"unsafe { arg("n") ?? old }"#,
-            fresh,
-        ),
-        (
-            "let old = action.random();",
-            r#"unsafe { arg("n") ?? { action.random(); old } }"#,
-            fresh,
-        ),
-        (
-            "",
-            r#"unsafe { arg("n") ?? action.intro_vdf(3, ore) }"#,
-            "unexpected unsafe block",
-        ),
-        (
-            "",
-            r#"unsafe { arg("n") ?? ore.grade - 1 - 1 }"#,
-            "generate a single value",
-        ),
-        (
-            "",
-            r#"unsafe { arg("n") ?? unsafe { ore.grade - 1 } }"#,
+            r#"unsafe { unsafe { action.random() } }"#,
             "unsafe already set",
         ),
         (
-            r#"var first = unsafe { arg("n") ?? action.random() };"#,
-            r#"unsafe { arg("n") ?? action.random() }"#,
-            "declared twice",
+            "action.pow_obj_grind(ore, action.top_limb_u256(9007199254740992))",
+            "expected unsafe block",
         ),
-        (
-            "",
-            "unsafe { arg(5) ?? action.random() }",
-            "name must be a string",
-        ),
-        (
-            "",
-            r#"unsafe { arg("") ?? action.random() }"#,
-            "must be non-empty",
-        ),
-        ("", r#"arg("n") ?? action.random()"#, unsafe_required),
-        (
-            "let target = action.top_limb_u256(9007199254740992);",
-            "action.pow_obj_grind(ore, target)",
-            unsafe_required,
-        ),
-        (
-            "",
-            r#"unsafe { arg("n") ?? arg("other") ?? action.random() }"#,
-            "only one argument",
-        ),
-        ("", r#"unsafe { arg("n") }"#, fresh),
     ] {
         let src = format!(
             r#"
             fn Main(action) {{
-                var ore = action.mutate("Ore");
-                {setup}
+                var ore = action.output("Ore");
                 var n = {expression};
-                ore.update("n", n);
             }}
         "#
         );
-        let err = Sdk::default()
+        let error = Sdk::default()
             .load_module_from_src_actions(&src, &["Main"])
             .err()
-            .expect("invalid argument expression")
+            .unwrap()
             .to_string();
-        assert!(err.contains(expected), "{expression}: {err}");
+        assert!(error.contains(expected), "{expression}: {error}");
     }
 }
 
 #[test]
-fn test_supplied_arg_must_be_returned_unchanged() {
-    for (expression, value) in [
-        (r#"arg("n"); action.random()"#, Value::from(42)),
+fn test_args_are_optional_data() {
+    let src = r#"
+        fn compute(action) {
+            let settings = arg("settings") ?? #{ offset: 0, items: [0] };
+            (arg("amount") ?? 0) + (arg("bonus") ?? 0) + settings.offset + settings.items[0]
+        }
+        fn Main(action) {
+            var out = action.output("Ore");
+            unsafe { arg("read_only"); };
+            var base = unsafe { state_header.block_number * 0 };
+            var total = unsafe {
+                arg("ignored");
+                let amount = arg("amount") ?? base;
+                var intermediate = amount + (arg("bonus") ?? 0);
+                intermediate + (arg("amount") ?? 0)
+            };
+            var from_helper = unsafe {
+                let computed = compute(action);
+                if arg("copy") == () { computed } else { base }
+            };
+            out.set([["total", total], ["helper", from_helper]]);
+        }
+    "#;
+    let module = Sdk::default()
+        .load_module_from_src_actions(src, &["Main"])
+        .unwrap();
+    assert_eq!(
+        module.actions()[0].args(),
+        &[
+            "read_only",
+            "ignored",
+            "amount",
+            "bonus",
+            "settings",
+            "copy"
+        ]
+    );
+    let state = TestState::default();
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let args = ActionArgs::from([
+        ("amount".to_string(), Value::from(5)),
+        ("bonus".to_string(), Value::from(2)),
         (
-            r#"let supplied = arg("n");
-                if supplied == () { action.random() } else { 42 }"#,
-            Value::from(42),
+            "settings".to_string(),
+            Value::from(dict!({ "offset" => 3, "items" => Array::new(vec![Value::from(4)]) })),
         ),
+        ("ignored".to_string(), Value::from("unused")),
+        ("unread".to_string(), Value::from(100)),
+    ]);
+    for (args, total, helper) in [
+        (ActionArgs::new(), 0, 0),
+        (args, 12, 14),
         (
-            r#"let supplied = arg("n");
-                if supplied == () { state_header.block_number * 0 } else { supplied + 1 }"#,
-            Value::from(42),
-        ),
-        (
-            r#"let supplied = arg("n") ?? action.random();
-                var_assign(supplied, 0); supplied"#,
-            Value::from(42),
-        ),
-        (
-            r#"let supplied = arg("n");
-                if supplied == () { action.random() } else { supplied.field }"#,
-            Value::from(dict!({ "field" => 42 })),
+            ActionArgs::from([("copy".to_string(), Value::from(1))]),
+            0,
+            0,
         ),
     ] {
-        let src = format!(
-            r#"
-            fn Main(action) {{
-                var out = action.output("Ore");
-                var n = unsafe {{ {expression} }};
-                out.update("key", n);
-            }}
-        "#
-        );
-        let module = Sdk::default()
-            .load_module_from_src_actions(&src, &["Main"])
+        executor
+            .plan_action_with_args("Main", vec![], &args)
             .unwrap();
-        let state = TestState::default();
-        let executor = module.executor(true, grounding_witness(&state, &[]));
-        executor.action("Main", vec![]).unwrap();
-        let args = ActionArgs::from([("n".to_string(), value)]);
-        for error in [
-            executor.action_with_args("Main", vec![], &args).err(),
-            executor.plan_action_with_args("Main", vec![], &args).err(),
-        ] {
-            let error = error
-                .expect("supplied witness must be returned unchanged")
-                .to_string();
-            assert!(
-                error.contains("returned unchanged"),
-                "{expression}: {error}"
-            );
-        }
+        let result = executor.action_with_args("Main", vec![], &args).unwrap();
+        let obj = result.obj(0);
+        let field = |name: &str| obj.obj.get(&StrKey::from(name)).unwrap().unwrap();
+        assert_eq!(field("total"), Value::from(total));
+        assert_eq!(field("helper"), Value::from(helper));
     }
 }
 
@@ -2391,15 +2326,7 @@ fn test_arg_supplied_and_default() {
     let module = Sdk::default()
         .load_module_from_src_actions(src, &["Main"])
         .unwrap();
-    let declarations: Vec<_> = module.actions()[0]
-        .args()
-        .iter()
-        .map(|arg| (arg.name.as_str(), arg.type_name()))
-        .collect();
-    assert_eq!(
-        declarations,
-        vec![("key", "Raw".into()), ("grade", "Int".into())]
-    );
+    assert_eq!(module.actions()[0].args(), &["key", "grade"]);
     let state = TestState::default();
     let executor = module.executor(true, grounding_witness(&state, &[]));
     let field =
@@ -2416,26 +2343,13 @@ fn test_arg_supplied_and_default() {
     assert_eq!(field(&result.obj(0), "key"), key);
     assert_eq!(field(&result.obj(1), "grade"), Value::from(2));
 
-    for (name, value, expected) in [
-        ("nonce", Value::from(1), "unknown argument `nonce`"),
-        (
-            "grade",
-            Value::from("two"),
-            "argument `grade` expects a value of type Int",
-        ),
-        (
-            "grade",
-            Value::from(5),
-            "failed with supplied arguments [grade]",
-        ),
-    ] {
-        let args = ActionArgs::from([(name.to_string(), value)]);
+    for value in [Value::from("two"), Value::from(5)] {
+        let args = ActionArgs::from([("grade".to_string(), value)]);
         let err = executor
             .action_with_args("Main", vec![], &args)
             .err()
-            .unwrap()
-            .to_string();
-        assert!(err.contains(expected), "{err}");
+            .unwrap();
+        assert!(matches!(err, SdkError::Eval(..)), "{err}");
     }
 }
 
@@ -2487,7 +2401,7 @@ fn test_arg_short_circuits_helper_default() {
     let module = Sdk::default()
         .load_module_from_src_actions(src, &["Main"])
         .unwrap();
-    assert_eq!(module.actions()[0].args()[0].name, "key");
+    assert_eq!(module.actions()[0].args()[0], "key");
     let state = TestState::default();
     let executor = module.executor(true, grounding_witness(&state, &[]));
     let err = executor
@@ -2528,8 +2442,7 @@ fn test_unsafe_state_restored_after_caught_error() {
         .load_module_from_src_actions(src, &["Extra", "Main"])
         .unwrap();
     let meta = &module.actions()[1];
-    assert_eq!(meta.args().len(), 1);
-    assert_eq!(meta.args()[0].name, "key");
+    assert_eq!(meta.args(), &["discarded", "key"]);
     assert_eq!(
         meta.total_outputs
             .iter()

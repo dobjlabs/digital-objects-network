@@ -97,6 +97,8 @@ Postgres is the sole source of `StateHead`. The highest committed
 
 ## Slot derivation rules
 
+Each payload publishes every created state, including states consumed later in the same transaction. The created index records them all; their nullifiers determine which states have been spent.
+
 For each decoded blob payload, the synchronizer:
 
 - skips blobs that do not decode into a valid `TxFinalized` proof

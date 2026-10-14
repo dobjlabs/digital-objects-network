@@ -6,7 +6,10 @@ use plonky2::{
     plonk::proof::CompressedProof,
     util::serialization::Buffer,
 };
-use pod2::middleware::{C, CommonCircuitData, D, F, Hash};
+use pod2::middleware::{
+    C, CommonCircuitData, CustomPredicateRef, D, F, Hash, Statement, Value, containers::Set,
+};
+use txlib::Tx;
 
 use crate::ProofType;
 
@@ -62,22 +65,49 @@ fn read_hashes(bytes: &mut &[u8]) -> Result<Vec<Hash>> {
 #[allow(clippy::large_enum_variant)]
 pub struct Payload {
     pub proof: PayloadProof,
-    /// Commitment of the finalized transaction dictionary `{live, nullifiers, chain_start, chain_end}`.
+    /// Commitment of the finalized transaction dictionary `{created, nullifiers, chain_start, chain_end}`.
     pub tx_final: Hash,
     pub state_root: Hash,
     pub nullifiers: Vec<Hash>,
-    /// Commitments of the objects this tx leaves live. The synchronizer
-    /// inserts each into its global created set, rejecting any that already
-    /// exists (the creation-uniqueness check, like a nullifier double-spend).
-    /// The list is also reconstructed into the `live` set that the public
-    /// TxFinalized statement commits to, so the proof only verifies against
-    /// these exact commitments -- the list cannot be forged.
-    pub live: Vec<Hash>,
+    /// Commitments of every state this tx creates, including states it later
+    /// consumes. The synchronizer inserts each into its global created set,
+    /// rejecting any that already exists (the creation-uniqueness check, like
+    /// a nullifier double-spend). The list is also reconstructed into the
+    /// `created` set that the public TxFinalized statement commits to, so the
+    /// proof only verifies against these exact commitments -- the list cannot
+    /// be forged.
+    pub created: Vec<Hash>,
 }
 
 const PAYLOAD_MAGIC: u16 = 0xd10b;
 
 impl Payload {
+    pub fn from_tx(proof: PayloadProof, tx: &Tx, state_root: Hash) -> Result<Self> {
+        let nullifiers = tx.nullifier_hashes()?;
+        let created = tx.created_commitments()?;
+        Ok(Self {
+            proof,
+            tx_final: tx.dict().commitment(),
+            state_root,
+            nullifiers,
+            created,
+        })
+    }
+
+    pub fn finalized_statement(&self, predicate: CustomPredicateRef) -> Statement {
+        let hashes_to_set =
+            |hashes: &[Hash]| Set::new(hashes.iter().map(|hash| Value::from(*hash)).collect());
+        Statement::Custom(
+            predicate,
+            vec![
+                Value::from(self.state_root).into(),
+                Value::from(self.tx_final).into(),
+                Value::from(hashes_to_set(&self.nullifiers)).into(),
+                Value::from(hashes_to_set(&self.created)).into(),
+            ],
+        )
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buffer = Vec::new();
         buffer
@@ -87,7 +117,7 @@ impl Payload {
         write_elems(&mut buffer, &self.tx_final.0);
         write_elems(&mut buffer, &self.state_root.0);
         write_hashes(&mut buffer, &self.nullifiers);
-        write_hashes(&mut buffer, &self.live);
+        write_hashes(&mut buffer, &self.created);
         buffer
     }
 
@@ -107,13 +137,13 @@ impl Payload {
         let tx_final = Hash(read_elems(&mut bytes)?);
         let state_root = Hash(read_elems(&mut bytes)?);
         let nullifiers = read_hashes(&mut bytes)?;
-        let live = read_hashes(&mut bytes)?;
+        let created = read_hashes(&mut bytes)?;
         Ok(Self {
             proof,
             tx_final,
             state_root,
             nullifiers,
-            live,
+            created,
         })
     }
 }
@@ -215,7 +245,7 @@ mod tests {
         let vds_root = vd_set.root();
 
         let input = r#"
-        TxnFinalized(state_root, tx_final, nullifiers, live) = AND(
+        TxnFinalized(state_root, tx_final, nullifiers, created) = AND(
             Equal(0, 0)
         )
         "#;
@@ -237,12 +267,12 @@ mod tests {
             let nullifiers_set = Value::from(Set::new(HashSet::from_iter(
                 nullifiers.iter().map(|h| Value::from(*h)),
             )));
-            let live = vec![
+            let created = vec![
                 Hash(Value::from(10i64).raw().0),
                 Hash(Value::from(11i64).raw().0),
             ];
-            let live_set = Value::from(Set::new(HashSet::from_iter(
-                live.iter().map(|h| Value::from(*h)),
+            let created_set = Value::from(Set::new(HashSet::from_iter(
+                created.iter().map(|h| Value::from(*h)),
             )));
             let state_root = Value::from("dummy_state_root");
             let st0 = builder.priv_op(Operation::eq(0, 0)).unwrap();
@@ -253,7 +283,7 @@ mod tests {
                         (0, state_root.clone()),
                         (1, tx_final.clone()),
                         (2, nullifiers_set.clone()),
-                        (3, live_set.clone()),
+                        (3, created_set.clone()),
                     ],
                     Operation::custom(pred.clone(), [st0]),
                 )
@@ -274,7 +304,7 @@ mod tests {
                 tx_final: Hash(tx_final.raw().0),
                 state_root: Hash(state_root.raw().0),
                 nullifiers: nullifiers.clone(),
-                live: live.clone(),
+                created: created.clone(),
             }
         };
 
@@ -288,8 +318,8 @@ mod tests {
         let nullifiers_set = Value::from(Set::new(HashSet::from_iter(
             payload.nullifiers.iter().map(|h| Value::from(*h)),
         )));
-        let live_set = Value::from(Set::new(HashSet::from_iter(
-            payload.live.iter().map(|h| Value::from(*h)),
+        let created_set = Value::from(Set::new(HashSet::from_iter(
+            payload.created.iter().map(|h| Value::from(*h)),
         )));
         let st = Statement::Custom(
             pred,
@@ -297,7 +327,7 @@ mod tests {
                 Value::from(payload.state_root).into(),
                 Value::from(payload.tx_final).into(),
                 nullifiers_set.into(),
-                live_set.into(),
+                created_set.into(),
             ],
         );
         println!("st: {st:?}");

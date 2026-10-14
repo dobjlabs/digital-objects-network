@@ -54,30 +54,22 @@ export interface ClassRefPayload {
   hash: string;
 }
 
-/** Metadata for an optional caller-supplied witness. */
-export interface ActionArgPayload {
-  name: string;
-  /** Required pod2 value type, such as Raw or Int. */
-  type: string;
-}
-
 export interface ActionPayload {
   action: QualifiedNamePayload;
   emoji: string;
   hash: string;
   totalInputs: ClassRefPayload[];
   description: string;
-  args?: ActionArgPayload[];
+  args?: string[];
 }
 
-/** Argument values by name in pod2's JSON form: `{ Raw: "<64 hex>" }`,
- * `{ Int: "<decimal>" }` or a bare string. */
+/** Optional caller data by name, in POD2 JSON form. */
 export type ActionArgValues = Record<string, unknown>;
 
 export interface RunActionInput {
   action: QualifiedNamePayload;
   inputObjectPaths: string[];
-  /** Overrides by name. Omitted arguments use their script defaults. */
+  /** Optional caller data by name, in POD2 JSON form. */
   args?: ActionArgValues;
 }
 

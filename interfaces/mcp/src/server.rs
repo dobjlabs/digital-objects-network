@@ -299,7 +299,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Start an action. Returns immediately with a runId and status=queued; proof generation and commit run in the background. Poll get_run(runId) until status is succeeded or failed (then read result / error). The daemon rejects requests while another action is running. `args` optionally supplies values for the action's declared arguments (listed as `args` on list_actions items, e.g. a proof-of-work key computed elsewhere) by name, in pod2 JSON form: {\"Raw\": \"<64 hex chars>\"} or {\"Int\": \"<decimal>\"}; arguments left out take the script default."
+        description = "Start an action. Returns immediately with a runId and status=queued; proof generation and commit run in the background. Poll get_run(runId) until status is succeeded or failed (then read result / error). The daemon rejects requests while another action is running. `args` optionally supplies caller data by name in POD2 JSON form, e.g. {\"count\": {\"Int\": \"42\"}, \"label\": \"hello\"}. Scripts read these values with arg(name) inside unsafe blocks. Argument names read during loading are listed on list_actions items. Omitted values are absent; the script chooses any defaults."
     )]
     fn run_action(
         &self,

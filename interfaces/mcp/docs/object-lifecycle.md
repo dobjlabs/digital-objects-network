@@ -1,64 +1,64 @@
 # Digital Object Lifecycle
 
-This document walks through the lifecycle of a Digital Object from creation to consumption, showing what happens at each stage.
+A transaction publishes commitments to every object state it creates, including intermediate states that it later mutates or deletes. It also publishes nullifiers for every state it consumes. A published state is spendable only while its nullifier is absent from the synchronizer's nullifier set.
 
 ## 1. Creation
 
-When an action creates a new object, it:
+When an action creates an object, it:
 
-1. Builds a fresh dictionary with the object's fields (e.g. `{key: 0xabc, durability: 100}` for a WoodPick).
-2. Generates a ZK proof that this dictionary satisfies the class predicate (e.g. `IsWood(state) = AND(CraftWood(state, log))`). The proof includes verification that the input `log` was itself valid.
-3. Records the new object in a transaction via `TxInserted`, adding it to the transaction's live set.
-4. The object appears in objects as `live: true` with its fields visible.
+1. Builds a dictionary containing its fields, including `key` and `type`.
+2. Records a `TxInsert` event and assigns the object's `stable_identifier`.
+3. Proves that the creation is authorized by the object's class predicate.
+4. Adds the state to the transaction's created set.
 
-The resulting `.dobj` file contains the state dictionary and the proof. The proof is constant-size — it does not grow as objects are created from longer chains of prior objects.
+The transaction payload includes the state's commitment even if a later event consumes it. Only surviving outputs are returned as spendable objects. After confirmation, the driver marks an output `live` if its commitment is published and its nullifier is absent.
+
+A `.dobj` file stores the object dictionary and metadata, including its class, status, and producing transaction's commitment. It does not contain the transaction proof; that proof is submitted with the transaction payload.
 
 ## 2. Inspection
 
-When you inspect a live object, you see:
+Object inspection exposes:
 
-- **id**: a hash uniquely identifying this object state
-- **className**: determined by the predicate that certifies it
-- **fields**: the key-value pairs (durability, key, etc.)
-- **predicateSource**: the podlang rule showing all valid transitions
-- **live**: true, meaning its nullifier has not been published
+- **contentHash**: the commitment identifying this object state.
+- **fileName**: the local `.dobj` filename.
+- **class** and **classHash**: the object's class identity.
+- **fields**: application fields such as durability and key.
+- **status**: `unknown`, `pending`, `live`, or `nullified`.
+
+Class inspection provides the predicate source describing authorized transitions. Objects awaiting confirmation may be `unknown` or `pending`; only `live` objects are eligible as action inputs.
 
 ## 3. Mutation
 
-Some actions mutate objects rather than consuming them (e.g. using a pickaxe decrements its durability). A mutation:
+Mutation consumes an old state and creates a replacement state. For example, using a pickaxe can decrement its durability:
 
-1. Proves the current state is valid.
-2. Modifies fields (e.g. `DictUpdate(new, old, "durability", new_value)`).
-3. Publishes a nullifier for the OLD state (preventing it from being reused).
-4. Records the transition via `TxMutated(tx_after, tx_before, new, old)`.
-5. The old object becomes `live: false`. The new object appears as `live: true` with updated fields.
+1. The action records a `TxMutate` event, preserving the object's class and `stable_identifier`.
+2. Replay verifies the class guard, adds the new state to the created set, and nullifies the old state.
+3. Once confirmed, the old state is `nullified`. The replacement is `live` if no later event consumed it.
 
-The old object ID and the new object ID are different (the ID is a hash of the state dictionary, and the fields changed).
+The states have different commitments. If several mutations occur in one transaction, all intermediate commitments are published and all consumed intermediate states are nullified. Returning to an already-created commitment is rejected.
 
 ## 4. Consumption
 
-When an object is consumed as input to an action (e.g. a Log consumed by CraftWood):
+Deletion records a `TxDelete` event, verifies the object's class guard, and publishes its nullifier without creating a replacement state. It never removes the object's commitment from the global created array.
 
-1. The action proves the input is valid.
-2. A nullifier is published for the input object.
-3. The input is removed from the live set via `TxDeleted`.
-4. The input object becomes `live: false` permanently.
-5. Output objects are created as in step 1.
+Every declared transaction input must be consumed by mutation or deletion. An action that only reads an input must still consume and reissue it if the object should remain spendable.
 
 ## 5. Nullifiers and double-spend prevention
 
-A nullifier is a hash derived from the object's key: `hash(hash(obj_dict, obj_dict.key), "txlib-nullifier-v1")`. It is published to a global set tracked by the synchronizer.
+A state's nullifier is `hash(hash(obj_dict, obj_dict.key), "txlib-nullifier-v1")`. The synchronizer maintains the global nullifier set and rejects transactions containing an already-published nullifier. Replay also prevents consuming the same state twice within a transaction.
 
-Once published, any attempt to use the same object in another action will fail because the nullifier is already in the set. This prevents double-spending without revealing which specific object was spent (the nullifier is a hash, not the object itself).
+The published payload contains commitments and nullifiers, not the private object dictionaries. Linking a nullifier to its object requires the private object data used to derive it.
 
 ## 6. State root grounding
 
-Every action must reference a recent state root — a hash of all published transactions and nullifiers. This ensures the action's inputs were live at a known point in time. The synchronizer rejects actions grounded in a state root more than ~300 blocks (~1 hour) old.
+A transaction references a recent state header committing to the created array, nullifier set, prior state history, and block metadata. `InputsGrounded` proves that each input existed in the referenced created array. Every input must also be consumed, so the transaction publishes its nullifier.
 
-## Summary of what changes after each action
+Historical creation membership alone does not prove that an input is still live. The synchronizer checks the emitted nullifiers against its current state, rejecting inputs spent since the grounding root. It also rejects grounding roots more than 300 blocks old.
 
-| Before                        | Action          | After                                             |
-| ----------------------------- | --------------- | ------------------------------------------------- |
-| Input objects: `live: true`   | Action runs     | Input objects: `live: false` (nullified)          |
-| —                             | Proof generated | Output objects: `live: true` (new)                |
-| Mutated objects: `live: true` | Action runs     | Old state: `live: false`, New state: `live: true` |
+## Transaction results
+
+| State | Published commitment | Published nullifier | Spendable after confirmation |
+| --- | --- | --- | --- |
+| External input consumed by mutation or deletion | Already published | Yes | No |
+| Created state retained as an output | Yes | No | Yes |
+| Created state mutated or deleted later in the transaction | Yes | Yes | No |

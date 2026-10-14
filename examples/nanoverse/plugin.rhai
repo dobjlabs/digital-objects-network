@@ -56,7 +56,7 @@ fn require_version(action, obj) {
 
 // Write the random key directly so repeated calls do not reuse a named wildcard.
 fn rekey(action, obj) {
-    obj.update("key", action.random());
+    obj.update("key", unsafe { action.random() });
 }
 
 // ---- ship -----------------------------------------------------------------

@@ -174,14 +174,15 @@ impl GroundingWitness {
     }
 }
 
-/// Output of a finalized transaction. The live set is known to the prover
-/// but private in the proof.
+/// Output of a finalized transaction. Created states and nullifiers are public
+/// proof outputs.
 #[derive(Clone, Debug)]
 pub struct Tx {
-    pub live: Set,
+    pub created: Set,
     pub nullifiers: Set,
-    /// The after_tx dictionary. Its commitment is tx_final (the value the
-    /// relayer publishes). Contains live, nullifiers, chain_start, chain_end.
+    /// The public final dictionary. Its commitment is tx_final (the value the
+    /// relayer publishes). Contains created, nullifiers, chain_start, chain_end.
+    /// Private inputs are removed before computing this commitment.
     pub ctx: Dictionary,
     pub state_header: Arc<StateHeader>,
 }
@@ -193,9 +194,9 @@ impl Tx {
         self.ctx.clone()
     }
 
-    /// Commitments of the objects this tx leaves live.
-    pub fn live_commitments(&self) -> anyhow::Result<Vec<Hash>> {
-        self.live
+    /// Commitments of all states produced, including subsequently consumed states.
+    pub fn created_commitments(&self) -> anyhow::Result<Vec<Hash>> {
+        self.created
             .iter()
             .map(|entry| Ok(Hash(entry?.raw().0)))
             .collect()
@@ -213,7 +214,7 @@ impl Tx {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TxSerde {
-    live: Set,
+    created: Set,
     nullifiers: Set,
     ctx: Dictionary,
     state_header: StateHeader,
@@ -225,7 +226,7 @@ impl Serialize for Tx {
         S: Serializer,
     {
         TxSerde {
-            live: self.live.clone(),
+            created: self.created.clone(),
             nullifiers: self.nullifiers.clone(),
             ctx: self.ctx.clone(),
             state_header: (*self.state_header).clone(),
@@ -241,7 +242,7 @@ impl<'de> Deserialize<'de> for Tx {
     {
         let payload = TxSerde::deserialize(deserializer)?;
         Ok(Self {
-            live: payload.live,
+            created: payload.created,
             nullifiers: payload.nullifiers,
             ctx: payload.ctx,
             state_header: Arc::new(payload.state_header),
@@ -373,15 +374,17 @@ pub struct EventHandle {
 // Replay tx-dict helpers
 // ============================================================================
 
-/// Build a replay tx dict with all 4 keys (chain is separate).
+/// Build a replay tx dict (the event chain is separate).
 pub(crate) fn build_tx(
-    live: &Set,
+    inputs: &Set,
+    created: &Set,
     nullifiers: &Set,
     chain_start: Hash,
     chain_end: Hash,
 ) -> Dictionary {
     dict!({
-        "live" => live.clone(),
+        "inputs" => inputs.clone(),
+        "created" => created.clone(),
         "nullifiers" => nullifiers.clone(),
         "chain_start" => chain_start,
         "chain_end" => chain_end
@@ -417,9 +420,8 @@ pub fn print_stats(stats: &TxStats) {
 pub struct TxBuilder {
     pub chain: Hash,
     pub chain_start: Hash,
-    live: Set,
-    nullifiers: Set,
     state_header: Arc<StateHeader>,
+    inputs: Vec<Dictionary>,
     st_inputs_grounded: Statement,
     inputs_set: Set,
     events: Vec<ChainEvent>,
@@ -513,20 +515,6 @@ impl std::fmt::Display for TxBuilder {
         writeln!(f, "Tx {} -> {}", self.chain_start, self.chain)?;
         fmt_events(f, &self.events, 1)?;
 
-        // Live set
-        let live_items: Vec<_> = self.live.iter().filter_map(|r| r.ok()).collect();
-        if live_items.is_empty() {
-            writeln!(f, "  live: (empty)")?;
-        } else {
-            writeln!(f, "  live: {} object(s)", live_items.len())?;
-        }
-
-        // Nullifiers
-        let null_count = self.nullifiers.iter().filter(|r| r.is_ok()).count();
-        if null_count > 0 {
-            writeln!(f, "  nullifiers: {null_count}")?;
-        }
-
         // Open scopes
         if !self.action_stack.is_empty() {
             writeln!(f, "  ({} open action scope(s))", self.action_stack.len())?;
@@ -554,9 +542,8 @@ impl TxBuilder {
         Self {
             chain: chain_start,
             chain_start,
-            live: inputs_set.clone(),
-            nullifiers: set!(),
             state_header,
+            inputs: inputs.to_vec(),
             st_inputs_grounded,
             inputs_set,
             events: vec![],
@@ -667,7 +654,7 @@ impl TxBuilder {
         }
     }
 
-    /// Record an insertion. Emits TxInsert, updates live set. Must be
+    /// Record an insertion. Emits TxInsert. Must be
     /// called inside an open action scope.
     ///
     /// `initial` is the pre-identity object state; the builder stamps
@@ -689,7 +676,6 @@ impl TxBuilder {
         let prev = self.chain;
         let event_hash = hash_values(&[Value::from(EMPTY_VALUE), Value::from(new.clone())]);
         self.chain = hash_values(&[Value::from(prev), Value::from(event_hash)]);
-        self.live.insert(&Value::from(new.clone())).unwrap();
 
         let new_type = object_type(&new);
         let st_dc = ctx
@@ -735,7 +721,7 @@ impl TxBuilder {
         (new, st, handle)
     }
 
-    /// Record a mutation. Emits TxMutate, updates live set and nullifiers.
+    /// Record a mutation. Emits TxMutate.
     /// Must be called inside an open action scope. Returns the
     /// TxMutate statement and a handle for guard attachment.
     pub fn mutate(
@@ -751,11 +737,6 @@ impl TxBuilder {
         let prev = self.chain;
         let event_hash = hash_values(&[Value::from(old.clone()), Value::from(new.clone())]);
         self.chain = hash_values(&[Value::from(prev), Value::from(event_hash)]);
-        self.live.delete(&Value::from(old.commitment())).unwrap();
-        self.live.insert(&Value::from(new.clone())).unwrap();
-        self.nullifiers
-            .insert(&Value::from(compute_nullifier(old)))
-            .unwrap();
 
         let new_type = object_type(new);
         let old_type = object_type(old);
@@ -820,7 +801,7 @@ impl TxBuilder {
         (st, handle)
     }
 
-    /// Record a deletion. Emits TxDelete, updates live set and nullifiers.
+    /// Record a deletion. Emits TxDelete.
     /// Must be called inside an open action scope. Returns the
     /// TxDelete statement and a handle for guard attachment.
     pub fn delete(&mut self, ctx: &mut BuildContext, old: &Dictionary) -> (Statement, EventHandle) {
@@ -831,10 +812,6 @@ impl TxBuilder {
         let prev = self.chain;
         let event_hash = hash_values(&[Value::from(old.clone()), Value::from(EMPTY_VALUE)]);
         self.chain = hash_values(&[Value::from(prev), Value::from(event_hash)]);
-        self.live.delete(&Value::from(old.commitment())).unwrap();
-        self.nullifiers
-            .insert(&Value::from(compute_nullifier(old)))
-            .unwrap();
 
         let old_type = object_type(old);
         let st_dc = ctx
@@ -870,7 +847,9 @@ impl TxBuilder {
     }
 
     /// Build the replay chain and emit TxFinalized.
-    pub fn finalize(self, ctx: &mut BuildContext) -> (Statement, Tx, TxStats) {
+    /// Returns an error if an input is not consumed, an unavailable or
+    /// already consumed state is consumed, or a state is created more than once.
+    pub fn finalize(self, ctx: &mut BuildContext) -> anyhow::Result<(Statement, Tx, TxStats)> {
         assert!(self.action_stack.is_empty(), "unclosed action scopes");
         assert!(
             !self.events.is_empty(),
@@ -880,8 +859,8 @@ impl TxBuilder {
         let mut stats = self.stats;
         let zero: Hash = EMPTY_VALUE.into();
 
-        let before_tx = build_tx(&self.inputs_set, &set!(), zero, zero);
-        let after_tx = build_tx(&self.live, &self.nullifiers, zero, zero);
+        let empty_created = set!();
+        let before_tx = build_tx(&self.inputs_set, &empty_created, &set!(), zero, zero);
 
         // Replay the top-level action sequence. Every top-level event
         // is guaranteed to be a ChainEvent::Action (enforced by the
@@ -889,19 +868,27 @@ impl TxBuilder {
         // ReplayActions instead of going through ReplayContents.
         let empty_nullifiers = set!();
         let frame = replay::ReplayFrame {
-            live: &self.inputs_set,
+            inputs: &self.inputs_set,
+            created: &empty_created,
             nullifiers: &empty_nullifiers,
             chain_start: zero,
             chain_end: zero,
         };
-        let (st_replay, _, _, _) = replay::Replayer::new(ctx, &mut stats).build_replay_actions(
-            &self.events,
-            self.chain_start,
-            frame,
-        );
+        let (st_replay, _, created, nullifiers) = replay::Replayer::new(ctx, &mut stats)
+            .build_replay_actions(&self.events, self.chain_start, frame)?;
+
+        for input in &self.inputs {
+            if !nullifiers.contains(&Value::from(object_nullifier_hash(input)?))? {
+                anyhow::bail!("input object {} was not spent", input.commitment());
+            }
+        }
+
+        let after_tx = build_tx(&self.inputs_set, &created, &nullifiers, zero, zero);
+        let mut tx_final = after_tx.clone();
+        tx_final.delete(&StrKey::from("inputs"))?;
 
         // Tie grounding to the public state root: rebind the InputsGrounded
-        // statement's `inputs` to `before_tx.live` (the in-tx working set) and
+        // statement's `inputs` to `before_tx.inputs` and
         // its created set to `state_header.created`. The latter is the single
         // state-root array access anchoring the whole grounding tree. Two calls
         // rather than one because the entries are different anchored-key types:
@@ -910,7 +897,7 @@ impl TxBuilder {
             .builder
             .priv_op(Operation::replace_value_with_entry(
                 vec![
-                    Some(entry(&before_tx, "live").expect("referenced container entry exists")),
+                    Some(entry(&before_tx, "inputs").expect("referenced container entry exists")),
                     None,
                 ],
                 self.st_inputs_grounded.clone(),
@@ -938,7 +925,7 @@ impl TxBuilder {
             .builder
             .priv_op(Operation::replace_value_with_entry(
                 vec![
-                    Some(entry(&before_tx, "live").expect("referenced container entry exists")),
+                    Some(entry(&before_tx, "inputs").expect("referenced container entry exists")),
                     None,
                     None,
                 ],
@@ -946,11 +933,12 @@ impl TxBuilder {
             ))
             .unwrap();
         // Pin the full schema of `before_tx` (nullifiers={}, chain_start={},
-        // chain_end={}, live=inputs_set) in a single DictInsert clause. This
+        // chain_end={}, created={}, inputs=inputs_set) in a single DictInsert clause. This
         // closes the malleability where the prover could otherwise witness
         // arbitrary chain_start/chain_end values that pass through ReplayActions
         // verbatim into tx_final.
         let scope_dict = dict!({
+            "created" => set!(),
             "nullifiers" => set!(),
             "chain_start" => zero,
             "chain_end" => zero
@@ -959,7 +947,7 @@ impl TxBuilder {
             .builder
             .priv_op(op!(DictInsert(
                 scope_dict,
-                "live",
+                "inputs",
                 self.inputs_set,
                 before_tx
             )))
@@ -970,26 +958,29 @@ impl TxBuilder {
                 vec![
                     None,
                     None,
-                    Some(entry(&before_tx, "live").expect("referenced container entry exists")),
+                    Some(entry(&before_tx, "inputs").expect("referenced container entry exists")),
                     None,
                 ],
                 st_dict_insert_lit,
             ))
             .unwrap();
-        // Surface the final nullifier and live sets as public args.
+        // Surface the final nullifier and created sets as public args.
+        let st_remove_inputs = ctx
+            .builder
+            .priv_op(op!(DictDelete(after_tx, "inputs", tx_final)))?;
         let st_dc_null_after = ctx
             .builder
-            .priv_op(op!(DictContains(after_tx, "nullifiers", self.nullifiers)))
+            .priv_op(op!(DictContains(tx_final, "nullifiers", nullifiers)))
             .unwrap();
-        let st_dc_live_after = ctx
+        let st_dc_created_after = ctx
             .builder
-            .priv_op(op!(DictContains(after_tx, "live", self.live)))
+            .priv_op(op!(DictContains(tx_final, "created", created)))
             .unwrap();
         let st_bindings = ctx
             .apply_custom_pred_simple(
                 false,
                 "TxFinalBindings",
-                vec![st_dc_null_after, st_dc_live_after],
+                vec![st_remove_inputs, st_dc_null_after, st_dc_created_after],
             )
             .unwrap();
         record(&mut stats, "TxFinalBindings");
@@ -1009,12 +1000,12 @@ impl TxBuilder {
         record(&mut stats, "TxFinalized");
 
         let tx = Tx {
-            live: self.live,
-            nullifiers: self.nullifiers,
-            ctx: after_tx,
+            created,
+            nullifiers,
+            ctx: tx_final,
             state_header: self.state_header,
         };
-        (st, tx, stats)
+        Ok((st, tx, stats))
     }
 
     // ========================================================================
@@ -1234,8 +1225,8 @@ mod tests {
         }
 
         fn apply_tx(&mut self, tx: &Tx) {
-            for obj in tx.live.iter() {
-                let obj = obj.expect("tx live entry should decode");
+            for obj in tx.created.iter() {
+                let obj = obj.expect("tx created entry should decode");
                 let commitment = Hash(obj.raw().0);
                 let index = self.created_index.len() as i64;
                 self.created.insert(index as usize, obj).unwrap();
@@ -1351,6 +1342,371 @@ mod tests {
         assert_eq!(decoded, original);
     }
 
+    fn replay_test_context() -> (BuildContext, Value) {
+        let params = Params::default();
+        let vd_set = VDSet::new(&[]);
+        // An unrestricted test class isolates replay from application authorization.
+        let guard_module = Arc::new(
+            pod2::lang::load_module(
+                "ReplayTestGuard(obj, state_header, chain_start, chain_end) = AND(Equal(obj, obj))",
+                "replay_test",
+                &params,
+                &[],
+            )
+            .unwrap(),
+        );
+        let guard_type = Value::from(
+            Predicate::Custom(
+                guard_module
+                    .predicate_ref_by_name("ReplayTestGuard")
+                    .unwrap(),
+            )
+            .hash(),
+        );
+        let ctx = BuildContext::new(
+            MultiPodBuilder::new(&params, &vd_set),
+            vec![
+                Arc::new(predicates::events_module()),
+                Arc::new(predicates::module()),
+                guard_module,
+            ],
+        );
+        (ctx, guard_type)
+    }
+
+    fn attach_guard(
+        ctx: &mut BuildContext,
+        builder: &mut TxBuilder,
+        object: &Dictionary,
+        handle: EventHandle,
+        chain_start: Hash,
+    ) {
+        let equal = ctx.builder.priv_op(op!(Equal(object, object))).unwrap();
+        let guard = ctx
+            .apply_custom_pred(
+                false,
+                "ReplayTestGuard",
+                map!({
+                    "state_header" => builder.state_header().array(),
+                    "chain_start" => chain_start,
+                    "chain_end" => builder.chain_position()
+                }),
+                vec![equal],
+            )
+            .unwrap();
+        builder.set_guard(handle, guard);
+    }
+
+    fn grounded_replay_inputs(
+        state: &mut TestState,
+        guard_type: Value,
+        count: usize,
+    ) -> Vec<Dictionary> {
+        (0..count)
+            .map(|index| {
+                let object = with_stable_identifier(&dict!({
+                    "key" => index as i64 + 100,
+                    "type" => guard_type.clone(),
+                    "version" => 0_i64
+                }));
+                state
+                    .created
+                    .insert(index, Value::from(object.clone()))
+                    .unwrap();
+                state
+                    .created_index
+                    .insert(object.commitment(), index as i64);
+                object
+            })
+            .collect()
+    }
+
+    #[test]
+    fn rejects_unspent_inputs() {
+        for unspent_index in [0, 1] {
+            let (mut ctx, guard_type) = replay_test_context();
+            let mut state = TestState::empty(0);
+            let inputs = grounded_replay_inputs(&mut state, guard_type.clone(), 2);
+            let mut builder = TxBuilder::new(&mut ctx, &inputs, state.grounding_witness(&inputs));
+            let start = builder.chain_position();
+            let scope = builder.begin_action();
+            let (output, _, output_handle) =
+                builder.insert(&mut ctx, &make_object(guard_type, &[]));
+            let mut guards = vec![(output, output_handle)];
+            for (index, input) in inputs.iter().enumerate() {
+                if index != unspent_index {
+                    let (_, handle) = builder.delete(&mut ctx, input);
+                    guards.push((input.clone(), handle));
+                }
+            }
+            for (object, handle) in guards {
+                attach_guard(&mut ctx, &mut builder, &object, handle, start);
+            }
+            builder.end_action(scope);
+            let error = builder.finalize(&mut ctx).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "input object {} was not spent",
+                    inputs[unspent_index].commitment()
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn publishes_intermediate_and_deleted_states() {
+        let (mut ctx, guard_type) = replay_test_context();
+        let input = with_stable_identifier(&make_object(guard_type.clone(), &[]));
+        let mut state = TestState::empty(0);
+        state.created.insert(0, Value::from(input.clone())).unwrap();
+        state.created_index.insert(input.commitment(), 0);
+        let inputs = vec![input.clone()];
+        let mut builder = TxBuilder::new(&mut ctx, &inputs, state.grounding_witness(&inputs));
+
+        let outer_start = builder.chain_position();
+        let outer = builder.begin_action();
+        let (_, input_handle) = builder.delete(&mut ctx, &input);
+        let initial = make_object(guard_type.clone(), &[("version", Value::from(0_i64))]);
+        let (first, _, first_handle) = builder.insert(&mut ctx, &initial);
+        let child_start = builder.chain_position();
+        let child = builder.begin_action();
+        let mut second = tx_with(&first, "version", Value::from(1_i64));
+        rekey(&mut second);
+        let (_, second_handle) = builder.mutate(&mut ctx, &second, &first);
+        let mut third = tx_with(&second, "version", Value::from(2_i64));
+        rekey(&mut third);
+        let (_, third_handle) = builder.mutate(&mut ctx, &third, &second);
+        let (_, delete_handle) = builder.delete(&mut ctx, &third);
+        for (object, handle) in [
+            (&second, second_handle),
+            (&third, third_handle),
+            (&third, delete_handle),
+        ] {
+            attach_guard(&mut ctx, &mut builder, object, handle, child_start);
+        }
+        builder.end_action(child);
+        let survivor_initial = make_object(guard_type, &[("version", Value::from(0_i64))]);
+        let (survivor, _, survivor_handle) = builder.insert(&mut ctx, &survivor_initial);
+        attach_guard(&mut ctx, &mut builder, &input, input_handle, outer_start);
+        attach_guard(&mut ctx, &mut builder, &first, first_handle, outer_start);
+        attach_guard(
+            &mut ctx,
+            &mut builder,
+            &survivor,
+            survivor_handle,
+            outer_start,
+        );
+        builder.end_action(outer);
+
+        let next_start = builder.chain_position();
+        let next = builder.begin_action();
+        let mut final_state = tx_with(&survivor, "version", Value::from(1_i64));
+        rekey(&mut final_state);
+        let (_, handle) = builder.mutate(&mut ctx, &final_state, &survivor);
+        attach_guard(&mut ctx, &mut builder, &final_state, handle, next_start);
+        builder.end_action(next);
+
+        let (statement, tx, stats) = builder.finalize(&mut ctx).unwrap();
+        let expected_created = set!(first, second, third, survivor, final_state);
+        assert_eq!(tx.created.commitment(), expected_created.commitment());
+        assert_eq!(
+            statement.args()[3].literal().unwrap(),
+            Value::from(tx.created.clone())
+        );
+        // An observer can reconstruct tx_final from public data alone. Private
+        // inputs must not enter this commitment, even though they enter replay.
+        let public_final = dict!({
+            "created" => tx.created.commitment(),
+            "nullifiers" => tx.nullifiers.commitment(),
+            "chain_start" => EMPTY_VALUE,
+            "chain_end" => EMPTY_VALUE
+        });
+        assert_eq!(tx.dict().commitment(), public_final.commitment());
+        assert!(tx.dict().get(&StrKey::from("inputs")).unwrap().is_none());
+        assert_eq!(
+            statement.args()[1].literal().unwrap(),
+            Value::from(public_final)
+        );
+        assert_eq!(tx.created_commitments().unwrap().len(), 5);
+        assert_eq!(tx.nullifier_hashes().unwrap().len(), 5);
+        assert_eq!(stats["ReplayMutateEvent"], 3);
+        assert_eq!(stats["ReplayNullify"], 5);
+        assert_eq!(stats["ReplayDelete"], 2);
+        ctx.builder.reveal(&statement).unwrap();
+        solve_and_verify(ctx.builder);
+
+        let decoded: Tx = serde_json::from_str(&serde_json::to_string(&tx).unwrap()).unwrap();
+        assert_eq!(decoded.created.commitment(), tx.created.commitment());
+        assert_eq!(decoded.ctx.commitment(), tx.ctx.commitment());
+        state.apply_tx(&tx);
+        for object in [&first, &second, &third, &survivor, &final_state] {
+            assert!(state.created_index.contains_key(&object.commitment()));
+        }
+    }
+
+    #[test]
+    fn recreating_a_state_returns_an_error() {
+        // Both mutation cycles and delete/reinsert must fail without unwinding,
+        // including when the previous creation was in a parent action scope.
+        for mutate_cycle in [true, false] {
+            let (mut ctx, guard_type) = replay_test_context();
+            let state = TestState::empty(0);
+            let mut builder = TxBuilder::new(&mut ctx, &[], state.grounding_witness(&[]));
+            let outer_start = builder.chain_position();
+            let outer = builder.begin_action();
+            let initial = make_object(guard_type, &[("version", Value::from(0_i64))]);
+            let (first, _, first_handle) = builder.insert(&mut ctx, &initial);
+            let child_start = builder.chain_position();
+            let child = builder.begin_action();
+            let (first_child_obj, first_child_handle, repeated_handle) = if mutate_cycle {
+                let mut second = tx_with(&first, "version", Value::from(1_i64));
+                rekey(&mut second);
+                let (_, second_handle) = builder.mutate(&mut ctx, &second, &first);
+                let (_, repeated_handle) = builder.mutate(&mut ctx, &first, &second);
+                (second, second_handle, repeated_handle)
+            } else {
+                let (_, delete_handle) = builder.delete(&mut ctx, &first);
+                let (repeated, _, repeated_handle) = builder.insert(&mut ctx, &initial);
+                assert_eq!(repeated.commitment(), first.commitment());
+                (first.clone(), delete_handle, repeated_handle)
+            };
+            attach_guard(
+                &mut ctx,
+                &mut builder,
+                &first_child_obj,
+                first_child_handle,
+                child_start,
+            );
+            attach_guard(&mut ctx, &mut builder, &first, repeated_handle, child_start);
+            builder.end_action(child);
+            attach_guard(&mut ctx, &mut builder, &first, first_handle, outer_start);
+            builder.end_action(outer);
+
+            let err = builder.finalize(&mut ctx).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "object state {} was already created in this transaction",
+                    first.commitment()
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn inserting_the_same_state_twice_returns_an_error() {
+        let (mut ctx, guard_type) = replay_test_context();
+        let state = TestState::empty(0);
+        let mut builder = TxBuilder::new(&mut ctx, &[], state.grounding_witness(&[]));
+        let start = builder.chain_position();
+        let scope = builder.begin_action();
+        let initial = make_object(guard_type, &[]);
+        let (first, _, first_handle) = builder.insert(&mut ctx, &initial);
+        let (repeated, _, repeated_handle) = builder.insert(&mut ctx, &initial);
+        assert_eq!(repeated.commitment(), first.commitment());
+        attach_guard(&mut ctx, &mut builder, &first, first_handle, start);
+        attach_guard(&mut ctx, &mut builder, &repeated, repeated_handle, start);
+        builder.end_action(scope);
+
+        let err = builder.finalize(&mut ctx).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "object state {} was already created in this transaction",
+                first.commitment()
+            )
+        );
+    }
+
+    #[test]
+    fn consuming_a_state_twice_returns_an_error() {
+        for consumed_is_input in [true, false] {
+            for second_is_mutation in [true, false] {
+                let (mut ctx, guard_type) = replay_test_context();
+                let mut state = TestState::empty(0);
+                let inputs = if consumed_is_input {
+                    grounded_replay_inputs(&mut state, guard_type.clone(), 1)
+                } else {
+                    vec![]
+                };
+                let witness = state.grounding_witness(&inputs);
+                let mut builder = TxBuilder::new(&mut ctx, &inputs, witness);
+                let start = builder.chain_position();
+                let scope = builder.begin_action();
+                let mut guards = vec![];
+                let version_zero = [("version", Value::from(0_i64))];
+                let consumed = if consumed_is_input {
+                    inputs[0].clone()
+                } else {
+                    let (created, _, handle) =
+                        builder.insert(&mut ctx, &make_object(guard_type, &version_zero));
+                    guards.push((created.clone(), handle));
+                    created
+                };
+                let (_, first_handle) = builder.delete(&mut ctx, &consumed);
+                guards.push((consumed.clone(), first_handle));
+                if second_is_mutation {
+                    let mut replacement = tx_with(&consumed, "version", Value::from(1_i64));
+                    rekey(&mut replacement);
+                    let (_, handle) = builder.mutate(&mut ctx, &replacement, &consumed);
+                    guards.push((replacement, handle));
+                } else {
+                    let (_, handle) = builder.delete(&mut ctx, &consumed);
+                    guards.push((consumed.clone(), handle));
+                }
+                for (object, handle) in guards {
+                    attach_guard(&mut ctx, &mut builder, &object, handle, start);
+                }
+                builder.end_action(scope);
+
+                let err = builder.finalize(&mut ctx).unwrap_err();
+                assert_eq!(
+                    err.to_string(),
+                    format!(
+                        "object state {} was already consumed in this transaction",
+                        consumed.commitment()
+                    )
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn consuming_an_unavailable_state_returns_an_error() {
+        for consume_by_mutation in [true, false] {
+            let (mut ctx, guard_type) = replay_test_context();
+            let state = TestState::empty(0);
+            let mut builder = TxBuilder::new(&mut ctx, &[], state.grounding_witness(&[]));
+            let start = builder.chain_position();
+            let scope = builder.begin_action();
+            let unavailable = with_stable_identifier(&make_object(
+                guard_type,
+                &[("version", Value::from(0_i64))],
+            ));
+            let (object, handle) = if consume_by_mutation {
+                let mut replacement = tx_with(&unavailable, "version", Value::from(1_i64));
+                rekey(&mut replacement);
+                let (_, handle) = builder.mutate(&mut ctx, &replacement, &unavailable);
+                (replacement, handle)
+            } else {
+                let (_, handle) = builder.delete(&mut ctx, &unavailable);
+                (unavailable.clone(), handle)
+            };
+            attach_guard(&mut ctx, &mut builder, &object, handle, start);
+            builder.end_action(scope);
+
+            let err = builder.finalize(&mut ctx).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "object state {} is neither a transaction input nor created earlier in this transaction",
+                    unavailable.commitment()
+                )
+            );
+        }
+    }
+
     /// Tx 1: Spawn a WoodPick (insert, no inputs).
     /// Tx 2: MineStone using the WoodPick (mutate pick + insert stone).
     #[test]
@@ -1406,7 +1762,7 @@ mod tests {
         tx1.end_action(scope);
 
         eprintln!("{tx1}");
-        let (st, tx0, stats) = tx1.finalize(&mut ctx);
+        let (st, tx0, stats) = tx1.finalize(&mut ctx).unwrap();
         print_stats(&stats);
         ctx.builder.reveal(&st).unwrap();
         solve_and_verify(ctx.builder);
@@ -1490,7 +1846,7 @@ mod tests {
         tx2.end_action(scope_outer);
 
         eprintln!("{tx2}");
-        let (st, tx_out, stats) = tx2.finalize(&mut ctx);
+        let (st, tx_out, stats) = tx2.finalize(&mut ctx).unwrap();
         print_stats(&stats);
         ctx.builder.reveal(&st).unwrap();
         solve_and_verify(ctx.builder);
@@ -1553,7 +1909,7 @@ mod tests {
         tx1.end_action(scope);
 
         eprintln!("{tx1}");
-        let (st, tx1_out, stats) = tx1.finalize(&mut ctx);
+        let (st, tx1_out, stats) = tx1.finalize(&mut ctx).unwrap();
         print_stats(&stats);
         ctx.builder.reveal(&st).unwrap();
         solve_and_verify(ctx.builder);
@@ -1613,7 +1969,7 @@ mod tests {
         tx2.end_action(scope_outer);
 
         eprintln!("{tx2}");
-        let (st, tx2_out, stats) = tx2.finalize(&mut ctx);
+        let (st, tx2_out, stats) = tx2.finalize(&mut ctx).unwrap();
         print_stats(&stats);
         ctx.builder.reveal(&st).unwrap();
         solve_and_verify(ctx.builder);
@@ -1728,14 +2084,14 @@ mod tests {
         tx3.end_action(scope_outer);
 
         eprintln!("{tx3}");
-        let (st, tx3_out, stats) = tx3.finalize(&mut ctx);
+        let (st, tx3_out, stats) = tx3.finalize(&mut ctx).unwrap();
         print_stats(&stats);
         ctx.builder.reveal(&st).unwrap();
         solve_and_verify(ctx.builder);
 
-        // Both sticks should be live
-        assert!(tx3_out.live.contains(&Value::from(stick_a)).unwrap());
-        assert!(tx3_out.live.contains(&Value::from(stick_b)).unwrap());
+        // Both sticks should be created
+        assert!(tx3_out.created.contains(&Value::from(stick_a)).unwrap());
+        assert!(tx3_out.created.contains(&Value::from(stick_b)).unwrap());
         // Wood should be nullified
         assert!(
             tx3_out
@@ -1788,7 +2144,7 @@ mod tests {
                 .unwrap();
             tx.set_guard(h, st_guard);
             tx.end_action(scope);
-            let (st, tx_out, _stats) = tx.finalize(&mut ctx);
+            let (st, tx_out, _stats) = tx.finalize(&mut ctx).unwrap();
             ctx.builder.reveal(&st).unwrap();
             solve_and_verify(ctx.builder);
             state.apply_tx(&tx_out);
@@ -1823,7 +2179,7 @@ mod tests {
         }
 
         eprintln!("{burn}");
-        let (st, burn_out, stats) = burn.finalize(&mut ctx);
+        let (st, burn_out, stats) = burn.finalize(&mut ctx).unwrap();
         print_stats(&stats);
         ctx.builder.reveal(&st).unwrap();
         solve_and_verify(ctx.builder);

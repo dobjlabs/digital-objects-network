@@ -134,17 +134,6 @@ pub(crate) fn validate_execute_request(
         }
     }
 
-    for name in input.args.keys() {
-        if !action.args.iter().any(|a| a.name == *name) {
-            let declared: Vec<&str> = action.args.iter().map(|a| a.name.as_str()).collect();
-            return Err(anyhow!(
-                "{} has no argument `{name}`; declared arguments: [{}]",
-                input.action,
-                declared.join(", ")
-            ));
-        }
-    }
-
     Ok(())
 }
 
@@ -310,16 +299,11 @@ pub(crate) fn build_relayer_payload(
     let compressed = shrink_compress_pod(&shrunk_main_pod, action_output.tx_pod.clone())
         .map_err(|err| anyhow!("failed to shrink/compress tx proof: {err}"))?;
 
-    let tx_final = action_output.tx.dict().commitment();
-    let nullifiers = action_output.tx.nullifier_hashes()?;
-    let live = action_output.tx.live_commitments()?;
-    let payload = Payload {
-        proof: PayloadProof::Plonky2(Box::new(compressed)),
-        tx_final,
-        state_root: *old_state_root,
-        nullifiers,
-        live,
-    };
+    let payload = Payload::from_tx(
+        PayloadProof::Plonky2(Box::new(compressed)),
+        &action_output.tx,
+        *old_state_root,
+    )?;
 
     Ok(payload.to_bytes())
 }
@@ -327,49 +311,6 @@ pub(crate) fn build_relayer_payload(
 #[cfg(test)]
 mod action_args_tests {
     use super::*;
-    use wire_types::{ActionArgSummary, QualifiedName};
-
-    fn summary(args: &[(&str, &str)]) -> ActionSummary {
-        ActionSummary {
-            action: QualifiedName::new("p", "A"),
-            emoji: String::new(),
-            hash: String::new(),
-            description: String::new(),
-            total_inputs: vec![],
-            total_outputs: vec![],
-            source_path: String::new(),
-            mutated_objects: vec![],
-            predicate_source: String::new(),
-            args: args
-                .iter()
-                .map(|(name, typ)| ActionArgSummary {
-                    name: name.to_string(),
-                    type_name: typ.to_string(),
-                })
-                .collect(),
-        }
-    }
-
-    #[test]
-    fn unknown_argument_is_rejected_before_execution() {
-        let action = summary(&[("key", "Raw")]);
-        let input = ExecuteActionInput {
-            action: action.action.clone(),
-            input_objects: vec![],
-            args: [("nonce".to_string(), serde_json::json!({"Int": "1"}))].into(),
-        };
-        let err = validate_execute_request(&input, &action)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("no argument `nonce`"), "{err}");
-        assert!(err.contains("[key]"), "{err}");
-
-        let ok = ExecuteActionInput {
-            args: [("key".to_string(), serde_json::json!({"Raw": "00"}))].into(),
-            ..input
-        };
-        validate_execute_request(&ok, &action).unwrap();
-    }
 
     #[test]
     fn argument_values_decode_from_json() {

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { DragEvent } from "react";
 import type {
-  ActionArgPayload,
   ActionArgValues,
   ActionPayload as Action,
   ClassRefPayload,
@@ -55,49 +54,6 @@ function validBinding(
       object.status === "live" &&
       qualifiedEq(object.class, required.class),
   ) ? binding : null;
-}
-
-/** Blank input selects the script default. */
-function parseArgValue(
-  arg: ActionArgPayload,
-  raw: string,
-): { value?: unknown; error?: string } {
-  const text = raw.trim();
-  if (!text) return {};
-  switch (arg.type) {
-    case "Raw": {
-      const hex = text.startsWith("0x") ? text.slice(2) : text;
-      if (!/^[0-9a-fA-F]{1,64}$/.test(hex)) {
-        return { error: "expected up to 64 hex digits" };
-      }
-      return { value: { Raw: hex.toLowerCase().padStart(64, "0") } };
-    }
-    case "Int":
-      if (!/^-?\d+$/.test(text)) return { error: "expected an integer" };
-      return { value: { Int: text } };
-    case "Str":
-      return { value: text };
-    default:
-      try {
-        return { value: JSON.parse(text) };
-      } catch {
-        return { error: "expected a pod2 value in JSON form" };
-      }
-  }
-}
-
-function parseActionArgs(
-  args: ActionArgPayload[],
-  values: Record<string, string>,
-): { args: ActionArgValues; errors: Record<string, string> } {
-  const parsed: ActionArgValues = Object.create(null);
-  const errors: Record<string, string> = Object.create(null);
-  for (const arg of args) {
-    const { value, error } = parseArgValue(arg, values[arg.name] ?? "");
-    if (error) errors[arg.name] = error;
-    else if (value !== undefined) parsed[arg.name] = value;
-  }
-  return { args: parsed, errors };
 }
 
 export function ContextPanel({
@@ -266,7 +222,6 @@ export function ContextPanel({
     methodName: string;
     totalInputs: ClassRefPayload[];
     onRun: (boundArgs: BoundArg[]) => void;
-    /** Label shown on the disabled run button. */
     runBlocked?: string;
   }) =>
     (() => {
@@ -369,7 +324,7 @@ export function ContextPanel({
                       </select>
                     </div>
                     {err && <div className="method-arg-error">{err}</div>}
-                  </div>
+                      </div>
                 );
               })}
             </div>
@@ -557,13 +512,23 @@ export function ContextPanel({
   const actionHashDisplay = truncateDisplayHash(actionHashRaw);
   const actionLabel = pluginScopedLabel(action.action);
   const actionId = qualifiedId(action.action);
-  const declaredArgs = action.args ?? [];
+  const argumentNames = action.args ?? [];
   const argValueKey = (name: string) => `${actionId}::${name}`;
-  const typedArgs = Object.fromEntries(
-    declaredArgs.map((arg) => [arg.name, argValues[argValueKey(arg.name)] ?? ""]),
+  const argumentInputs = Object.fromEntries(
+    argumentNames.map((name) => [name, argValues[argValueKey(name)] ?? ""]),
   );
-  const parsedArgs = parseActionArgs(declaredArgs, typedArgs);
-  const argErrorCount = Object.keys(parsedArgs.errors).length;
+  const argumentErrors = new Map<string, string>();
+  const suppliedArgs: ActionArgValues = Object.fromEntries(
+    Object.entries(argumentInputs).flatMap(([name, text]) => {
+      if (text.trim() === "") return [];
+      try {
+        return [[name, JSON.parse(text)]];
+      } catch {
+        argumentErrors.set(name, "Invalid JSON");
+        return [];
+      }
+    }),
+  );
 
   return (
     <section className="context-panel">
@@ -592,42 +557,41 @@ export function ContextPanel({
 
       <div className="context-desc">{action.description}</div>
 
-      {declaredArgs.length > 0 && (
+      {argumentNames.length > 0 && (
         <div className="method-args-block">
           <div className="method-args-title">
-            arguments (blank = script default)
+            optional arguments (POD2 JSON)
           </div>
-          {declaredArgs.map((arg) => {
-            const err = parsedArgs.errors[arg.name];
-            return (
-              <div key={arg.name} className="method-arg">
-                <div className="method-arg-row">
-                  <span
-                    className="method-arg-label"
-                    title={arg.type}
-                  >
-                    {arg.name}: {arg.type}
-                  </span>
-                  <input
-                    type="text"
-                    className={`method-arg-input ${err ? "error" : ""}`.trim()}
-                    value={typedArgs[arg.name]}
-                    placeholder="Use script default"
-                    disabled={proofRunning}
-                    spellCheck={false}
-                    onChange={(event) => {
-                      const text = event.target.value;
-                      setArgValues((prev) => ({
-                        ...prev,
-                        [argValueKey(arg.name)]: text,
-                      }));
-                    }}
-                  />
-                </div>
-                {err && <div className="method-arg-error">{err}</div>}
+          {argumentNames.map((name) => (
+            <div key={name} className="method-arg">
+              <div className="method-arg-row">
+                <span
+                  className="method-arg-label"
+                  title="POD2 JSON"
+                >
+                  {name}
+                </span>
+                <input
+                  type="text"
+                  className={`method-arg-input ${argumentErrors.has(name) ? "error" : ""}`.trim()}
+                  value={argumentInputs[name]}
+                  placeholder='{"Int":"42"}, "text" (blank = absent)'
+                  disabled={proofRunning}
+                  spellCheck={false}
+                  onChange={(event) => {
+                    const text = event.target.value;
+                    setArgValues((prev) => ({
+                      ...prev,
+                      [argValueKey(name)]: text,
+                    }));
+                  }}
+                />
               </div>
-            );
-          })}
+              {argumentErrors.has(name) && (
+                <div className="method-arg-error">{argumentErrors.get(name)}</div>
+              )}
+            </div>
+          ))}
         </div>
       )}
 
@@ -635,7 +599,7 @@ export function ContextPanel({
         methodId: actionId,
         methodName: actionLabel,
         totalInputs: action.totalInputs,
-        runBlocked: argErrorCount > 0 ? "fix arguments" : undefined,
+        runBlocked: argumentErrors.size > 0 ? "fix arguments" : undefined,
         onRun: (boundArgs) =>
           onRunProof({
             action: action.action,
@@ -643,7 +607,7 @@ export function ContextPanel({
               objectPath: arg.objectPath,
               label: arg.label,
             })),
-            args: parsedArgs.args,
+            args: suppliedArgs,
           }),
       })}
     </section>
