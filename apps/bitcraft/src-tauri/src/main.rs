@@ -35,6 +35,7 @@ struct Desktop {
     runtime: Mutex<Option<Arc<runtime::Runtime>>>,
     message: Mutex<String>,
     tray_available: AtomicBool,
+    #[cfg(target_os = "linux")]
     background_pending: AtomicBool,
 }
 
@@ -167,6 +168,17 @@ fn watch_tray(app: tauri::AppHandle) {
 fn main() -> Result<()> {
     let args = Args::parse();
     let home = bitcraft_launchers::resolve_home(args.home)?;
+    let desktop = Desktop {
+        runtime: Mutex::new(None),
+        message: Mutex::new(if args.no_runtime {
+            "Desktop shell only. Start without --no-runtime to launch the game.".into()
+        } else {
+            "Starting Bitcraft. The first launch builds the proving cache and can take several minutes.".into()
+        }),
+        tray_available: AtomicBool::new(false),
+        #[cfg(target_os = "linux")]
+        background_pending: AtomicBool::new(args.background),
+    };
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
             if !args.iter().any(|arg| arg == "--background") {
@@ -174,7 +186,7 @@ fn main() -> Result<()> {
             }
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(Desktop { runtime: Mutex::new(None), message: Mutex::new(if args.no_runtime { "Desktop shell only. Start without --no-runtime to launch the game.".into() } else { "Starting Bitcraft. The first launch builds the proving cache and can take several minutes.".into() }), tray_available: AtomicBool::new(false), background_pending: AtomicBool::new(args.background) })
+        .manage(desktop)
         .on_menu_event(|app, event| run_menu_action(app, event.id().as_ref()))
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event
