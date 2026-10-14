@@ -275,7 +275,7 @@ impl Node {
         let exp_backoff = ExponentialBackoffBuilder::default().build();
         let beacon_cli_config = beacon::Config {
             base_url: config.beacon_url.clone(),
-            exp_backoff: Some(exp_backoff.clone()),
+            exp_backoff: exp_backoff.clone(),
         };
         let beacon_cli = BeaconClient::try_with_client(http_cli.clone(), beacon_cli_config)?;
         let rpc_cli = execution::connect(http_cli, config.rpc_url.parse()?, exp_backoff);

@@ -81,7 +81,7 @@ where
         let inner = self.inner.clone();
         let backoff = self.backoff.clone();
         Box::pin(async move {
-            retry(Some(backoff), "execution RPC", || {
+            retry(backoff, "execution RPC", || {
                 let mut inner = inner.clone();
                 let request = request.clone();
                 async move {

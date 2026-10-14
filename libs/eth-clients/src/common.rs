@@ -173,21 +173,15 @@ impl Display for ErrorResponse {
 pub(crate) async fn json_get<ExpectedResponse: DeserializeOwned>(
     client: &Client,
     url: Url,
-    auth_token: Option<&str>,
-    exp_backoff: Option<ExponentialBackoff>,
+    exp_backoff: ExponentialBackoff,
 ) -> Result<ExpectedResponse, ClientError> {
-    let auth_token = auth_token.unwrap_or("");
     trace!(
         method = "GET",
         url = url.clone().as_str(),
         "Dispatching API request"
     );
 
-    let mut req = client.get(url.clone());
-
-    if !auth_token.is_empty() {
-        req = req.bearer_auth(auth_token);
-    }
+    let req = client.get(url.clone());
 
     let (status, text) = retry(exp_backoff, url.as_str(), || {
         fetch_text(
@@ -278,12 +272,12 @@ impl FailedAttempt<ClientError> {
     }
 }
 
-/// Run `attempt` until it succeeds, fails in a way that is not retryable, or `backoff` gives up;
-/// without `backoff` the first failure is returned. A retry waits as long as the server asked,
+/// Run `attempt` until it succeeds, fails in a way that is not retryable, or `backoff` gives up.
+/// A retry waits as long as the server asked,
 /// up to [`MAX_SERVER_RETRY_DELAY`], or else the next `backoff` interval. `backoff` is consulted
 /// either way, so its elapsed-time limit always ends the retries.
 pub(crate) async fn retry<T, E, Fut>(
-    backoff: Option<ExponentialBackoff>,
+    mut backoff: ExponentialBackoff,
     target: &str,
     mut attempt: impl FnMut() -> Fut,
 ) -> Result<T, E>
@@ -291,23 +285,17 @@ where
     E: Debug,
     Fut: Future<Output = Result<T, FailedAttempt<E>>>,
 {
-    let mut backoff = backoff;
-    if let Some(backoff) = &mut backoff {
-        backoff.reset();
-    }
+    backoff.reset();
     loop {
         let failed = match attempt().await {
             Ok(value) => return Ok(value),
             Err(failed) => failed,
         };
-        let backoff_delay = match &mut backoff {
-            Some(backoff) if failed.retryable => backoff.next_backoff(),
-            _ => None,
-        };
-        let Some(backoff_delay) = backoff_delay else {
-            if failed.retryable && backoff.is_some() {
-                warn!(target, error = ?failed.error, "Request failed. All retries failed");
-            }
+        if !failed.retryable {
+            return Err(failed.error);
+        }
+        let Some(backoff_delay) = backoff.next_backoff() else {
+            warn!(target, error = ?failed.error, "Request failed. All retries failed");
             return Err(failed.error);
         };
         let delay = failed
@@ -412,7 +400,7 @@ pub(crate) mod tests {
             r#"{"ok":true}"#,
         )
         .await;
-        let value: serde_json::Value = json_get(&Client::new(), url, None, Some(fast_backoff()))
+        let value: serde_json::Value = json_get(&Client::new(), url, fast_backoff())
             .await
             .expect("the request succeeds once the rate limit lifts");
         assert_eq!(value["ok"], true);
@@ -423,10 +411,9 @@ pub(crate) mod tests {
     async fn broken_connections_and_gateway_errors_are_retried() {
         let script = vec![Reply::Drop, Reply::Stall, Reply::BadGateway];
         let (url, requests) = scripted_server(script, r#"{"ok":true}"#).await;
-        let value: serde_json::Value =
-            json_get(&impatient_client(), url, None, Some(fast_backoff()))
-                .await
-                .expect("the request succeeds once the server recovers");
+        let value: serde_json::Value = json_get(&impatient_client(), url, fast_backoff())
+            .await
+            .expect("the request succeeds once the server recovers");
         assert_eq!(value["ok"], true);
         assert_eq!(requests.load(Ordering::SeqCst), 4);
     }
@@ -435,7 +422,7 @@ pub(crate) mod tests {
     async fn server_retry_delay_is_capped() {
         let started = tokio::time::Instant::now();
         let mut attempts = 0;
-        let result: Result<(), &str> = retry(Some(ExponentialBackoff::default()), "test", || {
+        let result: Result<(), &str> = retry(ExponentialBackoff::default(), "test", || {
             attempts += 1;
             let first_attempt = attempts == 1;
             async move {
@@ -456,9 +443,13 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn rate_limit_without_backoff_is_a_status_error() {
+    async fn exhausted_retries_return_the_status_error() {
         let (url, _) = scripted_server(vec![Reply::RateLimited], r#"{"ok":true}"#).await;
-        let err = json_get::<serde_json::Value>(&Client::new(), url, None, None)
+        let backoff = ExponentialBackoff {
+            max_elapsed_time: Some(Duration::ZERO),
+            ..Default::default()
+        };
+        let err = json_get::<serde_json::Value>(&Client::new(), url, backoff)
             .await
             .unwrap_err();
         assert!(

@@ -43,12 +43,12 @@ use alloy::primitives::B256;
 pub struct BeaconClient {
     base_url: Url,
     client: Client,
-    exp_backoff: Option<ExponentialBackoff>,
+    exp_backoff: ExponentialBackoff,
 }
 
 pub struct Config {
     pub base_url: String,
-    pub exp_backoff: Option<ExponentialBackoff>,
+    pub exp_backoff: ExponentialBackoff,
 }
 
 fn result_some<T>(r: ClientResult<T>) -> ClientResult<Option<T>> {
@@ -77,7 +77,7 @@ impl BeaconClient {
         let url = self.base_url.join(path.as_str())?;
 
         result_some(
-            json_get::<BlockResponse>(&self.client, url, None, self.exp_backoff.clone())
+            json_get::<BlockResponse>(&self.client, url, self.exp_backoff.clone())
                 .await
                 .map(|res| res.into()),
         )
@@ -88,7 +88,7 @@ impl BeaconClient {
         let url = self.base_url.join(path.as_str())?;
 
         result_some(
-            json_get::<BlockHeaderResponse>(&self.client, url, None, self.exp_backoff.clone())
+            json_get::<BlockHeaderResponse>(&self.client, url, self.exp_backoff.clone())
                 .await
                 .map(|res| res.into()),
         )
@@ -101,7 +101,7 @@ impl BeaconClient {
         let url = self.base_url.join(path.as_str())?;
 
         let mut blobs =
-            json_get::<BlobsSidecarsResponse>(&self.client, url, None, self.exp_backoff.clone())
+            json_get::<BlobsSidecarsResponse>(&self.client, url, self.exp_backoff.clone())
                 .await
                 .map(|res| res.data)?;
         blobs.sort_by_key(|blob| blob.index);
@@ -121,7 +121,7 @@ impl BeaconClient {
                 .map(|h| ("versioned_hashes", format!("{}", *h))),
         );
 
-        let blobs = json_get::<BlobsResponse>(&self.client, url, None, self.exp_backoff.clone())
+        let blobs = json_get::<BlobsResponse>(&self.client, url, self.exp_backoff.clone())
             .await
             .map(|res| res.data)?;
         Ok(blobs)
@@ -130,7 +130,7 @@ impl BeaconClient {
     pub async fn get_spec(&self) -> ClientResult<Spec> {
         let url = self.base_url.join("v1/config/spec")?;
 
-        json_get::<SpecResponse>(&self.client, url, None, self.exp_backoff.clone())
+        json_get::<SpecResponse>(&self.client, url, self.exp_backoff.clone())
             .await
             .map(|res| res.data)
     }

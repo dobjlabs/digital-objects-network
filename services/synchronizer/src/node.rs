@@ -111,12 +111,12 @@ impl Node {
         let exp_backoff = ExponentialBackoffBuilder::default().build();
         let beacon_cli_cfg = beacon::Config {
             base_url: cfg.beacon_url.clone(),
-            exp_backoff: Some(exp_backoff.clone()),
+            exp_backoff: exp_backoff.clone(),
         };
         let beacon_cli = BeaconClient::try_with_client(http_cli.clone(), beacon_cli_cfg)?;
         let archiver_cli_cfg = beacon::Config {
             base_url: cfg.archiver_url.clone(),
-            exp_backoff: Some(exp_backoff.clone()),
+            exp_backoff: exp_backoff.clone(),
         };
         let archiver_cli = BeaconClient::try_with_client(http_cli.clone(), archiver_cli_cfg)?;
         let rpc_cli = execution::connect(http_cli, cfg.rpc_url.parse()?, exp_backoff);
@@ -204,8 +204,8 @@ impl Node {
                     .await
                 {
                     Ok(blobs) => Ok(Some(blobs)),
-                    Err(ClientError::NotFound(_)) => return Ok(None),
-                    Err(err) => return Err(err.into()),
+                    Err(ClientError::NotFound(_)) => Ok(None),
+                    Err(err) => Err(err.into()),
                 }
             })
             .await?;
@@ -217,6 +217,12 @@ impl Node {
                 blobs.len()
             ));
         }
+        debug!(
+            slot,
+            blob_count = blobs.len(),
+            "Fetched blobs from archiver"
+        );
+
         blobs.reverse();
         let mut blob_map = HashMap::new();
         for (vh, _) in block_kzg_blob_commitments {
@@ -224,8 +230,6 @@ impl Node {
                 blob_map.insert(*vh, blobs.pop().expect("not empty"));
             }
         }
-
-        debug!(slot, blob_count = blobs.len(), "Fetched blobs from beacon");
 
         Ok(blob_map)
     }
