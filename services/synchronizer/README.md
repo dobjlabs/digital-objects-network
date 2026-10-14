@@ -220,8 +220,8 @@ Hashes in request and response bodies are pod2 `Hash` values, serialized as lowe
 - `APP_STATE_DB_PATH` (default: `data/synchronizer-db`)
 - `SYNC_METADATA_DB_URL` (default: `postgres://postgres@localhost:5432/synchronizer`)
 - `HTTP_BIND` (default: `127.0.0.1:3000`)
-- `RPC_RETRIES` (default: `6`)
-- `RPC_RETRY_MS` (default: `1000`)
+- `RPC_RETRIES` (default: `6`) — how many times to ask again for a beacon block, execution block or archived blobs that a lagging node does not serve yet. Failed requests (rate limits, gateway errors, broken connections) are retried separately by the clients, with exponential backoff.
+- `RPC_RETRY_MS` (default: `1000`) — delay in ms between those requests.
 - `SYNC_DELAY_MS` (default: derived from RPC rate limit, currently `173`) — delay in ms between slots when at head. Override with caution to avoid exceeding the RPC rate limit.
 - `CATCHUP_BATCH_SIZE` (default: derived from RPC rate limit, currently `7`) — number of slots fetched concurrently during catch-up. Override with caution to avoid exceeding the RPC rate limit.
 

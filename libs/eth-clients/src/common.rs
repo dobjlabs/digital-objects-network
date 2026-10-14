@@ -19,16 +19,20 @@
 // CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 // SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
+use std::{
+    fmt::{Debug, Display},
+    future::Future,
+    str::FromStr,
+    time::Duration,
 };
-use std::{fmt::Display, str::FromStr, time::Duration};
 
-use backoff::ExponentialBackoff;
-use reqwest::{header::RETRY_AFTER, Client, Response, StatusCode, Url};
+use backoff::{backoff::Backoff, ExponentialBackoff};
+use reqwest::{header::RETRY_AFTER, Client, RequestBuilder, StatusCode, Url};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use tracing::trace;
+use tracing::{trace, warn};
+
+/// Longest delay honoured when a server says how long to wait before retrying.
+const MAX_SERVER_RETRY_DELAY: Duration = Duration::from_mins(1);
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(untagged)]
@@ -185,85 +189,18 @@ pub(crate) async fn json_get<ExpectedResponse: DeserializeOwned>(
         req = req.bearer_auth(auth_token);
     }
 
-    let retry_after_counter = Arc::new(AtomicUsize::new(0));
-    let resp = if let Some(e) = exp_backoff {
-        match backoff::future::retry_notify(
-            e,
-            || {
-                let req = req.try_clone().unwrap();
-                let url = url.clone();
-                let retry_after_counter = retry_after_counter.clone();
-
-                async move {
-                    let resp = req.send().await.map_err(ClientError::from)?;
-                    match retryable_status(resp, url).await {
-                        Ok(resp) => Ok(resp),
-                        Err((err, Some(retry_after))) => {
-                            // If the server asks for a long delay or keeps sending Retry-After
-                            // follow backoff policy
-                            if retry_after > Duration::from_mins(1)
-                                || retry_after_counter.load(Ordering::SeqCst) >= 8
-                            {
-                                Err(backoff::Error::transient(err))
-                            } else {
-                                retry_after_counter.fetch_add(1, Ordering::SeqCst);
-                                Err(backoff::Error::retry_after(err, retry_after))
-                            }
-                        }
-                        Err((err, None)) => Err(backoff::Error::transient(err)),
-                    }
-                }
-            },
-            |error, duration: std::time::Duration| {
-                let duration = duration.as_secs();
-
-                tracing::warn!(
-                    method = "GET",
-                    url = %url,
-                    ?error,
-                    "Request failed. Retrying in {duration} seconds…"
-                );
-            },
+    let (status, text) = retry(exp_backoff, url.as_str(), || {
+        fetch_text(
+            req.try_clone().expect("a GET request has no streamed body"),
+            url.clone(),
         )
-        .await
-        {
-            Ok(resp) => resp,
-            Err(error) => {
-                tracing::warn!(
-                    method = "GET",
-                    url = %url,
-                    ?error,
-                    "Request failed. All retries failed"
-                );
+    })
+    .await?;
 
-                return Err(error);
-            }
-        }
-    } else {
-        match req.send().await {
-            Err(error) => {
-                tracing::warn!(
-                    method = "GET",
-                    url = %url,
-                    ?error,
-                    "Failed to send request"
-                );
-
-                return Err(error.into());
-            }
-            Ok(resp) => retryable_status(resp, url.clone())
-                .await
-                .map_err(|(err, _retry_after)| err)?,
-        }
-    };
-
-    let status = resp.status();
-
-    if status.as_u16() == 404 {
+    if status == StatusCode::NOT_FOUND {
         return Err(ClientError::NotFound(url));
     };
 
-    let text = resp.text().await?;
     let result: Result<ClientResponse<ExpectedResponse>, _> =
         serde_json::from_str(&text).map_err(ClientError::from);
 
@@ -283,34 +220,107 @@ pub(crate) async fn json_get<ExpectedResponse: DeserializeOwned>(
     }
 }
 
-/// Pass `resp` through unless its status is a transient server condition, in which case it
-/// becomes an error, paired with the delay the server asked for when it named one in seconds.
-async fn retryable_status(
-    resp: Response,
+/// Send `req` and read the whole body, so that a connection lost while reading is retried
+/// like one lost while sending.
+async fn fetch_text(
+    req: RequestBuilder,
     url: Url,
-) -> Result<Response, (ClientError, Option<Duration>)> {
+) -> Result<(StatusCode, String), FailedAttempt<ClientError>> {
+    let resp = req.send().await.map_err(FailedAttempt::from_reqwest)?;
     let status = resp.status();
-    let retryable = matches!(
-        status,
-        StatusCode::TOO_MANY_REQUESTS
-            | StatusCode::BAD_GATEWAY
-            | StatusCode::SERVICE_UNAVAILABLE
-            | StatusCode::GATEWAY_TIMEOUT
-    );
-    if !retryable {
-        return Ok(resp);
-    }
     let retry_after = resp
         .headers()
         .get(RETRY_AFTER)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.trim().parse::<u64>().ok())
         .map(Duration::from_secs);
-    let body = resp.text().await.unwrap_or_default();
-    Err((
-        ClientError::RetryableStatus { url, status, body },
-        retry_after,
-    ))
+    let text = resp.text().await.map_err(FailedAttempt::from_reqwest)?;
+    if is_retryable_status(status.as_u16()) {
+        return Err(FailedAttempt {
+            error: ClientError::RetryableStatus {
+                url,
+                status,
+                body: text,
+            },
+            retryable: true,
+            retry_after,
+        });
+    }
+    Ok((status, text))
+}
+
+/// HTTP statuses of transient server conditions, worth retrying.
+pub(crate) fn is_retryable_status(status: u16) -> bool {
+    matches!(status, 429 | 502 | 503 | 504)
+}
+
+/// Whether `err` means the exchange broke off -- no connection, a reset, or a timeout -- rather
+/// than the request being invalid.
+pub(crate) fn is_transient_reqwest_error(err: &reqwest::Error) -> bool {
+    err.is_connect() || err.is_timeout() || err.is_request() || err.is_body()
+}
+
+/// One failed attempt of a request.
+pub(crate) struct FailedAttempt<E> {
+    pub(crate) error: E,
+    pub(crate) retryable: bool,
+    /// How long the server asked to wait before retrying.
+    pub(crate) retry_after: Option<Duration>,
+}
+
+impl FailedAttempt<ClientError> {
+    fn from_reqwest(err: reqwest::Error) -> Self {
+        Self {
+            retryable: is_transient_reqwest_error(&err),
+            error: err.into(),
+            retry_after: None,
+        }
+    }
+}
+
+/// Run `attempt` until it succeeds, fails in a way that is not retryable, or `backoff` gives up;
+/// without `backoff` the first failure is returned. A retry waits as long as the server asked,
+/// up to [`MAX_SERVER_RETRY_DELAY`], or else the next `backoff` interval. `backoff` is consulted
+/// either way, so its elapsed-time limit always ends the retries.
+pub(crate) async fn retry<T, E, Fut>(
+    backoff: Option<ExponentialBackoff>,
+    target: &str,
+    mut attempt: impl FnMut() -> Fut,
+) -> Result<T, E>
+where
+    E: Debug,
+    Fut: Future<Output = Result<T, FailedAttempt<E>>>,
+{
+    let mut backoff = backoff;
+    if let Some(backoff) = &mut backoff {
+        backoff.reset();
+    }
+    loop {
+        let failed = match attempt().await {
+            Ok(value) => return Ok(value),
+            Err(failed) => failed,
+        };
+        let backoff_delay = match &mut backoff {
+            Some(backoff) if failed.retryable => backoff.next_backoff(),
+            _ => None,
+        };
+        let Some(backoff_delay) = backoff_delay else {
+            if failed.retryable && backoff.is_some() {
+                warn!(target, error = ?failed.error, "Request failed. All retries failed");
+            }
+            return Err(failed.error);
+        };
+        let delay = failed
+            .retry_after
+            .map_or(backoff_delay, |delay| delay.min(MAX_SERVER_RETRY_DELAY));
+        warn!(
+            target,
+            error = ?failed.error,
+            "Request failed. Retrying in {} seconds",
+            delay.as_secs()
+        );
+        tokio::time::sleep(delay).await;
+    }
 }
 
 #[cfg(test)]
@@ -327,10 +337,21 @@ pub(crate) mod tests {
 
     use super::*;
 
-    /// Serve `rate_limited` 429 answers, then 200s with `success_body`, one per connection;
+    /// How the test server answers one connection.
+    #[derive(Clone, Copy)]
+    pub(crate) enum Reply {
+        RateLimited,
+        BadGateway,
+        /// Close the connection without answering.
+        Drop,
+        /// Hold the connection open without answering, past any test client's timeout.
+        Stall,
+    }
+
+    /// Answer the connections in order with `script`, then with 200s carrying `success_body`;
     /// returns the base URL and the count of requests seen.
-    pub(crate) async fn rate_limited_server(
-        rate_limited: usize,
+    pub(crate) async fn scripted_server(
+        script: Vec<Reply>,
         success_body: &'static str,
     ) -> (Url, Arc<AtomicUsize>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -340,35 +361,58 @@ pub(crate) mod tests {
         tokio::spawn(async move {
             loop {
                 let (mut socket, _) = listener.accept().await.unwrap();
-                let mut buf = [0u8; 4096];
-                let _ = socket.read(&mut buf).await;
-                let response = if seen.fetch_add(1, Ordering::SeqCst) < rate_limited {
-                    let body = r#"{"code":-32007,"message":"50/second request limit reached"}"#;
-                    format!(
-                        "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 0\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                let reply = script.get(seen.fetch_add(1, Ordering::SeqCst)).copied();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let _ = socket.read(&mut buf).await;
+                    let (status, body) = match reply {
+                        Some(Reply::RateLimited) => (
+                            "429 Too Many Requests\r\nRetry-After: 0",
+                            r#"{"code":-32007,"message":"50/second request limit reached"}"#,
+                        ),
+                        Some(Reply::BadGateway) => ("502 Bad Gateway", "bad gateway"),
+                        Some(Reply::Drop) => return,
+                        Some(Reply::Stall) => {
+                            tokio::time::sleep(Duration::from_secs(30)).await;
+                            return;
+                        }
+                        None => ("200 OK", success_body),
+                    };
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                         body.len()
-                    )
-                } else {
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{success_body}",
-                        success_body.len()
-                    )
-                };
-                let _ = socket.write_all(response.as_bytes()).await;
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
             }
         });
         (url, requests)
     }
 
-    #[tokio::test]
-    async fn rate_limited_requests_are_retried() {
-        let (url, requests) = rate_limited_server(2, r#"{"ok":true}"#).await;
-        let backoff = ExponentialBackoff {
+    pub(crate) fn fast_backoff() -> ExponentialBackoff {
+        ExponentialBackoff {
             initial_interval: Duration::from_millis(1),
             max_elapsed_time: Some(Duration::from_secs(5)),
             ..Default::default()
-        };
-        let value: serde_json::Value = json_get(&Client::new(), url, None, Some(backoff))
+        }
+    }
+
+    /// A client that gives up on a stalled connection quickly.
+    pub(crate) fn impatient_client() -> Client {
+        Client::builder()
+            .timeout(Duration::from_millis(200))
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn rate_limited_requests_are_retried() {
+        let (url, requests) = scripted_server(
+            vec![Reply::RateLimited, Reply::RateLimited],
+            r#"{"ok":true}"#,
+        )
+        .await;
+        let value: serde_json::Value = json_get(&Client::new(), url, None, Some(fast_backoff()))
             .await
             .expect("the request succeeds once the rate limit lifts");
         assert_eq!(value["ok"], true);
@@ -376,8 +420,44 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn broken_connections_and_gateway_errors_are_retried() {
+        let script = vec![Reply::Drop, Reply::Stall, Reply::BadGateway];
+        let (url, requests) = scripted_server(script, r#"{"ok":true}"#).await;
+        let value: serde_json::Value =
+            json_get(&impatient_client(), url, None, Some(fast_backoff()))
+                .await
+                .expect("the request succeeds once the server recovers");
+        assert_eq!(value["ok"], true);
+        assert_eq!(requests.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn server_retry_delay_is_capped() {
+        let started = tokio::time::Instant::now();
+        let mut attempts = 0;
+        let result: Result<(), &str> = retry(Some(ExponentialBackoff::default()), "test", || {
+            attempts += 1;
+            let first_attempt = attempts == 1;
+            async move {
+                if first_attempt {
+                    Err(FailedAttempt {
+                        error: "busy",
+                        retryable: true,
+                        retry_after: Some(Duration::from_secs(3600)),
+                    })
+                } else {
+                    Ok(())
+                }
+            }
+        })
+        .await;
+        assert_eq!(result, Ok(()));
+        assert_eq!(started.elapsed(), MAX_SERVER_RETRY_DELAY);
+    }
+
+    #[tokio::test]
     async fn rate_limit_without_backoff_is_a_status_error() {
-        let (url, _) = rate_limited_server(1, r#"{"ok":true}"#).await;
+        let (url, _) = scripted_server(vec![Reply::RateLimited], r#"{"ok":true}"#).await;
         let err = json_get::<serde_json::Value>(&Client::new(), url, None, None)
             .await
             .unwrap_err();

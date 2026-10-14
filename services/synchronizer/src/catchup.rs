@@ -6,7 +6,7 @@ use futures_util::future::try_join_all;
 use tracing::info;
 
 use crate::node::{Node, SlotContext};
-use eth_clients::beacon::types::{BlockAndRoot, BlockHeader};
+use eth_clients::beacon::types::{BlockAndRoot, BlockHeader, BlockId};
 
 /// Pre-fetched data for a single slot in a catch-up batch.
 pub enum FetchedSlot {
@@ -25,12 +25,14 @@ pub enum FetchedSlot {
 pub async fn fetch_batch(node: &Node, slots: &[u32]) -> Result<Vec<FetchedSlot>> {
     // Phase 1: fetch the header and full block of every slot concurrently.
     let blocks = try_join_all(slots.iter().map(|&slot| async move {
-        let Some(header) = node.get_beacon_slot_header_with_retry(slot).await? else {
+        let Some(header) = node
+            .beacon_cli
+            .get_block_header(BlockId::Slot(slot))
+            .await?
+        else {
             return Ok((slot, None));
         };
-        let block = node
-            .get_beacon_block_by_hash_with_retry(header.root)
-            .await?;
+        let block = node.get_beacon_block(header.root).await?;
         let block = BlockAndRoot {
             root: header.root,
             block,
