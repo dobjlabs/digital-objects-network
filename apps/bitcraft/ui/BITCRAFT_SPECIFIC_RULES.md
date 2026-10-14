@@ -20,12 +20,21 @@ that block should be plugin-agnostic.
 - **Why:** this is a bitcraft inventory; other plugins' objects (e.g.
   `craft-basics`, `craft-rocket`, `nanoverse`) are out of scope.
 
-### Only bitcraft actions are offered in the Execute pane
+### Only bitcraft actions are offered in the context menu
 
 - **Where:** `PLUGIN_NAME`, applied in `load()` to the result of
   `GET /actions`.
-- **Generic behavior:** offer actions from every installed plugin. With no
-  objects selected, that would also show other plugins' no-input actions.
+- **Generic behavior:** offer actions from every installed plugin in the
+  objects' context menu. A right-click on empty space, which offers the
+  no-input actions, would also show other plugins' no-input actions.
+- **Why:** same scope as the object list.
+
+### Only bitcraft actions are listed in the recipebook
+
+- **Where:** `PLUGIN_NAME`, applied in `load()` to the result of
+  `GET /actions`; the recipebook lists the same filtered actions the
+  context menu offers from.
+- **Generic behavior:** list every installed plugin's actions.
 - **Why:** same scope as the object list.
 
 ### Only bitcraft runs are restored on page load
@@ -43,8 +52,8 @@ that block should be plugin-agnostic.
 bitcraft actions also constrain the values of those inputs' fields, so
 matching by class alone offers actions that would fail. These rules are the
 `ACTION_INPUT_RULES` entries; an action matching a rule's `actions` pattern
-is offered only if the rule's `accepts` check passes for the selected
-objects.
+is offered in the context menu only if the rule's `accepts` check passes for
+the selected objects.
 
 | Actions | Rule | Source in `plugin.rhai` |
 | --- | --- | --- |
@@ -78,7 +87,7 @@ objects.
   list shows each object's icon in place of the page icon, on a 16x16
   rounded white tile with a light shadow; the same small icon sits to the
   left of every class name the Details pane shows (object summary lines,
-  an action's selected inputs and expected outputs); and the Details pane
+  and a recipebook action's inputs and outputs); and the Details pane
   for a single
   selected object draws it at 6x (96x96 CSS px) on the large page icon,
   centered across it and just below its folded corner (`CLASS_ICONS_URL`
@@ -87,10 +96,77 @@ objects.
   keys in step with the classes in `../manifest.toml`. Generic behavior:
   plain page icons only, since the API reports no icons.
 
+## Object list footer and status bar
+
+A one-line footer under the object list (the file count and "Total Bit
+Value: 31", separated by a middle dot, like Finder's item count), and the status bar along the bottom of the
+page. Two of their entries know about bitcraft:
+
+- **Bitcraft version** (status bar): `BITCRAFT_VERSION` ("Alpha 1.0"), a
+  fixed string in the page; dobjd and the plugin manifest report no game
+  version.
+- **Total Bit Value** (footer): the summed value of the live objects in
+  the list (pending ones are left out); see below.
+- **Generic behavior:** no version or Total Bit Value. The other entries
+  are generic: the synchronizer and relayer statuses and addresses in the
+  status bar (the page probes each service's `/healthz` at the URLs
+  `GET /settings` reports, every 10 seconds), and the footer's count of
+  files: every unspent object in the objects folder, pending ones
+  included, whatever their plugin, plus the welcome guide when it is
+  listed. Unlike the Total Bit Value, it counts pending objects.
+
+### Total Bit Value
+
+An object's Total Bit Value is the raw resources spent to make it, each
+counted at the rate its `BitsFrom*` recipe pays: Wood 1, Stone 2, Iron 5.
+A Bit is worth 1. The values are worked out by hand from `../plugin.rhai`
+and hardcoded (`TOTAL_BIT_VALUES`, `BUCKET_CONTENT_BIT_VALUES`,
+`LEVELED_TOTAL_BIT_VALUES` in `index.html`). Recompute them whenever a
+recipe's inputs or outputs change.
+
+| Class | Total Bit Value | Made from |
+| --- | --- | --- |
+| Bit | 1 | |
+| Wood, Stone, Iron | 1, 2, 5 | |
+| Stick | 0.5 | 1 Wood makes 2 Sticks |
+| WoodAxe | 2 | 1 Wood + 2 Sticks |
+| StoneAxe | 4 | WoodAxe + 1 Stone |
+| IronAxe | 9 | StoneAxe + 1 Iron |
+| BucketOfWood / Stone / Iron | 1 + n x 1 / 2 / 5 | 1 Wood, plus the `n` resources it holds |
+| Quarry, by level 1-6 | 40, 122, 284, 606, 1248, 2530 | 20 Wood + 10 Stone, plus each level-up's buckets |
+| MiningDrill, by level 1-6 | 135, 408, 951, 2034, 4197, 8520 | 10 Wood + 50 Stone + 5 Iron, plus each level-up's buckets |
+
+A level-up spends full buckets, each worth 1 Wood plus its contents:
+`LevelUpQuarryK` adds 2 + 40 x 2^K, and `LevelUpMiningDrillK` adds
+3 + 135 x 2^K. Wear does not lower the value: an axe is worth what it
+cost to make whatever its durability. A total that is not whole shows one
+decimal place.
+
+## Welcome guide
+
+- **Where:** `WELCOME_FILE_URL`, loaded in `load()`; the text is
+  `BITCRAFT-WELCOME.md` in this folder.
+- **What:** a getting-started guide pinned as the first row of the object
+  list, with a document icon. It is selected like any object (click,
+  Cmd-click, Shift-click ranges). Selected alone, the Details pane renders
+  its Markdown (headings, paragraphs, lists, pipe tables, bold and inline
+  code only). Selected with objects, the Details pane counts it separately
+  ("2 objects and 1 file") and lists it with its size and a "View raw"
+  link but no status. Any selection that includes it gets only "Open" or
+  "Open all" in the context menu, since it is no action's input.
+- **Not from the objects folder:** the row is served next to the page, so
+  it shows whether or not a copy exists in the objects folder, and dobjd
+  knows nothing about it.
+- **Keep it in step with `../plugin.rhai`:** the guide quotes recipes,
+  yields, durability and level-up amounts. Update it whenever an action's
+  inputs, outputs or constraints change.
+- **Generic behavior:** no guide row; the list shows only objects.
+
 ## Action icons
 
 Each action gets a 32x32 app-style graphic, chosen by its category (tool
-interaction, material creation, raw resource gathering or rekey), in the Available
-actions list and in the Details pane for a selected action or job. The
+interaction, material creation, raw resource gathering or rekey), drawn at
+16x16 in the context menu, at 32x32 in the recipebook's list, and at 4x in
+the recipebook's Details pane and in the Details pane for a selected job. The
 rules, and how to add to them, are in `ACTION_ICONS.md`; the data is
 `action-icons.json`. Generic behavior: no action graphics.
