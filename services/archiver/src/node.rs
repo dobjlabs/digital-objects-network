@@ -1,10 +1,13 @@
 use std::time::Duration;
 
 use alloy::eips::eip4844::HeapBlob;
-use eth_clients::beacon::{
-    self,
-    types::{Block, BlockAndRoot, BlockHeader, BlockId, ExecutionPayloadRef, KzgCommitment},
-    BeaconClient,
+use eth_clients::{
+    beacon::{
+        self,
+        types::{Block, BlockAndRoot, BlockHeader, BlockId, ExecutionPayloadRef, KzgCommitment},
+        BeaconClient,
+    },
+    execution,
 };
 use itertools::zip_eq;
 use std::os::unix;
@@ -16,7 +19,6 @@ use std::{
     str::FromStr,
 };
 
-use alloy::network::Ethereum;
 use alloy::providers::{Provider, RootProvider};
 use alloy::{
     consensus::Transaction,
@@ -270,13 +272,13 @@ impl Node {
             .connect_timeout(Duration::from_secs(8))
             .build()?;
 
-        let exp_backoff = Some(ExponentialBackoffBuilder::default().build());
+        let exp_backoff = ExponentialBackoffBuilder::default().build();
         let beacon_cli_config = beacon::Config {
             base_url: config.beacon_url.clone(),
-            exp_backoff,
+            exp_backoff: Some(exp_backoff.clone()),
         };
         let beacon_cli = BeaconClient::try_with_client(http_cli, beacon_cli_config)?;
-        let rpc_cli = RootProvider::<Ethereum>::new_http(config.rpc_url.parse()?);
+        let rpc_cli = execution::connect(config.rpc_url.parse()?, exp_backoff);
 
         Ok(Self {
             beacon_cli,

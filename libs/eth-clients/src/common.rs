@@ -314,7 +314,7 @@ async fn retryable_status(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -327,9 +327,12 @@ mod tests {
 
     use super::*;
 
-    /// Serve `rate_limited` 429 answers, then a 200, one per connection; returns the base URL
-    /// and the count of requests seen.
-    async fn rate_limited_server(rate_limited: usize) -> (Url, Arc<AtomicUsize>) {
+    /// Serve `rate_limited` 429 answers, then 200s with `success_body`, one per connection;
+    /// returns the base URL and the count of requests seen.
+    pub(crate) async fn rate_limited_server(
+        rate_limited: usize,
+        success_body: &'static str,
+    ) -> (Url, Arc<AtomicUsize>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
         let requests = Arc::new(AtomicUsize::new(0));
@@ -346,10 +349,9 @@ mod tests {
                         body.len()
                     )
                 } else {
-                    let body = r#"{"ok":true}"#;
                     format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                        body.len()
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{success_body}",
+                        success_body.len()
                     )
                 };
                 let _ = socket.write_all(response.as_bytes()).await;
@@ -360,7 +362,7 @@ mod tests {
 
     #[tokio::test]
     async fn rate_limited_requests_are_retried() {
-        let (url, requests) = rate_limited_server(2).await;
+        let (url, requests) = rate_limited_server(2, r#"{"ok":true}"#).await;
         let backoff = ExponentialBackoff {
             initial_interval: Duration::from_millis(1),
             max_elapsed_time: Some(Duration::from_secs(5)),
@@ -375,7 +377,7 @@ mod tests {
 
     #[tokio::test]
     async fn rate_limit_without_backoff_is_a_status_error() {
-        let (url, _) = rate_limited_server(1).await;
+        let (url, _) = rate_limited_server(1, r#"{"ok":true}"#).await;
         let err = json_get::<serde_json::Value>(&Client::new(), url, None, None)
             .await
             .unwrap_err();

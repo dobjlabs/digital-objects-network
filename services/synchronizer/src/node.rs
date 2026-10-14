@@ -1,20 +1,23 @@
 use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
 
-use eth_clients::beacon::{
-    self,
-    types::{Block, BlockAndRoot, BlockHeader, BlockId, ExecutionPayloadRef, KzgCommitment, Spec},
-    BeaconClient,
+use eth_clients::{
+    beacon::{
+        self,
+        types::{
+            Block, BlockAndRoot, BlockHeader, BlockId, ExecutionPayloadRef, KzgCommitment, Spec,
+        },
+        BeaconClient,
+    },
+    execution,
 };
 
 use alloy::{
     consensus::Transaction,
     eips::eip4844::{kzg_to_versioned_hash, HeapBlob},
-    network as alloy_network,
     primitives::B256,
     providers as alloy_provider,
     rpc::types::BlockTransactionsKind,
 };
-use alloy_network::Ethereum;
 use alloy_provider::{Provider, RootProvider};
 use anyhow::{anyhow, Context, Result};
 use backoff::ExponentialBackoffBuilder;
@@ -106,18 +109,18 @@ impl Node {
             .timeout(Duration::from_secs(8))
             .build()?;
 
-        let exp_backoff = Some(ExponentialBackoffBuilder::default().build());
+        let exp_backoff = ExponentialBackoffBuilder::default().build();
         let beacon_cli_cfg = beacon::Config {
             base_url: cfg.beacon_url.clone(),
-            exp_backoff: exp_backoff.clone(),
+            exp_backoff: Some(exp_backoff.clone()),
         };
         let beacon_cli = BeaconClient::try_with_client(http_cli.clone(), beacon_cli_cfg)?;
         let archiver_cli_cfg = beacon::Config {
             base_url: cfg.archiver_url.clone(),
-            exp_backoff,
+            exp_backoff: Some(exp_backoff.clone()),
         };
         let archiver_cli = BeaconClient::try_with_client(http_cli, archiver_cli_cfg)?;
-        let rpc_cli = RootProvider::<Ethereum>::new_http(cfg.rpc_url.parse()?);
+        let rpc_cli = execution::connect(cfg.rpc_url.parse()?, exp_backoff);
 
         Ok(Self {
             beacon_cli,
