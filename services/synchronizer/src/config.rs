@@ -2,13 +2,12 @@ use std::{net::SocketAddr, str::FromStr, time::Duration};
 
 use alloy::primitives::Address;
 use anyhow::{Context, Result};
+use eth_clients::common::AvailabilityPolling;
 use tracing::warn;
 
 const DEFAULT_APP_STATE_DB_PATH: &str = "data/synchronizer-db";
 const DEFAULT_SYNC_METADATA_DB_URL: &str = "postgres://postgres@localhost:5432/synchronizer";
 const DEFAULT_HTTP_BIND: &str = "127.0.0.1:3000";
-const DEFAULT_RPC_RETRIES: u32 = 6;
-const DEFAULT_RPC_RETRY_MS: u64 = 1_000;
 
 /// Known RPC rate limit. Used to derive safe defaults for batch size and sync delay.
 const RPC_RATE_LIMIT_PER_SEC: u64 = 15;
@@ -34,8 +33,7 @@ pub struct AppConfig {
     pub sync_metadata_db_url: String,
     pub http_bind: SocketAddr,
     pub sync_delay: Duration,
-    pub rpc_retries: u32,
-    pub rpc_retry_delay: Duration,
+    pub availability_polling: AvailabilityPolling,
     pub catchup_batch_size: usize,
     pub init_start_slot: u32,
     pub rpc_url: String,
@@ -83,14 +81,17 @@ pub fn load_config() -> Result<AppConfig> {
         Err(_) => default_catchup_batch_size(),
     };
 
-    let rpc_retries = dotenvy::var("RPC_RETRIES")
-        .ok()
-        .and_then(|v| v.parse::<u32>().ok())
-        .unwrap_or(DEFAULT_RPC_RETRIES);
-    let rpc_retry_ms = dotenvy::var("RPC_RETRY_MS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_RPC_RETRY_MS);
+    let default_polling = AvailabilityPolling::default();
+    let availability_polling = AvailabilityPolling {
+        retries: dotenvy::var("RPC_RETRIES")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(default_polling.retries),
+        delay: dotenvy::var("RPC_RETRY_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map_or(default_polling.delay, Duration::from_millis),
+    };
     let init_start_slot: u32 = dotenvy::var("INIT_START_SLOT")
         .context("INIT_START_SLOT must be set (beacon slot to start syncing from)")?
         .parse()
@@ -113,8 +114,7 @@ pub fn load_config() -> Result<AppConfig> {
         sync_metadata_db_url,
         http_bind,
         sync_delay: Duration::from_millis(sync_delay_ms),
-        rpc_retries,
-        rpc_retry_delay: Duration::from_millis(rpc_retry_ms),
+        availability_polling,
         catchup_batch_size,
         init_start_slot,
         rpc_url,

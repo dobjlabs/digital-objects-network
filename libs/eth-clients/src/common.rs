@@ -311,6 +311,52 @@ where
     }
 }
 
+/// How long to keep asking for data that a node lagging behind the chain may not serve yet.
+#[derive(Clone, Copy, Debug)]
+pub struct AvailabilityPolling {
+    pub retries: u32,
+    pub delay: Duration,
+}
+
+impl Default for AvailabilityPolling {
+    fn default() -> Self {
+        Self {
+            retries: 6,
+            delay: Duration::from_secs(1),
+        }
+    }
+}
+
+/// Ask `fetch` again while it finds nothing, as a node lagging behind the chain may not serve
+/// `what` yet. Failed requests are retried inside the clients, so an error ends the wait.
+pub async fn fetch_once_available<T, Fut>(
+    polling: AvailabilityPolling,
+    what: &str,
+    mut fetch: impl FnMut() -> Fut,
+) -> anyhow::Result<T>
+where
+    Fut: Future<Output = anyhow::Result<Option<T>>>,
+{
+    for retry in 0..=polling.retries {
+        if let Some(value) = fetch().await? {
+            return Ok(value);
+        }
+        if retry < polling.retries {
+            warn!(
+                what,
+                retry = retry + 1,
+                max_retries = polling.retries,
+                "Not available yet; asking again"
+            );
+            tokio::time::sleep(polling.delay).await;
+        }
+    }
+    Err(anyhow::anyhow!(
+        "{what} still not available after {} retries",
+        polling.retries
+    ))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use std::sync::{
@@ -416,6 +462,26 @@ pub(crate) mod tests {
             .expect("the request succeeds once the server recovers");
         assert_eq!(value["ok"], true);
         assert_eq!(requests.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn polling_waits_until_the_data_is_served() {
+        let polling = AvailabilityPolling {
+            retries: 2,
+            delay: Duration::from_secs(1),
+        };
+        let mut attempts = 0;
+        let found = fetch_once_available(polling, "data", || {
+            attempts += 1;
+            let served = attempts == 3;
+            async move { Ok(served.then_some("data")) }
+        })
+        .await
+        .unwrap();
+        assert_eq!(found, "data");
+
+        let never_served = fetch_once_available(polling, "data", || async { Ok(None::<()>) }).await;
+        assert!(never_served.is_err());
     }
 
     #[tokio::test(start_paused = true)]

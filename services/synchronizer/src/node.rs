@@ -1,4 +1,4 @@
-use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use eth_clients::{
     beacon::{
@@ -6,7 +6,7 @@ use eth_clients::{
         types::{Block, BlockAndRoot, BlockHeader, BlockId, ExecutionPayloadRef, KzgCommitment},
         BeaconClient,
     },
-    common::ClientError,
+    common::{fetch_once_available, ClientError},
     execution,
 };
 
@@ -23,7 +23,7 @@ use backoff::ExponentialBackoffBuilder;
 use chrono::{DateTime, Utc};
 use pod2::middleware::Hash;
 use pod2utils::b256_to_hash;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::config::AppConfig;
 use crate::head::{BlockMetadata, StateHead};
@@ -149,37 +149,6 @@ impl Node {
         self.sync_db.rollback_to_slot(keep_slot).await
     }
 
-    /// Ask `fetch` again while it finds nothing, as a node lagging behind the chain may not
-    /// serve `what` yet. Failed requests are retried inside the clients, so an error ends the
-    /// wait.
-    async fn fetch_once_available<T, Fut>(
-        &self,
-        what: &str,
-        mut fetch: impl FnMut() -> Fut,
-    ) -> Result<T>
-    where
-        Fut: Future<Output = Result<Option<T>>>,
-    {
-        for retry in 0..=self.config.rpc_retries {
-            if let Some(value) = fetch().await? {
-                return Ok(value);
-            }
-            if retry < self.config.rpc_retries {
-                warn!(
-                    what,
-                    retry = retry + 1,
-                    max_retries = self.config.rpc_retries,
-                    "Not available yet; asking again"
-                );
-                tokio::time::sleep(self.config.rpc_retry_delay).await;
-            }
-        }
-        Err(anyhow!(
-            "{what} still not available after {} retries",
-            self.config.rpc_retries
-        ))
-    }
-
     pub(crate) async fn get_beacon_head_header(&self) -> Result<BlockHeader> {
         self.beacon_cli
             .get_block_header(BlockId::Head)
@@ -196,19 +165,18 @@ impl Node {
         versioned_hashes: &[B256],
     ) -> Result<HashMap<B256, HeapBlob>> {
         let what = format!("archived blobs of slot {slot}");
-        let mut blobs = self
-            .fetch_once_available(&what, || async {
-                match self
-                    .archiver_cli
-                    .get_blobs((*beacon_block_root).into(), versioned_hashes)
-                    .await
-                {
-                    Ok(blobs) => Ok(Some(blobs)),
-                    Err(ClientError::NotFound(_)) => Ok(None),
-                    Err(err) => Err(err.into()),
-                }
-            })
-            .await?;
+        let mut blobs = fetch_once_available(self.config.availability_polling, &what, || async {
+            match self
+                .archiver_cli
+                .get_blobs((*beacon_block_root).into(), versioned_hashes)
+                .await
+            {
+                Ok(blobs) => Ok(Some(blobs)),
+                Err(ClientError::NotFound(_)) => Ok(None),
+                Err(err) => Err(err.into()),
+            }
+        })
+        .await?;
 
         if blobs.len() != versioned_hashes.len() {
             return Err(anyhow!(
@@ -236,7 +204,7 @@ impl Node {
 
     pub(crate) async fn get_beacon_block(&self, beacon_block_root: B256) -> Result<Block> {
         let what = format!("beacon block {beacon_block_root}");
-        self.fetch_once_available(&what, || async {
+        fetch_once_available(self.config.availability_polling, &what, || async {
             Ok(self
                 .beacon_cli
                 .get_block(BlockId::Hash(beacon_block_root))
@@ -320,8 +288,8 @@ impl Node {
             BlockTransactionsKind::Full
         };
         let what = format!("execution block {execution_block_hash} of slot {slot}");
-        let execution_block = self
-            .fetch_once_available(&what, || async {
+        let execution_block =
+            fetch_once_available(self.config.availability_polling, &what, || async {
                 Ok(self
                     .rpc_cli
                     .get_block(execution_block_hash.into())
