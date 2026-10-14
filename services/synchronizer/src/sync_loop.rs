@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Result};
-use eth_clients::beacon::types::{BlockHeader, HeadEventData, Topic};
+use eth_clients::beacon::types::{BlockAndRoot, BlockHeader, HeadEventData, Topic};
 use futures_util::StreamExt;
 use reqwest_eventsource::{Event, EventSource};
 use tokio::sync::watch;
@@ -55,6 +55,7 @@ pub async fn run_sync_loop(
         head: sync_start.head,
         events: None,
     };
+    let mut prev_block = None;
 
     let batch_size = node.config.catchup_batch_size;
 
@@ -78,16 +79,16 @@ pub async fn run_sync_loop(
                 "Starting batch catch-up"
             );
 
-            let fetched = catchup::fetch_batch(&node, &slots).await;
+            let fetched = catchup::fetch_batch(&node, &slots).await?;
 
             let mut reorg_detected = false;
-            for result in fetched {
+            for fetched_slot in fetched {
                 if *shutdown_rx.borrow() {
                     info!("Sync loop shutting down");
                     return Ok(());
                 }
 
-                match result? {
+                match fetched_slot {
                     FetchedSlot::Missing { slot } => {
                         match handle_missing_slot(&node, slot).await? {
                             MissingSlotAction::Rewound(rewind_slot) => {
@@ -103,7 +104,7 @@ pub async fn run_sync_loop(
                     FetchedSlot::Present {
                         slot,
                         header,
-                        block,
+                        context,
                     } => {
                         if let Some(rewind_slot) =
                             handle_reorgs_for_present_slot(&node, slot, &header).await?
@@ -113,7 +114,7 @@ pub async fn run_sync_loop(
                             break;
                         }
 
-                        let processed = node.derive_slot_update_with_block(&header, &block).await?;
+                        let processed = node.derive_from_context(*context).await?;
                         node.commit_slot(&processed).await?;
                         next_slot = slot + 1;
                     }
@@ -165,7 +166,17 @@ pub async fn run_sync_loop(
             continue;
         }
 
-        let processed = node.derive_slot_update(&beacon_block_header).await?;
+        let beacon_block = node
+            .get_beacon_block_by_hash_with_retry(beacon_block_header.root)
+            .await?;
+        let context = node
+            .fetch_slot_context(&beacon_block_header, &beacon_block, prev_block.as_ref())
+            .await?;
+        prev_block = Some(BlockAndRoot {
+            root: beacon_block_header.root,
+            block: beacon_block,
+        });
+        let processed = node.derive_from_context(context).await?;
         node.commit_slot(&processed).await?;
 
         if wait_or_shutdown(sync_delay, &mut shutdown_rx).await {

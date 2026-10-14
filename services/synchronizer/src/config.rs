@@ -13,16 +13,19 @@ const DEFAULT_RPC_RETRY_MS: u64 = 1_000;
 /// Known RPC rate limit. Used to derive safe defaults for batch size and sync delay.
 const RPC_RATE_LIMIT_PER_SEC: u64 = 15;
 
-/// Each slot in a batch makes ~2 RPC calls (header + block). Use half the rate limit to leave
-/// headroom for retries and the single-slot path.
+/// Each slot in a batch makes two beacon calls (header and block); a slot with a block adds one
+/// execution call and, with target blobs, one archiver call, each to its own endpoint. Use half
+/// the rate limit to leave headroom for retries and the single-slot path.
 const fn default_catchup_batch_size() -> usize {
     (RPC_RATE_LIMIT_PER_SEC as usize) / 2
 }
 
-/// At head, one slot makes ~2 RPC calls. Space them so we stay under the rate limit with margin.
+/// Outside a batch, a slot with a block makes at most three beacon calls: header, block, and from
+/// Gloas on the parent block when the previous block is not its parent. Space slots so those
+/// stay under the rate limit with a 30% margin.
 const fn default_sync_delay_ms() -> u64 {
-    // 2 calls per slot, so min interval = 2000/rate_limit. Add 30% margin.
-    (2 * 1000 * 130) / (RPC_RATE_LIMIT_PER_SEC * 100)
+    const BEACON_CALLS_PER_SLOT: u64 = 3;
+    (BEACON_CALLS_PER_SLOT * 1000 * 130) / (RPC_RATE_LIMIT_PER_SEC * 100)
 }
 
 #[derive(Debug)]
