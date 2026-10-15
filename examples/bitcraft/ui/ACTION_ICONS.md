@@ -18,7 +18,7 @@ places:
 
 ## Categories
 
-Every action belongs to one of three categories, and each category decides
+Every action belongs to one of four categories, and each category decides
 the main icon and the badge differently.
 
 ### Tool interaction
@@ -67,6 +67,16 @@ Gathering raw resources with a pocketknife, which is kept (proof-of-work).
 | --- | --- |
 | `GatherWood`, `GatherStone`, `GatherIron` | Wood, Stone, Iron |
 
+### Rekey
+
+The built-in `Rekey<Class>` action every class gets, which replaces an
+object's key and keeps its other fields. These come from the SDK, not
+`../plugin.rhai`, so one rule covers every class.
+
+- **Main icon:** a blue refresh symbol (`assets/refresh.svg`), the same for
+  every class.
+- **Badge:** none.
+
 ## Badges
 
 Drawn in the top-right corner of the 32x32 grid, overhanging the tile like
@@ -88,10 +98,11 @@ Each rule has:
 
 | Field | Meaning |
 | --- | --- |
-| `category` | `tool interaction`, `material creation` or `raw resource gathering`; for people, not read by the page |
+| `category` | `tool interaction`, `material creation`, `raw resource gathering` or `rekey`; for people, not read by the page |
 | `description` | For people; not read by the page |
 | `actions` | Regular expression matched against the bare action name (e.g. `GatherWood`) |
 | `icon` | Class whose art is centered on the tile |
+| `image` | Optional; path to art, relative to the page, centered on the tile in place of `icon`'s class art. Used for art that belongs to no class |
 | `badge` | Optional; `plus`, `up` or `down` (see Badges). Omit for no badge |
 | `cornerIcon` | Optional; class whose icon is drawn at 8x8 in the tile's bottom-right corner (grid units 20-28). No current rule uses it |
 
@@ -102,7 +113,8 @@ class has no art, gets an empty slot in the list and the blank page in the
 Details pane.
 
 All 56 current bitcraft actions match a rule: 49 tool interaction, 4
-material creation, 3 raw resource gathering.
+material creation, 3 raw resource gathering. So does every `Rekey<Class>`
+built-in.
 
 ## Adding actions
 
