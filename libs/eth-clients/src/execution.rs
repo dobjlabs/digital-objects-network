@@ -31,7 +31,7 @@ pub fn connect(
     RootProvider::new(client)
 }
 
-/// Transport layer that retries transient failures under the same rules as the beacon client.
+/// Transport layer that retries transient failures following an exponential backoff.
 #[derive(Clone)]
 pub struct ExponentialBackoffLayer {
     backoff: ExponentialBackoff,
