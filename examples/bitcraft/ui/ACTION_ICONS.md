@@ -27,7 +27,7 @@ Creating, filling, emptying, using and upgrading tools: pocketknives,
 buckets, axes, quarries and drills.
 
 - **Main icon:** the tool being interacted with (pocketknife, bucket, axe,
-  quarry or drill). `Pocketknife` has no art yet, so its slot is empty.
+  quarry or drill).
 - **Badge:**
 
 | Interaction | Badge | Actions |
