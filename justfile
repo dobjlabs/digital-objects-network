@@ -50,6 +50,18 @@ build-ui:
 build-dobjd: build-ui
     cargo build --release -p dobjd --features bundled-ui
 
+build-docker-dev:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    t=$(git tag --points-at HEAD | head -1)
+    h=$(git rev-parse HEAD)
+    export DOBJ_RELEASE_TAG="${t:+$t-}$h"
+    echo "release_tag=${DOBJ_RELEASE_TAG}"
+    docker build --target synchronizer -t ghcr.io/dobjlabs/digital-objects-network/synchronizer:dev .
+    docker build --target relayer      -t ghcr.io/dobjlabs/digital-objects-network/relayer:dev .
+    docker build --target archiver     -t ghcr.io/dobjlabs/digital-objects-network/archiver:dev .
+
 # Run the documentation site (Vocs dev server) with hot reload
 docs:
     cd docs && pnpm install && pnpm dev

@@ -23,7 +23,7 @@ use wire_types::HealthResponse;
 
 #[derive(Clone)]
 pub(crate) struct ApiState {
-    pub(crate) config: Arc<Config>,
+    pub(crate) info: Arc<Info>,
     pub(crate) store: Arc<Store>,
     pub(crate) header: Arc<RwLock<Option<BlockHeader>>>,
 }
@@ -32,7 +32,7 @@ pub async fn run_api_server(state: ApiState, bind_addr: SocketAddr) -> Result<()
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/header", get(get_header))
-        .route("/config", get(get_config))
+        .route("/info", get(get_info))
         .route("/eth/v1/beacon/blobs/{block_id}", get(get_blobs))
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state);
@@ -53,13 +53,15 @@ async fn healthz() -> Json<HealthResponse> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Config {
+pub struct Info {
+    pub version: String,
+    pub init_start_slot: u32,
     pub filter_address: Address,
 }
 
-async fn get_config(State(state): State<ApiState>) -> Json<Config> {
-    let config = (*state.config).clone();
-    Json(config)
+async fn get_info(State(state): State<ApiState>) -> Json<Info> {
+    let info = (*state.info).clone();
+    Json(info)
 }
 
 async fn get_header(

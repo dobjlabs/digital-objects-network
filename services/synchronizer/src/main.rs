@@ -24,6 +24,17 @@ use state_machine::StateMachine;
 use sync_db::SyncDb;
 use sync_loop::run_sync_forever;
 
+fn new_info(config: &config::AppConfig, proof_parser: &ProofParser) -> api::Info {
+    api::Info {
+        // Release tag stamped by build.rs
+        version: env!("DOBJ_RELEASE_TAG").to_string(),
+        init_start_slot: config.init_start_slot,
+        to_address: config.to_address,
+        txn_finalized_pred: format!("{}", proof_parser.txn_finalized_pred_hash(),),
+        verifier_data_hash: format!("{}", proof_parser.verifier_data_hash(),),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     payload::log_init();
@@ -33,13 +44,16 @@ async fn main() -> Result<()> {
     let app_db = AppDb::connect(&cfg.app_state_db_path)?;
     let api_app_db = app_db.clone();
     let sync_db = Arc::new(SyncDb::connect(&cfg.sync_metadata_db_url).await?);
-    let state_machine = Arc::new(StateMachine::new(app_db, Arc::new(ProofParser::new()?)));
+    let proof_parser = ProofParser::new()?;
+    let info = Arc::new(new_info(&cfg, &proof_parser));
+    let state_machine = Arc::new(StateMachine::new(app_db, Arc::new(proof_parser)));
     let node = Arc::new(Node::new(cfg, Arc::clone(&state_machine), Arc::clone(&sync_db)).await?);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let server_task = tokio::spawn(run_api_server(
         Arc::clone(&sync_db),
         api_app_db,
+        info,
         node.config.http_bind,
         shutdown_rx.clone(),
     ));
