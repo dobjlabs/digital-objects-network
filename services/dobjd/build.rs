@@ -40,10 +40,17 @@ fn bundle_ui() {
             let mut files = Vec::new();
             collect_assets(&root, &mut files);
             files.sort();
-            for path in files
-                .into_iter()
-                .filter(|path| path.extension().is_none_or(|ext| ext != "md"))
-            {
+            for path in files.into_iter().filter(|path| {
+                !matches!(
+                    path.file_name().and_then(|name| name.to_str()),
+                    Some(
+                        "AGENTS.md"
+                            | "CLAUDE.md"
+                            | "ACTION_ICONS.md"
+                            | "BITCRAFT_SPECIFIC_RULES.md"
+                    )
+                )
+            }) {
                 let name = path
                     .strip_prefix(&root)
                     .unwrap()

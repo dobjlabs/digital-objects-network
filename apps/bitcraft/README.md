@@ -23,6 +23,8 @@ just bitcraft-bundle
 
 `scripts/prepare.py` builds the exact binaries, checks the plugin manifest with `pexe build --check`, and stages them under `src-tauri/binaries` and `src-tauri/runtime`. It generates `src-tauri/tauri.bundle.conf.json`; those outputs are ignored by Git. Run it with `--version VERSION` for a release and `--target TRIPLE` for cross-compilation. The plugin builder runs on the native host even for a cross-compiled package.
 
+The daemon bundles runtime Markdown files alongside other UI assets. Only the named contributor docs `AGENTS.md`, `CLAUDE.md`, `ACTION_ICONS.md`, and `BITCRAFT_SPECIFIC_RULES.md` are excluded.
+
 The desktop Cargo workspace is separate from the headless workspace to keep GTK/WebKit out of service-only builds. It contains the Tauri host and the `crates/launchers` package, which has no GUI dependencies. It uses the repository toolchain and commits its own lockfile. Both workspaces participate in the same product build.
 
 ```sh
