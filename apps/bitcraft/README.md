@@ -17,9 +17,16 @@ just bitcraft-shell
 # Build the daemon, tools, and plugin, then launch the full application.
 just bitcraft-dev
 
+# Launch against an already-running local backend stack with separate data.
+just bitcraft-dev-local
+
 # Build an unsigned development installer containing the prepared runtime.
 just bitcraft-bundle
 ```
+
+`just bitcraft-dev-local` uses `<checkout>/.dev/bitcraft-local` as its home, overriding `BITCRAFT_HOME`. On first use it creates `settings.json` with synchronizer `http://127.0.0.1:3000`, relayer `http://127.0.0.1:3200`, and MCP disabled. Later launches preserve existing settings, objects, and actions. This directory is ignored by Git. The local backend stack must already be running; for example, run `just dev-local` in another terminal. Its standalone daemon uses port `7717`; Bitcraft continues to use `7727` (MCP `7728` when enabled).
+
+Quit any running Bitcraft instance before switching homes: they share the application's single-instance identity and ports. To use the wrappers with the local development instance, pass `--home "$PWD/.dev/bitcraft-local"` from the repository root. Edit that home's `settings.json` while the app is stopped, or use the wrapper's `settings set` command while it is running, to customize the endpoints. The local recipe preserves those changes.
 
 `scripts/prepare.py` builds the exact binaries, checks the plugin manifest with `pexe build --check`, and stages them under `src-tauri/binaries` and `src-tauri/runtime`. It generates `src-tauri/tauri.bundle.conf.json`; those outputs are ignored by Git. Run it with `--version VERSION` for a release and `--target TRIPLE` for cross-compilation. The plugin builder runs on the native host even for a cross-compiled package.
 

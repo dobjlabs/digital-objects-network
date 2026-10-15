@@ -11,6 +11,7 @@ DOBJ_ROOT := env_var_or_default("DOBJ_HOME", home_directory() / ".dobj")
 # Devnet counterpart, passed by `just dev-local`. Absolute so every client
 # and service resolves the same root.
 LOCAL_DOBJ_ROOT := justfile_directory() / "data/dobj-local"
+LOCAL_BITCRAFT_ROOT := justfile_directory() / ".dev/bitcraft-local"
 
 # Run the synchronizer (loads env from services/synchronizer/.env if present)
 sync:
@@ -58,6 +59,10 @@ bitcraft-prepare:
 
 bitcraft-dev: bitcraft-prepare
     cd apps/bitcraft && npx --yes @tauri-apps/cli@2.12.2 dev --config src-tauri/tauri.bundle.conf.json
+
+bitcraft-dev-local: bitcraft-prepare
+    python3 apps/bitcraft/scripts/init_local.py "{{LOCAL_BITCRAFT_ROOT}}"
+    cd apps/bitcraft && npx --yes @tauri-apps/cli@2.12.2 dev --config src-tauri/tauri.bundle.conf.json -- -- --home "{{LOCAL_BITCRAFT_ROOT}}"
 
 bitcraft-bundle: bitcraft-prepare
     cd apps/bitcraft && npx --yes @tauri-apps/cli@2.12.2 build --config src-tauri/tauri.bundle.conf.json

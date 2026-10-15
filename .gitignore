@@ -23,6 +23,7 @@ target
 .DS_Store
 .env
 /data/
+/.dev/bitcraft-local/
 *.log
 # Claude Code local config
 /.claude/
