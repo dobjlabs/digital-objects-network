@@ -47,7 +47,11 @@ def run_tool(command, directory, environment):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("appimage", type=Path)
-    appimage = parser.parse_args().appimage.resolve(strict=True)
+    parser.add_argument("--version")
+    parser.add_argument("--target")
+    parser.add_argument("--commit")
+    args = parser.parse_args()
+    appimage = args.appimage.resolve(strict=True)
     with tempfile.TemporaryDirectory(prefix="bitcraft-bundle-smoke-") as temporary:
         directory = Path(temporary)
         subprocess.run([str(appimage), "--appimage-extract"], cwd=directory,
@@ -56,6 +60,9 @@ def main():
         binaries = appdir / "usr/bin"
         resources = appdir / "usr/lib/Bitcraft/runtime"
         release = json.loads((resources / "release.json").read_text())
+        for field, expected in [("version", args.version), ("target", args.target), ("sourceCommit", args.commit)]:
+            if expected is not None:
+                assert release.get(field) == expected, f"Packaged {field}: {release.get(field)!r} != {expected!r}"
         tools = {"bitcraft-dobjd", "bitcraft-dobj", "bitcraft-dobj-inner",
                  "bitcraft-dobj-mcp-proxy", "bitcraft-dobj-mcp-proxy-inner", "bitcraft-pexe"}
         assert set(release["binaries"]) == tools
@@ -65,7 +72,10 @@ def main():
         for tool in sorted(tools):
             executable = binaries / tool
             assert os.access(executable, os.X_OK), tool
-            assert run_tool([str(executable), "--version"], directory, environment).strip(), tool
+            version = run_tool([str(executable), "--version"], directory, environment).strip()
+            assert version, tool
+            if args.version and tool in {"bitcraft-dobjd", "bitcraft-dobj", "bitcraft-dobj-inner", "bitcraft-pexe"}:
+                assert f"v{args.version}" in version, f"{tool} reports the wrong release: {version}"
         print("PASS: packaged plugin matches its manifest and all six bundled tools execute", flush=True)
 
         assert port_closed(), "Bitcraft port 7727 is already in use"

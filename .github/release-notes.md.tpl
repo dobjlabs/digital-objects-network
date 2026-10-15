@@ -1,4 +1,15 @@
-## Install via agent prompt
+## Bitcraft desktop
+
+Bitcraft installers include the game UI, managed Digital Objects daemon, CLI tools, and Bitcraft plugin:
+
+- **`bitcraft-<version>-aarch64-apple-darwin.dmg`**: macOS Apple Silicon. Open the DMG and drag Bitcraft to Applications.
+- **`bitcraft-<version>-x86_64-apple-darwin.dmg`**: macOS Intel. Install in the same way.
+- **`bitcraft-<version>-x86_64-pc-windows-msvc.exe`**: Windows per-user installer.
+- **`bitcraft-<version>-x86_64-unknown-linux-gnu.AppImage`**: Linux. Make the file executable and run it.
+
+macOS packages are signed, notarized, and stapled. Windows installers are currently unsigned. Bitcraft stores data in `~/.bitcraft` and uses HTTP port `7727` (MCP `7728` when enabled), separately from standalone Digital Objects. Quit Bitcraft before installing a replacement version; existing objects and settings are preserved. Automatic app updates and command-line PATH integration are not enabled yet.
+
+## Standalone Digital Objects: install via agent prompt
 
 Paste this to Claude Code, Cursor, or any MCP-aware agent:
 

@@ -3,7 +3,7 @@ name: Release
 # Single workflow producing every Digital Objects Network release artifact: the daemon
 # (`dobjd`), CLI (`dobj`), Claude Desktop stdio bridge (`dobj-mcp-proxy`),
 # plugin packaging tool (`pexe`), and every example plugin under `examples/`
-# packaged as a `.pexe`.
+# packaged as a `.pexe`, plus Bitcraft desktop installers.
 # Triggered on `v*` tags or via the Actions UI with a tag name.
 #
 # On macOS, every native binary is codesigned + notarized so users get an
@@ -65,7 +65,7 @@ defaults:
 # Two pushes to the same tag (or a push + a manual dispatch) racing on the
 # same draft release would clobber each other's uploads. Serialize per-tag.
 concurrency:
-  group: release-${{ github.ref_name || inputs.tag_name }}
+  group: release-${{ inputs.tag_name || github.ref_name }}
   cancel-in-progress: false
 
 # No CI gate (Clippy/Tests/Rustfmt). Those workflows run on `push: branches:
@@ -149,6 +149,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ format('refs/tags/{0}', env.RELEASE_TAG) }}
 
       - uses: pnpm/action-setup@v6
         with:
@@ -299,45 +301,9 @@ jobs:
 
       # ---------- macOS codesign + notarize -----------------------------------
 
-      - name: Validate macOS signing secrets
-        if: runner.os == 'macOS'
-        run: |
-          missing=()
-          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY_SECRET KEYCHAIN_PASSWORD APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_CONTENT; do
-            if [[ -z "${!name}" ]]; then
-              missing+=("$name")
-            fi
-          done
-          if (( ${#missing[@]} > 0 )); then
-            echo "::error::Missing required macOS signing/notarization secrets: ${missing[*]}"
-            exit 1
-          fi
-
       - name: Prepare macOS signing assets
         if: runner.os == 'macOS'
-        run: |
-          set -euo pipefail
-          CERT_PATH="$RUNNER_TEMP/apple-certificate.p12"
-          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
-          # printf %s avoids the trailing newline `echo` would add — the
-          # base64 decoder tolerates it but the explicit form is clearer.
-          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security default-keychain -s "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -t 3600 -u "$KEYCHAIN_PATH"
-          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          # App Store Connect API key (used by xcrun notarytool).
-          APPLE_API_KEY_PATH="$RUNNER_TEMP/AuthKey_$APPLE_API_KEY.p8"
-          printf '%s' "$APPLE_API_KEY_CONTENT" > "$APPLE_API_KEY_PATH"
-
-          {
-            echo "MACOS_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY_SECRET"
-            echo "APPLE_API_KEY_ID=$APPLE_API_KEY"
-            echo "APPLE_API_ISSUER=$APPLE_API_ISSUER"
-            echo "APPLE_API_KEY_PATH=$APPLE_API_KEY_PATH"
-          } >> "$GITHUB_ENV"
+        run: bash .github/scripts/setup-macos-signing.sh
 
       - name: Codesign macOS binaries
         if: runner.os == 'macOS'
@@ -452,6 +418,16 @@ jobs:
           draft: true
           fail_on_unmatched_files: true
 
+  bitcraft:
+    needs: validate
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-bitcraft.yml
+    with:
+      tag_name: ${{ inputs.tag_name || github.ref_name }}
+      publish: true
+    secrets: inherit
+
   plugin:
     needs: validate
     runs-on: ubuntu-22.04
@@ -459,6 +435,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ format('refs/tags/{0}', env.RELEASE_TAG) }}
 
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
