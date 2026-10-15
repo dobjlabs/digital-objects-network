@@ -1,27 +1,29 @@
-use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use eth_clients::beacon::{
-    self,
-    types::{Block, BlockAndRoot, BlockHeader, BlockId, ExecutionPayloadRef, KzgCommitment, Spec},
-    BeaconClient,
+use eth_clients::{
+    beacon::{
+        self,
+        types::{Block, BlockAndRoot, BlockHeader, BlockId, ExecutionPayloadRef, KzgCommitment},
+        BeaconClient,
+    },
+    common::{fetch_once_available, ClientError},
+    execution,
 };
 
 use alloy::{
     consensus::Transaction,
     eips::eip4844::{kzg_to_versioned_hash, HeapBlob},
-    network as alloy_network,
     primitives::B256,
     providers as alloy_provider,
     rpc::types::BlockTransactionsKind,
 };
-use alloy_network::Ethereum;
 use alloy_provider::{Provider, RootProvider};
 use anyhow::{anyhow, Context, Result};
 use backoff::ExponentialBackoffBuilder;
 use chrono::{DateTime, Utc};
 use pod2::middleware::Hash;
 use pod2utils::b256_to_hash;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::config::AppConfig;
 use crate::head::{BlockMetadata, StateHead};
@@ -106,7 +108,7 @@ impl Node {
             .timeout(Duration::from_secs(8))
             .build()?;
 
-        let exp_backoff = Some(ExponentialBackoffBuilder::default().build());
+        let exp_backoff = ExponentialBackoffBuilder::default().build();
         let beacon_cli_cfg = beacon::Config {
             base_url: cfg.beacon_url.clone(),
             exp_backoff: exp_backoff.clone(),
@@ -114,10 +116,10 @@ impl Node {
         let beacon_cli = BeaconClient::try_with_client(http_cli.clone(), beacon_cli_cfg)?;
         let archiver_cli_cfg = beacon::Config {
             base_url: cfg.archiver_url.clone(),
-            exp_backoff,
+            exp_backoff: exp_backoff.clone(),
         };
-        let archiver_cli = BeaconClient::try_with_client(http_cli, archiver_cli_cfg)?;
-        let rpc_cli = RootProvider::<Ethereum>::new_http(cfg.rpc_url.parse()?);
+        let archiver_cli = BeaconClient::try_with_client(http_cli.clone(), archiver_cli_cfg)?;
+        let rpc_cli = execution::connect(http_cli, cfg.rpc_url.parse()?, exp_backoff);
 
         Ok(Self {
             beacon_cli,
@@ -147,69 +149,12 @@ impl Node {
         self.sync_db.rollback_to_slot(keep_slot).await
     }
 
-    async fn retry_rpc<T, Op, Fut>(&self, operation: &str, target: String, mut op: Op) -> Result<T>
-    where
-        Op: FnMut() -> Fut,
-        Fut: Future<Output = Result<T>>,
-    {
-        let mut retry = 0;
-
-        loop {
-            match op().await {
-                Ok(value) => return Ok(value),
-                Err(err) => {
-                    if retry >= self.config.rpc_retries {
-                        return Err(err).with_context(|| {
-                            format!(
-                                "RPC operation `{operation}` failed for {target} after {} retries",
-                                self.config.rpc_retries
-                            )
-                        });
-                    }
-
-                    retry += 1;
-                    warn!(
-                        operation,
-                        target = %target,
-                        retry,
-                        max_retries = self.config.rpc_retries,
-                        retry_delay_ms = self.config.rpc_retry_delay.as_millis() as u64,
-                        ?err,
-                        "RPC operation failed; retrying"
-                    );
-                    tokio::time::sleep(self.config.rpc_retry_delay).await;
-                }
-            }
-        }
-    }
-
-    pub(crate) async fn get_beacon_spec_with_retry(&self) -> Result<Spec> {
-        self.retry_rpc("beacon spec", "config/spec".to_string(), || async {
-            Ok(self.beacon_cli.get_spec().await?)
-        })
-        .await
-    }
-
-    pub(crate) async fn get_beacon_head_header_with_retry(&self) -> Result<BlockHeader> {
-        self.retry_rpc("beacon head header", "head".to_string(), || async {
-            self.beacon_cli
-                .get_block_header(BlockId::Head)
-                .await?
-                .ok_or_else(|| anyhow!("Beacon head header not found"))
-        })
-        .await
-    }
-
-    pub(crate) async fn get_beacon_slot_header_with_retry(
-        &self,
-        slot: u32,
-    ) -> Result<Option<BlockHeader>> {
-        self.retry_rpc("beacon slot header", format!("slot {slot}"), || async {
-            Ok(self
-                .beacon_cli
-                .get_block_header(BlockId::Slot(slot))
-                .await?)
-        })
+    pub(crate) async fn get_beacon_head_header(&self) -> Result<BlockHeader> {
+        fetch_once_available(
+            self.config.availability_polling,
+            "beacon head header",
+            || async { Ok(self.beacon_cli.get_block_header(BlockId::Head).await?) },
+        )
         .await
     }
 
@@ -221,49 +166,52 @@ impl Node {
         block_kzg_blob_commitments: &[(B256, KzgCommitment)],
         versioned_hashes: &[B256],
     ) -> Result<HashMap<B256, HeapBlob>> {
-        let blobs = self
-            .retry_rpc("beacon blob sidecars", format!("slot {slot}"), || async {
-                let mut blobs = self
-                    .archiver_cli
-                    .get_blobs((*beacon_block_root).into(), versioned_hashes)
-                    .await?;
-                if blobs.len() != versioned_hashes.len() {
-                    return Err(anyhow!(
-                        "Fetched {} blobs, but got {}",
-                        versioned_hashes.len(),
-                        blobs.len()
-                    ));
-                }
-                blobs.reverse();
-                let mut blob_map = HashMap::new();
-                for (vh, _) in block_kzg_blob_commitments {
-                    if versioned_hashes.contains(vh) {
-                        blob_map.insert(*vh, blobs.pop().expect("not empty"));
-                    }
-                }
+        let what = format!("archived blobs of slot {slot}");
+        let mut blobs = fetch_once_available(self.config.availability_polling, &what, || async {
+            match self
+                .archiver_cli
+                .get_blobs((*beacon_block_root).into(), versioned_hashes)
+                .await
+            {
+                Ok(blobs) => Ok(Some(blobs)),
+                Err(ClientError::NotFound(_)) => Ok(None),
+                Err(err) => Err(err.into()),
+            }
+        })
+        .await?;
 
-                Ok(blob_map)
-            })
-            .await?;
-        debug!(slot, blob_count = blobs.len(), "Fetched blobs from beacon");
+        if blobs.len() != versioned_hashes.len() {
+            return Err(anyhow!(
+                "Fetched {} blobs, but got {}",
+                versioned_hashes.len(),
+                blobs.len()
+            ));
+        }
+        debug!(
+            slot,
+            blob_count = blobs.len(),
+            "Fetched blobs from archiver"
+        );
 
-        Ok(blobs)
+        blobs.reverse();
+        let mut blob_map = HashMap::new();
+        for (vh, _) in block_kzg_blob_commitments {
+            if versioned_hashes.contains(vh) {
+                blob_map.insert(*vh, blobs.pop().expect("not empty"));
+            }
+        }
+
+        Ok(blob_map)
     }
 
-    pub(crate) async fn get_beacon_block_by_hash_with_retry(
-        &self,
-        beacon_block_root: B256,
-    ) -> Result<Block> {
-        self.retry_rpc(
-            "beacon block",
-            format!("block_root {beacon_block_root}"),
-            || async {
-                self.beacon_cli
-                    .get_block(BlockId::Hash(beacon_block_root))
-                    .await?
-                    .ok_or_else(|| anyhow!("Full beacon block {beacon_block_root} was not found"))
-            },
-        )
+    pub(crate) async fn get_beacon_block(&self, beacon_block_root: B256) -> Result<Block> {
+        let what = format!("beacon block {beacon_block_root}");
+        fetch_once_available(self.config.availability_polling, &what, || async {
+            Ok(self
+                .beacon_cli
+                .get_block(BlockId::Hash(beacon_block_root))
+                .await?)
+        })
         .await
     }
 
@@ -271,13 +219,15 @@ impl Node {
         &self,
         slot: u32,
     ) -> Result<CommittedSlotRecord> {
-        let Some(header) = self.get_beacon_slot_header_with_retry(slot).await? else {
+        let Some(header) = self
+            .beacon_cli
+            .get_block_header(BlockId::Slot(slot))
+            .await?
+        else {
             return Ok(CommittedSlotRecord::empty(slot));
         };
 
-        let block = self
-            .get_beacon_block_by_hash_with_retry(header.root)
-            .await?;
+        let block = self.get_beacon_block(header.root).await?;
         let payload = self.canonical_payload(&header, &block, None).await?;
 
         Ok(CommittedSlotRecord {
@@ -311,9 +261,8 @@ impl Node {
                 let parent_block = match prev_block {
                     Some(prev) if prev.root == beacon_block.parent_root => &prev.block,
                     _ => {
-                        fetched_parent_block = self
-                            .get_beacon_block_by_hash_with_retry(beacon_block.parent_root)
-                            .await?;
+                        fetched_parent_block =
+                            self.get_beacon_block(beacon_block.parent_root).await?;
                         &fetched_parent_block
                     }
                 };
@@ -340,18 +289,15 @@ impl Node {
         } else {
             BlockTransactionsKind::Full
         };
-        let execution_block = self
-            .retry_rpc(
-                "execution block",
-                format!("slot {slot}, block_hash {execution_block_hash}"),
-                || async {
-                    self.rpc_cli
-                        .get_block(execution_block_hash.into())
-                        .kind(transactions_kind)
-                        .await?
-                        .ok_or_else(|| anyhow!("Execution block {execution_block_hash} not found"))
-                },
-            )
+        let what = format!("execution block {execution_block_hash} of slot {slot}");
+        let execution_block =
+            fetch_once_available(self.config.availability_polling, &what, || async {
+                Ok(self
+                    .rpc_cli
+                    .get_block(execution_block_hash.into())
+                    .kind(transactions_kind)
+                    .await?)
+            })
             .await?;
 
         let target_blob_txs = match execution_block.transactions.as_transactions() {

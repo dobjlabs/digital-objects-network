@@ -22,7 +22,7 @@ use node::Node;
 use payload::proof::ProofParser;
 use state_machine::StateMachine;
 use sync_db::SyncDb;
-use sync_loop::{initialize_sync, run_sync_loop};
+use sync_loop::run_sync_forever;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -35,7 +35,6 @@ async fn main() -> Result<()> {
     let sync_db = Arc::new(SyncDb::connect(&cfg.sync_metadata_db_url).await?);
     let state_machine = Arc::new(StateMachine::new(app_db, Arc::new(ProofParser::new()?)));
     let node = Arc::new(Node::new(cfg, Arc::clone(&state_machine), Arc::clone(&sync_db)).await?);
-    let sync_start = initialize_sync(&node, node.config.init_start_slot).await?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let server_task = tokio::spawn(run_api_server(
@@ -44,12 +43,7 @@ async fn main() -> Result<()> {
         node.config.http_bind,
         shutdown_rx.clone(),
     ));
-    let sync_task = tokio::spawn(run_sync_loop(
-        Arc::clone(&node),
-        shutdown_rx,
-        node.config.sync_delay,
-        sync_start,
-    ));
+    let sync_task = tokio::spawn(run_sync_forever(Arc::clone(&node), shutdown_rx));
 
     let mut server_task = server_task;
     let mut sync_task = sync_task;

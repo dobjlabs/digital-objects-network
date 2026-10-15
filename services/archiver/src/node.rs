@@ -1,10 +1,14 @@
 use std::time::Duration;
 
 use alloy::eips::eip4844::HeapBlob;
-use eth_clients::beacon::{
-    self,
-    types::{Block, BlockAndRoot, BlockHeader, BlockId, ExecutionPayloadRef, KzgCommitment},
-    BeaconClient,
+use eth_clients::{
+    beacon::{
+        self,
+        types::{Block, BlockAndRoot, BlockHeader, BlockId, ExecutionPayloadRef, KzgCommitment},
+        BeaconClient,
+    },
+    common::{fetch_once_available, AvailabilityPolling, ClientError},
+    execution,
 };
 use itertools::zip_eq;
 use std::os::unix;
@@ -16,14 +20,13 @@ use std::{
     str::FromStr,
 };
 
-use alloy::network::Ethereum;
 use alloy::providers::{Provider, RootProvider};
 use alloy::{
     consensus::Transaction,
     eips::{self as alloy_eips, eip4844::kzg_to_versioned_hash},
     primitives::{Bytes, B256},
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use backoff::ExponentialBackoffBuilder;
 use tracing::{debug, info};
 
@@ -270,13 +273,13 @@ impl Node {
             .connect_timeout(Duration::from_secs(8))
             .build()?;
 
-        let exp_backoff = Some(ExponentialBackoffBuilder::default().build());
+        let exp_backoff = ExponentialBackoffBuilder::default().build();
         let beacon_cli_config = beacon::Config {
             base_url: config.beacon_url.clone(),
-            exp_backoff,
+            exp_backoff: exp_backoff.clone(),
         };
-        let beacon_cli = BeaconClient::try_with_client(http_cli, beacon_cli_config)?;
-        let rpc_cli = RootProvider::<Ethereum>::new_http(config.rpc_url.parse()?);
+        let beacon_cli = BeaconClient::try_with_client(http_cli.clone(), beacon_cli_config)?;
+        let rpc_cli = execution::connect(http_cli, config.rpc_url.parse()?, exp_backoff);
 
         Ok(Self {
             beacon_cli,
@@ -373,12 +376,13 @@ impl Node {
         })
     }
 
-    /// We expect this block to exist (the slot is not empty)
+    /// The slot is not empty, so a missing block is one the node does not serve yet.
     async fn get_block(&self, root: B256) -> Result<Block> {
-        self.beacon_cli
-            .get_block(BlockId::Hash(root))
-            .await?
-            .ok_or_else(|| anyhow!("Beacon full block {root} was not found"))
+        let what = format!("beacon block {root}");
+        fetch_once_available(AvailabilityPolling::default(), &what, || async {
+            Ok(self.beacon_cli.get_block(BlockId::Hash(root)).await?)
+        })
+        .await
     }
 
     /// Archive the filtered blobs of the payload `beacon_block` committed to.
@@ -406,12 +410,12 @@ impl Node {
         }
 
         let execution_block_id = alloy_eips::eip1898::BlockId::Hash(execution_block_hash.into());
-        let execution_block = self
-            .rpc_cli
-            .get_block(execution_block_id)
-            .full()
-            .await?
-            .with_context(|| format!("Execution block {execution_block_hash} not found"))?;
+        let what = format!("execution block {execution_block_hash}");
+        let execution_block =
+            fetch_once_available(AvailabilityPolling::default(), &what, || async {
+                Ok(self.rpc_cli.get_block(execution_block_id).full().await?)
+            })
+            .await?;
 
         let indexed_blob_txs: Vec<_> = match execution_block.transactions.as_transactions() {
             Some(txs) => txs
@@ -479,10 +483,19 @@ impl Node {
         }
         let mut missing_blobs = Vec::new();
         if !missing_vhs.is_empty() {
-            let blobs = self
-                .beacon_cli
-                .get_blobs(beacon_block_header.root.into(), &missing_vhs)
-                .await?;
+            let what = format!("blobs of block {}", beacon_block_header.root);
+            let blobs = fetch_once_available(AvailabilityPolling::default(), &what, || async {
+                match self
+                    .beacon_cli
+                    .get_blobs(beacon_block_header.root.into(), &missing_vhs)
+                    .await
+                {
+                    Ok(blobs) => Ok(Some(blobs)),
+                    Err(ClientError::NotFound(_)) => Ok(None),
+                    Err(err) => Err(err.into()),
+                }
+            })
+            .await?;
             assert_eq!(blobs.len(), missing_vhs.len());
             debug!("got {} blobs from beacon_cli", blobs.len());
             for (vh, blob) in zip_eq(missing_vhs, blobs) {

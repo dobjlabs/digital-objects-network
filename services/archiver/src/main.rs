@@ -1,11 +1,15 @@
 use anyhow::Result;
-use eth_clients::beacon::types::BlockId;
+use eth_clients::{
+    beacon::types::{BlockHeader, BlockId},
+    common::{fetch_once_available, is_node_error, AvailabilityPolling},
+};
+use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 use tracing::debug;
-use tracing::info;
+use tracing::{error, info};
 
 mod api;
 mod config;
@@ -15,6 +19,9 @@ use api::run_api_server;
 use config::load_config;
 use node::Node;
 
+/// Wait before following the chain again after it failed.
+const RESTART_DELAY: Duration = Duration::from_secs(10);
+
 #[tokio::main]
 async fn main() -> Result<()> {
     payload::log_init();
@@ -22,15 +29,6 @@ async fn main() -> Result<()> {
     let config = load_config()?;
 
     let node = Arc::new(Node::new(config).await?);
-
-    let spec = node.beacon_cli.get_spec().await?;
-    info!(?spec, "Beacon spec");
-    let mut head = node
-        .beacon_cli
-        .get_block_header(BlockId::Head)
-        .await?
-        .expect("head is not None");
-    info!(?head, "Beacon head");
 
     let last_header = Arc::new(RwLock::new(None));
     let api_state = api::ApiState {
@@ -41,6 +39,32 @@ async fn main() -> Result<()> {
         header: last_header.clone(),
     };
     tokio::spawn(run_api_server(api_state, node.config.http_bind));
+
+    // A node failure delays archiving instead of stopping it: archiving starts over from the
+    // stored progress. Any other failure ends the process.
+    loop {
+        let Err(err) = follow_chain(&node, &last_header).await;
+        if !is_node_error(&err) {
+            return Err(err);
+        }
+        error!(
+            ?err,
+            "Archiving failed; restarting in {} seconds",
+            RESTART_DELAY.as_secs()
+        );
+        sleep(RESTART_DELAY).await;
+    }
+}
+
+/// Archive the blobs of every slot from the stored progress on, following the head.
+async fn follow_chain(
+    node: &Node,
+    last_header: &RwLock<Option<BlockHeader>>,
+) -> Result<Infallible> {
+    let spec = node.beacon_cli.get_spec().await?;
+    info!(?spec, "Beacon spec");
+    let mut head = get_head_header(node).await?;
+    info!(?head, "Beacon head");
 
     let mut prev_beacon_block_header = node.store.last_header()?;
     let mut slot = prev_beacon_block_header
@@ -59,11 +83,7 @@ async fn main() -> Result<()> {
             // Beacon Headers
             sleep(Duration::from_secs(5)).await;
             loop {
-                head = node
-                    .beacon_cli
-                    .get_block_header(BlockId::Head)
-                    .await?
-                    .expect("head is not None");
+                head = get_head_header(node).await?;
                 if head.slot > slot {
                     debug!(
                         "head is {}, slot {} was skipped, retrieving...",
@@ -123,4 +143,13 @@ async fn main() -> Result<()> {
 
         slot += 1;
     }
+}
+
+async fn get_head_header(node: &Node) -> Result<BlockHeader> {
+    fetch_once_available(
+        AvailabilityPolling::default(),
+        "beacon head header",
+        || async { Ok(node.beacon_cli.get_block_header(BlockId::Head).await?) },
+    )
+    .await
 }

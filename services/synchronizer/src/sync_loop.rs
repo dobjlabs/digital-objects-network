@@ -1,15 +1,20 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Result};
-use eth_clients::beacon::types::{BlockAndRoot, BlockHeader, HeadEventData, Topic};
+use eth_clients::{
+    beacon::types::{BlockAndRoot, BlockHeader, BlockId, HeadEventData, Topic},
+    common::is_node_error,
+};
 use futures_util::StreamExt;
 use reqwest_eventsource::{Event, EventSource};
 use tokio::sync::watch;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::catchup::{self, FetchedSlot};
 use crate::node::{Node, ProcessedSlot};
 const HEAD_CHECK_INTERVAL: Duration = Duration::from_secs(12);
+/// Wait before syncing again after the sync loop failed.
+const RESTART_DELAY: Duration = Duration::from_secs(10);
 
 enum SlotHeaderState {
     Shutdown,
@@ -43,8 +48,45 @@ enum MissingSlotAction {
     Applied,
 }
 
+/// Sync until shutdown. A node failure delays syncing instead of stopping it: syncing starts
+/// over from the committed progress. Any other failure is returned.
+pub(crate) async fn run_sync_forever(
+    node: Arc<Node>,
+    mut shutdown_rx: watch::Receiver<bool>,
+) -> Result<()> {
+    loop {
+        let result = match initialize_sync(&node, node.config.init_start_slot).await {
+            Ok(sync_start) => {
+                run_sync_loop(
+                    Arc::clone(&node),
+                    shutdown_rx.clone(),
+                    node.config.sync_delay,
+                    sync_start,
+                )
+                .await
+            }
+            Err(err) => Err(err),
+        };
+        let Err(err) = result else {
+            return Ok(());
+        };
+        if !is_node_error(&err) {
+            return Err(err);
+        }
+        error!(
+            ?err,
+            "Sync failed; restarting in {} seconds",
+            RESTART_DELAY.as_secs()
+        );
+        if wait_or_shutdown(RESTART_DELAY, &mut shutdown_rx).await {
+            info!("Sync loop shutting down");
+            return Ok(());
+        }
+    }
+}
+
 /// Process beacon slots in order until shutdown, rewinding when chain history diverges.
-pub async fn run_sync_loop(
+async fn run_sync_loop(
     node: Arc<Node>,
     mut shutdown_rx: watch::Receiver<bool>,
     sync_delay: Duration,
@@ -123,7 +165,7 @@ pub async fn run_sync_loop(
 
             if reorg_detected {
                 // Re-fetch beacon head before restarting — chain view may have changed.
-                head_tracker.head = node.get_beacon_head_header_with_retry().await?;
+                head_tracker.head = node.get_beacon_head_header().await?;
             }
 
             continue;
@@ -166,9 +208,7 @@ pub async fn run_sync_loop(
             continue;
         }
 
-        let beacon_block = node
-            .get_beacon_block_by_hash_with_retry(beacon_block_header.root)
-            .await?;
+        let beacon_block = node.get_beacon_block(beacon_block_header.root).await?;
         let context = node
             .fetch_slot_context(&beacon_block_header, &beacon_block, prev_block.as_ref())
             .await?;
@@ -283,7 +323,8 @@ async fn find_divergence_slot(node: &Node, current_slot: u32) -> Result<u32> {
         // Walk backward until stored and live roots match (last common ancestor).
         let stored_root = node.slot_root(prev_slot).await?;
         let live_root = node
-            .get_beacon_slot_header_with_retry(prev_slot)
+            .beacon_cli
+            .get_block_header(BlockId::Slot(prev_slot))
             .await?
             .map(|header| header.root);
         match (stored_root, live_root) {
@@ -301,11 +342,11 @@ async fn find_divergence_slot(node: &Node, current_slot: u32) -> Result<u32> {
     ))
 }
 
-pub(crate) async fn initialize_sync(node: &Node, init_start_slot: u32) -> Result<SyncStart> {
-    let spec = node.get_beacon_spec_with_retry().await?;
+async fn initialize_sync(node: &Node, init_start_slot: u32) -> Result<SyncStart> {
+    let spec = node.beacon_cli.get_spec().await?;
     info!(?spec, "Loaded beacon spec");
 
-    let head = node.get_beacon_head_header_with_retry().await?;
+    let head = node.get_beacon_head_header().await?;
     info!(head_slot = head.slot, head_root = ?head.root, "Fetched initial beacon head");
 
     let bootstrap_start_slot = init_start_slot;
@@ -368,10 +409,16 @@ impl HeadTracker {
                 slots_behind = self.head.slot - slot,
                 "Catching up to beacon head"
             );
-            return Ok(match node.get_beacon_slot_header_with_retry(slot).await? {
-                Some(header) => SlotHeaderState::Present(header),
-                None => SlotHeaderState::Missing,
-            });
+            return Ok(
+                match node
+                    .beacon_cli
+                    .get_block_header(BlockId::Slot(slot))
+                    .await?
+                {
+                    Some(header) => SlotHeaderState::Present(header),
+                    None => SlotHeaderState::Missing,
+                },
+            );
         }
 
         loop {
@@ -453,7 +500,7 @@ impl HeadTracker {
     }
 
     async fn resolve_slot_from_head(&mut self, node: &Node, slot: u32) -> Result<HeadCheckResult> {
-        self.head = node.get_beacon_head_header_with_retry().await?;
+        self.head = node.get_beacon_head_header().await?;
 
         if self.head.slot < slot {
             return Ok(HeadCheckResult::BehindTarget);
@@ -468,10 +515,16 @@ impl HeadTracker {
             target_slot = slot,
             "Target slot behind head; fetching explicit slot header"
         );
-        Ok(match node.get_beacon_slot_header_with_retry(slot).await? {
-            Some(header) => HeadCheckResult::Present(header),
-            None => HeadCheckResult::Missing,
-        })
+        Ok(
+            match node
+                .beacon_cli
+                .get_block_header(BlockId::Slot(slot))
+                .await?
+            {
+                Some(header) => HeadCheckResult::Present(header),
+                None => HeadCheckResult::Missing,
+            },
+        )
     }
 
     fn decide_after_head_check(result: HeadCheckResult) -> AdvanceDecision {
