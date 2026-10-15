@@ -292,14 +292,14 @@ ensure-start-slot:
     [ -d "${blobs%/}/by_slot" ] && arch_fresh=false || arch_fresh=true
     ensure_slot archiver services/archiver/.env "$arch_fresh"
 
-# Wipe local state (RocksDB + local Postgres DBs + objects + archiver blobs)
+# Wipe local state, including Bitcraft's devnet home. Quit Bitcraft and stop the dev stack first.
 reset:
     #!/usr/bin/env bash
     set -uo pipefail
     # The installed CLI always lives under ~/.dobj/bin, even when DOBJ_HOME
     # points the driver's data elsewhere.
     [ -x ~/.dobj/bin/dobj ] && ~/.dobj/bin/dobj stop || true
-    rm -rf data/ ~/.dobj
+    rm -rf data/ ~/.dobj "{{LOCAL_BITCRAFT_ROOT}}"
     root="${DOBJ_HOME:-}"
     case "$root" in
         ""|/) ;;

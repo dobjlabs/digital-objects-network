@@ -28,6 +28,8 @@ just bitcraft-bundle
 
 Quit any running Bitcraft instance before switching homes: they share the application's single-instance identity and ports. To use the wrappers with the local development instance, pass `--home "$PWD/.dev/bitcraft-local"` from the repository root. Edit that home's `settings.json` while the app is stopped, or use the wrapper's `settings set` command while it is running, to customize the endpoints. The local recipe preserves those changes.
 
+Quit Bitcraft and stop the local backend stack before running `just reset`. Reset removes `.dev/bitcraft-local` along with the devnet state, since its objects are grounded on that chain. The next `just bitcraft-dev-local` recreates the initial local settings; custom settings in that home are lost. If you wipe the devnet manually, also remove this home (or the custom home used with that devnet). The normal `~/.bitcraft` home is unaffected by `just reset`.
+
 `scripts/prepare.py` builds the exact binaries, checks the plugin manifest with `pexe build --check`, and stages them under `src-tauri/binaries` and `src-tauri/runtime`. It generates `src-tauri/tauri.bundle.conf.json`; those outputs are ignored by Git. Run it with `--version VERSION` for a release and `--target TRIPLE` for cross-compilation. The plugin builder runs on the native host even for a cross-compiled package.
 
 The daemon bundles runtime Markdown files alongside other UI assets. Only the named contributor docs `AGENTS.md`, `CLAUDE.md`, `ACTION_ICONS.md`, and `BITCRAFT_SPECIFIC_RULES.md` are excluded.
