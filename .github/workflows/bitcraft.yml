@@ -37,3 +37,37 @@ jobs:
         run: |
           cargo build --locked --release
           xvfb-run -a dbus-run-session /usr/bin/python3 ../scripts/smoke_linux.py
+
+  packaging-linux:
+    name: Linux AppImage packaging
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Linux packaging and smoke-test dependencies
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf file xvfb dbus-x11 xdotool x11-utils python3-dbus python3-gi
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-10-05
+          cache-workspaces: |
+            .
+            apps/bitcraft/src-tauri
+          cache-shared-key: bitcraft-packaging-linux
+      - name: Prepare matched runtime
+        run: python3 apps/bitcraft/scripts/prepare.py
+      - name: Build unsigned AppImage
+        working-directory: apps/bitcraft
+        run: npx --yes @tauri-apps/cli@2.12.2 build --ci --no-sign --config src-tauri/tauri.bundle.conf.json --bundles appimage -- --locked
+      - name: Verify packaged runtime and desktop lifecycle
+        run: xvfb-run -a dbus-run-session /usr/bin/python3 apps/bitcraft/scripts/smoke_bundle_linux.py apps/bitcraft/src-tauri/target/release/bundle/appimage/*.AppImage
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bitcraft-linux-appimage
+          path: apps/bitcraft/src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 7

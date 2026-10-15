@@ -40,6 +40,8 @@ The host launches the daemon with `--exit-on-stdin-close` and retains its stdin 
 
 Linux lifecycle verification uses `cargo build --manifest-path apps/bitcraft/src-tauri/Cargo.toml --release --locked` followed by `xvfb-run -a dbus-run-session /usr/bin/python3 apps/bitcraft/scripts/smoke_linux.py`. Install `xvfb dbus-x11 xdotool x11-utils python3-dbus python3-gi` first. The test exercises background launch, native tray actions, close-to-tray, second-launch forwarding, tray-host loss, and ordinary close without a host. It runs with `--no-runtime` and checks that no game state was created.
 
+The Bitcraft CI workflow also runs a Linux packaging job: it prepares the full runtime, builds an unsigned AppImage, and runs `smoke_bundle_linux.py` against the extracted artifact without requiring FUSE. The smoke check verifies the packaged plugin and executable tools, starts the managed daemon in a temporary home with loopback-only backend settings, checks the UI and CLI wrapper, and runs the tray/window lifecycle checks using the packaged app. It does not generate proofs or submit transactions. The AppImage is retained as a CI artifact for seven days. macOS and Windows have native desktop checks; installer packaging and signing on those platforms remain separate work.
+
 ## State and compatibility
 
 Bitcraft stores writable data in a stable directory across app releases:
