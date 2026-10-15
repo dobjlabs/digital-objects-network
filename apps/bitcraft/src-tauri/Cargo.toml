@@ -21,14 +21,12 @@ sha2 = "0.10"
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
+tempfile = "3"
 tokio = { version = "1", features = ["time"] }
 uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { version = "5", default-features = false, features = ["tokio"] }
-
-[dev-dependencies]
-tempfile = "3"
 
 [lints.rust]
 unsafe_code = "forbid"

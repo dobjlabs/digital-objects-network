@@ -67,10 +67,8 @@ def main():
     resources = TAURI / "runtime"
     plugin_hash = hashlib.sha256((resources / "bitcraft.pexe").read_bytes()).hexdigest()
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
-    release_id = f"{args.version}-{hashlib.sha256(json.dumps(hashes, sort_keys=True).encode() + plugin_hash.encode()).hexdigest()[:16]}"
     (resources / "release.json").write_text(json.dumps({
         "version": args.version,
-        "releaseId": release_id,
         "target": target,
         "sourceCommit": commit,
         "pluginSha256": plugin_hash,
@@ -98,7 +96,7 @@ def main():
         config["bundle"]["createUpdaterArtifacts"] = True
         config["plugins"] = {"updater": {"endpoints": [endpoint], "pubkey": public_key}}
     (TAURI / "tauri.bundle.conf.json").write_text(json.dumps(config, indent=2) + "\n")
-    print(f"Prepared Bitcraft {args.version} ({target}); environment {release_id}")
+    print(f"Prepared Bitcraft {args.version} ({target})")
 
 
 if __name__ == "__main__":

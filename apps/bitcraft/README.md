@@ -40,19 +40,23 @@ Linux lifecycle verification uses `cargo build --manifest-path apps/bitcraft/src
 
 ## State and compatibility
 
-The scaffold currently stores writable data in this layout. The default location is an implementation choice that may change:
+Bitcraft stores writable data in a stable directory across app releases:
 
 ```text
-~/.bitcraft/environments/<release-id>/state/
+~/.bitcraft/
   actions/bitcraft.pexe
+  actions/archive/
   objects/
   settings.json
+  connection.json
   dobjd.log
 ```
 
-`--home` overrides the default root; the host and wrappers also accept `BITCRAFT_HOME`, with an explicit `--home` taking precedence. Release IDs include the product version and an artifact digest, so a changed runtime gets a fresh environment. Relaunching the same release preserves objects and settings. The bundled plugin is checked before launch; an altered installed plugin causes an error rather than being overwritten. Generic `~/.dobj` state is untouched.
+`--home` overrides the default root; the host and wrappers also accept `BITCRAFT_HOME`, with an explicit `--home` taking precedence. This directory is also the managed daemon's `DOBJ_HOME`. Changing the app version or bundled binaries does not select a new data directory. Objects, settings, and other installed actions remain in place across updates. The release manifest records version, source commit, and artifact hashes; it does not determine the data location. Generic `~/.dobj` state is untouched.
 
-The initial configuration uses the same hosted synchronizer and relayer as the existing Digital Objects releases. MCP starts disabled. Backend compatibility still needs release validation; these URLs alone do not establish a versioned backend contract.
+The app manages `actions/bitcraft.pexe`. Before launch it verifies the bundled plugin against the release manifest and atomically installs it if its contents differ from the installed copy. Replaced copies are retained as `actions/archive/bitcraft-<sha256>.pexe`; the action loader does not scan this subdirectory. Local edits to the managed file are archived and replaced too. Other installed actions are preserved. The archive retains previous plugin bytes; loading multiple versions or making older objects compatible with changed actions still requires explicit compatibility support.
+
+Bundled settings are copied only when `settings.json` does not exist. The initial configuration uses the same hosted synchronizer and relayer as the existing Digital Objects releases; MCP starts disabled. Changes to bundled defaults do not overwrite existing settings. For local-network development, use a separate `--home` directory and configure its settings. Backend compatibility still needs release validation; these URLs alone do not establish a versioned backend contract.
 
 The installer includes `bitcraft-dobjd`, `bitcraft-dobj`, `bitcraft-dobj-mcp-proxy`, and `bitcraft-pexe`. The names avoid collisions with a standalone Digital Objects installation. Bundling does not add commands to PATH or configure AI clients.
 
@@ -76,8 +80,8 @@ MCP clients can launch the proxy with no port arguments once MCP is enabled in t
 
 Tauri's updater plugin is registered in the Rust host. When both `BITCRAFT_UPDATE_ENDPOINT` and `BITCRAFT_UPDATE_PUBLIC_KEY` are supplied, preparation generates updater configuration and enables signed updater artifacts. The endpoint must use HTTPS. Tauri's build also needs `TAURI_SIGNING_PRIVATE_KEY` and, if applicable, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The signing key must correspond to the embedded public key. See [Tauri updater documentation](https://v2.tauri.app/plugin/updater/).
 
-The public updater feed, native update controls, scheduled checks, safe daemon shutdown, and update installation are not implemented yet. Registering the plugin and producing artifacts do not turn on automatic updates. Before enabling replacement of the installed package, retain a complete old runtime if returning to an older environment is supported; retaining its object files alone is insufficient.
+The public updater feed, native update controls, scheduled checks, safe daemon shutdown, and update installation are not implemented yet. Registering the plugin and producing artifacts do not turn on automatic updates. Storage-format compatibility checks and migrations must handle incompatible changes explicitly. Downgrades need their own compatibility policy; retaining previous action archives alone does not make an older runtime able to read newer data.
 
 Production macOS bundles require Developer ID signing of the app and bundled executables, hardened runtime, notarization, and stapling. Windows requires Authenticode signing of executables and the installer. OS signing and updater signatures are separate. No credentials or public feed are configured here. Start with macOS DMG/app bundles, per-user Windows NSIS, and Linux AppImage; actual packaged tray behaviour needs testing on each platform.
 
-The current Quit path terminates the child process. Safe quiescence of active proofs and pending submissions must precede update installation. Runtime monitoring after startup, log rotation, retained-runtime selection, launch at login, custom MCP docs, and command-line integration are subsequent work.
+The current Quit path terminates the child process. Safe quiescence of active proofs and pending submissions must precede update installation. Runtime monitoring after startup, log rotation, launch at login, custom MCP docs, and command-line integration are subsequent work.

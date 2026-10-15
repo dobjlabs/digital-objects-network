@@ -1,5 +1,6 @@
 use std::{
     fs::{self, OpenOptions},
+    io::{ErrorKind, Write},
     net::TcpListener,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -17,7 +18,6 @@ pub use bitcraft_launchers::DEFAULT_HTTP_PORT as HTTP_PORT;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Release {
-    pub release_id: String,
     pub plugin_sha256: String,
 }
 
@@ -26,18 +26,6 @@ pub struct Runtime {
     pub state_root: PathBuf,
     connection: Connection,
     connection_path: PathBuf,
-}
-
-fn state_root(home: &Path, release_id: &str) -> Result<PathBuf> {
-    if release_id.is_empty()
-        || !release_id.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
-        })
-        || release_id.starts_with('.')
-    {
-        bail!("Invalid packaged release ID");
-    }
-    Ok(home.join("environments").join(release_id).join("state"))
 }
 
 pub fn plugin_hash(bytes: &[u8]) -> String {
@@ -49,14 +37,24 @@ fn initialize(state: &Path, resources: &Path, release: &Release) -> Result<()> {
     if plugin_hash(&plugin) != release.plugin_sha256 {
         bail!("The bundled Bitcraft plugin does not match the release manifest");
     }
-    fs::create_dir_all(state.join("actions"))?;
-    let installed_plugin = state.join("actions/bitcraft.pexe");
-    if installed_plugin.exists() {
-        if plugin_hash(&fs::read(&installed_plugin)?) != release.plugin_sha256 {
-            bail!("The installed Bitcraft plugin has changed; refusing to replace it");
+    let actions = state.join("actions");
+    fs::create_dir_all(&actions)?;
+    let installed_plugin = actions.join("bitcraft.pexe");
+    let installed = match fs::read(&installed_plugin) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    if installed.as_deref() != Some(plugin.as_slice()) {
+        if let Some(previous) = installed {
+            let archive = actions.join("archive");
+            fs::create_dir_all(&archive)?;
+            write_atomic(
+                &archive.join(format!("bitcraft-{}.pexe", plugin_hash(&previous))),
+                &previous,
+            )?;
         }
-    } else {
-        write_new(&installed_plugin, &plugin)?;
+        write_atomic(&installed_plugin, &plugin)?;
     }
     let settings = state.join("settings.json");
     if !settings.exists() {
@@ -66,12 +64,20 @@ fn initialize(state: &Path, resources: &Path, release: &Release) -> Result<()> {
 }
 
 fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
-    use std::io::Write;
     OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)?
         .write_all(bytes)?;
+    Ok(())
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut temporary = tempfile::NamedTempFile::new_in(
+        path.parent().context("File path has no parent directory")?,
+    )?;
+    temporary.write_all(bytes)?;
+    temporary.persist(path)?;
     Ok(())
 }
 
@@ -94,7 +100,7 @@ fn wait_for_port(port: u16, timeout: Duration) -> Result<()> {
 impl Runtime {
     pub fn launch(home: &Path, resources: &Path, binary: &Path) -> Result<Self> {
         let release: Release = serde_json::from_slice(&fs::read(resources.join("release.json"))?)?;
-        let state_root = state_root(home, &release.release_id)?;
+        let state_root = home.to_path_buf();
         wait_for_port(HTTP_PORT, Duration::from_secs(3))?;
         initialize(&state_root, resources, &release)?;
         let log = OpenOptions::new()
@@ -220,33 +226,25 @@ mod tests {
     }
 
     #[test]
-    fn release_changes_get_fresh_state_and_reject_path_escape() {
-        let home = Path::new("/tmp/bitcraft");
-        assert_ne!(
-            state_root(home, "0.1.0").unwrap(),
-            state_root(home, "0.2.0").unwrap()
-        );
-        for release in ["", "..", "../other", "/other", "C:\\other"] {
-            assert!(state_root(home, release).is_err());
-        }
-    }
-
-    #[test]
-    fn reinstall_preserves_objects_and_settings_and_rejects_plugin_drift() {
+    fn plugin_updates_preserve_objects_settings_and_other_actions() {
         let temp = tempfile::tempdir().unwrap();
         let resources = temp.path().join("runtime");
         let state = temp.path().join("state");
         fs::create_dir(&resources).unwrap();
         fs::write(resources.join("bitcraft.pexe"), b"plugin").unwrap();
         fs::write(resources.join("settings.json"), b"initial settings").unwrap();
-        let release = Release {
-            release_id: "test".into(),
+        let mut release = Release {
             plugin_sha256: plugin_hash(b"plugin"),
         };
         initialize(&state, &resources, &release).unwrap();
         fs::create_dir(state.join("objects")).unwrap();
         fs::write(state.join("objects/object.dobj"), b"object").unwrap();
         fs::write(state.join("settings.json"), b"custom settings").unwrap();
+        fs::write(state.join("actions/other.pexe"), b"other plugin").unwrap();
+        fs::write(resources.join("settings.json"), b"new defaults").unwrap();
+        fs::write(resources.join("bitcraft.pexe"), b"new plugin").unwrap();
+        release.plugin_sha256 = plugin_hash(b"new plugin");
+        initialize(&state, &resources, &release).unwrap();
         initialize(&state, &resources, &release).unwrap();
         assert_eq!(
             fs::read(state.join("settings.json")).unwrap(),
@@ -256,11 +254,45 @@ mod tests {
             fs::read(state.join("objects/object.dobj")).unwrap(),
             b"object"
         );
-        fs::write(state.join("actions/bitcraft.pexe"), b"changed").unwrap();
+        assert_eq!(
+            fs::read(state.join("actions/bitcraft.pexe")).unwrap(),
+            b"new plugin"
+        );
+        assert_eq!(
+            fs::read(state.join("actions/other.pexe")).unwrap(),
+            b"other plugin"
+        );
+        let archive = state.join("actions/archive");
+        assert_eq!(
+            fs::read(archive.join(format!("bitcraft-{}.pexe", plugin_hash(b"plugin")))).unwrap(),
+            b"plugin"
+        );
+        assert_eq!(fs::read_dir(&archive).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn invalid_bundled_plugin_leaves_installed_files_unchanged() {
+        let temp = tempfile::tempdir().unwrap();
+        let resources = temp.path().join("runtime");
+        let state = temp.path().join("state");
+        fs::create_dir(&resources).unwrap();
+        fs::write(resources.join("bitcraft.pexe"), b"plugin").unwrap();
+        fs::write(resources.join("settings.json"), b"initial settings").unwrap();
+        let release = Release {
+            plugin_sha256: plugin_hash(b"plugin"),
+        };
+        initialize(&state, &resources, &release).unwrap();
+        fs::write(state.join("settings.json"), b"custom settings").unwrap();
+        fs::write(resources.join("bitcraft.pexe"), b"tampered plugin").unwrap();
         assert!(initialize(&state, &resources, &release).is_err());
         assert_eq!(
             fs::read(state.join("actions/bitcraft.pexe")).unwrap(),
-            b"changed"
+            b"plugin"
         );
+        assert_eq!(
+            fs::read(state.join("settings.json")).unwrap(),
+            b"custom settings"
+        );
+        assert!(!state.join("actions/archive").exists());
     }
 }
