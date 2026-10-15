@@ -1,0 +1,3 @@
+body { margin: 0; font: 16px system-ui, sans-serif; background: #fafafa; color: #1f1f1f; user-select: none; -webkit-user-select: none; }
+main { max-width: 40rem; margin: 5rem auto; padding: 2rem; }
+p { line-height: 1.5; white-space: pre-wrap; }

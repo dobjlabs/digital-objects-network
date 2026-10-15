@@ -10,6 +10,7 @@ that can be passed between mutually untrusting Internet users while maintaining 
 - **Install:** [INSTALL.md](INSTALL.md), for both humans and MCP-aware agents.
 - **Develop from source:** [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Self-host the services:** [deploy/](deploy/README.md).
+- **Bitcraft desktop:** [apps/bitcraft/](apps/bitcraft/README.md), a Tauri application bundling its Digital Objects runtime.
 
 After installing, run `dobj ui` to start the daemon if needed and open the
 default browser UI. If `dobj` is not on your PATH yet, use

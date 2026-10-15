@@ -11,6 +11,7 @@ DOBJ_ROOT := env_var_or_default("DOBJ_HOME", home_directory() / ".dobj")
 # Devnet counterpart, passed by `just dev-local`. Absolute so every client
 # and service resolves the same root.
 LOCAL_DOBJ_ROOT := justfile_directory() / "data/dobj-local"
+LOCAL_BITCRAFT_ROOT := justfile_directory() / ".dev/bitcraft-local"
 
 # Run the synchronizer (loads env from services/synchronizer/.env if present)
 sync:
@@ -49,6 +50,22 @@ build-ui:
 
 build-dobjd: build-ui
     cargo build --release -p dobjd --features bundled-ui
+
+bitcraft-shell:
+    cargo run --manifest-path apps/bitcraft/src-tauri/Cargo.toml --locked -- --no-runtime
+
+bitcraft-prepare:
+    python3 apps/bitcraft/scripts/prepare.py
+
+bitcraft-dev: bitcraft-prepare
+    cd apps/bitcraft && npx --yes @tauri-apps/cli@2.12.2 dev --config src-tauri/tauri.bundle.conf.json
+
+bitcraft-dev-local: bitcraft-prepare
+    python3 apps/bitcraft/scripts/init_local.py "{{LOCAL_BITCRAFT_ROOT}}"
+    cd apps/bitcraft && npx --yes @tauri-apps/cli@2.12.2 dev --config src-tauri/tauri.bundle.conf.json -- -- --home "{{LOCAL_BITCRAFT_ROOT}}"
+
+bitcraft-bundle: bitcraft-prepare
+    cd apps/bitcraft && npx --yes @tauri-apps/cli@2.12.2 build --config src-tauri/tauri.bundle.conf.json
 
 # Run the documentation site (Vocs dev server) with hot reload
 docs:
@@ -275,14 +292,14 @@ ensure-start-slot:
     [ -d "${blobs%/}/by_slot" ] && arch_fresh=false || arch_fresh=true
     ensure_slot archiver services/archiver/.env "$arch_fresh"
 
-# Wipe local state (RocksDB + local Postgres DBs + objects + archiver blobs)
+# Wipe local state, including Bitcraft's devnet home. Quit Bitcraft and stop the dev stack first.
 reset:
     #!/usr/bin/env bash
     set -uo pipefail
     # The installed CLI always lives under ~/.dobj/bin, even when DOBJ_HOME
     # points the driver's data elsewhere.
     [ -x ~/.dobj/bin/dobj ] && ~/.dobj/bin/dobj stop || true
-    rm -rf data/ ~/.dobj
+    rm -rf data/ ~/.dobj "{{LOCAL_BITCRAFT_ROOT}}"
     root="${DOBJ_HOME:-}"
     case "$root" in
         ""|/) ;;

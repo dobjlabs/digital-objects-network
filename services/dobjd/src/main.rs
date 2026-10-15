@@ -7,6 +7,7 @@ use tracing_subscriber::{EnvFilter, prelude::*};
 mod error;
 mod events;
 mod mcp;
+mod parent_lifetime;
 mod routes;
 mod runs;
 mod state;
@@ -23,8 +24,7 @@ pub(crate) const RELEASE_TAG: &str = env!("DOBJ_RELEASE_TAG");
 /// Target triple stamped by build.rs.
 pub(crate) const TARGET_TRIPLE: &str = env!("DOBJ_TARGET_TRIPLE");
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     // Print the stamp and exit without touching ports or the driver state.
     // `dobj update` runs this to validate a freshly installed binary.
     if std::env::args().any(|arg| arg == "--version") {
@@ -32,9 +32,18 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    parent_lifetime::install_if_requested()?;
+    run()
+}
+
+#[tokio::main]
+async fn run() -> Result<()> {
     init_tracing();
     tracing::info!("dobjd {RELEASE_TAG} ({TARGET_TRIPLE})");
-    if let Err(err) = payload::load_dotenv() {
+    // A supervisor that sets DOBJ_INSTANCE_ID supplies the environment; .env must not override it.
+    if std::env::var_os("DOBJ_INSTANCE_ID").is_none()
+        && let Err(err) = payload::load_dotenv()
+    {
         tracing::warn!("failed to load env: {err}");
     }
 
@@ -105,7 +114,7 @@ async fn main() -> Result<()> {
     });
 
     tracing::info!("listening on http://{addr}");
-    tracing::info!("browser UI: http://{addr}/ui/");
+    tracing::info!("browser UI: http://{addr}{}", ui::home_path());
     axum::serve(http_listener, app).await?;
     Ok(())
 }

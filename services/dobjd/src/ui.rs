@@ -12,23 +12,55 @@ include!(concat!(env!("OUT_DIR"), "/bundled_ui.rs"));
 type Assets = &'static [(&'static str, &'static [u8])];
 
 pub fn router() -> Router {
-    assets_router(BUNDLED_ASSETS)
+    ui_router(BUNDLED_ASSETS, BITCRAFT_ASSETS)
 }
 
-fn assets_router(assets: Assets) -> Router {
+pub fn home_path() -> &'static str {
+    home_path_for(BUNDLED_ASSETS, BITCRAFT_ASSETS)
+}
+
+fn home_path_for(default_ui: Assets, bitcraft_ui: Assets) -> &'static str {
+    if default_ui.is_empty() && !bitcraft_ui.is_empty() {
+        "/bitcraft/"
+    } else {
+        "/ui/"
+    }
+}
+
+// The default UI stays mounted when no UI is bundled at all, so `/` reaches
+// its build instructions.
+fn ui_router(default_ui: Assets, bitcraft_ui: Assets) -> Router {
+    let home = home_path_for(default_ui, bitcraft_ui);
+    let mut router =
+        Router::new().route("/", get(move || async move { Redirect::temporary(home) }));
+    if home == "/ui/" {
+        router = router.merge(mounted_assets_router("/ui", default_ui));
+    }
+    if !bitcraft_ui.is_empty() {
+        router = router.merge(mounted_assets_router("/bitcraft", bitcraft_ui));
+    }
+    router
+}
+
+fn mounted_assets_router(prefix: &'static str, assets: Assets) -> Router {
     Router::new()
-        .route("/", get(|| async { Redirect::temporary("/ui/") }))
-        .route("/ui", get(|| async { Redirect::temporary("/ui/") }))
-        .route("/ui/", get(index))
-        .route("/ui/{*path}", get(asset))
-        .with_state(assets)
+        .route(
+            prefix,
+            get(move || async move { Redirect::temporary(&format!("{prefix}/")) }),
+        )
+        .route(&format!("{prefix}/"), get(index))
+        .route(&format!("{prefix}/{{*path}}"), get(asset))
+        .with_state((prefix, assets))
 }
 
-async fn index(State(assets): State<Assets>) -> Response {
-    serve(assets, "index.html").await
+async fn index(State((prefix, assets)): State<(&'static str, Assets)>) -> Response {
+    serve(prefix, assets, "index.html").await
 }
 
-async fn asset(State(assets): State<Assets>, Path(path): Path<String>) -> Response {
+async fn asset(
+    State((prefix, assets)): State<(&'static str, Assets)>,
+    Path(path): Path<String>,
+) -> Response {
     // Path is already percent-decoded by axum. Reject Windows separators,
     // drive prefixes, traversal and hidden files on every platform.
     if path.contains(['\\', ':', '\0'])
@@ -42,10 +74,10 @@ async fn asset(State(assets): State<Assets>, Path(path): Path<String>) -> Respon
     } else {
         path
     };
-    serve(assets, &name).await
+    serve(prefix, assets, &name).await
 }
 
-async fn serve(assets: Assets, name: &str) -> Response {
+async fn serve(prefix: &str, assets: Assets, name: &str) -> Response {
     let asset = |name: &str| {
         assets
             .iter()
@@ -55,7 +87,7 @@ async fn serve(assets: Assets, name: &str) -> Response {
     let (name, bytes) = match asset(name) {
         Some(bytes) => (name, bytes),
         None if name == "index.html" || std::path::Path::new(name).extension().is_none() => {
-            // Keep SPA fallback confined to /ui/ and preserve missing-asset errors.
+            // SPA fallback stays inside this mount, and a missing asset keeps its 404.
             match asset("index.html") {
                 Some(bytes) => ("index.html", bytes),
                 None => return (
@@ -72,7 +104,9 @@ async fn serve(assets: Assets, name: &str) -> Response {
         String::from_utf8_lossy(bytes)
             .replacen(
                 "<head>",
-                "<head><base href=\"/ui/\"><meta name=\"dobjd-api-url\" content=\"/\">",
+                &format!(
+                    "<head><base href=\"{prefix}/\"><meta name=\"dobjd-api-url\" content=\"/\">"
+                ),
                 1,
             )
             .into_bytes()
@@ -128,11 +162,104 @@ mod tests {
         ("assets/app.js", b"console.log('default')"),
     ];
 
+    #[tokio::test]
+    async fn bitcraft_is_mounted_with_same_origin_api_and_its_own_assets() {
+        let app = ui_router(&[], BITCRAFT_ASSETS);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/bitcraft/")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        if !cfg!(feature = "bundled-bitcraft-ui") {
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            return;
+        }
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let html = std::str::from_utf8(&html).unwrap();
+        assert!(html.contains("<base href=\"/bitcraft/\">"));
+        assert!(html.contains("name=\"dobjd-api-url\" content=\"/\""));
+        assert!(html.contains("document.querySelector('meta[name=\"dobjd-api-url\"]')"));
+        for (name, bytes) in BITCRAFT_ASSETS
+            .iter()
+            .filter(|(name, _)| *name != "index.html")
+        {
+            let path = format!("/bitcraft/{name}");
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(&path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert_eq!(
+                to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+                *bytes,
+                "{path}"
+            );
+        }
+        for path in [
+            "/bitcraft/missing.png",
+            "/bitcraft/.hidden",
+            "/ui/",
+            "/objects",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+    }
+
     async fn request(assets: Assets, path: &str) -> Response {
-        assets_router(assets)
+        ui_router(assets, &[])
             .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn only_bundled_uis_are_mounted_and_root_redirects_to_one() {
+        let none: Assets = &[];
+        for (default_ui, bitcraft_ui, home, ui_status, bitcraft_status) in [
+            (
+                none,
+                none,
+                "/ui/",
+                StatusCode::SERVICE_UNAVAILABLE,
+                StatusCode::NOT_FOUND,
+            ),
+            (ASSETS, none, "/ui/", StatusCode::OK, StatusCode::NOT_FOUND),
+            (
+                none,
+                ASSETS,
+                "/bitcraft/",
+                StatusCode::NOT_FOUND,
+                StatusCode::OK,
+            ),
+            (ASSETS, ASSETS, "/ui/", StatusCode::OK, StatusCode::OK),
+        ] {
+            let app = ui_router(default_ui, bitcraft_ui);
+            let get = |path: &str| {
+                app.clone()
+                    .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            };
+            let root = get("/").await.unwrap();
+            assert_eq!(root.status(), StatusCode::TEMPORARY_REDIRECT);
+            assert_eq!(root.headers()[header::LOCATION], home);
+            assert_eq!(get("/ui/").await.unwrap().status(), ui_status, "{home}");
+            assert_eq!(
+                get("/bitcraft/").await.unwrap().status(),
+                bitcraft_status,
+                "{home}"
+            );
+        }
     }
 
     #[tokio::test]
