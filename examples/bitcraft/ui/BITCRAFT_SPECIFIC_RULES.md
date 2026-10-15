@@ -90,7 +90,7 @@ objects.
 ## Action icons
 
 Each action gets a 32x32 app-style graphic, chosen by its category (tool
-interaction, material creation or raw resource gathering), in the Available
+interaction, material creation, raw resource gathering or rekey), in the Available
 actions list and in the Details pane for a selected action or job. The
 rules, and how to add to them, are in `ACTION_ICONS.md`; the data is
 `action-icons.json`. Generic behavior: no action graphics.

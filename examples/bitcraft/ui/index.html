@@ -611,6 +611,7 @@
         template?.replace(/\$(\d)/g, (_, group) => match[Number(group)] ?? "") ?? null;
       return {
         icon: fill(rule.icon),
+        image: rule.image ?? null,
         badge: rule.badge ?? null,
         cornerIcon: fill(rule.cornerIcon),
       };
@@ -620,10 +621,11 @@
 
   // The action's graphic, laid out on a 32x32 grid and drawn `scale` CSS px
   // per grid unit: an app-style rounded tile with the art centered on it.
-  // Null when no rule matches or its main class has no art.
+  // Null when no rule matches or it names neither an image nor a class
+  // with art.
   function actionIcon(actionName, scale) {
     const spec = actionIconSpec(actionName);
-    const iconPath = spec && classIconPaths[spec.icon];
+    const iconPath = spec && (spec.image ?? classIconPaths[spec.icon]);
     if (!iconPath) {
       return null;
     }

@@ -74,6 +74,12 @@
       "actions": "^Gather(Wood|Stone|Iron)$",
       "icon": "$1",
       "badge": "plus"
+    },
+    {
+      "category": "rekey",
+      "description": "Rekeying an object (same fields, fresh key): a blue refresh symbol, the same for every class",
+      "actions": "^Rekey\\w+$",
+      "image": "assets/refresh.svg"
     }
   ]
 }
