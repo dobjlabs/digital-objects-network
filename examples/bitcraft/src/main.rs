@@ -16,6 +16,7 @@ static BUCKET_RESOURCES: &[Resource] = &[Resource::Wood, Resource::Stone, Resour
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum_macros::Display)]
 enum Tool {
+    Pocketknife,
     WoodAxe,
     StoneAxe,
     IronAxe,
@@ -52,6 +53,11 @@ enum Tag {
     ReqLevel(usize),
     AddToBucket(usize),
     TakeFromBucket(usize),
+    // Emits a no-op statement. pod2 splits a predicate into a chain only once
+    // it exceeds the per-predicate statement cap, and an unsplit predicate
+    // must fit the wildcard cap on its own; the extra statement forces the
+    // split for an action whose wildcards would otherwise overflow.
+    PadForSplit,
 }
 
 fn main() -> Result<(), io::Error> {
@@ -63,12 +69,32 @@ fn main() -> Result<(), io::Error> {
     use Tool::*;
 
     let mut actions = Vec::new();
+    actions.push(Action {
+        name: format!("CraftPocketknife"),
+        out_tool: Some(Pocketknife),
+        ..Default::default()
+    });
+
     // Gather
+    //
+    // The pocketknife is mutated rather than consumed, and must be rekeyed:
+    // a nullifier is derived from the object and its key, so a pocketknife
+    // returned unchanged would carry the nullifier its input just spent.
+    //
+    // Rekeying adds a `key` wildcard, bringing the action predicate to 9
+    // wildcards over 5 statements. pod2 caps a predicate at 8 wildcards, and
+    // splits a predicate into a chain of smaller ones (each within the
+    // wildcard cap) only when it exceeds 5 statements. At exactly 5 nothing
+    // is split and the predicate fails to compile, so PadForSplit adds a
+    // no-op sixth statement to trigger the split.
     for (pow, out) in [(10, Wood), (20, Stone), (40, Iron)] {
         actions.push(Action {
             name: format!("Gather{out}"),
+            mut_tool: Some(Pocketknife),
+            rekey: true,
             out_resources: vec![(1, out)],
             pow,
+            tag: PadForSplit,
             ..Default::default()
         });
     }
@@ -77,7 +103,7 @@ fn main() -> Result<(), io::Error> {
     for resource in BUCKET_RESOURCES {
         actions.push(Action {
             name: format!("CraftBucketOf{resource}"),
-            in_resources: vec![(1, Wood)],
+            in_resources: vec![(1, Iron)],
             out_bucket: Some(*resource),
             ..Default::default()
         });
@@ -296,6 +322,9 @@ fn main() -> Result<(), io::Error> {
                 ReqLevel(lvl) => {
                     writeln!(o, r#"  action.st_equal({name}.level, {lvl});"#)?;
                 }
+                PadForSplit => {
+                    writeln!(o, r#"  action.st_equal(1, 1);"#)?;
+                }
                 _ => {}
             }
         }
@@ -397,7 +426,7 @@ fn main() -> Result<(), io::Error> {
 name = "bitcraft"
 version = "0.1.0"
 # Rewritten by `cargo run -p pexe -- build game`.
-module_hash = "d7edcb9150d12af76a54fbbac7b00b8bb24fab61bc1395b65da47547ad5d1b42"
+module_hash = "8fddf7843a56a85bb8db6b55b3df3737ae67eeff37724f130cc02387bb1048a2"
 
 [[classes]]
 name = "Wood"
@@ -431,6 +460,11 @@ description = "-"
 
 [[classes]]
 name = "BucketOfIron"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Pocketknife"
 emoji = "🌲"
 description = "-"
 

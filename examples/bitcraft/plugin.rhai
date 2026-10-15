@@ -1,4 +1,12 @@
+fn CraftPocketknife(action) {
+  var pocketknife = action.output("Pocketknife");
+}
+
 fn GatherWood(action) {
+  var pocketknife = action.mutate("Pocketknife");
+  var key = unsafe { action.random() };
+  pocketknife.update("key", key);
+  action.st_equal(1, 1);
   var wood000 = action.output("Wood");
   let target = action.top_limb_u256(8339694957348);
   var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(wood000, target) };
@@ -7,6 +15,10 @@ fn GatherWood(action) {
 }
 
 fn GatherStone(action) {
+  var pocketknife = action.mutate("Pocketknife");
+  var key = unsafe { action.random() };
+  pocketknife.update("key", key);
+  action.st_equal(1, 1);
   var stone000 = action.output("Stone");
   let target = action.top_limb_u256(5040314377883);
   var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone000, target) };
@@ -15,6 +27,10 @@ fn GatherStone(action) {
 }
 
 fn GatherIron(action) {
+  var pocketknife = action.mutate("Pocketknife");
+  var key = unsafe { action.random() };
+  pocketknife.update("key", key);
+  action.st_equal(1, 1);
   var iron000 = action.output("Iron");
   let target = action.top_limb_u256(1740933798417);
   var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron000, target) };
@@ -23,19 +39,19 @@ fn GatherIron(action) {
 }
 
 fn CraftBucketOfWood(action) {
-  var wood000 = action.input("Wood");
+  var iron000 = action.input("Iron");
   var woodbucket = action.output("BucketOfWood");
   woodbucket.set([["n", 0]]);
 }
 
 fn CraftBucketOfStone(action) {
-  var wood000 = action.input("Wood");
+  var iron000 = action.input("Iron");
   var stonebucket = action.output("BucketOfStone");
   stonebucket.set([["n", 0]]);
 }
 
 fn CraftBucketOfIron(action) {
-  var wood000 = action.input("Wood");
+  var iron000 = action.input("Iron");
   var ironbucket = action.output("BucketOfIron");
   ironbucket.set([["n", 0]]);
 }
