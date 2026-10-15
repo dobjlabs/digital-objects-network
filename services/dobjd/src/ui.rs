@@ -12,13 +12,34 @@ include!(concat!(env!("OUT_DIR"), "/bundled_ui.rs"));
 type Assets = &'static [(&'static str, &'static [u8])];
 
 pub fn router() -> Router {
-    assets_router(BUNDLED_ASSETS).merge(mounted_assets_router("/bitcraft", BITCRAFT_ASSETS))
+    ui_router(BUNDLED_ASSETS, BITCRAFT_ASSETS)
 }
 
-fn assets_router(assets: Assets) -> Router {
-    Router::new()
-        .route("/", get(|| async { Redirect::temporary("/ui/") }))
-        .merge(mounted_assets_router("/ui", assets))
+pub fn home_path() -> &'static str {
+    home_path_for(BUNDLED_ASSETS, BITCRAFT_ASSETS)
+}
+
+fn home_path_for(default_ui: Assets, bitcraft_ui: Assets) -> &'static str {
+    if default_ui.is_empty() && !bitcraft_ui.is_empty() {
+        "/bitcraft/"
+    } else {
+        "/ui/"
+    }
+}
+
+// The default UI stays mounted when no UI is bundled at all, so `/` reaches
+// its build instructions.
+fn ui_router(default_ui: Assets, bitcraft_ui: Assets) -> Router {
+    let home = home_path_for(default_ui, bitcraft_ui);
+    let mut router =
+        Router::new().route("/", get(move || async move { Redirect::temporary(home) }));
+    if home == "/ui/" {
+        router = router.merge(mounted_assets_router("/ui", default_ui));
+    }
+    if !bitcraft_ui.is_empty() {
+        router = router.merge(mounted_assets_router("/bitcraft", bitcraft_ui));
+    }
+    router
 }
 
 fn mounted_assets_router(prefix: &'static str, assets: Assets) -> Router {
@@ -66,7 +87,7 @@ async fn serve(prefix: &str, assets: Assets, name: &str) -> Response {
     let (name, bytes) = match asset(name) {
         Some(bytes) => (name, bytes),
         None if name == "index.html" || std::path::Path::new(name).extension().is_none() => {
-            // Keep SPA fallback confined to /ui/ and preserve missing-asset errors.
+            // SPA fallback stays inside this mount, and a missing asset keeps its 404.
             match asset("index.html") {
                 Some(bytes) => ("index.html", bytes),
                 None => return (
@@ -143,7 +164,7 @@ mod tests {
 
     #[tokio::test]
     async fn bitcraft_is_mounted_with_same_origin_api_and_its_own_assets() {
-        let app = mounted_assets_router("/bitcraft", BITCRAFT_ASSETS);
+        let app = ui_router(&[], BITCRAFT_ASSETS);
         let response = app
             .clone()
             .oneshot(
@@ -155,7 +176,7 @@ mod tests {
             .await
             .unwrap();
         if !cfg!(feature = "bundled-bitcraft-ui") {
-            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
             return;
         }
         assert_eq!(response.status(), StatusCode::OK);
@@ -197,10 +218,48 @@ mod tests {
     }
 
     async fn request(assets: Assets, path: &str) -> Response {
-        assets_router(assets)
+        ui_router(assets, &[])
             .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn only_bundled_uis_are_mounted_and_root_redirects_to_one() {
+        let none: Assets = &[];
+        for (default_ui, bitcraft_ui, home, ui_status, bitcraft_status) in [
+            (
+                none,
+                none,
+                "/ui/",
+                StatusCode::SERVICE_UNAVAILABLE,
+                StatusCode::NOT_FOUND,
+            ),
+            (ASSETS, none, "/ui/", StatusCode::OK, StatusCode::NOT_FOUND),
+            (
+                none,
+                ASSETS,
+                "/bitcraft/",
+                StatusCode::NOT_FOUND,
+                StatusCode::OK,
+            ),
+            (ASSETS, ASSETS, "/ui/", StatusCode::OK, StatusCode::OK),
+        ] {
+            let app = ui_router(default_ui, bitcraft_ui);
+            let get = |path: &str| {
+                app.clone()
+                    .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            };
+            let root = get("/").await.unwrap();
+            assert_eq!(root.status(), StatusCode::TEMPORARY_REDIRECT);
+            assert_eq!(root.headers()[header::LOCATION], home);
+            assert_eq!(get("/ui/").await.unwrap().status(), ui_status, "{home}");
+            assert_eq!(
+                get("/bitcraft/").await.unwrap().status(),
+                bitcraft_status,
+                "{home}"
+            );
+        }
     }
 
     #[tokio::test]

@@ -24,24 +24,32 @@ def main():
     parser.add_argument("--target", help="Rust target triple; defaults to the native host")
     parser.add_argument("--version", default="0.1.0", help="Bitcraft product version")
     args = parser.parse_args()
-    target = args.target or next(
+    endpoint = os.environ.get("BITCRAFT_UPDATE_ENDPOINT")
+    public_key = os.environ.get("BITCRAFT_UPDATE_PUBLIC_KEY")
+    if bool(endpoint) != bool(public_key):
+        parser.error("Set both BITCRAFT_UPDATE_ENDPOINT and BITCRAFT_UPDATE_PUBLIC_KEY")
+    if endpoint and not endpoint.startswith("https://"):
+        parser.error("BITCRAFT_UPDATE_ENDPOINT must use HTTPS")
+    host = next(
         line.removeprefix("host: ")
         for line in subprocess.check_output(["rustc", "-vV"], text=True).splitlines()
         if line.startswith("host: ")
     )
+    target = args.target or host
     suffix = ".exe" if "windows" in target else ""
     run("cargo", "build", "--release", "--locked", "--target", target,
         "-p", "dobjd", "-p", "cli", "-p", "dobj-mcp", "-p", "pexe",
         "--features", "dobjd/bundled-bitcraft-ui,dobj-mcp/proxy",
         "--bin", "dobjd", "--bin", "dobj", "--bin", "dobj-mcp-proxy", "--bin", "pexe")
-    run("cargo", "run", "--release", "--locked", "-p", "pexe", "--", "build",
-        "--check", "--out-dir", str(TAURI / "runtime"), "examples/bitcraft")
-    run("cargo", "build", "--manifest-path", str(TAURI / "Cargo.toml"),
-        "--release", "--locked", "--target", target, "-p", "bitcraft-launchers", "--bins")
-
     metadata = json.loads(subprocess.check_output(
         ["cargo", "metadata", "--format-version", "1", "--no-deps"], cwd=REPO, text=True))
     built = Path(metadata["target_directory"]) / target / "release"
+    pexe = [str(built / f"pexe{suffix}")] if target == host else [
+        "cargo", "run", "--release", "--locked", "-p", "pexe", "--"]
+    run(*pexe, "build", "--check", "--out-dir", str(TAURI / "runtime"), "examples/bitcraft")
+    run("cargo", "build", "--manifest-path", str(TAURI / "Cargo.toml"),
+        "--release", "--locked", "--target", target, "-p", "bitcraft-launchers", "--bins")
+
     binaries = TAURI / "binaries"
     binaries.mkdir(exist_ok=True)
     tools = ["dobjd", "dobj", "dobj-mcp-proxy", "pexe"]
@@ -86,13 +94,7 @@ def main():
             "resources": {"runtime/": "runtime/"},
         },
     }
-    endpoint = os.environ.get("BITCRAFT_UPDATE_ENDPOINT")
-    public_key = os.environ.get("BITCRAFT_UPDATE_PUBLIC_KEY")
-    if bool(endpoint) != bool(public_key):
-        parser.error("Set both BITCRAFT_UPDATE_ENDPOINT and BITCRAFT_UPDATE_PUBLIC_KEY")
     if endpoint:
-        if not endpoint.startswith("https://"):
-            parser.error("BITCRAFT_UPDATE_ENDPOINT must use HTTPS")
         config["bundle"]["createUpdaterArtifacts"] = True
         config["plugins"] = {"updater": {"endpoints": [endpoint], "pubkey": public_key}}
     (TAURI / "tauri.bundle.conf.json").write_text(json.dumps(config, indent=2) + "\n")

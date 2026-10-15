@@ -91,6 +91,8 @@ fn daemon(home: &Path, identity: &str) -> (Connection, thread::JoinHandle<()>) {
                 Err(error) => panic!("Health listener failed: {error}"),
             }
         };
+        // Some platforms give the accepted socket the listener's non-blocking mode.
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(10)))
             .unwrap();

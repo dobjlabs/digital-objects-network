@@ -89,10 +89,14 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     Menu::with_items(app, &[&open, &close, &quit])
 }
 
-fn allow_navigation(url: &tauri::Url) -> bool {
-    (url.scheme() == "http"
+fn is_daemon_url(url: &tauri::Url) -> bool {
+    url.scheme() == "http"
         && url.host_str() == Some("127.0.0.1")
-        && url.port() == Some(runtime::HTTP_PORT))
+        && url.port() == Some(runtime::HTTP_PORT)
+}
+
+fn allow_navigation(url: &tauri::Url) -> bool {
+    is_daemon_url(url)
         || url.scheme() == "tauri"
         || (matches!(url.scheme(), "http" | "https") && url.host_str() == Some("tauri.localhost"))
 }
@@ -202,6 +206,13 @@ fn main() -> Result<()> {
                 .inner_size(1100.0, 760.0)
                 .min_inner_size(720.0, 480.0)
                 .on_navigation(allow_navigation)
+                .on_new_window(|url, _| {
+                    if is_daemon_url(&url) {
+                        tauri::webview::NewWindowResponse::Allow
+                    } else {
+                        tauri::webview::NewWindowResponse::Deny
+                    }
+                })
                 .on_page_load(|window, event| {
                     if matches!(event.event(), tauri::webview::PageLoadEvent::Finished) && window.url().is_ok_and(|url| url.scheme() == "tauri" || url.host_str() == Some("tauri.localhost")) {
                         let message = window.state::<Desktop>().message.lock().unwrap().clone();
@@ -265,12 +276,16 @@ fn main() -> Result<()> {
             Ok(())
         })
         .build(tauri::generate_context!())?;
-    app.run(|app, event| {
-        if let RunEvent::Exit = event
-            && let Some(runtime) = app.state::<Desktop>().runtime.lock().unwrap().take()
-        {
-            let _ = runtime.stop();
+    app.run(|app, event| match event {
+        RunEvent::Exit => {
+            if let Some(runtime) = app.state::<Desktop>().runtime.lock().unwrap().take() {
+                let _ = runtime.stop();
+            }
         }
+        // A Finder or Spotlight launch of the running app arrives here, not as a second instance.
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => show_window(app),
+        _ => {}
     });
     Ok(())
 }
@@ -296,5 +311,11 @@ mod tests {
         ] {
             assert!(!allow_navigation(&url.parse().unwrap()), "{url}");
         }
+        assert!(is_daemon_url(
+            &"http://127.0.0.1:7727/objects/a.dobj/raw".parse().unwrap()
+        ));
+        assert!(!is_daemon_url(
+            &"tauri://localhost/index.html".parse().unwrap()
+        ));
     }
 }

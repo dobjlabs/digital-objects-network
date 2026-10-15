@@ -140,7 +140,7 @@ impl Runtime {
             .no_proxy()
             .timeout(Duration::from_secs(2))
             .build()?;
-        let deadline = Instant::now() + Duration::from_secs(300);
+        let deadline = Instant::now() + Duration::from_secs(15 * 60);
         loop {
             {
                 let mut child = self.child.lock().unwrap();

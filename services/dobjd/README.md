@@ -170,7 +170,9 @@ Release builds embed the Vite app (`interfaces/gui/dist`) in the daemon via
 `--features bundled-ui`. `just build-dobjd` builds both. The browser UI is
 at `http://127.0.0.1:7717/ui/`; `/` redirects there. A plain Cargo build without
 that feature still serves the API, but `/ui/` reports that no default UI was
-bundled. It does not silently embed a stale build.
+bundled. It does not silently embed a stale build. The Bitcraft desktop build
+uses `--features bundled-bitcraft-ui` instead, which serves the game at
+`/bitcraft/`; with only that feature, `/` redirects there and `/ui/` is a 404.
 
 The daemon serves its bundled default UI. Alternative GUIs run on their own
 local web servers, such as Python's HTTP server or Vite, and connect directly

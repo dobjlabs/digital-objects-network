@@ -3,6 +3,7 @@ name: Bitcraft Desktop
 on:
   pull_request:
     branches: [main]
+    types: [ready_for_review, opened, synchronize, reopened]
   push:
     branches: [main]
 
@@ -11,6 +12,7 @@ permissions:
 
 jobs:
   desktop:
+    if: github.event.pull_request.draft == false
     strategy:
       fail-fast: false
       matrix:
@@ -39,6 +41,7 @@ jobs:
           xvfb-run -a dbus-run-session /usr/bin/python3 ../scripts/smoke_linux.py
 
   packaging-linux:
+    if: github.event.pull_request.draft == false
     name: Linux AppImage packaging
     runs-on: ubuntu-22.04
     timeout-minutes: 60
