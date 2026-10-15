@@ -6,12 +6,12 @@ For the desktop app, run `just bitcraft-dev` from the repository root. It prepar
 
 For standalone browser development, serve this directory with `python3 -m http.server 4170 --bind 127.0.0.1 --directory apps/bitcraft/ui` and open `http://127.0.0.1:4170`. Without the daemon-injected API origin, the page connects to the standalone Digital Objects daemon at `http://127.0.0.1:7717` (MCP uses `7718` when enabled). See [the desktop README](../README.md) for build and bundle commands.
 
-The page has two tabs, Objects (the inventory) and Recipebook. Both views
+The page has two tabs, Objects (the inventory) and Recipe Info. Both views
 stay in the page and are only hidden when inactive, so each keeps its
 selection, scroll position and expanded sections across tab switches. The
-address tracks the open tab and the recipebook's selected action, so
-`?page=recipebook&action=bitcraft::GatherWood` opens the Recipebook tab with
-that action selected and shown.
+address tracks the open tab and the Recipe Info tab's selected action, so
+`?page=recipebook&action=bitcraft::GatherWood` (the parameter keeps its
+older name) opens the Recipe Info tab with that action selected and shown.
 
 ## Bitcraft-specific rules
 
@@ -31,5 +31,11 @@ knows something about the `bitcraft` plugin that the API does not report
 - Action icon rules live in `ACTION_ICONS.md` (bitcraft-specific). When
   actions are added or changed, update `action-icons.json` and that file
   together.
-- `BITCRAFT-WELCOME.md` is the player's getting-started guide and quotes
-  the game's recipes. When actions are added or changed, update it too.
+- `BITCRAFT_WELCOME.md` is the player's getting-started guide, written and
+  maintained by hand by Brian. Never edit, rewrite, rename or regenerate
+  it, even when recipes change. It quotes the game's recipes, so when a
+  change makes it inaccurate, tell the user which passages are now wrong
+  instead. (Brian's local Claude Code settings also deny edits to it.)
+- Total Bit Values are hardcoded per class from the recipes (see
+  `BITCRAFT_SPECIFIC_RULES.md`). When a recipe's inputs or outputs change,
+  recompute them in `index.html` and that file.

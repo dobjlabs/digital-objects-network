@@ -522,7 +522,7 @@
   <nav id="tab-bar">
     <div class="tab-track" role="tablist">
       <button type="button" class="tab" role="tab" id="objects-tab" aria-controls="objects-view">Objects</button>
-      <button type="button" class="tab" role="tab" id="recipebook-tab" aria-controls="recipebook-view">Recipebook</button>
+      <button type="button" class="tab" role="tab" id="recipebook-tab" aria-controls="recipebook-view">Recipe Info</button>
     </div>
   </nav>
   <div id="objects-view" class="view" role="tabpanel" aria-labelledby="objects-tab">
@@ -544,7 +544,7 @@
   </div>
   <div id="recipebook-view" class="view" role="tabpanel" aria-labelledby="recipebook-tab" hidden>
     <section id="recipe-pane" class="pane">
-      <div class="pane-header">Recipebook</div>
+      <div class="pane-header">Recipe Info</div>
       <ul id="recipe-list"></ul>
     </section>
     <section id="recipe-details-pane" class="pane">
@@ -658,7 +658,7 @@
   // A getting-started guide shown as the first row of the object list: its
   // file name, which is also its URL relative to this page. It is served
   // next to this page, not read from the objects folder.
-  const WELCOME_FILE = "BITCRAFT-WELCOME.md";
+  const WELCOME_FILE = "BITCRAFT_WELCOME.md";
 
   // Shown in the status bar at the bottom of the page.
   const BITCRAFT_VERSION = "Alpha 1.0";
@@ -671,21 +671,22 @@
     Wood: 1,
     Stone: 2,
     Iron: 5,
+    Pocketknife: 0,
     Stick: 0.5,
     WoodAxe: 2,
     StoneAxe: 4,
     IronAxe: 9,
-    BucketOfWood: 1,
-    BucketOfStone: 1,
-    BucketOfIron: 1,
+    BucketOfWood: 5,
+    BucketOfStone: 5,
+    BucketOfIron: 5,
   };
   // A bucket is also worth the `n` resources it holds, at these rates.
   const BUCKET_CONTENT_BIT_VALUES = { BucketOfWood: 1, BucketOfStone: 2, BucketOfIron: 5 };
   // Quarries and drills by level (index 0 is level 1): building one, plus the
   // full buckets every level-up spends.
   const LEVELED_TOTAL_BIT_VALUES = {
-    Quarry: [40, 122, 284, 606, 1248, 2530],
-    MiningDrill: [135, 408, 951, 2034, 4197, 8520],
+    Quarry: [40, 130, 300, 630, 1280, 2570],
+    MiningDrill: [135, 420, 975, 2070, 4245, 8580],
   };
 
   // ---- End of bitcraft-specific rules.
@@ -719,7 +720,7 @@
     recipebook: {
       tab: document.getElementById("recipebook-tab"),
       view: document.getElementById("recipebook-view"),
-      title: "Bitcraft Recipebook",
+      title: "Bitcraft Recipe Info",
     },
   };
   let currentViewName = "objects";
@@ -2380,7 +2381,8 @@
     }
 
     renderObjects(heldObjects);
-    if (heldObjects.length === 0) {
+    // With the guide listed, an inventory with no objects still shows a file.
+    if (heldObjects.length === 0 && welcomeText === null) {
       const message = document.createElement("li");
       message.className = "message";
       message.textContent = "No objects.";
