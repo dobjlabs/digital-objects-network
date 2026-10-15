@@ -235,11 +235,13 @@ fn main() -> Result<()> {
             }
             if !args.no_runtime {
                 let handle = app.handle().clone();
-                let runtime = launch_runtime(&handle, home);
-                match runtime {
-                    Ok(runtime) => {
-                        *app.state::<Desktop>().runtime.lock().unwrap() = Some(runtime.clone());
-                        tauri::async_runtime::spawn(async move {
+                tauri::async_runtime::spawn(async move {
+                    let launch_handle = handle.clone();
+                    let runtime = tauri::async_runtime::spawn_blocking(move || launch_runtime(&launch_handle, home))
+                        .await.map_err(anyhow::Error::from).and_then(|result| result);
+                    match runtime {
+                        Ok(runtime) => {
+                            *handle.state::<Desktop>().runtime.lock().unwrap() = Some(runtime.clone());
                             match runtime.wait_until_ready().await {
                                 Ok(()) => {
                                     if let Some(window) = handle.get_webview_window("main") {
@@ -252,14 +254,13 @@ fn main() -> Result<()> {
                                     show_window(&handle);
                                 }
                             }
-                        });
+                        }
+                        Err(error) => {
+                            report(&handle, &format!("Bitcraft could not start.\n\n{error:#}"));
+                            show_window(&handle);
+                        }
                     }
-                    Err(error) => {
-                        let message = format!("Bitcraft could not start.\n\n{error:#}");
-                        report(app.handle(), &message);
-                        show_window(app.handle());
-                    }
-                }
+                });
             }
             Ok(())
         })

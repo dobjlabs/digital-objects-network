@@ -32,6 +32,8 @@ Two concurrent listeners:
 Release builds serve the default UI at `/ui/`. Development uses Vite on
 `:1420`; custom GUIs can be served by dobjd or by their own frontend server.
 
+For a supervised daemon, `--exit-on-stdin-close` makes stdin a parent-lifetime pipe. The supervisor must keep the write end open for the daemon's entire lifetime. Closing the pipe, including through a supervisor crash, exits the daemon immediately. The watcher starts before initialization and circuit warm-up, and does not wait for blocking work or connected HTTP/SSE clients. Standalone launches without this flag ignore stdin EOF and retain their existing lifetime behaviour. `--version` remains a read-only command that exits before installing the watcher.
+
 ## HTTP API
 
 All routes return JSON unless noted; errors come back as

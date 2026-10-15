@@ -1,5 +1,6 @@
 use std::{
     fs::{self, OpenOptions},
+    net::TcpListener,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Mutex,
@@ -74,10 +75,27 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+fn wait_for_port(port: u16, timeout: Duration) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)) {
+            Ok(_) => return Ok(()),
+            Err(_) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Bitcraft's HTTP port {port} is unavailable"));
+            }
+        }
+    }
+}
+
 impl Runtime {
     pub fn launch(home: &Path, resources: &Path, binary: &Path) -> Result<Self> {
         let release: Release = serde_json::from_slice(&fs::read(resources.join("release.json"))?)?;
         let state_root = state_root(home, &release.release_id)?;
+        wait_for_port(HTTP_PORT, Duration::from_secs(3))?;
         initialize(&state_root, resources, &release)?;
         let log = OpenOptions::new()
             .create(true)
@@ -87,11 +105,12 @@ impl Runtime {
         let connection = Connection::new(state_root.clone(), instance_id.clone(), HTTP_PORT)?;
         let mut command = Command::new(binary);
         command
+            .arg("--exit-on-stdin-close")
             .env("DOBJ_HOME", &state_root)
             .env("DOBJD_PORT", HTTP_PORT.to_string())
             .env("DOBJ_INSTANCE_ID", &instance_id)
             .current_dir(&state_root)
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(log.try_clone()?)
             .stderr(log);
         #[cfg(windows)]
@@ -186,6 +205,19 @@ impl Drop for Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_waits_for_a_port_to_be_released() {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(wait_for_port(port, Duration::from_millis(30)).is_err());
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            drop(listener);
+        });
+        wait_for_port(port, Duration::from_secs(1)).unwrap();
+        release.join().unwrap();
+    }
 
     #[test]
     fn release_changes_get_fresh_state_and_reject_path_escape() {

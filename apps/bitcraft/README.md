@@ -34,6 +34,8 @@ cargo test --release --locked -p dobjd --features bundled-bitcraft-ui ui::tests
 
 The host accepts `--background`, `--no-tray`, `--home PATH`, and `--no-runtime`. Closing the window or pressing Cmd-W hides it when a tray is available. The tray's Open action and a second foreground launch restore it. On macOS, hiding switches to accessory activation policy so the app leaves Cmd-Tab. Linux checks for a registered StatusNotifier host and restores the window if the host disappears. With no tray, closing the window exits normally. Explicit Quit exits the host and stops its child daemon.
 
+The host launches the daemon with `--exit-on-stdin-close` and retains its stdin pipe. If the host crashes or is force-quit, EOF makes the daemon exit even during initialization or circuit warm-up. Launch waits up to three seconds for the HTTP port to become available; this wait runs off the UI thread and never terminates another process. A stale connection file fails verification until a new daemon becomes ready and replaces it. This is immediate termination, with the same in-flight-job limitation as explicit Quit.
+
 Linux lifecycle verification uses `cargo build --manifest-path apps/bitcraft/src-tauri/Cargo.toml --release --locked` followed by `xvfb-run -a dbus-run-session /usr/bin/python3 apps/bitcraft/scripts/smoke_linux.py`. Install `xvfb dbus-x11 xdotool x11-utils python3-dbus python3-gi` first. The test exercises background launch, native tray actions, close-to-tray, second-launch forwarding, tray-host loss, and ordinary close without a host. It runs with `--no-runtime` and checks that no game state was created.
 
 ## State and compatibility
