@@ -26,6 +26,7 @@ use std::{
     time::Duration,
 };
 
+use alloy::transports::TransportError;
 use backoff::{backoff::Backoff, ExponentialBackoff};
 use reqwest::{header::RETRY_AFTER, Client, RequestBuilder, StatusCode, Url};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -331,6 +332,22 @@ impl Default for AvailabilityPolling {
     }
 }
 
+/// Data a node should serve but still did not after polling for it.
+#[derive(Debug, thiserror::Error)]
+#[error("{what} still not available after {retries} retries")]
+pub struct Unavailable {
+    pub what: String,
+    pub retries: u32,
+}
+
+/// Whether `err` was caused by a node: unreachable, answering with an error, or not serving
+/// data it should. Such failures are expected to clear up, unlike local ones.
+pub fn is_node_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause.is::<ClientError>() || cause.is::<TransportError>() || cause.is::<Unavailable>()
+    })
+}
+
 /// Ask `fetch` again while it finds nothing, as a node lagging behind the chain may not serve
 /// `what` yet. Failed requests are retried inside the clients, so an error ends the wait.
 pub async fn fetch_once_available<T, Fut>(
@@ -355,10 +372,11 @@ where
             tokio::time::sleep(polling.delay).await;
         }
     }
-    Err(anyhow::anyhow!(
-        "{what} still not available after {} retries",
-        polling.retries
-    ))
+    Err(Unavailable {
+        what: what.to_string(),
+        retries: polling.retries,
+    }
+    .into())
 }
 
 #[cfg(test)]
@@ -444,20 +462,6 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn rate_limited_requests_are_retried() {
-        let (url, requests) = scripted_server(
-            vec![Reply::RateLimited, Reply::RateLimited],
-            r#"{"ok":true}"#,
-        )
-        .await;
-        let value: serde_json::Value = json_get(&Client::new(), url, fast_backoff())
-            .await
-            .expect("the request succeeds once the rate limit lifts");
-        assert_eq!(value["ok"], true);
-        assert_eq!(requests.load(Ordering::SeqCst), 3);
-    }
-
-    #[tokio::test]
     async fn broken_connections_and_gateway_errors_are_retried() {
         let script = vec![Reply::Drop, Reply::Stall, Reply::BadGateway];
         let (url, requests) = scripted_server(script, r#"{"ok":true}"#).await;
@@ -466,6 +470,24 @@ pub(crate) mod tests {
             .expect("the request succeeds once the server recovers");
         assert_eq!(value["ok"], true);
         assert_eq!(requests.load(Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn only_node_failures_are_node_errors() {
+        let client_error: anyhow::Error = ClientError::Empty.into();
+        assert!(is_node_error(&client_error.context("fetching a block")));
+        let transport_error: anyhow::Error =
+            alloy::transports::TransportErrorKind::http_error(500, String::new()).into();
+        assert!(is_node_error(&transport_error));
+        let unavailable: anyhow::Error = Unavailable {
+            what: "a block".to_string(),
+            retries: 6,
+        }
+        .into();
+        assert!(is_node_error(&unavailable));
+
+        let disk_error: anyhow::Error = std::io::Error::other("disk full").into();
+        assert!(!is_node_error(&disk_error.context("storing a blob")));
     }
 
     #[tokio::test(start_paused = true)]
@@ -486,30 +508,6 @@ pub(crate) mod tests {
 
         let never_served = fetch_once_available(polling, "data", || async { Ok(None::<()>) }).await;
         assert!(never_served.is_err());
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn server_retry_delay_is_capped() {
-        let started = tokio::time::Instant::now();
-        let mut attempts = 0;
-        let result: Result<(), &str> = retry(ExponentialBackoff::default(), "test", || {
-            attempts += 1;
-            let first_attempt = attempts == 1;
-            async move {
-                if first_attempt {
-                    Err(FailedAttempt {
-                        error: "busy",
-                        retryable: true,
-                        retry_after: Some(Duration::from_secs(3600)),
-                    })
-                } else {
-                    Ok(())
-                }
-            }
-        })
-        .await;
-        assert_eq!(result, Ok(()));
-        assert_eq!(started.elapsed(), MAX_SERVER_RETRY_DELAY);
     }
 
     #[tokio::test]

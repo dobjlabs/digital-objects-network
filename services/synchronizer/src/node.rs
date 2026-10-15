@@ -150,10 +150,12 @@ impl Node {
     }
 
     pub(crate) async fn get_beacon_head_header(&self) -> Result<BlockHeader> {
-        self.beacon_cli
-            .get_block_header(BlockId::Head)
-            .await?
-            .ok_or_else(|| anyhow!("Beacon head header not found"))
+        fetch_once_available(
+            self.config.availability_polling,
+            "beacon head header",
+            || async { Ok(self.beacon_cli.get_block_header(BlockId::Head).await?) },
+        )
+        .await
     }
 
     /// Fetch beacon blob sidecars for a slot and retain only requested versioned hashes.

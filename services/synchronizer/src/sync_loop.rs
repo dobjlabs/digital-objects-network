@@ -1,15 +1,20 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Result};
-use eth_clients::beacon::types::{BlockAndRoot, BlockHeader, BlockId, HeadEventData, Topic};
+use eth_clients::{
+    beacon::types::{BlockAndRoot, BlockHeader, BlockId, HeadEventData, Topic},
+    common::is_node_error,
+};
 use futures_util::StreamExt;
 use reqwest_eventsource::{Event, EventSource};
 use tokio::sync::watch;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::catchup::{self, FetchedSlot};
 use crate::node::{Node, ProcessedSlot};
 const HEAD_CHECK_INTERVAL: Duration = Duration::from_secs(12);
+/// Wait before syncing again after the sync loop failed.
+const RESTART_DELAY: Duration = Duration::from_secs(10);
 
 enum SlotHeaderState {
     Shutdown,
@@ -43,8 +48,45 @@ enum MissingSlotAction {
     Applied,
 }
 
+/// Sync until shutdown. A node failure delays syncing instead of stopping it: syncing starts
+/// over from the committed progress. Any other failure is returned.
+pub(crate) async fn run_sync_forever(
+    node: Arc<Node>,
+    mut shutdown_rx: watch::Receiver<bool>,
+) -> Result<()> {
+    loop {
+        let result = match initialize_sync(&node, node.config.init_start_slot).await {
+            Ok(sync_start) => {
+                run_sync_loop(
+                    Arc::clone(&node),
+                    shutdown_rx.clone(),
+                    node.config.sync_delay,
+                    sync_start,
+                )
+                .await
+            }
+            Err(err) => Err(err),
+        };
+        let Err(err) = result else {
+            return Ok(());
+        };
+        if !is_node_error(&err) {
+            return Err(err);
+        }
+        error!(
+            ?err,
+            "Sync failed; restarting in {} seconds",
+            RESTART_DELAY.as_secs()
+        );
+        if wait_or_shutdown(RESTART_DELAY, &mut shutdown_rx).await {
+            info!("Sync loop shutting down");
+            return Ok(());
+        }
+    }
+}
+
 /// Process beacon slots in order until shutdown, rewinding when chain history diverges.
-pub async fn run_sync_loop(
+async fn run_sync_loop(
     node: Arc<Node>,
     mut shutdown_rx: watch::Receiver<bool>,
     sync_delay: Duration,
@@ -300,7 +342,7 @@ async fn find_divergence_slot(node: &Node, current_slot: u32) -> Result<u32> {
     ))
 }
 
-pub(crate) async fn initialize_sync(node: &Node, init_start_slot: u32) -> Result<SyncStart> {
+async fn initialize_sync(node: &Node, init_start_slot: u32) -> Result<SyncStart> {
     let spec = node.beacon_cli.get_spec().await?;
     info!(?spec, "Loaded beacon spec");
 
