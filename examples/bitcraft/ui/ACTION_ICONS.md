@@ -23,16 +23,16 @@ the main icon and the badge differently.
 
 ### Tool interaction
 
-Creating, filling, emptying, using and upgrading tools: buckets, axes,
-quarries and drills.
+Creating, filling, emptying, using and upgrading tools: pocketknives,
+buckets, axes, quarries and drills.
 
-- **Main icon:** the tool being interacted with (bucket, axe, quarry or
-  drill).
+- **Main icon:** the tool being interacted with (pocketknife, bucket, axe,
+  quarry or drill). `Pocketknife` has no art yet, so its slot is empty.
 - **Badge:**
 
 | Interaction | Badge | Actions |
 | --- | --- | --- |
-| Creating the tool | green plus | `CraftBucketOfWood`, `CraftBucketOfStone`, `CraftBucketOfIron`, `CraftWoodAxe`, `CraftStoneAxe`, `CraftIronAxe`, `BuildQuarry`, `BuildMiningDrill` |
+| Creating the tool | green plus | `CraftPocketknife`, `CraftBucketOfWood`, `CraftBucketOfStone`, `CraftBucketOfIron`, `CraftWoodAxe`, `CraftStoneAxe`, `CraftIronAxe`, `BuildQuarry`, `BuildMiningDrill` |
 | Adding to a bucket | green up chevron (^) | `BucketOf{Wood,Stone,Iron}Add{1,5,10,50}` |
 | Taking from a bucket | red down chevron (v) | `BucketOf{Wood,Stone,Iron}Take1` |
 | Using an axe to produce wood | none | `UseWoodAxe`, `UseStoneAxe`, `UseIronAxe` |
@@ -57,7 +57,7 @@ Turning resources into intermediate materials.
 
 ### Raw resource gathering
 
-Gathering raw resources from nothing (proof-of-work).
+Gathering raw resources with a pocketknife, which is kept (proof-of-work).
 
 - **Main icon:** the resource gathered.
 - **Badge:** green plus. All current actions in this category create
@@ -101,7 +101,7 @@ covers a family of actions. An action that matches no rule, or whose `icon`
 class has no art, gets an empty slot in the list and the blank page in the
 Details pane.
 
-All 55 current bitcraft actions match a rule: 48 tool interaction, 4
+All 56 current bitcraft actions match a rule: 49 tool interaction, 4
 material creation, 3 raw resource gathering.
 
 ## Adding actions

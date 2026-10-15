@@ -71,7 +71,7 @@ objects.
 - **Page title:** "Bitcraft Inventory".
 - **Class icons:** `class-icons.json` maps each bitcraft class name to a
   16x16 PNG in `assets/` (paths relative to this folder), or to `null` for
-  a class with no icon yet (every class currently has one). All three
+  a class with no icon yet (currently only `Pocketknife`). All three
   bucket classes share `bucket.png`, and every level of `Quarry` and
   `MiningDrill` uses the one icon for its class, since level is a field,
   not a class. The object

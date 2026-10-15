@@ -6,6 +6,7 @@
   "BucketOfWood": "assets/bucket.png",
   "BucketOfStone": "assets/bucket.png",
   "BucketOfIron": "assets/bucket.png",
+  "Pocketknife": null,
   "WoodAxe": "assets/wood-axe.png",
   "StoneAxe": "assets/stone-axe.png",
   "IronAxe": "assets/iron-axe.png",

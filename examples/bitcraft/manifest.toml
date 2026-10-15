@@ -2,7 +2,7 @@
 name = "bitcraft"
 version = "0.1.0"
 # Rewritten by `cargo run -p pexe -- build game`.
-module_hash = "807f515746e63714a4b975ab42caab95ea9ec82bde278add327af8ca454754c7"
+module_hash = "8fddf7843a56a85bb8db6b55b3df3737ae67eeff37724f130cc02387bb1048a2"
 
 [[classes]]
 name = "Wood"
@@ -40,6 +40,11 @@ emoji = "🌲"
 description = "-"
 
 [[classes]]
+name = "Pocketknife"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
 name = "WoodAxe"
 emoji = "🌲"
 description = "-"
@@ -67,6 +72,11 @@ description = "-"
 [[classes]]
 name = "Bit"
 emoji = "🌲"
+description = "-"
+
+[[actions]]
+name = "CraftPocketknife"
+emoji = "⛏️"
 description = "-"
 
 [[actions]]
