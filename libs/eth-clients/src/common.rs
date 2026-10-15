@@ -33,6 +33,8 @@ use tracing::{trace, warn};
 
 /// Longest delay honoured when a server says how long to wait before retrying.
 const MAX_SERVER_RETRY_DELAY: Duration = Duration::from_mins(1);
+/// Shortest delay honoured when a server says how long to wait before retrying.
+const MIN_SERVER_RETRY_DELAY: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(untagged)]
@@ -251,7 +253,7 @@ pub(crate) fn is_retryable_status(status: u16) -> bool {
 /// Whether `err` means the exchange broke off -- no connection, a reset, or a timeout -- rather
 /// than the request being invalid.
 pub(crate) fn is_transient_reqwest_error(err: &reqwest::Error) -> bool {
-    err.is_connect() || err.is_timeout() || err.is_request() || err.is_body()
+    err.is_connect() || err.is_timeout() || err.is_request() || err.is_body() || err.is_decode()
 }
 
 /// One failed attempt of a request.
@@ -298,9 +300,11 @@ where
             warn!(target, error = ?failed.error, "Request failed. All retries failed");
             return Err(failed.error);
         };
-        let delay = failed
-            .retry_after
-            .map_or(backoff_delay, |delay| delay.min(MAX_SERVER_RETRY_DELAY));
+        let delay = failed.retry_after.map_or(backoff_delay, |delay| {
+            delay
+                .min(MAX_SERVER_RETRY_DELAY)
+                .max(MIN_SERVER_RETRY_DELAY)
+        });
         warn!(
             target,
             error = ?failed.error,
