@@ -76,8 +76,7 @@ fn test_sdk_1() {
             var durability = unsafe { pick.durability - 1 };
             action.st_sum(durability, 1, pick.durability);
             pick.update("durability", durability);
-            var key = unsafe { action.random() };
-            pick.update("key", key);
+            pick.commit();
             var work = action.intro_vdf(vdf_iters, pick);
         }
 
@@ -551,11 +550,12 @@ fn test_records_form_mutate() {
 
 // Actions
 
-UseFoo(io UseFooIO, state_header StateHeader, chain0, chain, private: foo0, dur) = AND(
+UseFoo(io UseFooIO, state_header StateHeader, chain0, chain, private: foo0, foo1, dur, _key1) = AND(
   ArrayContains(io, UseFooIO::in_foo, foo0)
   Gt(foo0.durability, 0)
   Sum(dur, 1, foo0.durability)
-  DictUpdate(foo0, "durability", dur, io.out_foo)
+  DictUpdate(foo0, "durability", dur, foo1)
+  DictUpdate(foo1, "key", _key1, io.out_foo)
   tx::TxMutate(chain0, chain, foo0, io.out_foo, @self_predicate(IsFoo))
 )
 
@@ -949,7 +949,7 @@ fn test_sdk_state_header() {
         [plugin]
         name = "test"
         version = "0.1.0"
-        module_hash = "34bb2d3c2baeccd532cb02405a01b80a06f8265c3f7346d1e6123b6c0b63fb32"
+        module_hash = "38e140ea2dde27cbe9986a353ba1dfc07e8afe20506513ec3d940f010e8f8712"
 
         [[classes]]
         name = "Ticker"
@@ -1424,7 +1424,7 @@ fn test_literal_table_lookup() {
             r#""y": 32"#,
             "chart0.code, row)",
             r#"DictUpdate(chart0, "x", row.x, chart1)"#,
-            r#"DictUpdate(chart1, "y", row.y, io.out_chart)"#,
+            r#"DictUpdate(chart1, "y", row.y, chart2)"#,
         ],
     );
 
@@ -1623,7 +1623,7 @@ fn test_inline_lookup_needs_no_var_binding() {
         &module,
         &[
             "ArrayContains([10, 20, 30], chart0.code, _get0)",
-            r#"DictUpdate(chart0, "x", _get0, io.out_chart)"#,
+            r#"DictUpdate(chart0, "x", _get0, chart1)"#,
             r#"DictContains({"floor": 3}, "floor", _get1)"#,
             "Gt(_get1, 0)",
         ],
@@ -1828,9 +1828,9 @@ fn test_lookup_before_update_reads_the_pre_update_object() {
         &[
             "Gt(chart0.code, 0)",
             r#"DictContains(chart0, "x", x)"#,
-            r#"DictUpdate(chart0, "x", 5, chart)"#,
+            r#"DictUpdate(chart0, "x", 5, chart1)"#,
             "GtEq(x, 0)",
-            "Gt(chart.code, 1)",
+            "Gt(chart1.code, 1)",
         ],
     );
 
@@ -1883,7 +1883,7 @@ fn test_var_container_lookup_executes() {
             "chart0.code, tier)",
             r#"DictContains(tier, "cost", cost)"#,
             "Gt(cost, 0)",
-            r#"DictUpdate(chart0, "cost", cost, io.out_chart)"#,
+            r#"DictUpdate(chart0, "cost", cost, chart1)"#,
         ],
     );
 
@@ -2721,4 +2721,371 @@ fn test_builtin_rekey_name_is_reserved() {
         .err()
         .expect("script must not shadow the built-in");
     assert!(err.to_string().contains("RekeyFoo is reserved"), "{err}");
+}
+
+#[test]
+fn test_commit_output_identity_can_be_stored_in_another_output() {
+    let src = r#"
+        fn Mint(action) {
+            var item = action.output("Item");
+            item.set([["amount", 3]]);
+            item.update("key", 7);
+            var old_amount = item.get("amount");
+            item.commit();
+            item.commit();
+            action.st_equal(item.amount, old_amount);
+            var reference = action.output("Reference");
+            reference.set([["target", item.stable_identifier], ["item", item]]);
+            var target = item.get("stable_identifier");
+            action.st_equal(reference.target, target);
+            reference.commit();
+        }
+    "#;
+    let module = Sdk::default()
+        .load_module_from_src_actions(src, &["Mint"])
+        .unwrap();
+    let state = TestState::default();
+    let result = module
+        .executor(true, grounding_witness(&state, &[]))
+        .action("Mint", vec![])
+        .unwrap();
+    let [item, reference] = result.objs();
+    let identifier = item
+        .obj
+        .get(&StrKey::from("stable_identifier"))
+        .unwrap()
+        .unwrap();
+    let mut initial = item.obj.clone();
+    initial.delete(&StrKey::from("stable_identifier")).unwrap();
+    assert_eq!(identifier, Value::from(initial.commitment()));
+    assert_eq!(
+        item.obj.get(&StrKey::from("key")).unwrap().unwrap(),
+        Value::from(7)
+    );
+    assert_eq!(
+        reference.obj.get(&StrKey::from("target")).unwrap().unwrap(),
+        identifier
+    );
+    assert_eq!(
+        reference.obj.get(&StrKey::from("item")).unwrap().unwrap(),
+        Value::from(item.obj)
+    );
+    result.tx_pod.pod.verify().unwrap();
+}
+
+#[test]
+fn test_commit_mutation_rotation_and_opt_out() {
+    let src = r#"
+        fn Mint(action) {
+            var item = action.output("Item");
+            item.set([["amount", 1]]);
+            item.update("key", 7);
+        }
+        fn Auto(action) {
+            var item = action.mutate("Item");
+            item.update("amount", 2);
+        }
+        fn Touch(action) {
+            var item = action.mutate("Item");
+        }
+        fn TouchExplicit(action) {
+            var item = action.mutate("Item");
+            item.commit();
+        }
+        fn Explicit(action) {
+            var item = action.mutate("Item");
+            item.update("amount", 2);
+            item.commit();
+            var key = item.get("key");
+            item.commit(#{ rotate_key: true });
+            action.st_equal(item.key, key);
+            var work = action.intro_vdf(1, item);
+        }
+        fn Override(action) {
+            var item = action.mutate("Item");
+            item.update("key", 42);
+        }
+        fn Keep(action) {
+            var item = action.mutate("Item");
+            item.update("amount", 2);
+            item.commit(#{ rotate_key: false });
+            action.st_equal(item.key, 7);
+        }
+        fn Custom(action) {
+            var item = action.mutate("Item");
+            item.update("key", 42);
+            item.commit(#{ rotate_key: false });
+            item.commit(#{ rotate_key: false });
+            action.st_equal(item.key, 42);
+        }
+    "#;
+    let module = Sdk::default()
+        .load_module_from_src_actions(
+            src,
+            &[
+                "Mint",
+                "Auto",
+                "Touch",
+                "TouchExplicit",
+                "Explicit",
+                "Override",
+                "Keep",
+                "Custom",
+            ],
+        )
+        .unwrap();
+    let mut state = TestState::default();
+    let minted = module
+        .executor(true, grounding_witness(&state, &[]))
+        .action("Mint", vec![])
+        .unwrap();
+    apply_tx(&mut state, &minted.tx);
+    let [item] = minted.objs();
+    let field = |obj: &Dictionary, name: &str| obj.get(&StrKey::from(name)).unwrap().unwrap();
+    let identifier = field(&item.obj, "stable_identifier");
+    let old_key = field(&item.obj, "key");
+    let executor = module.executor(true, grounding_witness(&state, &[item.obj.commitment()]));
+    for action in [
+        "Auto",
+        "Touch",
+        "TouchExplicit",
+        "Explicit",
+        "Override",
+        "Keep",
+        "Custom",
+    ] {
+        let result = executor.action(action, vec![item.clone()]).unwrap();
+        let output = &result.obj(0).obj;
+        assert_eq!(field(output, "stable_identifier"), identifier, "{action}");
+        let key = field(output, "key");
+        match action {
+            "Keep" => assert_eq!(key, old_key),
+            "Custom" => assert_eq!(key, Value::from(42)),
+            _ => {
+                assert_ne!(key, old_key, "{action}");
+                assert_ne!(key, Value::from(42), "{action}");
+                assert!(key.is_raw(), "{action}");
+            }
+        }
+        result.tx_pod.pod.verify().unwrap();
+    }
+}
+
+#[test]
+fn test_commit_preserves_output_pow_shape_and_key() {
+    let src = r#"
+        fn Mint(action) {
+            var item = action.output("Item");
+            let target = action.top_limb_u256(9007199254740992);
+            var key = unsafe { action.pow_obj_grind(item, target) };
+            item.update("key", key);
+            action.intro_lt_eq_u256(item, target);
+            COMMIT
+        }
+    "#;
+    let sdk = Sdk::default();
+    let implicit = sdk
+        .load_module_from_src_actions(&src.replace("COMMIT", ""), &["Mint"])
+        .unwrap();
+    for commit in ["item.commit();", "item.commit(#{ rotate_key: false });"] {
+        let explicit = sdk
+            .load_module_from_src_actions(&src.replace("COMMIT", commit), &["Mint"])
+            .unwrap();
+        assert_eq!(implicit.podlang_src(), explicit.podlang_src());
+        let state = TestState::default();
+        let result = explicit
+            .executor(true, grounding_witness(&state, &[]))
+            .action("Mint", vec![])
+            .unwrap();
+        let mut initial = result.obj(0).obj.clone();
+        let identifier = initial
+            .get(&StrKey::from("stable_identifier"))
+            .unwrap()
+            .unwrap();
+        initial.delete(&StrKey::from("stable_identifier")).unwrap();
+        assert_eq!(identifier, Value::from(initial.commitment()));
+        result.tx_pod.pod.verify().unwrap();
+    }
+}
+
+#[test]
+fn test_commit_rejects_invalid_calls_and_writes_through_aliases() {
+    for (body, message) in [
+        (
+            r#"let alias = item; item.commit(); alias.update("key", 4);"#,
+            "committed",
+        ),
+        (
+            r#"let alias = item; alias.commit(); item.set([["amount", 1]]);"#,
+            "committed",
+        ),
+        (
+            r#"item.commit(); item.var_assign(#{ key: 4 });"#,
+            "committed",
+        ),
+        (
+            r#"item.commit(); item.commit(#{ rotate_key: false });"#,
+            "different options",
+        ),
+        (r#"item.commit(#{ rotate_keys: false });"#, "unknown option"),
+        (r#"item.commit(#{ rotate_key: 0 });"#, "literal boolean"),
+        (
+            r#"var flag = unsafe { 1 }; item.commit(#{ rotate_key: flag });"#,
+            "literal boolean",
+        ),
+        (r#"unsafe { item.commit(); }"#, "unexpected unsafe block"),
+        (r#"item.key.commit();"#, "expected an object"),
+        (
+            r#"item.set([["stable_identifier", 1]]);"#,
+            "managed by commit",
+        ),
+        (
+            r#"item.update("stable_identifier", 1);"#,
+            "managed by commit",
+        ),
+    ] {
+        let src = format!(r#"fn Mint(action) {{ var item = action.output("Item"); {body} }}"#);
+        let err = Sdk::default()
+            .load_module_from_src_actions(&src, &["Mint"])
+            .err()
+            .expect("invalid script loaded");
+        assert!(err.to_string().contains(message), "{body}: {err}");
+    }
+    for declaration in [r#"action.input("Item")"#, r#"action.subaction("Child")"#] {
+        let src = format!(
+            r#"
+            fn Child(action) {{ var child = action.output("Item"); }}
+            fn Main(action) {{ var item = {declaration}; item.commit(); }}
+        "#
+        );
+        let err = Sdk::default()
+            .load_module_from_src_actions(&src, &["Child", "Main"])
+            .err()
+            .expect("invalid commit loaded");
+        assert!(
+            err.to_string().contains("input objects")
+                || err.to_string().contains("subaction results"),
+            "{err}"
+        );
+    }
+}
+
+#[test]
+fn test_commit_subaction_output_exposes_identity() {
+    let src = r#"
+        fn Child(action) {
+            var item = action.output("Item");
+            item.set([["amount", 3]]);
+        }
+        fn Parent(action) {
+            var item = action.subaction("Child");
+            var reference = action.output("Reference");
+            reference.set([["target", item.stable_identifier]]);
+        }
+    "#;
+    let module = Sdk::default()
+        .load_module_from_src_actions(src, &["Child", "Parent"])
+        .unwrap();
+    let state = TestState::default();
+    let result = module
+        .executor(true, grounding_witness(&state, &[]))
+        .action("Parent", vec![])
+        .unwrap();
+    let [item, reference] = result.objs();
+    assert_eq!(
+        reference.obj.get(&StrKey::from("target")).unwrap(),
+        item.obj.get(&StrKey::from("stable_identifier")).unwrap()
+    );
+    result.tx_pod.pod.verify().unwrap();
+}
+
+#[test]
+fn test_commit_without_rotation_rejects_mutations_without_updates_during_load() {
+    for body in [
+        "",
+        "var work = action.intro_vdf(1, item);",
+        r#"var other = action.mutate("Item"); other.update("key", 7);"#,
+    ] {
+        let src = format!(
+            r#"
+            fn Keep(action) {{
+                var item = action.mutate("Item");
+                {body}
+                item.commit(#{{ rotate_key: false }});
+            }}
+        "#
+        );
+        let err = Sdk::default()
+            .load_module_from_src_actions(&src, &["Keep"])
+            .err()
+            .expect("mutation without updates passed Load");
+        assert!(
+            err.to_string()
+                .contains("mutation item has no updates and key rotation is disabled"),
+            "{body}: {err}"
+        );
+    }
+}
+
+#[test]
+fn test_sealing_protects_value_writes_and_cached_field_handles() {
+    let mut engine = new_engine();
+    engine.register_fn("overwrite", |item: ArgHandle| {
+        item.arg.borrow_mut().set_value(Value::from(0))
+    });
+    engine.register_fn(
+        "overwrite_in_place",
+        |item: ArgHandle| -> RuntimeResult<()> {
+            *item.arg.borrow_mut().as_mut_value()? = Value::from(0);
+            Ok(())
+        },
+    );
+    let sdk = Sdk {
+        engine: Rc::new(engine),
+    };
+    for write in [
+        "item.overwrite();",
+        "item.overwrite_in_place();",
+        "key.overwrite();",
+        "key.overwrite_in_place();",
+    ] {
+        let src = format!(
+            r#"
+            fn Mint(action) {{
+                var item = action.output("Item");
+                let key = item.key;
+                item.commit();
+                {write}
+            }}
+        "#
+        );
+        let err = sdk
+            .load_module_from_src_actions(&src, &["Mint"])
+            .err()
+            .expect("sealed value was writable");
+        assert!(err.to_string().contains("committed"), "{write}: {err}");
+    }
+}
+
+#[test]
+fn test_subaction_object_state_does_not_seal_unrelated_witnesses() {
+    let src = r#"
+        fn Child(action) {
+            var item = action.output("Item");
+        }
+        fn Parent(action) {
+            action.subaction("Child");
+            unsafe { action.random().var_assign(1); }
+            var reference = action.output("Reference");
+        }
+    "#;
+    let module = Sdk::default()
+        .load_module_from_src_actions(src, &["Child", "Parent"])
+        .unwrap();
+    let state = TestState::default();
+    let result = module
+        .executor(true, grounding_witness(&state, &[]))
+        .action("Parent", vec![])
+        .unwrap();
+    result.tx_pod.pod.verify().unwrap();
 }

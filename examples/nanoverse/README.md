@@ -22,6 +22,7 @@ just pexe build examples/nanoverse                       # compile and pack
 | One `set()` after the inputs are declared | `ScanBody` | A placeholder in every field the output cannot fill yet, then an update per field to overwrite it. |
 | Container literal plus `array_get` | `UpgradeShip`, `MoveShipX`, `DetectSignal`, `ScanBody`, `ExtractResource`, `RevealCoordinate` | One action per row. 2,017 of microverse's 2,070 actions are one-line rows of literals over 43 helpers. A table read is one `ArrayContains` and one private wildcard whatever the table's size. |
 | `Raw` bounds as table or literal values | `SurveySector*`, and `top_limb_u256` in a row | Per-band helper variants (`*_ungated`, `*_lower`, `*_upper`, `*_range`). `top_limb_u256` returns a literal, so a band can live in a row alongside the rest of it. |
+| `commit()` and automatic key rotation | `DetectSignal`, `ExtractResource`, and mutations finalized at action return | Manual random key generation and `update("key", ...)`. Explicit commit seals a mutation early; outputs preserve their creation keys. |
 | `intro_vdf` with a var count | `UpgradeShip`, `ScanBody` | A separate predicate per difficulty. |
 | Nested container in a row, stored as a field | `ScanBody` (`body.kinds` is a `Set`) | Nothing in microverse: it has no containers at all. |
 | `st_set_contains` against an object field | `ExtractResource` | An action per allowed value. |
@@ -114,18 +115,18 @@ BuildShip(io BuildShipIO, state_header StateHeader, chain0, chain, private: work
   tx::TxInsert(chain0, chain, initials.ship, io.out_ship, @self_predicate(Isship))
 )
 
-UpgradeShip(io UpgradeShipIO, state_header StateHeader, chain0, chain, private: ship0, ship1, next_tier, row, work, _rand3) = AND(
+UpgradeShip(io UpgradeShipIO, state_header StateHeader, chain0, chain, private: ship0, ship1, next_tier, row, work, _key3) = AND(
   ArrayContains(io, UpgradeShipIO::in_ship, ship0)
   Equal(ship0.v, 1)
   Sum(ship0.tier, 1, next_tier)
   ArrayContains([{"extract_base": 10, "vdf": 3, "step": 1}, {"extract_base": 50, "vdf": 6, "step": 10}, {"extract_base": 250, "vdf": 9, "step": 100}], next_tier, row)
   DictUpdate(ship0, "tier", next_tier, ship1)
   Vdf(row.vdf, ship1, work)
-  DictUpdate(ship1, "key", _rand3, io.out_ship)
+  DictUpdate(ship1, "key", _key3, io.out_ship)
   tx::TxMutate(chain0, chain, ship0, io.out_ship, @self_predicate(Isship))
 )
 
-MoveShipX(io MoveShipXIO, state_header StateHeader, chain0, chain, private: ship0, ship1, ship2, row, next_x, _rand2) = AND(
+MoveShipX(io MoveShipXIO, state_header StateHeader, chain0, chain, private: ship0, ship1, ship2, row, next_x, _key2) = AND(
   ArrayContains(io, MoveShipXIO::in_ship, ship0)
   Equal(ship0.v, 1)
   Gt(state_header.block_timestamp, ship0.ready_at)
@@ -133,11 +134,11 @@ MoveShipX(io MoveShipXIO, state_header StateHeader, chain0, chain, private: ship
   Sum(ship0.x, row.step, next_x)
   DictUpdate(ship0, "x", next_x, ship1)
   DictUpdate(ship1, "ready_at", state_header.block_timestamp, ship2)
-  DictUpdate(ship2, "key", _rand2, io.out_ship)
+  DictUpdate(ship2, "key", _key2, io.out_ship)
   tx::TxMutate(chain0, chain, ship0, io.out_ship, @self_predicate(Isship))
 )
 
-ClaimSector(io ClaimSectorIO, state_header StateHeader, chain0, chain, private: chain1, ship0, _rand0, initials ClaimSectorInitials) = AND(
+ClaimSector(io ClaimSectorIO, state_header StateHeader, chain0, chain, private: chain1, ship0, _key0, initials ClaimSectorInitials) = AND(
   ArrayContains(io, ClaimSectorIO::in_ship, ship0)
   Equal(ship0.v, 1)
   DictContains(initials.sector, "v", 1)
@@ -148,34 +149,34 @@ ClaimSector(io ClaimSectorIO, state_header StateHeader, chain0, chain, private: 
   DictContains(initials.sector, "slots_left", 0)
   DictContains(initials.sector, "next_slot", 0)
   DictContains(initials.sector, "claimed_at", state_header.block_number)
-  DictUpdate(ship0, "key", _rand0, io.out_ship)
+  DictUpdate(ship0, "key", _key0, io.out_ship)
   tx::TxMutate(chain0, chain1, ship0, io.out_ship, @self_predicate(Isship))
   tx::TxInsert(chain1, chain, initials.sector, io.out_sector, @self_predicate(Issector))
 )
 
-SurveySectorSparse(io SurveySectorSparseIO, state_header StateHeader, chain0, chain, private: sector0, sector1, sector2, _rand0) = AND(
+SurveySectorSparse(io SurveySectorSparseIO, state_header StateHeader, chain0, chain, private: sector0, sector1, sector2, _key0) = AND(
   ArrayContains(io, SurveySectorSparseIO::in_sector, sector0)
   LtEqU256(sector0.stable_identifier, Raw(0x5555555555555555000000000000000000000000000000000000000000000000))
   Equal(sector0.v, 1)
   Equal(sector0.profile, 0)
   DictUpdate(sector0, "profile", 1, sector1)
   DictUpdate(sector1, "slots_left", 3, sector2)
-  DictUpdate(sector2, "key", _rand0, io.out_sector)
+  DictUpdate(sector2, "key", _key0, io.out_sector)
   tx::TxMutate(chain0, chain, sector0, io.out_sector, @self_predicate(Issector))
 )
 
-SurveySectorRich(io SurveySectorRichIO, state_header StateHeader, chain0, chain, private: sector0, sector1, sector2, _rand0) = AND(
+SurveySectorRich(io SurveySectorRichIO, state_header StateHeader, chain0, chain, private: sector0, sector1, sector2, _key0) = AND(
   ArrayContains(io, SurveySectorRichIO::in_sector, sector0)
   LtEqU256(Raw(0x5555555555555556000000000000000000000000000000000000000000000000), sector0.stable_identifier)
   Equal(sector0.v, 1)
   Equal(sector0.profile, 0)
   DictUpdate(sector0, "profile", 2, sector1)
   DictUpdate(sector1, "slots_left", 5, sector2)
-  DictUpdate(sector2, "key", _rand0, io.out_sector)
+  DictUpdate(sector2, "key", _key0, io.out_sector)
   tx::TxMutate(chain0, chain, sector0, io.out_sector, @self_predicate(Issector))
 )
 
-DetectSignal(io DetectSignalIO, state_header StateHeader, chain0, chain, private: ship0, sector0, sector1, sector2, row, left, next_slot, _rand3, _rand4, chain_steps DetectSignalChain, initials DetectSignalInitials) = AND(
+DetectSignal(io DetectSignalIO, state_header StateHeader, chain0, chain, private: ship0, sector0, sector1, sector2, row, left, next_slot, _key3, _key4, chain_steps DetectSignalChain, initials DetectSignalInitials) = AND(
   ArrayContains(io, DetectSignalIO::in_ship, ship0)
   ArrayContains(io, DetectSignalIO::in_sector, sector0)
   Equal(ship0.v, 1)
@@ -193,14 +194,14 @@ DetectSignal(io DetectSignalIO, state_header StateHeader, chain0, chain, private
   DictContains(initials.signal, "slot", sector0.next_slot)
   DictUpdate(sector0, "slots_left", left, sector1)
   DictUpdate(sector1, "next_slot", next_slot, sector2)
-  DictUpdate(sector2, "key", _rand3, io.out_sector)
-  DictUpdate(ship0, "key", _rand4, io.out_ship)
+  DictUpdate(sector2, "key", _key3, io.out_sector)
+  DictUpdate(ship0, "key", _key4, io.out_ship)
   tx::TxMutate(chain0, chain_steps.step_0, ship0, io.out_ship, @self_predicate(Isship))
   tx::TxMutate(chain_steps.step_0, chain_steps.step_1, sector0, io.out_sector, @self_predicate(Issector))
   tx::TxInsert(chain_steps.step_1, chain, initials.signal, io.out_signal, @self_predicate(Issignal))
 )
 
-ScanBody(io ScanBodyIO, state_header StateHeader, chain0, chain, private: ship0, signal, row, work, _rand2, chain_steps ScanBodyChain, initials ScanBodyInitials) = AND(
+ScanBody(io ScanBodyIO, state_header StateHeader, chain0, chain, private: ship0, signal, row, work, _key2, chain_steps ScanBodyChain, initials ScanBodyInitials) = AND(
   ArrayContains(io, ScanBodyIO::in_ship, ship0)
   ArrayContains(io, ScanBodyIO::in_signal, signal)
   Equal(ship0.v, 1)
@@ -216,13 +217,13 @@ ScanBody(io ScanBodyIO, state_header StateHeader, chain0, chain, private: ship0,
   DictContains(initials.body, "slot", signal.slot)
   DictContains(initials.body, "next_coordinate", 0)
   Vdf(row.vdf, initials.body, work)
-  DictUpdate(ship0, "key", _rand2, io.out_ship)
+  DictUpdate(ship0, "key", _key2, io.out_ship)
   tx::TxMutate(chain0, chain_steps.step_0, ship0, io.out_ship, @self_predicate(Isship))
   tx::TxDelete(chain_steps.step_0, chain_steps.step_1, signal, @self_predicate(Issignal))
   tx::TxInsert(chain_steps.step_1, chain, initials.body, io.out_body, @self_predicate(Isbody))
 )
 
-ExtractResource(io ExtractResourceIO, state_header StateHeader, chain0, chain, private: ship0, body0, body1, tier, amount, left, _rand3, _rand4, chain_steps ExtractResourceChain, initials ExtractResourceInitials) = AND(
+ExtractResource(io ExtractResourceIO, state_header StateHeader, chain0, chain, private: ship0, body0, body1, tier, amount, left, _key3, _key4, chain_steps ExtractResourceChain, initials ExtractResourceInitials) = AND(
   ArrayContains(io, ExtractResourceIO::in_ship, ship0)
   ArrayContains(io, ExtractResourceIO::in_body, body0)
   Equal(ship0.v, 1)
@@ -236,14 +237,14 @@ ExtractResource(io ExtractResourceIO, state_header StateHeader, chain0, chain, p
   DictContains(initials.resource, "kind", body0.primary_kind)
   DictContains(initials.resource, "amount", amount)
   DictUpdate(body0, "remaining", left, body1)
-  DictUpdate(body1, "key", _rand3, io.out_body)
-  DictUpdate(ship0, "key", _rand4, io.out_ship)
+  DictUpdate(body1, "key", _key3, io.out_body)
+  DictUpdate(ship0, "key", _key4, io.out_ship)
   tx::TxMutate(chain0, chain_steps.step_0, ship0, io.out_ship, @self_predicate(Isship))
   tx::TxMutate(chain_steps.step_0, chain_steps.step_1, body0, io.out_body, @self_predicate(Isbody))
   tx::TxInsert(chain_steps.step_1, chain, initials.resource, io.out_resource, @self_predicate(Isresource))
 )
 
-ExtractCoordinate(io ExtractCoordinateIO, state_header StateHeader, chain0, chain, private: chain1, body0, body1, next, _rand1, initials ExtractCoordinateInitials) = AND(
+ExtractCoordinate(io ExtractCoordinateIO, state_header StateHeader, chain0, chain, private: chain1, body0, body1, next, _key1, initials ExtractCoordinateInitials) = AND(
   ArrayContains(io, ExtractCoordinateIO::in_body, body0)
   Equal(body0.v, 1)
   Sum(body0.next_coordinate, 1, next)
@@ -258,12 +259,12 @@ ExtractCoordinate(io ExtractCoordinateIO, state_header StateHeader, chain0, chai
   DictContains(initials.coordinate, "z", 0)
   DictContains(initials.coordinate, "uses_left", 0)
   DictUpdate(body0, "next_coordinate", next, body1)
-  DictUpdate(body1, "key", _rand1, io.out_body)
+  DictUpdate(body1, "key", _key1, io.out_body)
   tx::TxMutate(chain0, chain1, body0, io.out_body, @self_predicate(Isbody))
   tx::TxInsert(chain1, chain, initials.coordinate, io.out_coordinate, @self_predicate(Iscoordinate))
 )
 
-RevealCoordinate(io RevealCoordinateIO, state_header StateHeader, chain0, chain, private: coordinate0, coordinate1, coordinate2, coordinate3, coordinate4, coordinate5, coordinate6, row, _rand1) = AND(
+RevealCoordinate(io RevealCoordinateIO, state_header StateHeader, chain0, chain, private: coordinate0, coordinate1, coordinate2, coordinate3, coordinate4, coordinate5, coordinate6, row, _key1) = AND(
   ArrayContains(io, RevealCoordinateIO::in_coordinate, coordinate0)
   Equal(coordinate0.v, 1)
   Equal(coordinate0.revealed, 0)
@@ -275,22 +276,22 @@ RevealCoordinate(io RevealCoordinateIO, state_header StateHeader, chain0, chain,
   DictUpdate(coordinate3, "y", row.y, coordinate4)
   DictUpdate(coordinate4, "z", row.z, coordinate5)
   DictUpdate(coordinate5, "uses_left", row.uses, coordinate6)
-  DictUpdate(coordinate6, "key", _rand1, io.out_coordinate)
+  DictUpdate(coordinate6, "key", _key1, io.out_coordinate)
   tx::TxMutate(chain0, chain, coordinate0, io.out_coordinate, @self_predicate(Iscoordinate))
 )
 
-UseCoordinate(io UseCoordinateIO, state_header StateHeader, chain0, chain, private: coordinate0, coordinate1, left, _rand1) = AND(
+UseCoordinate(io UseCoordinateIO, state_header StateHeader, chain0, chain, private: coordinate0, coordinate1, left, _key1) = AND(
   ArrayContains(io, UseCoordinateIO::in_coordinate, coordinate0)
   Equal(coordinate0.v, 1)
   Equal(coordinate0.revealed, 1)
   Sum(left, 1, coordinate0.uses_left)
   GtEq(left, 0)
   DictUpdate(coordinate0, "uses_left", left, coordinate1)
-  DictUpdate(coordinate1, "key", _rand1, io.out_coordinate)
+  DictUpdate(coordinate1, "key", _key1, io.out_coordinate)
   tx::TxMutate(chain0, chain, coordinate0, io.out_coordinate, @self_predicate(Iscoordinate))
 )
 
-WarpToCoordinate(io WarpToCoordinateIO, state_header StateHeader, chain0, chain, private: chain1, coordinate, ship0, ship1, ship2, ship3, _rand0, _UseCoordinate_io_0 UseCoordinateIO) = AND(
+WarpToCoordinate(io WarpToCoordinateIO, state_header StateHeader, chain0, chain, private: chain1, coordinate, ship0, ship1, ship2, ship3, _key0, _UseCoordinate_io_0 UseCoordinateIO) = AND(
   ArrayContains(io, WarpToCoordinateIO::in_ship, ship0)
   ArrayContains(_UseCoordinate_io_0, UseCoordinateIO::out_coordinate, coordinate)
   UseCoordinate(_UseCoordinate_io_0, state_header, chain0, chain1)
@@ -298,7 +299,7 @@ WarpToCoordinate(io WarpToCoordinateIO, state_header StateHeader, chain0, chain,
   DictUpdate(ship0, "x", coordinate.x, ship1)
   DictUpdate(ship1, "y", coordinate.y, ship2)
   DictUpdate(ship2, "z", coordinate.z, ship3)
-  DictUpdate(ship3, "key", _rand0, io.out_ship)
+  DictUpdate(ship3, "key", _key0, io.out_ship)
   tx::TxMutate(chain1, chain, ship0, io.out_ship, @self_predicate(Isship))
 )
 
@@ -323,7 +324,7 @@ ScrapResource(io ScrapResourceIO, state_header StateHeader, chain0, chain, priva
   tx::TxDelete(chain0, chain, source, @self_predicate(Isresource))
 )
 
-MergeResources(io MergeResourcesIO, state_header StateHeader, chain0, chain, private: chain1, destination0, destination1, source, total, _rand1) = AND(
+MergeResources(io MergeResourcesIO, state_header StateHeader, chain0, chain, private: chain1, destination0, destination1, source, total, _key1) = AND(
   ArrayContains(io, MergeResourcesIO::in_destination, destination0)
   ArrayContains(io, MergeResourcesIO::in_source, source)
   Equal(destination0.v, 1)
@@ -332,7 +333,7 @@ MergeResources(io MergeResourcesIO, state_header StateHeader, chain0, chain, pri
   GtEq(source.amount, 0)
   Sum(destination0.amount, source.amount, total)
   DictUpdate(destination0, "amount", total, destination1)
-  DictUpdate(destination1, "key", _rand1, io.out_destination)
+  DictUpdate(destination1, "key", _key1, io.out_destination)
   tx::TxMutate(chain0, chain1, destination0, io.out_destination, @self_predicate(Isresource))
   tx::TxDelete(chain1, chain, source, @self_predicate(Isresource))
 )

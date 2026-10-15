@@ -54,11 +54,6 @@ fn require_version(action, obj) {
     action.st_equal(obj.v, 1);
 }
 
-// Write the random key directly so repeated calls do not reuse a named wildcard.
-fn rekey(action, obj) {
-    obj.update("key", unsafe { action.random() });
-}
-
 // ---- ship -----------------------------------------------------------------
 
 fn BuildShip(action) {
@@ -85,7 +80,6 @@ fn UpgradeShip(action) {
     var row = action.array_get(ship_tiers(), next_tier);
     ship.update("tier", next_tier);
     var work = action.intro_vdf(row.vdf, ship);
-    rekey(action, ship);
 }
 
 // Tier selects the step; separate actions represent player-selected direction.
@@ -101,7 +95,6 @@ fn MoveShipX(action) {
     action.st_sum(ship.x, row.step, next_x);
     ship.update("x", next_x);
     ship.update("ready_at", state_header.block_timestamp);
-    rekey(action, ship);
 }
 
 // ---- sector ---------------------------------------------------------------
@@ -122,7 +115,6 @@ fn ClaimSector(action) {
         ["next_slot", 0],
         ["claimed_at", state_header.block_number]
     ]);
-    rekey(action, ship);
 }
 
 // Partition `stable_identifier` into bands because a 256-bit identity cannot
@@ -135,7 +127,6 @@ fn survey(action, sector, profile) {
     let row = sector_profiles()[profile];
     sector.update("profile", profile);
     sector.update("slots_left", row.slots);
-    rekey(action, sector);
 }
 
 // Adjacent bounds cover every identity without overlap.
@@ -178,8 +169,7 @@ fn DetectSignal(action) {
     ]);
     sector.update("slots_left", left);
     sector.update("next_slot", next_slot);
-    rekey(action, sector);
-    rekey(action, ship);
+    sector.commit();
 }
 
 // ---- body -----------------------------------------------------------------
@@ -205,7 +195,6 @@ fn ScanBody(action) {
         ["next_coordinate", 0]
     ]);
     var work = action.intro_vdf(row.vdf, body);
-    rekey(action, ship);
 }
 
 // Compute the yield as a witness and constrain it with `st_product`.
@@ -228,8 +217,7 @@ fn ExtractResource(action) {
         ["amount", amount]
     ]);
     body.update("remaining", left);
-    rekey(action, body);
-    rekey(action, ship);
+    body.commit();
 }
 
 // ---- coordinates ----------------------------------------------------------
@@ -254,7 +242,6 @@ fn ExtractCoordinate(action) {
         ["uses_left", 0]
     ]);
     body.update("next_coordinate", next);
-    rekey(action, body);
 }
 
 // A variable-key lookup handles the entire catalog; `coordinate.row`
@@ -271,7 +258,6 @@ fn RevealCoordinate(action) {
     coordinate.update("y", row.y);
     coordinate.update("z", row.z);
     coordinate.update("uses_left", row.uses);
-    rekey(action, coordinate);
 }
 
 // Mutation and deletion are fixed by the action shape, so deleting the final
@@ -284,7 +270,6 @@ fn UseCoordinate(action) {
     action.st_sum(left, 1, coordinate.uses_left);
     action.st_gt_eq(left, 0);
     coordinate.update("uses_left", left);
-    rekey(action, coordinate);
 }
 
 // The sub-action returns the updated coordinate; the parent copies its
@@ -296,7 +281,6 @@ fn WarpToCoordinate(action) {
     ship.update("x", coordinate.x);
     ship.update("y", coordinate.y);
     ship.update("z", coordinate.z);
-    rekey(action, ship);
 }
 
 // ---- resources ------------------------------------------------------------
@@ -340,5 +324,4 @@ fn MergeResources(action) {
     var total = unsafe { destination.amount + source.amount };
     action.st_sum(destination.amount, source.amount, total);
     destination.update("amount", total);
-    rekey(action, destination);
 }
