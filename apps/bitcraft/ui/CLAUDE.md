@@ -1,11 +1,10 @@
 # Bitcraft UI
 
-A single-page web client (`index.html`, no build step) for the dobjd HTTP
-API, specialised to the `bitcraft` plugin. It talks to dobjd at
-`http://127.0.0.1:7717`; serve it with any static file server, e.g.
-`python3 -m http.server 4170 --bind 127.0.0.1 --directory apps/bitcraft/ui`.
+A single-page web client (`index.html`, no build step) for the dobjd HTTP API, specialised to the `bitcraft` plugin.
 
-The `bundled-bitcraft-ui` daemon feature serves this page at `/bitcraft/` and injects its own API origin. The Tauri desktop application displays that daemon-served page in its webview.
+For the desktop app, run `just bitcraft-dev` from the repository root. It prepares the bundled runtime and launches Tauri, whose managed daemon serves the UI at `http://127.0.0.1:7727/bitcraft/`. The `bundled-bitcraft-ui` daemon feature injects its own API origin into the page, so UI requests use the same origin rather than a fixed port. The managed MCP endpoint uses port `7728` when enabled.
+
+For standalone browser development, serve this directory with `python3 -m http.server 4170 --bind 127.0.0.1 --directory apps/bitcraft/ui` and open `http://127.0.0.1:4170`. Without the daemon-injected API origin, the page connects to the standalone Digital Objects daemon at `http://127.0.0.1:7717` (MCP uses `7718` when enabled). See [the desktop README](../README.md) for build and bundle commands.
 
 ## Bitcraft-specific rules
 
