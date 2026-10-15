@@ -37,6 +37,28 @@ metadata.
 In the Execution phase, the `Executor` is used to track the generated execution
 artifacts.
 
+## Built-in rekey actions
+
+Each loaded class also has a built-in `Rekey<Class>` action. For example,
+`RekeyLog` consumes one Log and produces one Log with a fresh random key.
+All other fields, including its type and stable identifier, are preserved.
+These actions appear in `SdkModule::actions()` and the driver catalog, so the
+CLI, GUI, and MCP use the same discovery and execution paths as scripted
+actions. No Rhai function or manifest action entry is needed. The names
+`Rekey<Class>` are reserved for the corresponding loaded classes.
+
+Built-ins use `ActionKind::Rekey` and execute directly through
+`TxBuilder::rekey`, selecting the existing final branch of `Is<Class>`.
+Every class uses the same imported `rk::Rekey` predicate; the class guard
+binds it to that class. Built-in metadata is added after Podlang compilation,
+so it does not change plugin or class hashes. Both `Executor::action` and
+`Executor::plan_action` support built-ins. Explicit key parameters are not
+currently supported.
+
+`pexe inspect predicates examples/craft-basics --action RekeyLog` displays
+the shared predicate, and `pexe inspect plan examples/craft-basics --action RekeyLog`
+plans its execution against a synthetic grounded Log.
+
 ## Literal values and Variable values
 
 The action needs to be translated to a pod2 predicate which will use a mix of
