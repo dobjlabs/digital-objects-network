@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::sync::LazyLock;
 
@@ -122,6 +122,9 @@ enum Inst {
         /// Populated at exe time inside `obj_io`; left None at Load.
         original: Option<Dictionary>,
     },
+    Commit {
+        obj: Ref,
+    },
     Update {
         obj: String,
         key: String,
@@ -205,6 +208,20 @@ struct Var {
     value: Option<Value>,
     /// If Some, then this `Var` is treated as an Entry
     key: Option<String>,
+    object: Option<Rc<RefCell<ObjectState>>>,
+}
+
+#[derive(Debug)]
+struct ObjectState {
+    owner: Weak<()>,
+    io: ObjectIO,
+    committed: Option<CommittedObject>,
+}
+
+#[derive(Debug)]
+struct CommittedObject {
+    rotate_key: bool,
+    initial: Option<Dictionary>,
 }
 
 #[derive(Debug, Clone)]
@@ -229,6 +246,7 @@ impl VarOrValue {
             typ,
             value: None,
             key: None,
+            object: None,
         })
     }
     fn type_check(&self, typ: Type) -> RuntimeResult<()> {
@@ -304,18 +322,65 @@ impl VarOrValue {
             }
         }
     }
-    // Only call this at exec time
-    fn as_mut_value(&mut self) -> &mut Value {
+    fn check_writable(&self) -> RuntimeResult<()> {
+        if let Self::Var(var) = self {
+            if let Some(object) = &var.object {
+                let object = object.borrow();
+                if object.owner.upgrade().is_none() {
+                    return Err("subaction results are read-only".into());
+                }
+                if !object.io.produces() {
+                    return Err("input objects cannot be modified".into());
+                }
+                if object.committed.is_some() {
+                    return Err(
+                        format!("object {} is committed and cannot be modified", var.name).into(),
+                    );
+                }
+            }
+            if var.key.is_some() {
+                return Err("object fields cannot be assigned directly; use update".into());
+            }
+        }
+        Ok(())
+    }
+    fn object_state(&self) -> RuntimeResult<Rc<RefCell<ObjectState>>> {
         match self {
-            Self::Value(value) => value,
+            Self::Var(Var {
+                key: None,
+                object: Some(object),
+                ..
+            }) => Ok(object.clone()),
+            _ => Err(
+                "expected an object declared in this action; subaction results are read-only"
+                    .into(),
+            ),
+        }
+    }
+    fn output_initial(&self) -> Dictionary {
+        self.object_state()
+            .expect("output has object state")
+            .borrow()
+            .committed
+            .as_ref()
+            .expect("output committed during execution")
+            .initial
+            .clone()
+            .expect("output has a pre-identity dictionary")
+    }
+    // Only call this at exec time
+    fn as_mut_value(&mut self) -> RuntimeResult<&mut Value> {
+        self.check_writable()?;
+        match self {
+            Self::Value(value) => Ok(value),
             Self::Var(Var {
                 value, key: None, ..
-            }) => value.as_mut().expect("has value at exec time"),
+            }) => Ok(value.as_mut().expect("has value at exec time")),
             Self::Var(Var {
                 value: _,
                 key: Some(_),
                 ..
-            }) => panic!("entry can't be mutated"),
+            }) => unreachable!("field writes rejected"),
         }
     }
     // Only call this at exec time
@@ -339,23 +404,25 @@ impl VarOrValue {
             }
         }
     }
-    fn set_value(&mut self, value: Value) {
+    fn set_value(&mut self, value: Value) -> RuntimeResult<()> {
+        self.check_writable()?;
         match self {
             Self::Value(v) => *v = value,
             Self::Var(Var { value: v, .. }) => *v = Some(value),
         }
+        Ok(())
     }
     // Only call this at exec time
     fn to_dict(&self) -> Dictionary {
         self.as_value().as_dictionary().expect("is dict")
     }
     // Only call this at exec time
-    fn mut_dict<T>(&mut self, mut f: impl FnMut(&mut Dictionary) -> T) -> T {
-        let obj = self.as_mut_value();
+    fn mut_dict<T>(&mut self, mut f: impl FnMut(&mut Dictionary) -> T) -> RuntimeResult<T> {
+        let obj = self.as_mut_value()?;
         let mut dict = obj.as_dictionary().expect("is dict");
         let output = f(&mut dict);
         *obj = Value::from(dict);
-        output
+        Ok(output)
     }
 }
 
@@ -494,6 +561,16 @@ fn capture_op_args(args: &[Ref], is_exe: bool) -> Option<Vec<OperationArg>> {
     is_exe.then(|| args.iter().map(|arg| arg.borrow().as_op_arg()).collect())
 }
 
+// A dictionary's root can also occur as a Raw identifier in the record's DB.
+// Retain the dictionary witness instead of decoding that root as a Raw value.
+fn record_entry(record: &Array, slot: usize, value: Value) -> OperationArg {
+    OperationArg::Statement(Statement::Contains(
+        Value::from(record.clone()).into(),
+        Value::from(slot as i64).into(),
+        value.into(),
+    ))
+}
+
 /// Single-argument version of `capture_op_args`.
 fn capture_op_arg(arg: &Ref, is_exe: bool) -> Option<OperationArg> {
     is_exe.then(|| arg.borrow().as_op_arg())
@@ -570,6 +647,7 @@ struct ActionHandle(Rc<RefCell<ActionContext>>);
 /// parent and sub-action handles see the same builder / input queue /
 /// tx_builder.
 struct ActionContext {
+    identity: Rc<()>,
     name: String,
     insts: Vec<Inst>,
     /// User-defined vars (objects, intro outputs, temporaries) plus
@@ -588,6 +666,7 @@ struct ActionContext {
 impl ActionContext {
     fn new(name: String, exe_ctx: Option<Rc<RefCell<ExeContext>>>) -> Self {
         let mut ctx = Self {
+            identity: Rc::new(()),
             name,
             insts: Vec::new(),
             vars: Vec::new(),
@@ -671,32 +750,21 @@ impl ActionContext {
             state.dict_read = true;
         }
     }
-    /// Per-var max ts, including the extra ts an Output reserves for
-    /// the identity-stamp bump (`fmt_podlang::output_max_ts`). This is
-    /// the single source for in/out/initials slot positions, consumed
-    /// by `compute_wildcard_needs`, `ActionMeta`, and `fmt_podlang`.
     fn max_ts_per_var(&self) -> HashMap<String, usize> {
-        let output_vars: HashSet<String> = self
-            .insts
-            .iter()
-            .filter_map(|inst| match inst {
-                Inst::Object {
-                    io: ObjectIO::Output,
-                    obj,
-                    ..
-                } => Some(obj.borrow().var_name().to_string()),
-                _ => None,
-            })
-            .collect();
         self.var_state
             .iter()
-            .map(|(k, v)| {
-                (
-                    k.clone(),
-                    fmt_podlang::output_max_ts(v.ts, output_vars.contains(k)),
-                )
-            })
+            .map(|(name, state)| (name.clone(), state.ts))
             .collect()
+    }
+    fn object_state(&self, arg: &VarOrValue) -> RuntimeResult<Rc<RefCell<ObjectState>>> {
+        let object = arg.object_state()?;
+        if !Weak::ptr_eq(&object.borrow().owner, &Rc::downgrade(&self.identity)) {
+            return Err(
+                "expected an object declared in this action; subaction results are read-only"
+                    .into(),
+            );
+        }
+        Ok(object)
     }
     /// Reject a `set` that cannot hold. `set` writes its initializer into
     /// the object's dict without advancing the object's ts, so any
@@ -707,46 +775,35 @@ impl ActionContext {
     /// Only an output is settable. On an input or a mutate the write
     /// lands in a pre-state fixed by the state root the transaction
     /// grounds against.
-    fn check_settable(&self, var: &str) -> RuntimeResult<()> {
+    fn check_settable(&self, arg: &Ref) -> RuntimeResult<()> {
+        let var = arg.borrow().var_name().to_string();
         if var == "?" {
             return Err("set: bind the object with `var` first".into());
         }
-        let io = self.insts.iter().find_map(|inst| match inst {
-            Inst::Object { io, obj, .. } if obj.borrow().var_name() == var => Some(*io),
-            _ => None,
-        });
-        match io {
-            Some(ObjectIO::Output) => {}
-            Some(_) => {
-                return Err(format!(
-                    "set on {var}: only an output object can be initialized with set"
-                )
-                .into());
-            }
-            None => {
-                return Err(format!(
-                    "set on {var}: expected an output object declared in this action"
-                )
-                .into());
-            }
+        if self.object_state(&arg.borrow())?.borrow().io != ObjectIO::Output {
+            return Err(
+                format!("set on {var}: only an output object can be initialized with set").into(),
+            );
         }
         let names_var = |r: &Ref| match &*r.borrow() {
             VarOrValue::Var(v) => v.name == var,
             VarOrValue::Value(_) => false,
         };
         let pinned_by = self.insts.iter().find_map(|inst| match inst {
-            Inst::Update { obj, value, .. } => (obj == var || names_var(value)).then_some("update"),
+            Inst::Update { obj, value, .. } => {
+                (obj == &var || names_var(value)).then_some("update")
+            }
             Inst::Set { kvs, .. } => kvs
                 .iter()
                 .any(|(_, v)| names_var(v))
                 .then_some("another object's set"),
             Inst::Statement { args, .. } => args.iter().any(names_var).then_some("a statement"),
             Inst::Intro { args, .. } => args.iter().any(names_var).then_some("an intro pod"),
-            Inst::Object { .. } | Inst::SubAction { .. } => None,
+            Inst::Object { .. } | Inst::SubAction { .. } | Inst::Commit { .. } => None,
         });
         let pinned_by = pinned_by.or_else(|| {
             self.var_state
-                .get(var)
+                .get(&var)
                 .is_some_and(|s| s.dict_read)
                 .then_some("pow_obj_grind")
         });
@@ -800,6 +857,26 @@ impl ActionHandle {
     fn new(name: String, exe_ctx: Option<Rc<RefCell<ExeContext>>>) -> Self {
         Self(Rc::new(RefCell::new(ActionContext::new(name, exe_ctx))))
     }
+    fn commit_objects(&self) -> RuntimeResult<()> {
+        let objects: Vec<Ref> = self
+            .0
+            .borrow()
+            .insts
+            .iter()
+            .filter_map(|inst| match inst {
+                Inst::Object { io, obj, .. } if io.produces() => Some(obj.clone()),
+                _ => None,
+            })
+            .collect();
+        for obj in objects {
+            let object = obj.borrow().object_state()?;
+            let needs_commit = object.borrow().committed.is_none();
+            if needs_commit {
+                ArgHandle::new(self.clone(), obj).commit()?;
+            }
+        }
+        Ok(())
+    }
     fn state_header(&self) -> ArgHandle {
         let mut ctx = self.0.borrow_mut();
         ctx.add_var("state_header".to_string()).unwrap_or(());
@@ -813,7 +890,8 @@ impl ActionHandle {
             let exe_ctx = exe_rc.borrow();
             let state_header = exe_ctx.tx_builder.state_header();
             arg.borrow_mut()
-                .set_value(Value::from(state_header.array()));
+                .set_value(Value::from(state_header.array()))
+                .expect("state header has no object write restrictions");
         }
         ArgHandle::new(self.clone(), arg)
     }
@@ -842,19 +920,24 @@ impl ActionHandle {
             match io {
                 ObjectIO::Output => {
                     arg.borrow_mut()
-                        .set_value(Value::from(Self::new_obj(&exe_ctx, &class)));
+                        .set_value(Value::from(Self::new_obj(&exe_ctx, &class)))?;
                 }
                 ObjectIO::Input => {
                     let obj = exe_ctx.inputs.pop().expect("exists");
-                    arg.borrow_mut().set_value(Value::from(obj));
+                    arg.borrow_mut().set_value(Value::from(obj))?;
                 }
                 ObjectIO::Mutate => {
                     let obj = exe_ctx.inputs.pop().expect("exists");
-                    arg.borrow_mut().set_value(Value::from(obj.clone()));
+                    arg.borrow_mut().set_value(Value::from(obj.clone()))?;
                     original = Some(obj);
                 }
             }
         }
+        arg.borrow_mut().as_mut_var().object = Some(Rc::new(RefCell::new(ObjectState {
+            owner: Rc::downgrade(&ctx.identity),
+            io,
+            committed: None,
+        })));
         ctx.insts.push(Inst::Object {
             io,
             obj: arg.clone(),
@@ -896,7 +979,7 @@ impl ActionHandle {
         };
         let witness = self.0.borrow_mut().new_witness("unsafe", typ);
         if self.0.borrow().exe_ctx.is_some() {
-            witness.borrow_mut().set_value(value.borrow().as_value());
+            witness.borrow_mut().set_value(value.borrow().as_value())?;
         }
         // Preserve aliases of a temporary returned from the block.
         if matches!(&*value.borrow(), VarOrValue::Var(var) if var.name == "?" && var.key.is_none())
@@ -931,46 +1014,15 @@ impl ActionHandle {
             &action,
             (self.clone(),),
         )?;
+        self.commit_objects()?;
 
         // ---- Build in/out record arrays from the action's direct
         // Object insts. Each Object contributes one entry to its
         // dispatch side's array (Mutate contributes to both).
-        //
-        // For Outputs, cache the identity-stamped dict once here so the
-        // three consumers that need the post-identity form -- the
-        // out_array entry, the ArrayContains anchor below, and the
-        // downstream obj_dict -- all use the same value.
         let exe_rc = self.0.borrow().exe_ctx.clone().expect("exe phase");
         let meta = module.action_by_name(&action);
-        // Output dicts: `stamped_outputs` (keyed by varname) backs
-        // `out_array` and the array_contains anchors; `raw_outputs`
-        // (declaration-ordered, matching `meta.initials_entries`) backs
-        // the `<Action>Initials` array. `raw_outputs` is only built
-        // when this action performs TxInserts and thus requires an
-        // `initials` record.
         let has_initials = meta.initials_entries.is_some();
-        let (raw_outputs, stamped_outputs): (Vec<Dictionary>, HashMap<String, Dictionary>) = {
-            let ctx = self.0.borrow();
-            let mut raw: Vec<Dictionary> = Vec::new();
-            let mut stamped: HashMap<String, Dictionary> = HashMap::new();
-            for inst in &ctx.insts {
-                if let Inst::Object {
-                    io: ObjectIO::Output,
-                    obj,
-                    ..
-                } = inst
-                {
-                    let obj = obj.borrow();
-                    let varname = obj.var_name().to_string();
-                    let raw_dict = obj.to_dict();
-                    stamped.insert(varname, with_stable_identifier(&raw_dict));
-                    if has_initials {
-                        raw.push(raw_dict);
-                    }
-                }
-            }
-            (raw, stamped)
-        };
+        let mut raw_outputs: Vec<Dictionary> = Vec::new();
         let mut in_dicts: Vec<Value> = Vec::new();
         let mut out_dicts: Vec<Value> = Vec::new();
         {
@@ -980,14 +1032,14 @@ impl ActionHandle {
                     io, obj, original, ..
                 } = inst
                 {
-                    let varname = obj.borrow().var_name().to_string();
                     let post_dict = obj.borrow().to_dict();
                     match io {
                         ObjectIO::Input => {
                             in_dicts.push(Value::from(post_dict));
                         }
                         ObjectIO::Output => {
-                            out_dicts.push(Value::from(stamped_outputs[&varname].clone()));
+                            raw_outputs.push(obj.borrow().output_initial());
+                            out_dicts.push(Value::from(post_dict));
                         }
                         ObjectIO::Mutate => {
                             let pre_dict = original
@@ -1003,7 +1055,8 @@ impl ActionHandle {
         }
         let mut io_dicts = in_dicts;
         io_dicts.extend(out_dicts);
-        let io_array = Array::new(io_dicts);
+        let io_array = Array::new(io_dicts.clone());
+        let io_anchor = |slot: usize| record_entry(&io_array, slot, io_dicts[slot].clone());
 
         // Build the `<Action>Initials` record value (the pre-identity Output
         // dicts) when the action has one.
@@ -1017,21 +1070,23 @@ impl ActionHandle {
             if shape.needs_wildcard {
                 return None;
             }
-            Some(entry(initials_array.as_ref()?, slot as i64).expect("initials slot exists"))
+            Some(record_entry(
+                initials_array.as_ref()?,
+                slot,
+                Value::from(raw_outputs[slot].clone()),
+            ))
         };
 
         // Returns the anchored op-arg for the Object's collapsed side at
         // this ts, or None when the form stays an explicit wildcard.
         let anchor_at = |obj_name: &str, ts: usize| -> Option<OperationArg> {
             match meta.collapsed_at(obj_name, ts)? {
-                fmt_podlang::Collapse::IO(fmt_podlang::Side::In) => Some(
-                    entry(&io_array, meta.in_entry(obj_name).unwrap().0 as i64)
-                        .expect("input slot exists"),
-                ),
-                fmt_podlang::Collapse::IO(fmt_podlang::Side::Out) => Some(
-                    entry(&io_array, meta.out_entry(obj_name).unwrap().0 as i64)
-                        .expect("output slot exists"),
-                ),
+                fmt_podlang::Collapse::IO(fmt_podlang::Side::In) => {
+                    Some(io_anchor(meta.in_entry(obj_name).unwrap().0))
+                }
+                fmt_podlang::Collapse::IO(fmt_podlang::Side::Out) => {
+                    Some(io_anchor(meta.out_entry(obj_name).unwrap().0))
+                }
                 fmt_podlang::Collapse::Initials => {
                     Some(initials_anchor(obj_name).expect("collapsed_at promised an initials slot"))
                 }
@@ -1057,10 +1112,7 @@ impl ActionHandle {
                 } = inst
                 {
                     let varname = obj.borrow().var_name().to_string();
-                    let post_dict = match io {
-                        ObjectIO::Output => stamped_outputs[&varname].clone(),
-                        _ => obj.borrow().to_dict(),
-                    };
+                    let post_dict = obj.borrow().to_dict();
                     let pre_dict = match io {
                         ObjectIO::Mutate => original
                             .as_ref()
@@ -1068,9 +1120,11 @@ impl ActionHandle {
                             .clone(),
                         _ => post_dict.clone(),
                     };
-                    // The script-final form, which for an Output is the
-                    // dict before TxInsert stamps identity onto it.
-                    let initials_dict = obj.borrow().to_dict();
+                    let initials_dict = if *io == ObjectIO::Output {
+                        obj.borrow().output_initial()
+                    } else {
+                        obj.borrow().to_dict()
+                    };
                     // Same forms and order as `fmt_action`'s clauses; the
                     // two sets have to line up statement for statement.
                     for (entry, record, dict) in [
@@ -1216,7 +1270,11 @@ impl ActionHandle {
                 } = inst
                 {
                     let varname = obj.borrow().var_name().to_string();
-                    let raw_obj_dict = obj.borrow().to_dict();
+                    let raw_obj_dict = if *io == ObjectIO::Output {
+                        obj.borrow().output_initial()
+                    } else {
+                        obj.borrow().to_dict()
+                    };
                     // tx_builder.insert returns a new dictionary with
                     // an added identity entry, other cases stick with
                     // the raw dictionary.
@@ -1294,14 +1352,14 @@ impl ActionHandle {
                     ObjectIO::Input | ObjectIO::Mutate => meta
                         .in_entry(varname)
                         .filter(|(_, e)| !e.needs_wildcard)
-                        .map(|(idx, _)| entry(&io_array, idx as i64).expect("input slot exists")),
+                        .map(|(idx, _)| io_anchor(idx)),
                     ObjectIO::Output => None,
                 };
                 let new_anchor: Option<OperationArg> = match io {
                     ObjectIO::Output | ObjectIO::Mutate => meta
                         .out_entry(varname)
                         .filter(|(_, e)| !e.needs_wildcard)
-                        .map(|(idx, _)| entry(&io_array, idx as i64).expect("output slot exists")),
+                        .map(|(idx, _)| io_anchor(idx)),
                     ObjectIO::Input => None,
                 };
                 let pre_ts = pending.post_ts - 1;
@@ -1380,6 +1438,11 @@ impl ActionHandle {
             for (i, inst) in ctx.insts.iter().enumerate() {
                 match inst {
                     Inst::Object { .. } => {}
+                    Inst::Commit { obj } => {
+                        *current_ts
+                            .get_mut(obj.borrow().var_name())
+                            .expect("object has a timestamp") += 1;
+                    }
                     Inst::Statement {
                         pred,
                         args,
@@ -1625,6 +1688,16 @@ impl ActionHandle {
         let exe_rc_opt = self.0.borrow().exe_ctx.clone();
         let arg_placeholder = Rc::new(RefCell::new(VarOrValue::var(Type::Dict)));
 
+        arg_placeholder.borrow_mut().as_mut_var().object =
+            Some(Rc::new(RefCell::new(ObjectState {
+                owner: Weak::new(),
+                io: ObjectIO::Output,
+                committed: Some(CommittedObject {
+                    rotate_key: true,
+                    initial: None,
+                }),
+            })));
+
         let (arg, st_sub, sub_out) = if let Some(exe_rc) = exe_rc_opt {
             let sub_handle = ActionHandle::new(action.clone(), Some(exe_rc.clone()));
             let (st_sub, sub_io_array) = sub_handle.exe_action()?;
@@ -1632,12 +1705,11 @@ impl ActionHandle {
             // Alias the parent's binding to the Ref of the sub-action's
             // first produced object, or a fresh placeholder if the sub
             // produces nothing.
-            let aliased: Option<(ObjectIO, Ref)> =
-                sub_handle.0.borrow().insts.iter().find_map(|i| match i {
-                    Inst::Object { io, obj, .. } if io.produces() => Some((*io, obj.clone())),
-                    _ => None,
-                });
-            let (arg, sub_out) = if let Some((io, obj)) = aliased {
+            let aliased: Option<Ref> = sub_handle.0.borrow().insts.iter().find_map(|i| match i {
+                Inst::Object { io, obj, .. } if io.produces() => Some(obj.clone()),
+                _ => None,
+            });
+            let (arg, sub_out) = if let Some(obj) = aliased {
                 let module = exe_rc.borrow().module.clone();
                 let sub_meta = module.action_by_name(&action);
                 let varname = obj.borrow().var_name().to_string();
@@ -1648,12 +1720,6 @@ impl ActionHandle {
                     .get(entry_idx)
                     .expect("array op")
                     .expect("sub io record has an entry per produced object");
-                // An Output's out entry is the post-identity dict, but
-                // the sub left its Ref at the pre-identity form; rebind
-                // so parent reads see the recorded form.
-                if io == ObjectIO::Output {
-                    obj.borrow_mut().set_value(entry.clone());
-                }
                 // The shared Ref still carries the sub's script-side
                 // var name; reset it so only a parent `var` binding
                 // names it (matching the Load-phase placeholder).
@@ -1696,7 +1762,7 @@ impl ActionHandle {
         self.0.borrow().assert_unsafe(true)?;
         let value = temporary(Type::Raw);
         if let Some(exe_ctx) = self.0.borrow().exe_ref() {
-            value.borrow_mut().set_value(exe_ctx.rand_value());
+            value.borrow_mut().set_value(exe_ctx.rand_value())?;
         }
         Ok(ArgHandle::new(self.clone(), value))
     }
@@ -1741,7 +1807,7 @@ impl ActionHandle {
                     }
                 }
             }
-            key.borrow_mut().set_value(k);
+            key.borrow_mut().set_value(k)?;
         }
         Ok(ArgHandle::new(self.clone(), key))
     }
@@ -1780,7 +1846,7 @@ impl ActionHandle {
                 &container.borrow().as_value(),
                 &key.borrow().as_value(),
             )?;
-            entry.borrow_mut().set_value(found);
+            entry.borrow_mut().set_value(found)?;
         } else if let (VarOrValue::Value(c), VarOrValue::Value(k)) =
             (&*container.borrow(), &*key.borrow())
         {
@@ -1832,7 +1898,8 @@ impl ActionHandle {
             }
             .map_err(rt_err_from_anyhow)?;
             let st = add_intro_pod(&mut exe_ctx, pod);
-            work.borrow_mut().set_value(st.args()[2].literal().unwrap());
+            work.borrow_mut()
+                .set_value(st.args()[2].literal().unwrap())?;
             statement = Some(st);
         }
         let args = vec![n_iters, input, work.clone()];
@@ -1975,38 +2042,148 @@ impl ArgHandle {
         let arg = Rc::new(RefCell::new(VarOrValue::value(value)));
         Self::new(ctx, arg)
     }
+    fn commit(self) -> RuntimeResult<()> {
+        self.commit_with_rotation(true)
+    }
+    fn commit_with_options(self, options: rhai::Map) -> RuntimeResult<()> {
+        let mut rotate_key = true;
+        for (name, value) in options {
+            if name != "rotate_key" {
+                return Err(format!("commit: unknown option {name}").into());
+            }
+            rotate_key = value
+                .try_cast::<bool>()
+                .ok_or("commit: rotate_key must be a literal boolean")?;
+        }
+        self.commit_with_rotation(rotate_key)
+    }
+    fn write<T>(
+        &self,
+        f: impl FnOnce(&mut ActionContext, &mut VarOrValue) -> RuntimeResult<T>,
+    ) -> RuntimeResult<T> {
+        let mut ctx = self.ctx.0.borrow_mut();
+        let mut arg = self.arg.borrow_mut();
+        arg.check_writable()?;
+        if matches!(
+            &*arg,
+            VarOrValue::Var(Var {
+                object: Some(_),
+                ..
+            })
+        ) {
+            ctx.assert_unsafe(false)?;
+            ctx.object_state(&arg)?;
+        }
+        f(&mut ctx, &mut arg)
+    }
+    fn commit_with_rotation(self, rotate_key: bool) -> RuntimeResult<()> {
+        let (io, object) = {
+            let ctx = self.ctx.0.borrow();
+            ctx.assert_unsafe(false)?;
+            let object = ctx.object_state(&self.arg.borrow())?;
+            let io = object.borrow().io;
+            if !io.produces() {
+                return Err("commit: input objects cannot be committed".into());
+            }
+            if let Some(previous) = &object.borrow().committed {
+                return if previous.rotate_key == rotate_key {
+                    Ok(())
+                } else {
+                    Err("commit: object already committed with different options".into())
+                };
+            }
+            (io, object)
+        };
+        let name = self.arg.borrow().var_name().to_string();
+        if name == "?" {
+            return Err("commit: bind the object with `var` first".into());
+        }
+        if io == ObjectIO::Mutate && !rotate_key && self.ctx.0.borrow().var_state[&name].ts == 0 {
+            return Err(format!(
+                "commit: mutation {name} has no updates and key rotation is disabled"
+            )
+            .into());
+        }
+        if io == ObjectIO::Mutate && rotate_key {
+            let key = {
+                let mut ctx = self.ctx.0.borrow_mut();
+                let key = ctx.new_witness("key", Type::Raw);
+                if let Some(exe_ctx) = ctx.exe_ref() {
+                    key.borrow_mut().set_value(exe_ctx.rand_value())?;
+                }
+                key
+            };
+            self.clone().update(
+                "key".to_string(),
+                Dynamic::from(ArgHandle::new(self.ctx.clone(), key)),
+            )?;
+        }
+        self.write(|ctx, arg| {
+            let initial = if io == ObjectIO::Output && ctx.exe_ctx.is_some() {
+                let initial = arg.to_dict();
+                if initial
+                    .get(&StrKey::from(txlib::STABLE_IDENTIFIER_FIELD))
+                    .map_err(|err| rt_err_from_anyhow(err.into()))?
+                    .is_some()
+                {
+                    return Err("commit: output already contains stable_identifier".into());
+                }
+                arg.set_value(Value::from(with_stable_identifier(&initial)))?;
+                Some(initial)
+            } else {
+                None
+            };
+            if io == ObjectIO::Output {
+                ctx.inc_t_var(&name)?;
+                ctx.insts.push(Inst::Commit {
+                    obj: self.arg.clone(),
+                });
+            }
+            object.borrow_mut().committed = Some(CommittedObject {
+                rotate_key,
+                initial,
+            });
+            Ok(())
+        })
+    }
     fn set(self, kvs: Dynamic) -> RuntimeResult<()> {
         type_check_args([(&self, Type::Dict)])?;
         let kvs = dynamic_to_kvs(kvs)?;
-        // The guard walks the action's recorded Insts, which alias this
-        // object's Ref, so resolve the name and drop the borrow first.
-        let var_name = match &*self.arg.borrow() {
-            VarOrValue::Var(var) => var.name.clone(),
-            VarOrValue::Value(_) => return Ok(()),
-        };
-        let mut ctx = self.ctx.0.borrow_mut();
-        ctx.assert_unsafe(false)?;
-        ctx.check_settable(&var_name)?;
-        let written: Vec<Ref> = kvs.iter().map(|(_, value)| value.clone()).collect();
-        let op_args = capture_op_args(&written, ctx.exe_ctx.is_some());
-        let mut final_dict: Option<Dictionary> = None;
-        if ctx.exe_ctx.is_some() {
-            let mut arg = self.arg.borrow_mut();
-            for (key, value) in &kvs {
-                let value = value.borrow().as_value().clone();
-                arg.mut_dict(|obj| {
-                    obj.insert(&StrKey::from(key), &value).expect("TODO");
-                });
-            }
-            final_dict = Some(arg.to_dict());
+        if kvs
+            .iter()
+            .any(|(key, _)| key == txlib::STABLE_IDENTIFIER_FIELD)
+        {
+            return Err("set: stable_identifier is managed by commit".into());
         }
-        ctx.insts.push(Inst::Set {
-            obj: var_name,
-            kvs,
-            op_args,
-            final_dict,
+        self.ctx.0.borrow().check_settable(&self.arg)?;
+        let is_exe = self.ctx.0.borrow().exe_ctx.is_some();
+        let written: Vec<Ref> = kvs.iter().map(|(_, value)| value.clone()).collect();
+        let op_args = capture_op_args(&written, is_exe);
+        let values: Option<Vec<Value>> = is_exe.then(|| {
+            written
+                .iter()
+                .map(|value| value.borrow().as_value())
+                .collect()
         });
-        Ok(())
+        self.write(|ctx, arg| {
+            let final_dict = if let Some(values) = values {
+                arg.mut_dict(|dict| {
+                    for ((key, _), value) in kvs.iter().zip(&values) {
+                        dict.insert(&StrKey::from(key), value).expect("TODO");
+                    }
+                })?;
+                Some(arg.to_dict())
+            } else {
+                None
+            };
+            ctx.insts.push(Inst::Set {
+                obj: arg.var_name().to_string(),
+                kvs,
+                op_args,
+                final_dict,
+            });
+            Ok(())
+        })
     }
     /// Equivalent to `action.dict_get(o, k)`. Unlike `o.k`, this form accepts
     /// a variable key.
@@ -2016,36 +2193,50 @@ impl ArgHandle {
     }
     fn update(self, key: String, value: Dynamic) -> RuntimeResult<()> {
         type_check_args([(&self, Type::Dict)])?;
-        let mut arg = self.arg.borrow_mut();
-        if let VarOrValue::Var(var) = &*arg {
-            let var_name = var.name.clone();
-            let value = try_ref_from_dynamic(value)?;
-            let mut ctx = self.ctx.0.borrow_mut();
-            ctx.assert_unsafe(false)?;
-            let op_arg = capture_op_arg(&value, ctx.exe_ctx.is_some());
-            let mut old_dict: Option<Dictionary> = None;
-            let mut new_dict: Option<Dictionary> = None;
-            if ctx.exe_ctx.is_some() {
-                let v = value.borrow().as_value().clone();
-                let (obj0, obj) = arg.mut_dict(|obj| {
-                    let obj0 = obj.clone();
-                    obj.update(&StrKey::from(&key), &v).expect("TODO");
-                    (obj0, obj.clone())
-                });
-                old_dict = Some(obj0);
-                new_dict = Some(obj);
-            }
-            ctx.inc_t_var(var_name.as_str())?;
+        self.ctx.0.borrow().object_state(&self.arg.borrow())?;
+        if key == txlib::STABLE_IDENTIFIER_FIELD {
+            return Err("update: stable_identifier is managed by commit".into());
+        }
+        let value = try_ref_from_dynamic(value)?;
+        let is_exe = self.ctx.0.borrow().exe_ctx.is_some();
+        let op_arg = capture_op_arg(&value, is_exe);
+        let concrete_value = is_exe.then(|| value.borrow().as_value());
+        self.write(|ctx, arg| {
+            let (old_dict, new_dict) = if let Some(value) = concrete_value {
+                let (old, new) = arg.mut_dict(|dict| {
+                    let old = dict.clone();
+                    dict.update(&StrKey::from(&key), &value).expect("TODO");
+                    (old, dict.clone())
+                })?;
+                (Some(old), Some(new))
+            } else {
+                (None, None)
+            };
+            let name = arg.var_name().to_string();
+            ctx.inc_t_var(&name)?;
             ctx.insts.push(Inst::Update {
-                obj: var_name,
+                obj: name,
                 key,
                 value,
                 op_arg,
                 old_dict,
                 new_dict,
             });
-        }
-        Ok(())
+            Ok(())
+        })
+    }
+    fn assign(self, value: Dynamic) -> RuntimeResult<()> {
+        let concrete_value = if self.ctx.0.borrow().exe_ctx.is_some() {
+            Some(try_value_from_dynamic(value)?)
+        } else {
+            None
+        };
+        self.write(|_, arg| {
+            if let Some(value) = concrete_value {
+                arg.set_value(value)?;
+            }
+            Ok(())
+        })
     }
     fn entry(&mut self, index: String) -> RuntimeResult<ArgHandle> {
         let mut arg = self.arg.borrow().clone();
@@ -2125,7 +2316,7 @@ fn arg_arith(op: ArithOp, a: ArgHandle, b: ArgHandle) -> RuntimeResult<ArgHandle
             let sym = op.symbol();
             format!("operator{sym}: integer overflow on {x} {sym} {y}").into()
         })?;
-        value.borrow_mut().set_value(Value::from(result));
+        value.borrow_mut().set_value(Value::from(result))?;
     }
     Ok(ArgHandle::new(a.ctx.clone(), value))
 }
@@ -2352,9 +2543,7 @@ pub struct ActionMeta {
     /// txlib events recorded by this action (Object insts + sub-action
     /// calls). Drives whether the chain is packed into `<Action>Chain`.
     pub(crate) chain_max_ts: usize,
-    /// Per-var max ts, with the Output identity-stamp bump applied. The
-    /// cached result of `ActionContext::max_ts_per_var`, so `collapsed_at`
-    /// need not recompute it or take it as an argument.
+    /// Cached per-variable final timestamps, including commit transitions.
     var_max_ts: HashMap<String, usize>,
     pub(crate) args: Vec<String>,
 }
@@ -2433,7 +2622,7 @@ impl ActionMeta {
 
     /// Find this Output's entry in the `<Action>Initials` record, with
     /// its slot. `needs_wildcard` is set when the body reads a field of
-    /// the object's script-final form, which cannot render as an
+    /// the object's pre-identity form, which cannot render as an
     /// anchored `initials.<var>` because `initials.<var>.<field>` would
     /// anchor twice.
     pub(crate) fn initials_entry(&self, varname: &str) -> Option<(usize, &EntryShape)> {
@@ -2491,7 +2680,7 @@ impl ActionMeta {
         {
             return Some(fmt_podlang::Collapse::IO(fmt_podlang::Side::Out));
         }
-        // An Output's script-final form collapses into the initials
+        // An Output's pre-identity form collapses into the initials
         // record for passing to TxInsert, unless the body reads one of
         // its fields, which needs the form to stay a wildcard.
         if ts == fmt_podlang::initials_ts(max_ts)
@@ -2594,7 +2783,7 @@ pub(crate) fn body_referenced_vars(insts: &[Inst]) -> HashSet<String> {
     let mut referenced = HashSet::new();
     for inst in insts {
         match inst {
-            Inst::Object { .. } | Inst::SubAction { .. } => {}
+            Inst::Object { .. } | Inst::SubAction { .. } | Inst::Commit { .. } => {}
             Inst::Update { obj, value, .. } => {
                 referenced.insert(obj.clone());
                 add(&mut referenced, value);
@@ -2673,6 +2862,11 @@ fn compute_wildcard_needs(ctx: &ActionContext) -> WildcardNeeds {
     for inst in &ctx.insts {
         match inst {
             Inst::Object { .. } | Inst::SubAction { .. } => {}
+            Inst::Commit { obj } => {
+                *current_ts
+                    .get_mut(obj.borrow().var_name())
+                    .expect("object has a timestamp") += 1;
+            }
             Inst::Update { obj, value, .. } => {
                 check(value, &current_ts, &mut needs);
                 if let Some(ts) = current_ts.get_mut(obj) {
@@ -3438,17 +3632,9 @@ fn new_engine() -> Engine {
         .register_fn("set", ArgHandle::set)
         .register_fn("get", ArgHandle::get)
         .register_fn("update", ArgHandle::update)
-        .register_fn(
-            "var_assign",
-            |lhs: ArgHandle, rhs: Dynamic| -> RuntimeResult<()> {
-                let ctx = lhs.ctx.0.borrow();
-                if ctx.exe_ctx.is_some() {
-                    let rhs = try_value_from_dynamic(rhs)?;
-                    *lhs.arg.borrow_mut().as_mut_value() = rhs;
-                }
-                Ok(())
-            },
-        )
+        .register_fn("commit", ArgHandle::commit)
+        .register_fn("commit", ArgHandle::commit_with_options)
+        .register_fn("var_assign", ArgHandle::assign)
         .register_indexer_get(ArgHandle::entry);
 
     register_st_methods(&mut engine);
@@ -3518,6 +3704,7 @@ impl Sdk {
                 action,
                 (action_handle.clone(),),
             )?;
+            action_handle.commit_objects()?;
             action_handles.push(action_handle);
         }
         log::debug!(

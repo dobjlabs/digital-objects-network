@@ -35,8 +35,7 @@ fn use_pick(action, pick, vdf_iters) {
     var durability = unsafe { pick.durability - 1 };
     action.st_sum(durability, 1, pick.durability);
     pick.update("durability", durability);
-    var key = unsafe { action.random() };
-    pick.update("key", key);
+    pick.commit();
     var work = action.intro_vdf(vdf_iters, pick);
 }
 

@@ -52,17 +52,7 @@ fn fmt_var_at(name: &str, ts: usize, max_ts: usize) -> String {
     }
 }
 
-/// Output Objects reserve one extra ts beyond the script's last
-/// DictUpdate to account for the update performed when TxInsert adds
-/// the `stable_identifier` entry to the object. This is always the final
-/// update to the object's state before output.
-pub(crate) const fn output_max_ts(base_ts: usize, is_output: bool) -> usize {
-    if is_output { base_ts + 1 } else { base_ts }
-}
-
-/// Inverse of the ts `output_max_ts` reserves: where an Output's
-/// script-final form sits, which is what the `initials` record holds and
-/// what TxInsert takes as the object's initial state.
+/// The state immediately before commit adds an output's identity entry.
 pub(crate) const fn initials_ts(max_ts: usize) -> usize {
     max_ts.saturating_sub(1)
 }
@@ -435,7 +425,7 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     // Private wildcards: every (var, ts) except sub-action aliases, state_header, chain
     // endpoints (public chain0/chain), packed chain intermediates (anchored via the
     // `chain_steps` record), Object pre/post-form ts on collapsed sides, and Output Objects'
-    // script-final ts when packed into the `initials` record. Unpacked chain intermediates
+    // pre-identity ts when packed into the `initials` record. Unpacked chain intermediates
     // appear as scalar `chain1, chain2, ...` privates.
     let mut private_vars: Vec<String> = Vec::new();
     for var in &action.vars {
@@ -559,6 +549,11 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     for inst in &action.insts {
         match inst {
             Inst::Object { .. } => {}
+            Inst::Commit { obj } => {
+                vars.get_mut(obj.borrow().var_name())
+                    .expect("object exists")
+                    .inc();
+            }
             Inst::Set { obj, kvs, .. } => {
                 let obj_str = vars[obj.as_str()];
                 for (key, value) in kvs {
@@ -628,15 +623,6 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
     // internally, so the guard predicate ref is passed as the last
     // arg to TxInsert / TxDelete / TxMutate (and pins both sides for
     // mutate, making the type-preservation check implicit).
-    // For Output, TxInsert produces a final state with a
-    // "stable_identifier" entry, so it takes the object in two forms.
-    // `obj_str` (the
-    // script's final wildcard) is the pre-identity `initial` dict the
-    // script built; `obj_with_id` (the same wildcard one ts later, the
-    // extra ts that `output_max_ts` reserves) is the post-identity `new`
-    // dict TxInsert produces. The post-identity form is the object's
-    // output state: it is what the transaction inserts, and it collapses
-    // to `io.out_<name>` to bind the `<Action>IO` record entry.
     for o in &meta.object_refs {
         let chain = vars["chain"];
         let chain_next = chain.next();
@@ -648,10 +634,14 @@ fn fmt_action(action: &ActionContext, loader: &Loader, w: &mut dyn fmt::Write) -
                 "  tx::TxDelete({chain}, {chain_next}, {obj_str}, @self_predicate(Is{class}))"
             )?,
             ObjectIO::Output => {
-                let obj_with_id = obj_str.next();
+                // The identifier commits to the pre-identity dictionary, so
+                // TxInsert needs both that form and the final output form.
+                let obj_with_id = obj_str;
+                let mut initial = obj_str;
+                initial.ts = initials_ts(meta.max_ts(&o.varname));
                 writeln!(
                     w,
-                    "  tx::TxInsert({chain}, {chain_next}, {obj_str}, {obj_with_id}, @self_predicate(Is{class}))"
+                    "  tx::TxInsert({chain}, {chain_next}, {initial}, {obj_with_id}, @self_predicate(Is{class}))"
                 )?;
             }
             ObjectIO::Mutate => {

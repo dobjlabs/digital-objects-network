@@ -37,14 +37,10 @@ fn wear(action, tool) {
     var durability = unsafe { tool.durability - 1 };
     action.st_sum(durability, 1, tool.durability);
     tool.update("durability", durability);
-    var key = unsafe { action.random() };
-    tool.update("key", key);
 }
 
 // ── tool wear (hidden top-level actions, called via subaction) ───────────────
-// Each is its own action so its `var key`/`var durability` live in their own
-// scope and don't collide with the calling recipe's `var key` (e.g. from a
-// pow_proof on the recipe's output).
+// Each tool use has its own action scope and durability witness.
 
 fn UseDrillBit(action) {
     var tool = action.mutate("DrillBit");
@@ -68,38 +64,26 @@ fn UsePressureValve(action) {
 
 fn TouchMachineI(action) {
     var m = action.mutate("MachineI");
-    var key = unsafe { action.random() };
-    m.update("key", key);
 }
 
 fn TouchMachineII(action) {
     var m = action.mutate("MachineII");
-    var key = unsafe { action.random() };
-    m.update("key", key);
 }
 
 fn TouchBlastFurnace(action) {
     var s = action.mutate("BlastFurnace");
-    var key = unsafe { action.random() };
-    s.update("key", key);
 }
 
 fn TouchCircuitFab(action) {
     var s = action.mutate("CircuitFab");
-    var key = unsafe { action.random() };
-    s.update("key", key);
 }
 
 fn TouchCrackingUnit(action) {
     var s = action.mutate("CrackingUnit");
-    var key = unsafe { action.random() };
-    s.update("key", key);
 }
 
 fn TouchReactionChamber(action) {
     var s = action.mutate("ReactionChamber");
-    var key = unsafe { action.random() };
-    s.update("key", key);
 }
 
 // ── mines (PoW) ──────────────────────────────────────────────────────────────

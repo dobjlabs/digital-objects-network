@@ -92,6 +92,36 @@ block, allowing the operators to emit constraints elsewhere would make their
 behavior depend on the caller. Keeping them unsafe-only gives them one
 consistent meaning: compute a witness without constraining it.
 
+## Committing objects
+
+`obj.commit()` finalizes and seals an output or mutation declared by the current action. It returns `()`. Reads and proof statements remain available, but `set` and `update` are rejected after commit. Inputs and sub-action results are read-only; sub-action results have already been committed.
+
+For a new output, commit preserves the current key and inserts `stable_identifier = commitment(pre_identity_dictionary)`. The identifier can then be read and stored in another object:
+
+```rhai
+var item = action.output("Item");
+item.set([["amount", 1]]);
+item.commit();
+var reference = action.output("Reference");
+reference.set([["target", item.stable_identifier]]);
+```
+
+For a mutation, commit preserves the stable identifier and replaces the key with a fresh random value, even if the script previously wrote a key. To preserve the current key, use the options overload:
+
+```rhai
+var item = action.mutate("Item");
+item.update("key", chosen_key);
+item.commit(#{ rotate_key: false });
+```
+
+A mutation that disables key rotation must have at least one recorded `update` before commit. Otherwise Load rejects the action because its output would necessarily equal its input. Reads and proof statements do not count as updates. Load does not compare update values with the original input.
+
+The options map accepts only `rotate_key`, whose value must be a native boolean available during Load. This option affects mutations only. No inequality or randomness constraint is added. Repeating commit with the same options is a no-op; changing the options after commit is rejected.
+
+Uncommitted outputs and mutations are committed automatically when the action function returns. Commit is forbidden inside `unsafe`. The SDK manages the `stable_identifier` field, so scripts cannot initialize or update it directly.
+
+Statements before commit refer to the earlier object state; statements after commit refer to the finalized state. For a VDF on a mutation's final state, commit before calling `intro_vdf`. For output PoW, mine and prove the pre-identity dictionary before committing; output commit preserves the mined key. The mined root becomes the stable identifier, and the final dictionary's commitment also includes that identifier.
+
 ## Caller data and unsafe computations
 
 `arg(name)` reads optional caller data inside an `unsafe` block. Missing values return `()`, so Rhai's built-in `??` operator can choose a default. Arguments can be read repeatedly, combined, transformed, or ignored, including in helpers. They do not create wildcards or constraints.
@@ -414,12 +444,12 @@ CraftWoodPick(io CraftWoodPickIO, state_header StateHeader, chain0, chain, priva
   tx::TxInsert(chain_steps.step_1, chain, initials.pick, io.out_pick, @self_predicate(IsWoodPick))
 )
 
-UseWoodPick(io UseWoodPickIO, state_header StateHeader, chain0, chain, private: wood_pick0, wood_pick1, durability, key, work) = AND(
+UseWoodPick(io UseWoodPickIO, state_header StateHeader, chain0, chain, private: wood_pick0, wood_pick1, durability, _key1, work) = AND(
   ArrayContains(io, UseWoodPickIO::in_wood_pick, wood_pick0)
   Gt(wood_pick0.durability, 0)
   Sum(durability, 1, wood_pick0.durability)
   DictUpdate(wood_pick0, "durability", durability, wood_pick1)
-  DictUpdate(wood_pick1, "key", key, io.out_wood_pick)
+  DictUpdate(wood_pick1, "key", _key1, io.out_wood_pick)
   Vdf(10, io.out_wood_pick, work)
   tx::TxMutate(chain0, chain, wood_pick0, io.out_wood_pick, @self_predicate(IsWoodPick))
 )

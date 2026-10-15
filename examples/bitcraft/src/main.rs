@@ -34,7 +34,6 @@ struct Action {
     in_tool: Option<Tool>,
     out_tool: Option<Tool>,
     mut_tool: Option<Tool>,
-    rekey: bool,
     pow: usize,
     vdf: usize,
     tag: Tag,
@@ -90,7 +89,6 @@ fn main() -> Result<(), io::Error> {
                 name: format!("BucketOf{resource}Add{n}"),
                 in_resources: vec![(n, *resource)],
                 mut_bucket: Some(*resource),
-                rekey: true,
                 tag: AddToBucket(n),
                 ..Default::default()
             });
@@ -100,7 +98,6 @@ fn main() -> Result<(), io::Error> {
             name: format!("BucketOf{resource}Take1"),
             out_resources: vec![(1, *resource)],
             mut_bucket: Some(*resource),
-            rekey: true,
             tag: TakeFromBucket(1),
             ..Default::default()
         });
@@ -155,7 +152,6 @@ fn main() -> Result<(), io::Error> {
         actions.push(Action {
             name: format!("UseQuarry{lvl}"),
             mut_tool: Some(Quarry),
-            rekey: true,
             out_resources: vec![(lvl + 1, Stone)],
             pow: 20,
             tag: ReqLevel(lvl),
@@ -164,7 +160,6 @@ fn main() -> Result<(), io::Error> {
         actions.push(Action {
             name: format!("UseMiningDrill{lvl}"),
             mut_tool: Some(MiningDrill),
-            rekey: true,
             in_resources: vec![(5, Wood)],
             out_resources: vec![(lvl + 1, Iron)],
             pow: 40,
@@ -267,14 +262,6 @@ fn main() -> Result<(), io::Error> {
             let name = format!("{mut_tool}").to_lowercase();
             writeln!(o, "  var {name} = action.mutate(\"{mut_tool}\");")?;
 
-            if action.rekey {
-                writeln!(
-                    o,
-                    r#"  var key = unsafe {{ action.random() }};
-  {name}.update("key", key);"#
-                )?;
-            }
-
             match action.tag {
                 DecDurability => {
                     writeln!(
@@ -335,14 +322,6 @@ fn main() -> Result<(), io::Error> {
         if let Some(res) = action.mut_bucket {
             let name = format!("{res}bucket").to_lowercase();
             writeln!(o, r#"  var {name} = action.mutate("BucketOf{res}");"#)?;
-
-            if action.rekey {
-                writeln!(
-                    o,
-                    r#"  var key = unsafe {{ action.random() }};
-  {name}.update("key", key);"#
-                )?;
-            }
 
             match action.tag {
                 AddToBucket(d) => {
