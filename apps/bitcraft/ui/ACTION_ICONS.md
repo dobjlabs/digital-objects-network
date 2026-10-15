@@ -8,12 +8,13 @@
 Each action gets a 32x32 graphic, styled like a macOS app icon: a plain
 white rounded tile (grid units 2-30, about 22% corner radius) with a faint
 edge and a drop shadow, the main class art centered on it (grid units
-8-24), and an optional badge in the top-right corner. It is shown in three
+8-24), and an optional badge in the top-right corner. It is shown in these
 places:
 
-- the Available actions list, at 32x32, left of the action name;
-- the Details pane when an action is selected, at 4x, replacing the blank
-  page;
+- the objects' context menu, at half size (16x16), left of each action
+  name;
+- the Recipe Info tab's action list, at 32x32, left of the action name;
+- the Recipe Info tab's Details pane, at 4x, replacing the blank page;
 - the Details pane when a job is selected, at 4x, for the job's action.
 
 ## Categories
@@ -71,7 +72,7 @@ Gathering raw resources with a pocketknife, which is kept (proof-of-work).
 
 The built-in `Rekey<Class>` action every class gets, which replaces an
 object's key and keeps its other fields. These come from the SDK, not
-`../plugin.rhai`, so one rule covers every class.
+`../../../examples/bitcraft/plugin.rhai`, so one rule covers every class.
 
 - **Main icon:** a blue refresh symbol (`assets/refresh.svg`), the same for
   every class.
@@ -109,8 +110,8 @@ Each rule has:
 `icon` and `cornerIcon` are class names looked up in `class-icons.json`,
 and may use `$1`, `$2`, ... for the pattern's capture groups, so one rule
 covers a family of actions. An action that matches no rule, or whose `icon`
-class has no art, gets an empty slot in the list and the blank page in the
-Details pane.
+class has no art, gets an empty icon slot in the context menu and the
+Recipe Info list, and the blank page wherever it is drawn at 4x.
 
 All 56 current bitcraft actions match a rule: 49 tool interaction, 4
 material creation, 3 raw resource gathering. So does every `Rekey<Class>`
@@ -118,6 +119,6 @@ built-in.
 
 ## Adding actions
 
-When `../plugin.rhai` gains actions, decide which category each belongs
+When `../../../examples/bitcraft/plugin.rhai` gains actions, decide which category each belongs
 to, then add or extend a rule in `action-icons.json` and update the tables
 above in the same change.
