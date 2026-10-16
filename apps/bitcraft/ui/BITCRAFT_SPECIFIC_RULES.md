@@ -46,6 +46,22 @@ that block should be plugin-agnostic.
   agent).
 - **Why:** same scope as the object list.
 
+## Startup pocketknife
+
+- **Where:** `ensureStartupPocketknife()`, called by `load()` after active
+  runs have been restored successfully.
+- **What:** if no unspent `bitcraft::Pocketknife` exists, start
+  `bitcraft::CraftPocketknife` with no inputs through the normal Jobs flow.
+  Pending knives and knives held by a run count as existing. An active
+  crafting run or another active action that outputs a pocketknife also
+  suppresses creation. Re-read inventory after restoring runs so a run that
+  finished during startup does not cause another knife to be crafted.
+- **Failures:** skip automatic creation if active runs cannot be read or
+  the crafting action is unavailable. A failed creation appears as a failed
+  job, with no automatic retry during the session. Inventory refreshes do
+  not trigger creation; the check runs only on page load.
+- **Generic behavior:** loading the UI never starts actions automatically.
+
 ## Action input constraints
 
 `GET /actions` reports only the classes an action takes as inputs. Some
