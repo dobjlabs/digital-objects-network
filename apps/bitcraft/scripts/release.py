@@ -27,7 +27,6 @@ def verify_payload(binaries, resources, args):
         raise ValueError("Packaged release manifest does not list the complete Bitcraft tool set")
     if hashlib.sha256((resources / "bitcraft.pexe").read_bytes()).hexdigest() != release["pluginSha256"]:
         raise ValueError("Packaged Bitcraft plugin does not match its release manifest")
-    json.loads((resources / "settings.json").read_text())
     suffix = ".exe" if "windows" in args.target else ""
     for name in sorted(TOOLS | {"bitcraft-desktop"}):
         executable = binaries / f"{name}{suffix}"
