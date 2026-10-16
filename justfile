@@ -50,17 +50,17 @@ build-ui:
 build-dobjd: build-ui
     cargo build --release -p dobjd --features bundled-ui
 
-build-docker-dev:
+build-services-docker:
     #!/usr/bin/env bash
     set -euo pipefail
 
     t=$(git tag --points-at HEAD | head -1)
     h=$(git rev-parse HEAD)
-    export DOBJ_RELEASE_TAG="${t:+$t-}$h"
-    echo "release_tag=${DOBJ_RELEASE_TAG}"
-    docker build --target synchronizer -t ghcr.io/dobjlabs/digital-objects-network/synchronizer:dev .
-    docker build --target relayer      -t ghcr.io/dobjlabs/digital-objects-network/relayer:dev .
-    docker build --target archiver     -t ghcr.io/dobjlabs/digital-objects-network/archiver:dev .
+    tag="${t:+$t-}$h"
+    echo "release_tag=${tag}"
+    docker build --build-arg DOBJ_RELEASE_TAG=${tag} --target synchronizer -t ghcr.io/dobjlabs/digital-objects-network/synchronizer:${tag} .
+    docker build --build-arg DOBJ_RELEASE_TAG=${tag} --target relayer      -t ghcr.io/dobjlabs/digital-objects-network/relayer:${tag} .
+    docker build --build-arg DOBJ_RELEASE_TAG=${tag} --target archiver     -t ghcr.io/dobjlabs/digital-objects-network/archiver:${tag} .
 
 # Run the documentation site (Vocs dev server) with hot reload
 docs:

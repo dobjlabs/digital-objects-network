@@ -52,16 +52,19 @@ RUN cargo chef cook --release --recipe-path recipe.json \
 # Each logs the binary's dynamic deps so a dependency bump that pulls in a new
 # C library is caught here and not at runtime.
 FROM cook AS build-synchronizer
+ARG DOBJ_RELEASE_TAG
 COPY . .
 RUN cargo build --release --locked -p synchronizer
 RUN echo "--- synchronizer ldd ---" && ldd target/release/synchronizer || true
 
 FROM cook AS build-relayer
+ARG DOBJ_RELEASE_TAG
 COPY . .
 RUN cargo build --release --locked -p relayer
 RUN echo "--- relayer ldd ---" && ldd target/release/relayer || true
 
 FROM cook AS build-archiver
+ARG DOBJ_RELEASE_TAG
 COPY . .
 RUN cargo build --release --locked -p archiver
 RUN echo "--- archiver ldd ---" && ldd target/release/archiver || true
