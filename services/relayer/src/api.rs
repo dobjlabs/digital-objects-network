@@ -404,6 +404,12 @@ mod tests {
         let state = AppState {
             db,
             parser: Arc::new(MockParser { mode }),
+            info: Arc::new(Info {
+                version: "-".to_string(),
+                to_address: Address::ZERO,
+                txn_finalized_pred: "-".to_string(),
+                verifier_data_hash: "-".to_string(),
+            }),
         };
         (build_router(state), admin_url, db_name)
     }
