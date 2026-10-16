@@ -5,10 +5,12 @@ use crate::{
 use anyhow::{Result, anyhow};
 use plonky2::plonk::proof::CompressedProofWithPublicInputs;
 use pod2::{
-    backends::plonky2::{basetypes::DEFAULT_VD_SET, mainpod::public_inputs},
+    backends::plonky2::{
+        basetypes::DEFAULT_VD_SET, mainpod::public_inputs, recursion::circuit::hash_verifier_data,
+    },
     middleware::{
-        CommonCircuitData, CustomPredicateRef, Hash, Params, Statement, Value, VerifierCircuitData,
-        containers::Array,
+        CommonCircuitData, CustomPredicateRef, Hash, Params, Predicate, Statement, Value,
+        VerifierCircuitData, containers::Array,
     },
 };
 
@@ -106,6 +108,14 @@ impl ProofParser {
             common_circuit_data: (**common_circuit_data).clone(),
             verifier_circuit_data: (**verifier_circuit_data).clone(),
         })
+    }
+
+    pub fn txn_finalized_pred_hash(&self) -> Hash {
+        Predicate::Custom(self.txn_finalized_pred.clone()).hash()
+    }
+
+    pub fn verifier_data_hash(&self) -> Hash {
+        Hash(hash_verifier_data(&self.verifier_circuit_data.verifier_only).elements)
     }
 
     /// Verify a shrunk MainPod proof against a single expected `Statement`.

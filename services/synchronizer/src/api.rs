@@ -1,5 +1,6 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
+use alloy::primitives::Address;
 use anyhow::Result;
 use axum::{
     extract::State,
@@ -8,6 +9,7 @@ use axum::{
     Json, Router,
 };
 use pod2::{backends::plonky2::primitives::merkletree::MerkleProof, middleware::Hash};
+use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tracing::info;
 use wire_types::synchronizer::{
@@ -32,6 +34,7 @@ struct AppState {
     app_db: AppDb,
     /// Postgres-backed state head and sync-progress store.
     sync_db: Arc<SyncDb>,
+    info: Arc<Info>,
 }
 
 /// Internal view of head/progress fields shaped for HTTP responses.
@@ -89,11 +92,13 @@ struct MembershipContext {
 pub async fn run_api_server(
     sync_db: Arc<SyncDb>,
     app_db: AppDb,
+    info: Arc<Info>,
     bind_addr: SocketAddr,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
     let app = Router::new()
         .route("/healthz", get(healthz))
+        .route("/info", get(get_info))
         .route("/sync-progress", get(get_sync_progress))
         .route("/v1/state/head", get(get_state_head))
         .route("/v1/state/membership", post(post_state_membership))
@@ -107,7 +112,11 @@ pub async fn run_api_server(
         )
         .route("/v1/txlib/grounding-witness", post(post_grounding_witness))
         .layer(tower_http::cors::CorsLayer::permissive())
-        .with_state(AppState { app_db, sync_db });
+        .with_state(AppState {
+            app_db,
+            sync_db,
+            info,
+        });
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
     info!(%bind_addr, "API server listening");
@@ -126,6 +135,20 @@ const TARGET_TRIPLE: &str = env!("DOBJ_TARGET_TRIPLE");
 
 async fn healthz() -> Json<HealthResponse> {
     Json(HealthResponse::stamped(RELEASE_TAG, TARGET_TRIPLE))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Info {
+    pub version: String,
+    pub init_start_slot: u32,
+    pub to_address: Address,
+    pub txn_finalized_pred: String,
+    pub verifier_data_hash: String,
+}
+
+async fn get_info(State(app_state): State<AppState>) -> Json<Info> {
+    let info = (*app_state.info).clone();
+    Json(info)
 }
 
 async fn get_sync_progress(
