@@ -60,17 +60,17 @@ out of the box:
 
 | Service      | Endpoint                                                                               | Role                                                                                              |
 | ------------ | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Synchronizer | [`synchronizer.don.pateldhvani.com`](https://synchronizer.don.pateldhvani.com/healthz) | Rebuilds canonical network state from Ethereum blobs; answers live / consumed queries             |
-| Relayer      | [`relayer.don.pateldhvani.com`](https://relayer.don.pateldhvani.com/healthz)           | Submits proof payloads to Ethereum as EIP-4844 blob transactions                                  |
-| Archiver     | [`archiver.don.pateldhvani.com`](https://archiver.don.pateldhvani.com/healthz)         | Stores historical blobs durably so synchronizers can bootstrap beyond Ethereum's retention window |
+| Synchronizer | [`terminus.digiobjects.net:4000`](https://terminus.digiobjects.net:4000/healthz) | Rebuilds canonical network state from Ethereum blobs; answers live / consumed queries             |
+| Relayer      | [`terminus.digiobjects.net:4200`](https://terminus.digiobjects.net:4200/healthz)           | Submits proof payloads to Ethereum as EIP-4844 blob transactions                                  |
+| Archiver     | [`terminus.digiobjects.net:4001`](https://terminus.digiobjects.net:4001/healthz)         | Stores historical blobs durably so synchronizers can bootstrap beyond Ethereum's retention window |
 
 Your driver is free to point elsewhere — set the endpoints with the `dobj`
 CLI; it applies immediately, no restart:
 
 ```bash
 dobj settings set \
-  --synchronizer https://synchronizer.don.pateldhvani.com \
-  --relayer https://relayer.don.pateldhvani.com
+  --synchronizer https://terminus.digiobjects.net:4000 \
+  --relayer https://terminus.digiobjects.net:4200
 ```
 
 Check the current values with `dobj settings get`. The driver only talks to a

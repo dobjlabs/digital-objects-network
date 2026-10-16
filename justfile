@@ -177,7 +177,7 @@ ensure-remote-settings:
     set -euo pipefail
     root="${DOBJ_HOME:-$HOME/.dobj}"
     mkdir -p "$root"
-    printf '{"synchronizerApiUrl":"https://synchronizer.don.pateldhvani.com","relayerApiUrl":"https://relayer.don.pateldhvani.com"}\n' > "$root/settings.json"
+    printf '{"synchronizerApiUrl":"https://terminus.digiobjects.net:4000","relayerApiUrl":"https://terminus.digiobjects.net:4200"}\n' > "$root/settings.json"
     echo "$root/settings.json -> hosted sync + relayer"
 
 # Install plugins into the driver's actions/ dir if none are present. Runs as
