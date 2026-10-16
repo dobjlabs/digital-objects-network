@@ -30,8 +30,8 @@ fn new_info(config: &config::AppConfig, proof_parser: &ProofParser) -> api::Info
         version: env!("DOBJ_RELEASE_TAG").to_string(),
         init_start_slot: config.init_start_slot,
         to_address: config.to_address,
-        txn_finalized_pred: format!("{}", proof_parser.txn_finalized_pred_hash(),),
-        verifier_data_hash: format!("{}", proof_parser.verifier_data_hash(),),
+        txn_finalized_pred: format!("{:#}", proof_parser.txn_finalized_pred_hash(),),
+        verifier_data_hash: format!("{:#}", proof_parser.verifier_data_hash(),),
     }
 }
 

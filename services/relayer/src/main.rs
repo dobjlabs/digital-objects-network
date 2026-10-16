@@ -20,6 +20,16 @@ use eth::{EthClient, EthGateway};
 use payload::proof::{BlobParser, ProofParser};
 use worker::{run_worker, WorkerConfig};
 
+fn new_info(config: &config::AppConfig, proof_parser: &ProofParser) -> api::Info {
+    api::Info {
+        // Release tag stamped by build.rs
+        version: env!("DOBJ_RELEASE_TAG").to_string(),
+        to_address: config.to_address,
+        txn_finalized_pred: format!("{:#}", proof_parser.txn_finalized_pred_hash(),),
+        verifier_data_hash: format!("{:#}", proof_parser.verifier_data_hash(),),
+    }
+}
+
 /// Boot relayer dependencies, then run API server and background worker together.
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -28,7 +38,9 @@ async fn main() -> Result<()> {
     let cfg = load_config()?;
 
     let db = Arc::new(Db::connect(&cfg.db_url).await?);
-    let parser: Arc<dyn BlobParser> = Arc::new(ProofParser::new()?);
+    let proof_parser = ProofParser::new()?;
+    let info = Arc::new(new_info(&cfg, &proof_parser));
+    let parser: Arc<dyn BlobParser> = Arc::new(proof_parser);
     let eth_client: Arc<dyn EthGateway> = Arc::new(EthClient::new(&cfg).await?);
 
     let worker_cfg = WorkerConfig {
@@ -48,6 +60,7 @@ async fn main() -> Result<()> {
     let api_task = tokio::spawn(run_api_server(
         Arc::clone(&db),
         Arc::clone(&parser),
+        info,
         cfg.bind,
         shutdown_rx.clone(),
     ));
