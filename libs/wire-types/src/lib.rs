@@ -456,7 +456,7 @@ pub struct RunActionProgress {
 // Driver configuration
 // ===========================================================================
 
-/// The persisted configuration shared by the driver and dobjd:
+/// The effective configuration shared by the driver and dobjd:
 /// synchronizer + relayer URLs, plus the daemon's MCP server toggle.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]

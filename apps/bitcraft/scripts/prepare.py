@@ -15,8 +15,8 @@ REPO = APP.parents[1]
 TAURI = APP / "src-tauri"
 
 
-def run(*command, cwd=REPO):
-    subprocess.run(command, cwd=cwd, check=True)
+def run(*command, cwd=REPO, env=None):
+    subprocess.run(command, cwd=cwd, env=env, check=True)
 
 
 def main():
@@ -40,7 +40,10 @@ def main():
     run("cargo", "build", "--release", "--locked", "--target", target,
         "-p", "dobjd", "-p", "cli", "-p", "dobj-mcp", "-p", "pexe",
         "--features", "dobjd/bundled-bitcraft-ui,dobj-mcp/proxy",
-        "--bin", "dobjd", "--bin", "dobj", "--bin", "dobj-mcp-proxy", "--bin", "pexe")
+        "--bin", "dobjd", "--bin", "dobj", "--bin", "dobj-mcp-proxy", "--bin", "pexe",
+        env={**os.environ,
+             "DEFAULT_SYNCHRONIZER_API_URL": "https://terminus.digiobjects.net:4000",
+             "DEFAULT_RELAYER_API_URL": "https://terminus.digiobjects.net:4200"})
     metadata = json.loads(subprocess.check_output(
         ["cargo", "metadata", "--format-version", "1", "--no-deps"], cwd=REPO, text=True))
     built = Path(metadata["target_directory"]) / target / "release"
@@ -73,6 +76,7 @@ def main():
         hashes[name] = hashlib.sha256(destination.read_bytes()).hexdigest()
 
     resources = TAURI / "runtime"
+    (resources / "settings.json").unlink(missing_ok=True)
     plugin_hash = hashlib.sha256((resources / "bitcraft.pexe").read_bytes()).hexdigest()
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
     (resources / "release.json").write_text(json.dumps({
@@ -81,11 +85,6 @@ def main():
         "sourceCommit": commit,
         "pluginSha256": plugin_hash,
         "binaries": hashes,
-    }, indent=2) + "\n")
-    (resources / "settings.json").write_text(json.dumps({
-        "synchronizerApiUrl": "https://terminus.digiobjects.net:4000",
-        "relayerApiUrl": "https://terminus.digiobjects.net:4200",
-        "mcpEnabled": False,
     }, indent=2) + "\n")
     config = {
         "version": args.version,

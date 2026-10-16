@@ -27,7 +27,7 @@ use crate::object_store::{
     write_object_file,
 };
 use crate::pexe_catalog::PexeCatalog;
-use crate::settings::{default_settings, read_settings, write_settings};
+use crate::settings::{read_settings, write_settings};
 use crate::types::{
     ActionQuery, DriverPaths, ExecuteActionInput, ExecuteActionResult, ExecutionReporter,
     ExecutionStepContext, NoopExecutionReporter, ObjectQuery,
@@ -184,12 +184,7 @@ impl Driver {
     }
 
     pub fn load_settings(&self) -> Result<DriverSettings> {
-        if let Some(settings) = read_settings(&self.paths)? {
-            return Ok(settings);
-        }
-        let settings = default_settings();
-        write_settings(&self.paths, &settings)?;
-        Ok(settings)
+        read_settings(&self.paths)
     }
 
     pub fn save_settings(&self, settings: &DriverSettings) -> Result<DriverSettings> {
