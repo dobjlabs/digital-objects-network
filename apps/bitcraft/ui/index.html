@@ -626,6 +626,24 @@
 
   const PLUGIN_NAME = "bitcraft";
 
+  async function ensureStartupPocketknife() {
+    const isPocketknife = (className) =>
+      className.pluginName === PLUGIN_NAME && className.name === "Pocketknife";
+    const action = pluginActions.find((candidate) => candidate.action.name === "CraftPocketknife");
+    if (action === undefined || runs.some((run) => isRunInProgress(run) && (
+      qualifiedClassName(run.action.action) === qualifiedClassName(action.action)
+      || run.action.totalOutputs?.some((output) => isPocketknife(output.class))
+    ))) {
+      return;
+    }
+    // A restored run may have finished since the initial inventory read.
+    const objects = await fetchJson("/objects/unspent");
+    showObjects(objects);
+    if (!objects.some((object) => isPocketknife(object.class))) {
+      await startRun(action, []);
+    }
+  }
+
   // Constraints an action places on its inputs beyond their classes, which
   // the HTTP API does not report. An action whose name matches `actions` is
   // offered only when `accepts` returns true for the selected objects; the
@@ -1303,7 +1321,7 @@
       retainedRuns = await fetchJson("/actions/runs?status=active");
     } catch (error) {
       console.warn("Could not list runs:", error);
-      return;
+      return false;
     }
     for (const state of retainedRuns) {
       const alreadyTracked = runs.some((run) => run.runId === state.runId);
@@ -1322,6 +1340,7 @@
       }
     }
     renderRuns();
+    return true;
   }
 
   setInterval(() => {
@@ -2238,7 +2257,9 @@
       objectsDirHeader.title = objectsDir.path;
       showObjects(objects);
       showRecipes(pluginActions);
-      await restoreRuns();
+      if (await restoreRuns()) {
+        await ensureStartupPocketknife();
+      }
     } catch (error) {
       const text = `Could not reach dobjd at ${DOBJD_URL}: ${error.message}`;
       showMessage(text, true);
