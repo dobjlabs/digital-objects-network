@@ -1,0 +1,165 @@
+name: Release Bitcraft
+
+on:
+  workflow_call:
+    inputs:
+      tag_name:
+        required: true
+        type: string
+      publish:
+        description: Upload installers to the shared draft release
+        default: false
+        type: boolean
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Version label for build-only installers (e.g. v0.1.0-rc.44)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bitcraft-release-${{ inputs.tag_name }}-${{ inputs.publish && 'publish' || github.ref_name }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  validate:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.source.outputs.commit }}
+    steps:
+      - name: Validate version tag
+        id: version
+        env:
+          RELEASE_TAG: ${{ inputs.tag_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(rc|alpha|beta)\.[0-9]+)?$ ]]; then
+            echo "::error::tag must be vMAJOR.MINOR.PATCH[-rc.N | -alpha.N | -beta.N]"
+            exit 1
+          fi
+          echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.publish && format('refs/tags/{0}', inputs.tag_name) || github.sha }}
+      - name: Resolve source commit
+        id: source
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  installers:
+    needs: validate
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            bundles: app,dmg
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+    runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.target }}
+      BITCRAFT_VERSION: ${{ needs.validate.outputs.version }}
+      SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
+      DOBJ_RELEASE_TAG: ${{ inputs.tag_name }}
+      PUBLISH: ${{ inputs.publish || false }}
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+      - name: Install Linux packaging and smoke-test dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf file xvfb dbus-x11 xdotool x11-utils python3-dbus python3-gi
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+          cache-workspaces: |
+            .
+            apps/bitcraft/src-tauri
+          cache-shared-key: bitcraft-release-${{ matrix.target }}
+      - name: Install Rosetta for Intel package verification
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: sudo softwareupdate --install-rosetta --agree-to-license
+      - name: Prepare matched runtime
+        run: python apps/bitcraft/scripts/prepare.py --target "$TARGET" --version "$BITCRAFT_VERSION"
+      - name: Prepare macOS signing assets
+        if: runner.os == 'macOS' && inputs.publish
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY_SECRET: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: bash .github/scripts/setup-macos-signing.sh
+      - name: Build installers
+        working-directory: apps/bitcraft
+        env:
+          BUNDLES: ${{ matrix.bundles }}
+        run: |
+          set -euo pipefail
+          rm -rf "src-tauri/target/$TARGET/release/bundle" src-tauri/target/release-artifacts
+          command=(npx --yes @tauri-apps/cli@2.12.2 build --ci --target "$TARGET"
+            --config src-tauri/tauri.bundle.conf.json --bundles "$BUNDLES")
+          if [[ "$PUBLISH" != "true" ]]; then
+            command+=(--no-sign)
+          fi
+          "${command[@]}" -- --locked
+      - name: Verify and stage installers
+        run: |
+          set -euo pipefail
+          python_command=python
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            python_command=/usr/bin/python3
+          fi
+          command=("$python_command" apps/bitcraft/scripts/release.py
+            --target "$TARGET" --version "$BITCRAFT_VERSION" --commit "$SOURCE_COMMIT"
+            --bundle-dir "apps/bitcraft/src-tauri/target/$TARGET/release/bundle")
+          if [[ "$RUNNER_OS" == "macOS" && "$PUBLISH" == "true" ]]; then
+            command+=(--signed)
+          fi
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            xvfb-run -a dbus-run-session "${command[@]}"
+          else
+            "${command[@]}"
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bitcraft-${{ matrix.target }}
+          path: apps/bitcraft/src-tauri/target/release-artifacts/*
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload installers to shared draft release
+        if: inputs.publish
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.tag_name }}
+          draft: true
+          fail_on_unmatched_files: true
+          files: apps/bitcraft/src-tauri/target/release-artifacts/*

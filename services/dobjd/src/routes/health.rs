@@ -10,13 +10,23 @@
 //! dobjd and the relayer/synchronizer/archiver services: the `ok` liveness
 //! flag plus the version/target stamp so clients can tell which build is
 //! serving.
+//! An optional instance_id echoes DOBJ_INSTANCE_ID for process supervisors.
 
 use axum::Json;
+use serde::Serialize;
 use wire_types::HealthResponse;
 
-pub async fn healthz() -> Json<HealthResponse> {
-    Json(HealthResponse::stamped(
-        crate::RELEASE_TAG,
-        crate::TARGET_TRIPLE,
-    ))
+#[derive(Serialize)]
+pub struct DaemonHealth {
+    #[serde(flatten)]
+    health: HealthResponse,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    instance_id: Option<String>,
+}
+
+pub async fn healthz() -> Json<DaemonHealth> {
+    Json(DaemonHealth {
+        health: HealthResponse::stamped(crate::RELEASE_TAG, crate::TARGET_TRIPLE),
+        instance_id: std::env::var("DOBJ_INSTANCE_ID").ok(),
+    })
 }

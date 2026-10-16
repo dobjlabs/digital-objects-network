@@ -4,7 +4,9 @@ Transaction predicates for verifiable state transitions in the Digital Objects N
 
 ## SDK: actions and classes
 
-The SDK defines **actions** and **classes**. A class is a label for an object's type: what kind of thing it is. Some actions output objects of class "Wood"; others take "Wood" as input. The class is defined by the set of actions capable of producing, mutating, or deleting an object of that class. Concretely, every object dictionary carries a `type` field whose value is the hash of an `Is<Class>` predicate. That predicate is an OR over all the actions in the class.
+The SDK defines **actions** and **classes**. A class is a label for an object's type: what kind of thing it is. Some actions output objects of class "Wood"; others take "Wood" as input. The class is defined by the set of actions capable of producing, mutating, or deleting an object of that class. Concretely, every object dictionary carries a `type` field whose value is the hash of an `Is<Class>` predicate. That predicate is an OR over all the actions in the class plus a final `Rekey` branch.
+
+Every SDK-generated class permits transferring an object to a new key without changing its other fields. `TxBuilder::rekey` proves this through the isolated `predicates::rekey_module` and records one mutation, consuming the old state and its nullifier. Include the Rekey module in the build context, call `rekey` inside an action scope, and attach the generated class guard with the Rekey statement in its final branch before closing the scope. The intermediate state with an erased key is a private witness, not a transaction event.
 
 ## Transactions: verifying state changes
 

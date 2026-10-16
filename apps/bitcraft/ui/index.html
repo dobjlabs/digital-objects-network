@@ -16,13 +16,21 @@
     --error: #b00020;
     --link: #0b57d0;
     --action-name: #6d28d9;
-    --run-in-progress: #fff6cc;
-    --run-failed: #fde4e2;
-    --run-succeeded: #e3f4df;
+    --run-in-progress: #a16207;
+    --run-failed: #b00020;
     --object-unknown: #9a9a9a;
     --object-pending: #a16207;
     --object-held: #9a9a9a;
     --row-flash: #ffe58a;
+    --menu-bg: rgba(246, 246, 246, 0.94);
+    --menu-border: rgba(0, 0, 0, 0.14);
+    --menu-highlight: #0a64d8;
+    --menu-disabled: #a8a8a8;
+    --menu-divider: rgba(0, 0, 0, 0.12);
+    --tab-track: #e3e3e3;
+    --status-connected: #16a34a;
+    --status-disconnected: #dc2626;
+    --status-unknown: #a8a8a8;
     /* Blank strip kept below the last row of a full list, so a click on
        empty space to clear the selection always has a target. */
     --list-trailing-space: 48px;
@@ -37,7 +45,80 @@
     color: var(--text);
     font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     display: flex;
+    flex-direction: column;
   }
+  #status-bar {
+    flex: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 20px;
+    padding: 4px 12px;
+    border-top: 1px solid var(--border);
+    background: var(--pane-header-bg);
+    font-size: 12px;
+  }
+  .status-label { color: var(--muted); }
+  .status-item { white-space: nowrap; }
+  /* A one-line count under the object list, like Finder's item count. */
+  .list-footer {
+    flex: none;
+    padding: 3px 10px;
+    border-top: 1px solid var(--border);
+    background: var(--pane-header-bg);
+    color: var(--muted);
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin: 0 5px 1px 0;
+    border-radius: 50%;
+    vertical-align: middle;
+    background: var(--status-unknown);
+  }
+  .status-dot.connected { background: var(--status-connected); }
+  .status-dot.disconnected { background: var(--status-disconnected); }
+  #tab-bar {
+    flex: none;
+    display: flex;
+    justify-content: center;
+    padding: 6px 10px;
+    background: var(--pane-header-bg);
+    border-bottom: 1px solid var(--border);
+  }
+  .tab-track {
+    display: inline-flex;
+    padding: 2px;
+    border-radius: 7px;
+    background: var(--tab-track);
+  }
+  .tab {
+    padding: 2px 18px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: default;
+  }
+  .tab[aria-selected="true"] {
+    background: var(--bg);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  }
+  /* Each tab's view; both stay in the page so their state survives
+     switching tabs. */
+  .view {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+  }
+  .view[hidden] { display: none; }
   .pane {
     display: flex;
     flex-direction: column;
@@ -52,55 +133,50 @@
     height: 100%;
     border-right: 1px solid var(--border);
   }
-  #objects-pane,
-  #execute-pane {
-    flex: 1;
+  /* The jobs pane takes a third of the column, the object list the rest. */
+  #objects-pane {
+    flex: 2;
     min-height: 0;
   }
   #execute-pane {
+    flex: 1;
+    min-height: 0;
     border-top: 1px solid var(--border);
   }
-  #action-list {
+  #run-list {
     flex: 1;
     overflow-y: auto;
     margin: 0;
     padding: 0 0 var(--list-trailing-space);
     list-style: none;
   }
-  .list-header {
-    flex: none;
-    padding: 3px 10px;
-    background: var(--pane-header-bg);
-    border-bottom: 1px solid var(--border);
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--muted);
-  }
-  #run-list-header { border-top: 1px solid var(--border); }
-  #run-list {
-    flex: none;
-    max-height: 40%;
-    overflow-y: auto;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-  .action-row,
   .run-row {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 4px 10px;
-    border-bottom: 1px solid var(--row-hover);
+    gap: 6px;
+    padding: 3px 10px;
     cursor: default;
     user-select: none;
+    white-space: nowrap;
   }
-  .run-row.in-progress { background: var(--run-in-progress); }
-  .run-row.failed { background: var(--run-failed); }
-  .run-row.succeeded { background: var(--run-succeeded); }
-  .action-row:hover,
+  .run-icon-slot {
+    flex: none;
+    width: 16px;
+    height: 16px;
+  }
+  .run-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* A job's text, its action name included, takes its status color; a
+     succeeded job keeps the normal colors. */
+  .run-row.in-progress .run-text,
+  .run-row.in-progress .run-text * { color: var(--run-in-progress); }
+  .run-row.failed .run-text,
+  .run-row.failed .run-text * { color: var(--run-failed); }
   .run-row:hover { background: var(--row-hover); }
-  .action-row.selected,
   .run-row.selected { background: var(--row-selected); }
   .action-name,
   .details-title.action-name {
@@ -110,31 +186,6 @@
   .row-text {
     flex: 1;
     min-width: 0;
-  }
-  .run-detail {
-    font-size: 11px;
-    color: var(--muted);
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
-  .circle-button {
-    flex: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    padding: 0;
-    border: 1px solid var(--border);
-    border-radius: 50%;
-    background: var(--bg);
-    color: var(--text);
-  }
-  .circle-button:hover:not(:disabled) { background: var(--row-hover); }
-  .circle-button:disabled {
-    color: var(--border);
-    cursor: default;
   }
   .action-source {
     margin: 6px 0 0;
@@ -178,15 +229,8 @@
     font-size: 11px;
     color: var(--muted);
   }
-  .action-path {
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-    /* Puts the ellipsis at the start so the file name stays visible. */
-    direction: rtl;
-    text-align: left;
-  }
-  #details-pane {
+  #details-pane,
+  #recipe-details-pane {
     flex: 1;
   }
   .pane-header {
@@ -240,11 +284,6 @@
     vertical-align: middle;
     margin: -2px 5px 0 0;
   }
-  .action-icon-slot {
-    flex: none;
-    width: 32px;
-    height: 32px;
-  }
   .action-icon {
     position: relative;
     flex: none;
@@ -279,7 +318,8 @@
     color: var(--muted);
   }
   .message.error { color: var(--error); }
-  #details-body {
+  #details-body,
+  #recipe-details-body {
     flex: 1;
     overflow-y: auto;
     padding: 12px 14px;
@@ -350,26 +390,175 @@
     cursor: default;
     user-select: none;
   }
+  .markdown-body {
+    max-width: 46em;
+    line-height: 1.5;
+  }
+  .markdown-body h1 {
+    margin: 4px 0 8px;
+    font-size: 20px;
+  }
+  .markdown-body h2 {
+    margin: 20px 0 6px;
+    padding-bottom: 2px;
+    border-bottom: 1px solid var(--border);
+    font-size: 15px;
+  }
+  .markdown-body h3 {
+    margin: 14px 0 4px;
+    font-size: 13px;
+  }
+  .markdown-body p,
+  .markdown-body ul,
+  .markdown-body ol { margin: 6px 0; }
+  .markdown-body ul,
+  .markdown-body ol { padding-left: 22px; }
+  .markdown-body code {
+    padding: 0 3px;
+    border-radius: 3px;
+    background: var(--pane-header-bg);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+  }
+  .markdown-body table {
+    margin: 8px 0;
+    border-collapse: collapse;
+  }
+  .markdown-body th,
+  .markdown-body td {
+    padding: 3px 8px;
+    border: 1px solid var(--border);
+    text-align: left;
+    vertical-align: top;
+  }
+  .markdown-body th {
+    background: var(--pane-header-bg);
+    font-weight: 600;
+  }
+  .context-menu {
+    position: fixed;
+    z-index: 10;
+    min-width: 180px;
+    max-height: calc(100vh - 8px);
+    overflow-y: auto;
+    padding: 5px;
+    background: var(--menu-bg);
+    border: 1px solid var(--menu-border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18), 0 1px 3px rgba(0, 0, 0, 0.12);
+    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(20px);
+    cursor: default;
+    user-select: none;
+  }
+  .menu-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 22px;
+    /* Wider on the right so labels that follow an icon do not look pushed
+       against the menu's edge. */
+    padding: 0 19px 0 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  .menu-item.highlighted {
+    background: var(--menu-highlight);
+    color: #fff;
+  }
+  .menu-item.disabled { color: var(--menu-disabled); }
+  .menu-item.highlighted .action-name,
+  .menu-item.disabled .action-name { color: inherit; }
+  .menu-item-label { flex: 1; }
+  .menu-item-icon {
+    flex: none;
+    width: 16px;
+    height: 16px;
+  }
+  .menu-divider {
+    height: 1px;
+    margin: 5px 8px;
+    background: var(--menu-divider);
+  }
+  #recipe-pane {
+    width: 40%;
+    min-width: 280px;
+    border-right: 1px solid var(--border);
+  }
+  #recipe-list {
+    flex: 1;
+    overflow-y: auto;
+    margin: 0;
+    padding: 0 0 var(--list-trailing-space);
+    list-style: none;
+  }
+  .recipe-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    border-bottom: 1px solid var(--row-hover);
+    cursor: default;
+    user-select: none;
+  }
+  .recipe-row:hover { background: var(--row-hover); }
+  .recipe-row.selected { background: var(--row-selected); }
+  .recipe-icon-slot {
+    flex: none;
+    width: 32px;
+    height: 32px;
+  }
+  .recipe-path {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    /* Puts the ellipsis at the start so the file name stays visible. */
+    direction: rtl;
+    text-align: left;
+  }
 </style>
 </head>
 <body>
-  <div id="left-column">
-    <section id="objects-pane" class="pane">
-      <div id="objects-dir" class="pane-header">&nbsp;</div>
-      <ul id="object-list"></ul>
-    </section>
-    <section id="execute-pane" class="pane">
-      <div class="pane-header">Execute</div>
-      <div id="action-list-header" class="list-header">(0 objects selected) Available actions</div>
-      <ul id="action-list"></ul>
-      <div id="run-list-header" class="list-header">Active and completed jobs</div>
-      <ul id="run-list"></ul>
+  <nav id="tab-bar">
+    <div class="tab-track" role="tablist">
+      <button type="button" class="tab" role="tab" id="objects-tab" aria-controls="objects-view">Objects</button>
+      <button type="button" class="tab" role="tab" id="recipebook-tab" aria-controls="recipebook-view">Recipe Info</button>
+    </div>
+  </nav>
+  <div id="objects-view" class="view" role="tabpanel" aria-labelledby="objects-tab">
+    <div id="left-column">
+      <section id="objects-pane" class="pane">
+        <div id="objects-dir" class="pane-header">&nbsp;</div>
+        <ul id="object-list"></ul>
+        <div id="objects-footer" class="list-footer">&nbsp;</div>
+      </section>
+      <section id="execute-pane" class="pane">
+        <div class="pane-header">Active and completed jobs</div>
+        <ul id="run-list"></ul>
+      </section>
+    </div>
+    <section id="details-pane" class="pane">
+      <div class="pane-header">Details</div>
+      <div id="details-body"></div>
     </section>
   </div>
-  <section id="details-pane" class="pane">
-    <div class="pane-header">Details</div>
-    <div id="details-body"></div>
-  </section>
+  <div id="recipebook-view" class="view" role="tabpanel" aria-labelledby="recipebook-tab" hidden>
+    <section id="recipe-pane" class="pane">
+      <div class="pane-header">Recipe Info</div>
+      <ul id="recipe-list"></ul>
+    </section>
+    <section id="recipe-details-pane" class="pane">
+      <div class="pane-header">Details</div>
+      <div id="recipe-details-body"></div>
+    </section>
+  </div>
+  <footer id="status-bar">
+    <span class="status-item"><span class="status-label">Bitcraft version:</span> <span id="bitcraft-version"></span></span>
+    <span class="status-item"><span class="status-label">Synchronizer status:</span> <span id="synchronizer-dot" class="status-dot"></span><span id="synchronizer-status">Checking</span></span>
+    <span class="status-item"><span class="status-label">Synchronizer address:</span> <span id="synchronizer-address">n/a</span></span>
+    <span class="status-item"><span class="status-label">Relayer status:</span> <span id="relayer-dot" class="status-dot"></span><span id="relayer-status">Checking</span></span>
+    <span class="status-item"><span class="status-label">Relayer address:</span> <span id="relayer-address">n/a</span></span>
+  </footer>
 
 <template id="file-icon">
   <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
@@ -401,15 +590,16 @@
   </svg>
 </template>
 
-<template id="play-icon">
-  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-    <path d="M4 2.5v7l5.5-3.5z" fill="currentColor"/>
-  </svg>
-</template>
-
-<template id="clear-icon">
-  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-    <path d="M3.5 3.5l5 5M8.5 3.5l-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+<template id="doc-icon">
+  <svg width="16" height="16" viewBox="0 0 32 32" aria-hidden="true">
+    <defs>
+      <filter id="doc-icon-shadow" x="-20%" y="-20%" width="140%" height="140%">
+        <feDropShadow dx="0" dy="0.75" stdDeviation="0.75" flood-color="#000" flood-opacity="0.25"/>
+      </filter>
+    </defs>
+    <path d="M8 2.5h11.5l7 7V27.5a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-23a2 2 0 0 1 2-2z" fill="#fff" stroke="#d2d2d2" filter="url(#doc-icon-shadow)"/>
+    <path d="M19.5 2.5v5a2 2 0 0 0 2 2h5" fill="#ececec" stroke="#d2d2d2" stroke-linejoin="round"/>
+    <path d="M10 14h12M10 17.5h12M10 21h12M10 24.5h8" stroke="#b4b4b4" stroke-width="1.5" stroke-linecap="round"/>
   </svg>
 </template>
 
@@ -426,7 +616,10 @@
 </template>
 
 <script>
-  const DOBJD_URL = "http://127.0.0.1:7717";
+  const DOBJD_URL = new URL(
+    document.querySelector('meta[name="dobjd-api-url"]')?.content || "http://127.0.0.1:7717",
+    window.location.href,
+  ).href.replace(/\/$/, "");
 
   // ---- Bitcraft-specific rules. Every entry here is listed in
   // BITCRAFT_SPECIFIC_RULES.md; keep the two in step.
@@ -462,6 +655,40 @@
   const ACTION_ICONS_URL = "action-icons.json";
   let actionIconRules = [];
 
+  // A getting-started guide shown as the first row of the object list: its
+  // file name, which is also its URL relative to this page. It is served
+  // next to this page, not read from the objects folder.
+  const WELCOME_FILE = "BITCRAFT_WELCOME.md";
+
+  // Shown in the status bar at the bottom of the page.
+  const BITCRAFT_VERSION = "Alpha 1.0";
+
+  // Total Bit Value: what an object is worth in bits, counting each raw
+  // resource spent to make it at the rate its BitsFrom* recipe pays (Wood 1,
+  // Stone 2, Iron 5). Worked out by hand from the recipes, per class.
+  const TOTAL_BIT_VALUES = {
+    Bit: 1,
+    Wood: 1,
+    Stone: 2,
+    Iron: 5,
+    Pocketknife: 0,
+    Stick: 0.5,
+    WoodAxe: 2,
+    StoneAxe: 4,
+    IronAxe: 9,
+    BucketOfWood: 5,
+    BucketOfStone: 5,
+    BucketOfIron: 5,
+  };
+  // A bucket is also worth the `n` resources it holds, at these rates.
+  const BUCKET_CONTENT_BIT_VALUES = { BucketOfWood: 1, BucketOfStone: 2, BucketOfIron: 5 };
+  // Quarries and drills by level (index 0 is level 1): building one, plus the
+  // full buckets every level-up spends.
+  const LEVELED_TOTAL_BIT_VALUES = {
+    Quarry: [40, 130, 300, 630, 1280, 2570],
+    MiningDrill: [135, 420, 975, 2070, 4245, 8580],
+  };
+
   // ---- End of bitcraft-specific rules.
 
   const objectsDirHeader = document.getElementById("objects-dir");
@@ -474,14 +701,42 @@
   };
   const largeFileIconTemplate = document.getElementById("large-file-icon");
   const detailsBody = document.getElementById("details-body");
-  const actionList = document.getElementById("action-list");
   const runList = document.getElementById("run-list");
-  const runListHeader = document.getElementById("run-list-header");
-  const actionListHeader = document.getElementById("action-list-header");
-  const playIconTemplate = document.getElementById("play-icon");
-  const clearIconTemplate = document.getElementById("clear-icon");
+  const docIconTemplate = document.getElementById("doc-icon");
+
+  // The address names the open tab and the recipebook's selected action, so
+  // `?page=recipebook&action=bitcraft::GatherWood` links to that action.
+  // Read once here: the address is rewritten as the page's state changes.
+  const PAGE_PARAM = "page";
+  const RECIPEBOOK_PAGE = "recipebook";
+  const RECIPE_ACTION_PARAM = "action";
+  const initialParams = new URLSearchParams(location.search);
+  const views = {
+    objects: {
+      tab: document.getElementById("objects-tab"),
+      view: document.getElementById("objects-view"),
+      title: "Bitcraft Inventory",
+    },
+    recipebook: {
+      tab: document.getElementById("recipebook-tab"),
+      view: document.getElementById("recipebook-view"),
+      title: "Bitcraft Recipe Info",
+    },
+  };
+  let currentViewName = "objects";
+  const recipeList = document.getElementById("recipe-list");
+  const recipeDetailsBody = document.getElementById("recipe-details-body");
+  let recipeActions = [];
+  let selectedRecipeName = null;
+  const recipeRowsByName = new Map();
 
   const NOT_AVAILABLE = "n/a";
+  const objectsFooter = document.getElementById("objects-footer");
+  // Unspent objects in the objects folder, pending ones included, whatever
+  // their plugin; null until the first load.
+  let objectFileCount = null;
+  const SERVICE_STATUS_INTERVAL_MS = 10000;
+  const SERVICE_PROBE_TIMEOUT_MS = 3000;
   const MAX_STACKED_ICONS = 3;
   const HIDDEN_KEY_TEXT = "\u2022".repeat(16) + " (click to reveal)";
   const NON_PROPERTY_KEYS = new Set(["stable_identifier", "type", "key"]);
@@ -498,13 +753,8 @@
   let objectReloadQueued = false;
   let pluginActions = [];
   let objectsDirPath = "";
-  let selectedActionName = null;
-  // The action whose source the Details pane shows expanded, so a redraw
-  // keeps it open; any other action's source starts collapsed.
-  let expandedSourceActionName = null;
-  // Runs started from this page, newest first. At most one of
-  // `selectedActionName` and `selectedRunId` is set: the Execute pane
-  // holds a single selection across both of its lists.
+  // Runs started from this page, newest first. A selected run is always the
+  // only selection: selecting one clears the object selection.
   let runs = [];
   let nextRunClientId = 1;
   let selectedRunId = null;
@@ -515,6 +765,15 @@
   // an earlier shift-click from the same anchor.
   let anchorFileName = null;
   let selectionAtAnchor = new Set();
+  // The open context menu's element; null when closed.
+  let openMenu = null;
+  // The objects the open context menu acts on, as selected when it opened.
+  let menuFileNames = [];
+  const MENU_DIVIDER = "divider";
+  // The guide's Markdown and its size in bytes; null when it could not be
+  // loaded, and then it is not listed.
+  let welcomeText = null;
+  let welcomeFileSize = null;
 
   function fieldEntries(object) {
     const kvs = object.fields && object.fields.kvs;
@@ -611,6 +870,7 @@
         template?.replace(/\$(\d)/g, (_, group) => match[Number(group)] ?? "") ?? null;
       return {
         icon: fill(rule.icon),
+        image: rule.image ?? null,
         badge: rule.badge ?? null,
         cornerIcon: fill(rule.cornerIcon),
       };
@@ -620,10 +880,11 @@
 
   // The action's graphic, laid out on a 32x32 grid and drawn `scale` CSS px
   // per grid unit: an app-style rounded tile with the art centered on it.
-  // Null when no rule matches or its main class has no art.
+  // Null when no rule matches or it names neither an image nor a class
+  // with art.
   function actionIcon(actionName, scale) {
     const spec = actionIconSpec(actionName);
-    const iconPath = spec && classIconPaths[spec.icon];
+    const iconPath = spec && (spec.image ?? classIconPaths[spec.icon]);
     if (!iconPath) {
       return null;
     }
@@ -675,19 +936,34 @@
   }
 
   function summaryLine(object, leadingParts) {
-    const parts = [
+    return fileSummaryLine(object.fileName, [
       ...leadingParts,
       object.class ? classLabel(object.class) : NOT_AVAILABLE,
       formatFileSize(object.fileSize),
       object.status ?? NOT_AVAILABLE,
-    ];
+    ]);
+  }
+
+  function welcomeSummaryLine(leadingParts) {
+    const label = document.createElement("span");
+    label.className = "class-label";
+    label.append(docIconTemplate.content.cloneNode(true), WELCOME_FILE);
+    return fileSummaryLine(WELCOME_FILE, [
+      ...leadingParts,
+      label,
+      formatFileSize(welcomeFileSize),
+    ]);
+  }
+
+  // The parts, then a link to the file's contents.
+  function fileSummaryLine(fileName, parts) {
     const line = document.createElement("div");
     line.className = "details-meta";
     for (const part of parts) {
       line.append(part, " \u00b7 ");
     }
     const rawLink = document.createElement("a");
-    rawLink.href = rawObjectUrl(object.fileName);
+    rawLink.href = fileUrl(fileName);
     rawLink.target = "_blank";
     rawLink.rel = "noopener";
     rawLink.textContent = "View raw";
@@ -719,14 +995,24 @@
     icon.className = "details-icon";
     icon.append(stackedFileIcons(Math.min(selectedFileNames.size, MAX_STACKED_ICONS)));
 
+    const fileCount = selectedFileNames.has(WELCOME_FILE) ? 1 : 0;
+    const objectCount = selectedFileNames.size - fileCount;
+    const counted = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`;
     const title = document.createElement("div");
     title.className = "details-title";
-    title.textContent = `${selectedFileNames.size} objects`;
+    title.textContent = fileCount === 0
+      ? counted(objectCount, "object")
+      : `${counted(objectCount, "object")} and ${counted(fileCount, "file")}`;
 
     detailsBody.append(icon, title);
     let index = 1;
     for (const fileName of selectedFileNames) {
-      detailsBody.append(summaryLine(objectsByFileName.get(fileName), [`#${index}`]));
+      const prefix = [`#${index}`];
+      detailsBody.append(
+        fileName === WELCOME_FILE
+          ? welcomeSummaryLine(prefix)
+          : summaryLine(objectsByFileName.get(fileName), prefix),
+      );
       index++;
     }
   }
@@ -740,100 +1026,159 @@
     return [...classNames].sort().join("\n");
   }
 
-  function renderActions() {
-    actionList.replaceChildren();
-    const selectedObjects = [...selectedFileNames].map((fileName) => objectsByFileName.get(fileName));
-    const selectedKey = classMultisetKey(
-      selectedObjects.map((object) => qualifiedClassName(object.class)),
-    );
-    const matchingActions = pluginActions.filter((action) => {
+  // The plugin's actions whose inputs the given objects fill exactly.
+  function availableActions(fileNames) {
+    const objects = fileNames.map((fileName) => objectsByFileName.get(fileName));
+    const objectsKey = classMultisetKey(objects.map((object) => qualifiedClassName(object.class)));
+    return pluginActions.filter((action) => {
       const inputKey = classMultisetKey(
         action.totalInputs.map((input) => qualifiedClassName(input.class)),
       );
-      return inputKey === selectedKey && passesActionInputRules(action, selectedObjects);
+      return inputKey === objectsKey && passesActionInputRules(action, objects);
     });
-    const stillOffered = matchingActions.some(
-      (action) => qualifiedClassName(action.action) === selectedActionName,
-    );
-    if (!stillOffered) {
-      selectedActionName = null;
-    }
-    const selectedCount = selectedObjects.length;
-    actionListHeader.textContent =
-      `(${selectedCount} object${selectedCount === 1 ? "" : "s"} selected) Available actions`;
+  }
 
-    if (matchingActions.length === 0) {
-      const count = selectedObjects.length;
-      const message = document.createElement("li");
-      message.className = "message";
-      message.textContent = count === 1
-        ? "No available actions can be executed with this input."
-        : `No available actions can be executed with these ${count} inputs.`;
-      actionList.append(message);
+  // Opens the context menu for the current object selection, which may be
+  // empty: then it offers the actions that take no inputs. Clicking an
+  // action executes it on the selection.
+  function showObjectMenu(x, y) {
+    const fileNames = [...selectedFileNames];
+    const entries = [];
+    if (fileNames.length > 0) {
+      entries.push({
+        label: fileNames.length === 1 ? "Open" : "Open all",
+        onSelect: () => {
+          for (const fileName of fileNames) {
+            window.open(fileUrl(fileName), "_blank", "noopener");
+          }
+        },
+      });
+    }
+    // A file that is not an object is no action's input.
+    if (fileNames.includes(WELCOME_FILE)) {
+      openContextMenu(entries, x, y);
+      menuFileNames = fileNames;
       return;
     }
-
-    for (const action of matchingActions) {
-      const actionName = qualifiedClassName(action.action);
-      const row = document.createElement("li");
-      row.className = "action-row";
-      row.classList.toggle("selected", actionName === selectedActionName);
-      row.addEventListener("mousedown", (event) => {
-        if (event.button !== 0 || (IS_MAC && event.ctrlKey)) {
-          return;
-        }
-        const toggleKeyHeld = IS_MAC ? event.metaKey : event.ctrlKey;
-        if (actionName === selectedActionName) {
-          if (toggleKeyHeld) {
-            selectedActionName = null;
-            showSelection();
-          }
-          return;
-        }
-        selectedActionName = actionName;
-        selectedRunId = null;
-        showSelection();
+    if (fileNames.length > 0) {
+      entries.push(MENU_DIVIDER);
+    }
+    const actions = availableActions(fileNames);
+    if (actions.length === 0) {
+      entries.push({ label: "No available actions", isDisabled: () => true });
+    }
+    for (const action of actions) {
+      entries.push({
+        label: qualifiedClassName(action.action),
+        labelClass: "action-name",
+        icon: actionIcon(action.action.name, 0.5),
+        isDisabled: () => runs.some(isRunInProgress),
+        onSelect: () => startRun(action, fileNames),
       });
+    }
+    openContextMenu(entries, x, y);
+    menuFileNames = fileNames;
+  }
 
-      const name = document.createElement("div");
-      name.className = "action-name";
-      name.textContent = qualifiedClassName(action.action);
+  // Each entry is MENU_DIVIDER or an item: `label` and `onSelect`, and
+  // optionally `labelClass`, `icon` (an element, or null to keep the icon
+  // column empty) and `isDisabled`.
+  function openContextMenu(entries, x, y) {
+    closeContextMenu();
+    openMenu = createMenu(entries);
+    document.body.append(openMenu);
+    placeMenu(openMenu, x, y);
+  }
 
-      const path = document.createElement("div");
-      path.className = "action-detail action-path";
-      path.title = action.sourcePath;
-      // Marks keep the leading "/" in place under right-to-left layout.
-      path.textContent = `\u200e${action.sourcePath || NOT_AVAILABLE}\u200e`;
+  function closeContextMenu() {
+    openMenu?.remove();
+    openMenu = null;
+    menuFileNames = [];
+  }
 
-      const text = document.createElement("div");
-      text.className = "row-text";
-      text.append(name, path);
-
-      const playButton = circleButton(playIconTemplate, `Run ${actionName}`);
-      playButton.disabled = runs.some(isRunInProgress);
-      playButton.addEventListener("click", () => startRun(action));
-
-      const iconSlot = document.createElement("span");
-      iconSlot.className = "action-icon-slot";
-      const rowIcon = actionIcon(action.action.name, 1);
-      if (rowIcon) {
-        iconSlot.append(rowIcon);
+  function createMenu(entries) {
+    const element = document.createElement("div");
+    element.className = "context-menu";
+    element.setAttribute("role", "menu");
+    element.addEventListener("contextmenu", (event) => event.preventDefault());
+    for (const entry of entries) {
+      if (entry === MENU_DIVIDER) {
+        const divider = document.createElement("div");
+        divider.className = "menu-divider";
+        element.append(divider);
+        continue;
       }
-      row.append(iconSlot, text, playButton);
-      actionList.append(row);
+      const item = document.createElement("div");
+      item.className = "menu-item";
+      item.setAttribute("role", "menuitem");
+      item.isDisabled = entry.isDisabled ?? null;
+      if (entry.icon !== undefined) {
+        const iconSlot = document.createElement("span");
+        iconSlot.className = "menu-item-icon";
+        if (entry.icon) {
+          iconSlot.append(entry.icon);
+        }
+        item.append(iconSlot);
+      }
+      const label = document.createElement("span");
+      label.className = "menu-item-label";
+      if (entry.labelClass) {
+        label.classList.add(entry.labelClass);
+      }
+      label.textContent = entry.label;
+      item.append(label);
+      item.addEventListener("mouseenter", () => {
+        if (!item.classList.contains("disabled")) {
+          item.classList.add("highlighted");
+        }
+      });
+      item.addEventListener("mouseleave", () => item.classList.remove("highlighted"));
+      item.addEventListener("click", () => {
+        if (item.classList.contains("disabled")) {
+          return;
+        }
+        closeContextMenu();
+        entry.onSelect();
+      });
+      element.append(item);
+    }
+    refreshMenuItems(element);
+    return element;
+  }
+
+  // Puts the menu's top-left corner at (x, y), or its top-right corner there
+  // when it would run off the right of the window, and keeps it inside the
+  // window.
+  function placeMenu(element, x, y) {
+    const margin = 4;
+    const { width, height } = element.getBoundingClientRect();
+    let left = x + width > window.innerWidth - margin ? x - width : x;
+    left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
+    const top = Math.max(margin, Math.min(y, window.innerHeight - height - margin));
+    element.style.left = `${left}px`;
+    element.style.top = `${top}px`;
+  }
+
+  // Re-reads each item's `isDisabled`, e.g. when a run starts or finishes
+  // while the menu is open.
+  function refreshMenuItems(menuElement) {
+    for (const item of menuElement.querySelectorAll(".menu-item")) {
+      if (item.isDisabled === null) {
+        continue;
+      }
+      const disabled = item.isDisabled();
+      item.classList.toggle("disabled", disabled);
+      item.setAttribute("aria-disabled", String(disabled));
+      if (disabled) {
+        item.classList.remove("highlighted");
+      }
     }
   }
 
-  function circleButton(iconTemplate, label) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "circle-button";
-    button.title = label;
-    button.setAttribute("aria-label", label);
-    button.append(iconTemplate.content.cloneNode(true));
-    // Keeps a press on the button from also selecting its row.
-    button.addEventListener("mousedown", (event) => event.stopPropagation());
-    return button;
+  function refreshOpenMenus() {
+    if (openMenu !== null) {
+      refreshMenuItems(openMenu);
+    }
   }
 
   function isRunInProgress(run) {
@@ -856,14 +1201,18 @@
       clientStartedAt: Date.now(),
       clientEndedAt: null,
       elapsedElement: null,
+      finishedAgoElement: null,
       detailsElapsedElement: null,
       latestEventDurationElement: null,
+      // The status the row last showed (undefined until first drawn), and
+      // when the row's current flash began.
+      shownStatus: undefined,
+      flashStartedAt: null,
     };
   }
 
-  async function startRun(action) {
-    const inputFileNames = assignInputSlots(action, [...selectedFileNames])
-      .map((object) => object.fileName);
+  async function startRun(action, fileNames) {
+    const inputFileNames = assignInputSlots(action, fileNames).map((object) => object.fileName);
     const run = newRun(action, inputFileNames);
     runs.unshift(run);
     showSelection();
@@ -880,7 +1229,6 @@
       run.clientEndedAt = Date.now();
     }
     renderRuns();
-    renderActions();
     if (run.id === selectedRunId) {
       renderDetails();
     }
@@ -905,7 +1253,6 @@
       if (!isRunInProgress(run)) {
         run.clientEndedAt ??= Date.now();
         source.close();
-        renderActions();
       }
       // A run's inputs become held and its outputs appear (pending, then
       // live) while it runs, so the object list is re-read as it progresses.
@@ -927,6 +1274,24 @@
     const startMs = run.state?.createdAtMs || run.clientStartedAt;
     const endMs = run.state?.finishedAtMs ?? run.clientEndedAt ?? Date.now();
     return formatDuration(Math.max(0, endMs - startMs));
+  }
+
+  // How long ago the run finished: "just now" within its first minute, then
+  // whole minutes, hours or days.
+  function finishedAgoText(run) {
+    const endMs = run.state?.finishedAtMs ?? run.clientEndedAt ?? Date.now();
+    const minutes = Math.floor(Math.max(0, Date.now() - endMs) / 60000);
+    if (minutes < 1) {
+      return "just now";
+    }
+    if (minutes < 60) {
+      return `${minutes}m ago`;
+    }
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) {
+      return `${hours}h ago`;
+    }
+    return `${Math.floor(hours / 24)}d ago`;
   }
 
   // Rebuilds the job list from the runs dobjd still has in
@@ -957,11 +1322,13 @@
       }
     }
     renderRuns();
-    renderActions();
   }
 
   setInterval(() => {
     for (const run of runs) {
+      if (run.finishedAgoElement?.isConnected) {
+        run.finishedAgoElement.textContent = finishedAgoText(run);
+      }
       if (!isRunInProgress(run)) {
         continue;
       }
@@ -978,26 +1345,26 @@
     }
   }, 1000);
 
-  function clearRun(run) {
-    run.eventSource?.close();
-    runs = runs.filter((candidate) => candidate !== run);
-    if (selectedRunId === run.id) {
-      clearSelection();
-    } else {
-      renderRuns();
-    }
-  }
-
   function renderRuns() {
+    refreshOpenMenus();
     runList.replaceChildren();
-    runListHeader.hidden = runs.length === 0;
     for (const run of runs) {
       const row = document.createElement("li");
       row.className = "run-row";
       row.classList.toggle("selected", run.id === selectedRunId);
       row.classList.toggle("in-progress", isRunInProgress(run));
       row.classList.toggle("failed", runStatus(run) === "failed");
-      row.classList.toggle("succeeded", runStatus(run) === "succeeded");
+      // As in the object list, a row flashes when the status it shows
+      // changes, and a redraw mid-flash resumes the animation.
+      const status = runStatus(run) ?? null;
+      if (run.shownStatus !== undefined && run.shownStatus !== status) {
+        run.flashStartedAt = Date.now();
+      }
+      run.shownStatus = status;
+      const flashElapsed = Date.now() - (run.flashStartedAt ?? -Infinity);
+      if (flashElapsed < ROW_FLASH_MS) {
+        row.style.animation = `row-flash ${ROW_FLASH_MS}ms ease-out -${flashElapsed}ms`;
+      }
       row.addEventListener("mousedown", (event) => {
         if (event.button !== 0 || (IS_MAC && event.ctrlKey)) {
           return;
@@ -1011,44 +1378,42 @@
           return;
         }
         selectedRunId = run.id;
-        selectedActionName = null;
         selectedFileNames.clear();
         anchorFileName = null;
         selectionAtAnchor = new Set();
         showSelection();
       });
 
-      const heading = document.createElement("div");
-      const jobName = document.createElement("span");
-      jobName.textContent = run.runId === null ? "Job" : `Job ${run.runId.slice(0, 4)}`;
-      const status = run.requestError !== null ? "failed" : run.state?.status;
+      const iconSlot = document.createElement("span");
+      iconSlot.className = "run-icon-slot";
+      const icon = actionIcon(run.action.action.name, 0.5);
+      if (icon) {
+        iconSlot.append(icon);
+      }
+
+      const text = document.createElement("span");
+      text.className = "run-text";
+      const actionName = document.createElement("span");
+      actionName.className = "action-name";
+      actionName.textContent = qualifiedClassName(run.action.action);
       const runDetail = document.createElement("span");
       runDetail.className = "action-detail";
       run.elapsedElement = document.createElement("span");
       run.elapsedElement.textContent = elapsedText(run);
       runDetail.append(
-        ` ${qualifiedClassName(run.action.action)} \u00b7 `,
+        ` ${run.runId === null ? "Job" : `Job ${run.runId.slice(0, 4)}`} \u00b7 `,
         run.elapsedElement,
       );
-      if (status) {
+      run.finishedAgoElement = null;
+      if (status === "succeeded" || status === "failed") {
+        run.finishedAgoElement = document.createElement("span");
+        run.finishedAgoElement.textContent = finishedAgoText(run);
+        runDetail.append(` \u00b7 ${status} `, run.finishedAgoElement);
+      } else if (status) {
         runDetail.append(` \u00b7 ${status}`);
       }
-      heading.append(jobName, runDetail);
-
-      const latestMessage = document.createElement("div");
-      latestMessage.className = "run-detail";
-      latestMessage.textContent = run.requestError ?? run.state?.progress?.at(-1)?.message ?? "";
-
-      const text = document.createElement("div");
-      text.className = "row-text";
-      text.append(heading, latestMessage);
-      row.append(text);
-
-      if (!isRunInProgress(run)) {
-        const clearButton = circleButton(clearIconTemplate, "Clear this run");
-        clearButton.addEventListener("click", () => clearRun(run));
-        row.append(clearButton);
-      }
+      text.append(actionName, runDetail);
+      row.append(iconSlot, text);
       runList.append(row);
     }
   }
@@ -1121,7 +1486,7 @@
     return icon;
   }
 
-  function renderActionDetails(action) {
+  function renderActionInfo(action, container) {
     const icon = largeActionIcon(action.action.name);
 
     const title = document.createElement("div");
@@ -1140,60 +1505,208 @@
     source.className = "action-source";
     source.textContent = formatPredicateSource(action.predicateSource);
 
+    const classLines = (slots) => numberedLines(slots.map((slot) => (prefix) => {
+      const line = document.createElement("div");
+      line.className = "details-meta";
+      line.append(prefix, " \u00b7 ", classLabel(slot.class));
+      return line;
+    }));
+
     const mutatedObjects = action.mutatedObjects ?? [];
     const mutatedInputSlots = new Set(mutatedObjects.map((slots) => slots.inputIndex));
     const mutatedOutputSlots = new Set(mutatedObjects.map((slots) => slots.outputIndex));
-    const objectsBySlot = assignInputSlots(action, [...selectedFileNames]);
-    const consumedObjects = objectsBySlot.filter((_, slot) => !mutatedInputSlots.has(slot));
-    const mutatedInputObjects = objectsBySlot.filter((_, slot) => mutatedInputSlots.has(slot));
+    const consumedInputs = action.totalInputs.filter((_, slot) => !mutatedInputSlots.has(slot));
+    const mutatedInputs = action.totalInputs.filter((_, slot) => mutatedInputSlots.has(slot));
 
     const inputs = document.createElement("div");
     inputs.className = "subsection-list";
-    if (consumedObjects.length > 0) {
-      inputs.append(
-        subSubsection("Will be consumed"),
-        numberedLines(consumedObjects.map((object) => (prefix) => summaryLine(object, [prefix]))),
-      );
+    if (consumedInputs.length > 0) {
+      inputs.append(subSubsection("Consumed"), classLines(consumedInputs));
     }
-    if (mutatedInputObjects.length > 0) {
-      inputs.append(
-        subSubsection("Will be mutated"),
-        numberedLines(mutatedInputObjects.map((object) => (prefix) => summaryLine(object, [prefix]))),
-      );
+    if (mutatedInputs.length > 0) {
+      inputs.append(subSubsection("Mutated"), classLines(mutatedInputs));
     }
 
     const newOutputs = action.totalOutputs.filter((_, slot) => !mutatedOutputSlots.has(slot));
     const outputs = document.createElement("div");
     outputs.className = "subsection-list";
-    outputs.append(numberedLines(newOutputs.map((output) => (prefix) => {
-      const line = document.createElement("div");
-      line.className = "details-meta";
-      line.append(prefix, " \u00b7 ", classLabel(output.class));
-      return line;
-    })));
+    outputs.append(classLines(newOutputs));
 
-    detailsBody.append(icon, title, meta, hashTable);
-    if (objectsBySlot.length > 0) {
-      detailsBody.append(subsection("Selected Inputs"), inputs);
+    container.append(icon, title, meta, hashTable);
+    if (action.totalInputs.length > 0) {
+      container.append(subsection("Inputs"), inputs);
     }
     if (newOutputs.length > 0) {
-      detailsBody.append(subsection("Expected Outputs"), outputs);
-    }
-    const actionName = qualifiedClassName(action.action);
-    if (expandedSourceActionName !== actionName) {
-      expandedSourceActionName = null;
+      container.append(subsection("Outputs"), outputs);
     }
     const sourceSection = document.createElement("details");
     sourceSection.className = "collapsible-section";
-    sourceSection.open = expandedSourceActionName === actionName;
-    sourceSection.addEventListener("toggle", () => {
-      expandedSourceActionName = sourceSection.open ? actionName : null;
-    });
     const sourceTitle = document.createElement("summary");
     sourceTitle.className = "subsection-title";
     sourceTitle.textContent = "Action Source";
     sourceSection.append(sourceTitle, source);
-    detailsBody.append(sourceSection);
+    container.append(sourceSection);
+  }
+
+  // Probes the synchronizer and relayer dobjd is configured to use. The page
+  // reaches each service itself, at the address dobjd's settings name, so a
+  // service that only dobjd could reach would show as disconnected here.
+  async function refreshServiceStatus() {
+    let settings = null;
+    try {
+      settings = await fetchJson("/settings");
+    } catch (error) {
+      console.warn("Could not read dobjd settings:", error);
+    }
+    await Promise.all([
+      showServiceStatus("synchronizer", settings?.synchronizerApiUrl ?? null),
+      showServiceStatus("relayer", settings?.relayerApiUrl ?? null),
+    ]);
+  }
+
+  async function showServiceStatus(service, apiUrl) {
+    const dot = document.getElementById(`${service}-dot`);
+    const status = document.getElementById(`${service}-status`);
+    const address = document.getElementById(`${service}-address`);
+    address.textContent = apiUrl === null ? NOT_AVAILABLE : serviceAddress(apiUrl);
+    address.title = apiUrl ?? "";
+    let state = "unknown";
+    if (apiUrl !== null) {
+      try {
+        const response = await fetch(`${apiUrl.replace(/\/$/, "")}/healthz`, {
+          signal: AbortSignal.timeout(SERVICE_PROBE_TIMEOUT_MS),
+        });
+        state = response.ok ? "connected" : "disconnected";
+      } catch {
+        state = "disconnected";
+      }
+    }
+    dot.classList.toggle("connected", state === "connected");
+    dot.classList.toggle("disconnected", state === "disconnected");
+    status.textContent = { connected: "Connected", disconnected: "Disconnected", unknown: "Unknown" }[state];
+  }
+
+  // The host and port of a service URL, or the URL itself if it is not one.
+  function serviceAddress(apiUrl) {
+    try {
+      return new URL(apiUrl).host;
+    } catch {
+      return apiUrl;
+    }
+  }
+
+  function errorMessage(text) {
+    const message = document.createElement("div");
+    message.className = "message error";
+    message.textContent = text;
+    return message;
+  }
+
+  function showView(viewName) {
+    currentViewName = viewName;
+    for (const [name, { tab, view }] of Object.entries(views)) {
+      tab.setAttribute("aria-selected", String(name === viewName));
+      view.hidden = name !== viewName;
+    }
+    document.title = views[viewName].title;
+    closeContextMenu();
+    updateAddress();
+  }
+
+  function updateAddress() {
+    const url = new URL(location.href);
+    url.searchParams.delete(PAGE_PARAM);
+    url.searchParams.delete(RECIPE_ACTION_PARAM);
+    if (currentViewName === "recipebook") {
+      url.searchParams.set(PAGE_PARAM, RECIPEBOOK_PAGE);
+      if (selectedRecipeName !== null) {
+        url.searchParams.set(RECIPE_ACTION_PARAM, selectedRecipeName);
+      }
+    }
+    history.replaceState(null, "", url);
+  }
+
+  function showRecipes(actions) {
+    recipeActions = actions;
+    renderRecipeList();
+    if (initialParams.get(PAGE_PARAM) !== RECIPEBOOK_PAGE) {
+      return;
+    }
+    const linkedName = initialParams.get(RECIPE_ACTION_PARAM);
+    const linkedRow = recipeRowsByName.get(linkedName);
+    if (linkedRow !== undefined) {
+      selectRecipe(linkedName);
+      linkedRow.scrollIntoView({ block: "center" });
+    }
+  }
+
+  function renderRecipeList() {
+    recipeList.replaceChildren();
+    recipeRowsByName.clear();
+    for (const action of recipeActions) {
+      const actionName = qualifiedClassName(action.action);
+      const row = document.createElement("li");
+      row.className = "recipe-row";
+      row.classList.toggle("selected", actionName === selectedRecipeName);
+      row.addEventListener("mousedown", (event) => {
+        if (event.button !== 0 || (IS_MAC && event.ctrlKey)) {
+          return;
+        }
+        const toggleKeyHeld = IS_MAC ? event.metaKey : event.ctrlKey;
+        if (actionName === selectedRecipeName && !toggleKeyHeld) {
+          return;
+        }
+        selectRecipe(actionName === selectedRecipeName ? null : actionName);
+      });
+
+      const iconSlot = document.createElement("span");
+      iconSlot.className = "recipe-icon-slot";
+      const icon = actionIcon(action.action.name, 1);
+      if (icon) {
+        iconSlot.append(icon);
+      }
+
+      const name = document.createElement("div");
+      name.className = "action-name";
+      name.textContent = actionName;
+
+      const path = document.createElement("div");
+      path.className = "action-detail recipe-path";
+      path.title = action.sourcePath ?? "";
+      // Marks keep the leading "/" in place under right-to-left layout.
+      path.textContent = `\u200e${action.sourcePath || NOT_AVAILABLE}\u200e`;
+
+      const text = document.createElement("div");
+      text.className = "row-text";
+      text.append(name, path);
+      row.append(iconSlot, text);
+      recipeRowsByName.set(actionName, row);
+      recipeList.append(row);
+    }
+  }
+
+  function selectRecipe(actionName) {
+    selectedRecipeName = actionName;
+    for (const [rowName, row] of recipeRowsByName) {
+      row.classList.toggle("selected", rowName === selectedRecipeName);
+    }
+    updateAddress();
+    renderRecipeDetails();
+  }
+
+  function renderRecipeDetails() {
+    recipeDetailsBody.replaceChildren();
+    const action = recipeActions.find(
+      (candidate) => qualifiedClassName(candidate.action) === selectedRecipeName,
+    );
+    if (action === undefined) {
+      const message = document.createElement("div");
+      message.className = "message";
+      message.textContent = "Select an action to view details.";
+      recipeDetailsBody.append(message);
+      return;
+    }
+    renderActionInfo(action, recipeDetailsBody);
   }
 
   function formatDuration(milliseconds) {
@@ -1346,11 +1859,11 @@
       renderRunDetails(selectedRun);
       return;
     }
-    const selectedAction = pluginActions.find(
-      (action) => qualifiedClassName(action.action) === selectedActionName,
-    );
-    if (selectedAction !== undefined) {
-      renderActionDetails(selectedAction);
+    if (selectedFileNames.size === 1 && selectedFileNames.has(WELCOME_FILE)) {
+      const guide = document.createElement("div");
+      guide.className = "markdown-body";
+      guide.append(...renderMarkdown(welcomeText));
+      detailsBody.append(guide);
       return;
     }
     if (selectedFileNames.size === 0) {
@@ -1464,11 +1977,11 @@
   function renderObjects(objects) {
     objectList.replaceChildren();
     rowsByFileName.clear();
+    if (welcomeText !== null) {
+      appendFileRow(WELCOME_FILE, docIconTemplate.content.cloneNode(true));
+    }
     for (const object of objects) {
-      const row = document.createElement("li");
-      row.className = "object-row";
-      row.title = object.fileName;
-      row.classList.toggle("selected", selectedFileNames.has(object.fileName));
+      const row = appendFileRow(object.fileName, smallClassIcon(object.class.name));
       const state = shownState(object);
       row.classList.toggle("unknown", state === "unknown");
       row.classList.toggle("pending", state === "pending");
@@ -1479,26 +1992,141 @@
         row.classList.add("flashing");
         row.style.animation = `row-flash ${ROW_FLASH_MS}ms ease-out -${flashElapsed}ms`;
       }
-      row.append(smallClassIcon(object.class.name));
-
-      const name = document.createElement("span");
-      name.className = "object-name";
-      row.append(name);
-
-      // A ctrl-click on macOS is a context-menu click and leaves the
-      // selection alone.
-      row.addEventListener("mousedown", (event) => {
-        if (event.button === 0 && !(IS_MAC && event.ctrlKey)) {
-          selectWithClick(object.fileName, event);
-        }
-      });
-      row.addEventListener("dblclick", () => {
-        window.open(rawObjectUrl(object.fileName), "_blank", "noopener");
-      });
-      rowsByFileName.set(object.fileName, row);
-      objectList.append(row);
     }
     fitObjectNames();
+  }
+
+  function appendFileRow(fileName, icon) {
+    const row = document.createElement("li");
+    row.className = "object-row";
+    row.title = fileName;
+    row.classList.toggle("selected", selectedFileNames.has(fileName));
+    const name = document.createElement("span");
+    name.className = "object-name";
+    row.append(icon, name);
+
+    // A ctrl-click on macOS is a context-menu click and leaves the
+    // selection alone.
+    row.addEventListener("mousedown", (event) => {
+      if (event.button === 0 && !(IS_MAC && event.ctrlKey)) {
+        selectWithClick(fileName, event);
+      }
+    });
+    row.addEventListener("dblclick", () => {
+      window.open(fileUrl(fileName), "_blank", "noopener");
+    });
+    // As in Finder, a right-click on an unselected row selects only that
+    // row; on a selected row it keeps the whole selection.
+    row.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      if (!selectedFileNames.has(fileName)) {
+        selectWithClick(fileName, { shiftKey: false, metaKey: false, ctrlKey: false });
+      }
+      showObjectMenu(event.clientX, event.clientY);
+    });
+    rowsByFileName.set(fileName, row);
+    objectList.append(row);
+    return row;
+  }
+
+  // The file names in the object list, in list order.
+  function listedFileNames() {
+    const objectFileNames = [...objectsByFileName.keys()];
+    return welcomeText === null ? objectFileNames : [WELCOME_FILE, ...objectFileNames];
+  }
+
+  function isListedFile(fileName) {
+    return objectsByFileName.has(fileName) || (fileName === WELCOME_FILE && welcomeText !== null);
+  }
+
+  // Where Open and View raw take a listed file.
+  function fileUrl(fileName) {
+    return fileName === WELCOME_FILE ? WELCOME_FILE : rawObjectUrl(fileName);
+  }
+
+  // Renders the Markdown subset the welcome guide uses: headings,
+  // paragraphs, bulleted and numbered lists, pipe tables, and inline bold and
+  // code. Anything else shows as plain text.
+  function renderMarkdown(source) {
+    const lines = source.split("\n");
+    const blocks = [];
+    const listItemPattern = /^(?:[-*]|\d+\.) (.*)$/;
+    const startsBlock = (line) => /^(?:#{1,6} |[-*] |\d+\. |\|)/.test(line);
+    let index = 0;
+    while (index < lines.length) {
+      const line = lines[index];
+      if (line.trim() === "") {
+        index++;
+        continue;
+      }
+      const heading = /^(#{1,6}) (.*)$/.exec(line);
+      if (heading !== null) {
+        const element = document.createElement(`h${heading[1].length}`);
+        element.append(...renderInlineMarkdown(heading[2]));
+        blocks.push(element);
+        index++;
+        continue;
+      }
+      if (listItemPattern.test(line)) {
+        const list = document.createElement(/^\d/.test(line) ? "ol" : "ul");
+        let item;
+        while (index < lines.length && (item = listItemPattern.exec(lines[index])) !== null) {
+          const listItem = document.createElement("li");
+          listItem.append(...renderInlineMarkdown(item[1]));
+          list.append(listItem);
+          index++;
+        }
+        blocks.push(list);
+        continue;
+      }
+      if (line.startsWith("|")) {
+        const rows = [];
+        while (index < lines.length && lines[index].startsWith("|")) {
+          rows.push(lines[index].trim().replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim()));
+          index++;
+        }
+        const hasHeader = rows.length > 1 && rows[1].every((cell) => /^:?-+:?$/.test(cell));
+        const table = document.createElement("table");
+        rows.forEach((cells, rowIndex) => {
+          if (hasHeader && rowIndex === 1) {
+            return;
+          }
+          const row = table.insertRow();
+          for (const cell of cells) {
+            const element = document.createElement(hasHeader && rowIndex === 0 ? "th" : "td");
+            element.append(...renderInlineMarkdown(cell));
+            row.append(element);
+          }
+        });
+        blocks.push(table);
+        continue;
+      }
+      const paragraphLines = [];
+      while (index < lines.length && lines[index].trim() !== "" && !startsBlock(lines[index])) {
+        paragraphLines.push(lines[index].trim());
+        index++;
+      }
+      const paragraph = document.createElement("p");
+      paragraph.append(...renderInlineMarkdown(paragraphLines.join(" ")));
+      blocks.push(paragraph);
+    }
+    return blocks;
+  }
+
+  function renderInlineMarkdown(text) {
+    const nodes = [];
+    const pattern = /`([^`]+)`|\*\*(.+?)\*\*/g;
+    let plainStart = 0;
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      nodes.push(text.slice(plainStart, match.index));
+      const element = document.createElement(match[1] !== undefined ? "code" : "strong");
+      element.textContent = match[1] ?? match[2];
+      nodes.push(element);
+      plainStart = pattern.lastIndex;
+    }
+    nodes.push(text.slice(plainStart));
+    return nodes;
   }
 
   // Writes each row's file name, cut in the middle to fit its row.
@@ -1541,7 +2169,7 @@
     selectedRunId = null;
     const toggleKeyHeld = IS_MAC ? event.metaKey : event.ctrlKey;
     if (event.shiftKey && selectedFileNames.size > 0 && anchorFileName !== null) {
-      const fileNames = [...objectsByFileName.keys()];
+      const fileNames = listedFileNames();
       const anchorIndex = fileNames.indexOf(anchorFileName);
       const clickedIndex = fileNames.indexOf(fileName);
       const start = Math.min(anchorIndex, clickedIndex);
@@ -1577,7 +2205,6 @@
     selectedFileNames.clear();
     anchorFileName = null;
     selectionAtAnchor = new Set();
-    selectedActionName = null;
     selectedRunId = null;
     showSelection();
   }
@@ -1587,20 +2214,22 @@
       row.classList.toggle("selected", selectedFileNames.has(rowFileName));
     }
     renderRuns();
-    renderActions();
     renderDetails();
   }
 
   async function load() {
     showMessage("Loading...", false);
     try {
-      const [objectsDir, objects, actions, iconPaths, actionIcons] = await Promise.all([
+      const [objectsDir, objects, actions, iconPaths, actionIcons, welcome] = await Promise.all([
         fetchJson("/objects/dir"),
         fetchJson("/objects/unspent"),
         fetchJson("/actions"),
         loadUiDataFile(CLASS_ICONS_URL, {}),
         loadUiDataFile(ACTION_ICONS_URL, { rules: [] }),
+        loadUiTextFile(WELCOME_FILE),
       ]);
+      welcomeText = welcome;
+      welcomeFileSize = welcome === null ? null : new TextEncoder().encode(welcome).length;
       classIconPaths = iconPaths;
       actionIconRules = actionIcons.rules;
       pluginActions = actions.filter((action) => action.action.pluginName === PLUGIN_NAME);
@@ -1608,9 +2237,14 @@
       objectsDirHeader.textContent = objectsDir.path;
       objectsDirHeader.title = objectsDir.path;
       showObjects(objects);
+      showRecipes(pluginActions);
       await restoreRuns();
     } catch (error) {
-      showMessage(`Could not reach dobjd at ${DOBJD_URL}: ${error.message}`, true);
+      const text = `Could not reach dobjd at ${DOBJD_URL}: ${error.message}`;
+      showMessage(text, true);
+      const item = document.createElement("li");
+      item.append(errorMessage(text));
+      recipeList.replaceChildren(item);
     }
   }
 
@@ -1626,6 +2260,21 @@
     } catch (error) {
       console.warn(`Could not load ${url}:`, error);
       return fallback;
+    }
+  }
+
+  // Reads a text file served next to this page, or returns null if it
+  // cannot be read.
+  async function loadUiTextFile(url) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      return await response.text();
+    } catch (error) {
+      console.warn(`Could not load ${url}:`, error);
+      return null;
     }
   }
 
@@ -1658,10 +2307,45 @@
     return object.heldByRunId != null ? "held" : object.status;
   }
 
+  // Pending objects are left out of every count and value until they are
+  // confirmed.
+  function isLive(object) {
+    return object.status === "live";
+  }
+
+  function liveListedObjects() {
+    return [...objectsByFileName.values()].filter(isLive);
+  }
+
+  function formatBitValue(value) {
+    return Number.isInteger(value) ? String(value) : value.toFixed(1);
+  }
+
+  // An object whose class has no value listed is worth nothing.
+  function totalBitValue(object) {
+    const className = object.class.name;
+    const valuesByLevel = LEVELED_TOTAL_BIT_VALUES[className];
+    if (valuesByLevel !== undefined) {
+      return valuesByLevel[Number(fieldValue(object, "level")) - 1] ?? 0;
+    }
+    const contentValue = BUCKET_CONTENT_BIT_VALUES[className] ?? 0;
+    return (TOTAL_BIT_VALUES[className] ?? 0) + contentValue * Number(fieldValue(object, "n") ?? 0);
+  }
+
+  function updateObjectsFooter() {
+    const totalValue = liveListedObjects().reduce((sum, object) => sum + totalBitValue(object), 0);
+    // The guide is listed as a file alongside the objects.
+    const fileCount = objectFileCount + (welcomeText === null ? 0 : 1);
+    const noun = fileCount === 1 ? "file" : "files";
+    objectsFooter.textContent =
+      `${fileCount} ${noun} \u00b7 Total Bit Value: ${formatBitValue(totalValue)}`;
+  }
+
   // Replaces the object list, keeping the selection of any objects that are
   // still held and dropping the rest. A row flashes when its file is new to
   // the page or its shown state changed; nothing flashes on the first load.
   function showObjects(objects) {
+    objectFileCount = objects.length;
     const heldObjects = objects
       .filter((object) => object.class.pluginName === PLUGIN_NAME)
       .sort((left, right) => left.fileName.localeCompare(right.fileName));
@@ -1680,23 +2364,29 @@
     for (const object of heldObjects) {
       objectsByFileName.set(object.fileName, object);
     }
+    updateObjectsFooter();
     for (const fileName of [...selectedFileNames]) {
-      if (!objectsByFileName.has(fileName)) {
+      if (!isListedFile(fileName)) {
         selectedFileNames.delete(fileName);
       }
     }
     selectionAtAnchor = new Set(
-      [...selectionAtAnchor].filter((fileName) => objectsByFileName.has(fileName)),
+      [...selectionAtAnchor].filter(isListedFile),
     );
-    if (anchorFileName !== null && !objectsByFileName.has(anchorFileName)) {
+    if (anchorFileName !== null && !isListedFile(anchorFileName)) {
       anchorFileName = null;
     }
+    if (menuFileNames.some((fileName) => !isListedFile(fileName))) {
+      closeContextMenu();
+    }
 
-    if (heldObjects.length === 0) {
-      rowsByFileName.clear();
-      showMessage("No objects.", false);
-    } else {
-      renderObjects(heldObjects);
+    renderObjects(heldObjects);
+    // With the guide listed, an inventory with no objects still shows a file.
+    if (heldObjects.length === 0 && welcomeText === null) {
+      const message = document.createElement("li");
+      message.className = "message";
+      message.textContent = "No objects.";
+      objectList.append(message);
     }
     showSelection();
   }
@@ -1712,17 +2402,61 @@
     }
   });
 
-  for (const executeList of [runList, actionList]) {
-    executeList.addEventListener("mousedown", (event) => {
-      if (event.target === executeList && isPlainPress(event)) {
-        clearSelection();
-      }
-    });
-  }
+  // A right-click on empty space clears the selection, so the menu offers
+  // the actions that take no inputs.
+  objectList.addEventListener("contextmenu", (event) => {
+    if (event.target.closest(".object-row") !== null) {
+      return;
+    }
+    event.preventDefault();
+    clearSelection();
+    showObjectMenu(event.clientX, event.clientY);
+  });
+
+  runList.addEventListener("mousedown", (event) => {
+    if (event.target === runList && isPlainPress(event)) {
+      clearSelection();
+    }
+  });
+
+  const isInsideMenu = (target) => openMenu?.contains(target) ?? false;
+  document.addEventListener("mousedown", (event) => {
+    if (!isInsideMenu(event.target)) {
+      closeContextMenu();
+    }
+  }, true);
+  document.addEventListener("scroll", (event) => {
+    if (!isInsideMenu(event.target)) {
+      closeContextMenu();
+    }
+  }, true);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      closeContextMenu();
+    }
+  });
+  window.addEventListener("blur", closeContextMenu);
+  window.addEventListener("resize", closeContextMenu);
 
   new ResizeObserver(() => fitObjectNames()).observe(objectList);
 
+  recipeList.addEventListener("mousedown", (event) => {
+    if (event.target === recipeList && isPlainPress(event) && selectedRecipeName !== null) {
+      selectRecipe(null);
+    }
+  });
+
+  for (const [name, { tab }] of Object.entries(views)) {
+    tab.addEventListener("click", () => showView(name));
+  }
+
+  document.getElementById("bitcraft-version").textContent = BITCRAFT_VERSION;
+  refreshServiceStatus();
+  setInterval(refreshServiceStatus, SERVICE_STATUS_INTERVAL_MS);
+
+  showView(initialParams.get(PAGE_PARAM) === RECIPEBOOK_PAGE ? "recipebook" : "objects");
   renderDetails();
+  renderRecipeDetails();
   load();
 </script>
 </body>

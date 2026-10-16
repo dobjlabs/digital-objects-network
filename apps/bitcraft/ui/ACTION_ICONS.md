@@ -8,31 +8,32 @@
 Each action gets a 32x32 graphic, styled like a macOS app icon: a plain
 white rounded tile (grid units 2-30, about 22% corner radius) with a faint
 edge and a drop shadow, the main class art centered on it (grid units
-8-24), and an optional badge in the top-right corner. It is shown in three
+8-24), and an optional badge in the top-right corner. It is shown in these
 places:
 
-- the Available actions list, at 32x32, left of the action name;
-- the Details pane when an action is selected, at 4x, replacing the blank
-  page;
+- the objects' context menu, at half size (16x16), left of each action
+  name;
+- the Recipe Info tab's action list, at 32x32, left of the action name;
+- the Recipe Info tab's Details pane, at 4x, replacing the blank page;
 - the Details pane when a job is selected, at 4x, for the job's action.
 
 ## Categories
 
-Every action belongs to one of three categories, and each category decides
+Every action belongs to one of four categories, and each category decides
 the main icon and the badge differently.
 
 ### Tool interaction
 
-Creating, filling, emptying, using and upgrading tools: buckets, axes,
-quarries and drills.
+Creating, filling, emptying, using and upgrading tools: pocketknives,
+buckets, axes, quarries and drills.
 
-- **Main icon:** the tool being interacted with (bucket, axe, quarry or
-  drill).
+- **Main icon:** the tool being interacted with (pocketknife, bucket, axe,
+  quarry or drill).
 - **Badge:**
 
 | Interaction | Badge | Actions |
 | --- | --- | --- |
-| Creating the tool | green plus | `CraftBucketOfWood`, `CraftBucketOfStone`, `CraftBucketOfIron`, `CraftWoodAxe`, `CraftStoneAxe`, `CraftIronAxe`, `BuildQuarry`, `BuildMiningDrill` |
+| Creating the tool | green plus | `CraftPocketknife`, `CraftBucketOfWood`, `CraftBucketOfStone`, `CraftBucketOfIron`, `CraftWoodAxe`, `CraftStoneAxe`, `CraftIronAxe`, `BuildQuarry`, `BuildMiningDrill` |
 | Adding to a bucket | green up chevron (^) | `BucketOf{Wood,Stone,Iron}Add{1,5,10,50}` |
 | Taking from a bucket | red down chevron (v) | `BucketOf{Wood,Stone,Iron}Take1` |
 | Using an axe to produce wood | none | `UseWoodAxe`, `UseStoneAxe`, `UseIronAxe` |
@@ -57,7 +58,7 @@ Turning resources into intermediate materials.
 
 ### Raw resource gathering
 
-Gathering raw resources from nothing (proof-of-work).
+Gathering raw resources with a pocketknife, which is kept (proof-of-work).
 
 - **Main icon:** the resource gathered.
 - **Badge:** green plus. All current actions in this category create
@@ -66,6 +67,16 @@ Gathering raw resources from nothing (proof-of-work).
 | Actions | Main icon |
 | --- | --- |
 | `GatherWood`, `GatherStone`, `GatherIron` | Wood, Stone, Iron |
+
+### Rekey
+
+The built-in `Rekey<Class>` action every class gets, which replaces an
+object's key and keeps its other fields. These come from the SDK, not
+`../../../examples/bitcraft/plugin.rhai`, so one rule covers every class.
+
+- **Main icon:** a blue refresh symbol (`assets/refresh.svg`), the same for
+  every class.
+- **Badge:** none.
 
 ## Badges
 
@@ -88,24 +99,26 @@ Each rule has:
 
 | Field | Meaning |
 | --- | --- |
-| `category` | `tool interaction`, `material creation` or `raw resource gathering`; for people, not read by the page |
+| `category` | `tool interaction`, `material creation`, `raw resource gathering` or `rekey`; for people, not read by the page |
 | `description` | For people; not read by the page |
 | `actions` | Regular expression matched against the bare action name (e.g. `GatherWood`) |
 | `icon` | Class whose art is centered on the tile |
+| `image` | Optional; path to art, relative to the page, centered on the tile in place of `icon`'s class art. Used for art that belongs to no class |
 | `badge` | Optional; `plus`, `up` or `down` (see Badges). Omit for no badge |
 | `cornerIcon` | Optional; class whose icon is drawn at 8x8 in the tile's bottom-right corner (grid units 20-28). No current rule uses it |
 
 `icon` and `cornerIcon` are class names looked up in `class-icons.json`,
 and may use `$1`, `$2`, ... for the pattern's capture groups, so one rule
 covers a family of actions. An action that matches no rule, or whose `icon`
-class has no art, gets an empty slot in the list and the blank page in the
-Details pane.
+class has no art, gets an empty icon slot in the context menu and the
+Recipe Info list, and the blank page wherever it is drawn at 4x.
 
-All 55 current bitcraft actions match a rule: 48 tool interaction, 4
-material creation, 3 raw resource gathering.
+All 56 current bitcraft actions match a rule: 49 tool interaction, 4
+material creation, 3 raw resource gathering. So does every `Rekey<Class>`
+built-in.
 
 ## Adding actions
 
-When `../plugin.rhai` gains actions, decide which category each belongs
+When `../../../examples/bitcraft/plugin.rhai` gains actions, decide which category each belongs
 to, then add or extend a rule in `action-icons.json` and update the tables
 above in the same change.

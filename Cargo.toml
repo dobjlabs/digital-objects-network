@@ -21,6 +21,7 @@ members = [
     "examples/bitcraft",
 ]
 resolver = "2"
+exclude = ["apps/bitcraft/src-tauri"]
 
 [workspace.dependencies]
 pod2 = { git = "https://github.com/0xPARC/pod2", rev = "a91d87895de0f6d9bda256016572d593216e619a", default-features = false, features = [

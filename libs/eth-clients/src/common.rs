@@ -96,7 +96,7 @@ pub enum ClientError {
     #[error("Empty response")]
     Empty,
 
-    /// A status worth retrying, returned once the retries are exhausted or when retrying is off
+    /// A status worth retrying, returned once the retries are exhausted
     #[error("{url} answered with status {status}: {body}")]
     RetryableStatus {
         url: Url,

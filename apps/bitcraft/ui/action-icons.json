@@ -2,6 +2,13 @@
   "rules": [
     {
       "category": "tool interaction",
+      "description": "Creating a pocketknife: the pocketknife, with a green plus",
+      "actions": "^Craft(Pocketknife)$",
+      "icon": "$1",
+      "badge": "plus"
+    },
+    {
+      "category": "tool interaction",
       "description": "Creating a bucket: the bucket, with a green plus",
       "actions": "^Craft(BucketOf(?:Wood|Stone|Iron))$",
       "icon": "$1",
@@ -70,10 +77,16 @@
     },
     {
       "category": "raw resource gathering",
-      "description": "Gathering wood, stone or iron: the resource, with a green plus",
+      "description": "Gathering wood, stone or iron with a pocketknife: the resource, with a green plus",
       "actions": "^Gather(Wood|Stone|Iron)$",
       "icon": "$1",
       "badge": "plus"
+    },
+    {
+      "category": "rekey",
+      "description": "Rekeying an object (same fields, fresh key): a blue refresh symbol, the same for every class",
+      "actions": "^Rekey\\w+$",
+      "image": "assets/refresh.svg"
     }
   ]
 }

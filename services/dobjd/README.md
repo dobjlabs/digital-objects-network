@@ -32,6 +32,8 @@ Two concurrent listeners:
 Release builds serve the default UI at `/ui/`. Development uses Vite on
 `:1420`; custom GUIs can be served by dobjd or by their own frontend server.
 
+For a supervised daemon, `--exit-on-stdin-close` makes stdin a parent-lifetime pipe. The supervisor must keep the write end open for the daemon's entire lifetime. Closing the pipe, including through a supervisor crash, exits the daemon immediately. The watcher starts before initialization and circuit warm-up, and does not wait for blocking work or connected HTTP/SSE clients. Standalone launches without this flag ignore stdin EOF and retain their existing lifetime behaviour. `--version` remains a read-only command that exits before installing the watcher.
+
 ## HTTP API
 
 All routes return JSON unless noted; errors come back as
@@ -139,8 +141,8 @@ Read on every `load_settings()` call from `~/.dobj/settings.json`:
 
 ```json
 {
-  "synchronizerApiUrl": "https://synchronizer.don.pateldhvani.com",
-  "relayerApiUrl": "https://relayer.don.pateldhvani.com",
+  "synchronizerApiUrl": "https://terminus.digiobjects.net:4000",
+  "relayerApiUrl": "https://terminus.digiobjects.net:4200",
   "mcpEnabled": false
 }
 ```
@@ -168,7 +170,9 @@ Release builds embed the Vite app (`interfaces/gui/dist`) in the daemon via
 `--features bundled-ui`. `just build-dobjd` builds both. The browser UI is
 at `http://127.0.0.1:7717/ui/`; `/` redirects there. A plain Cargo build without
 that feature still serves the API, but `/ui/` reports that no default UI was
-bundled. It does not silently embed a stale build.
+bundled. It does not silently embed a stale build. The Bitcraft desktop build
+uses `--features bundled-bitcraft-ui` instead, which serves the game at
+`/bitcraft/`; with only that feature, `/` redirects there and `/ui/` is a 404.
 
 The daemon serves its bundled default UI. Alternative GUIs run on their own
 local web servers, such as Python's HTTP server or Vite, and connect directly
