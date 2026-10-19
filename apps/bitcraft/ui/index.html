@@ -47,6 +47,59 @@
     display: flex;
     flex-direction: column;
   }
+  #inventory-app {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+  }
+  #inventory-app[hidden], #startup-screen[hidden] { display: none; }
+  #startup-screen {
+    display: grid;
+    flex: 1;
+    place-items: center;
+    padding: 32px;
+    background: #fafafa;
+  }
+  .startup-content { width: min(100%, 380px); }
+  .startup-brand { margin: 0 0 32px; font-size: 16px; font-weight: 600; }
+  #startup-status { margin: 20px 0 10px; font-size: 24px; font-weight: 600; line-height: 1.25; }
+  #startup-description { color: var(--muted); font-size: 14px; line-height: 1.6; }
+  #startup-error {
+    color: var(--error);
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+  #startup-copy-status { color: var(--muted); }
+  .startup-progress {
+    display: block;
+    width: 100%;
+    height: 6px;
+    appearance: none;
+    border: 0;
+    border-radius: 3px;
+    overflow: hidden;
+    background: #dedede;
+    color: #6d28d9;
+  }
+  .startup-progress::-webkit-progress-bar { background: #dedede; }
+  .startup-progress::-webkit-progress-value { background: #6d28d9; }
+  .startup-progress::-moz-progress-bar { background: #6d28d9; }
+  #startup-progress-label { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
+  #startup-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+  #startup-actions[hidden] { display: none; }
+  #startup-actions button {
+    padding: 8px 14px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+  }
+  #startup-actions #startup-retry { background: #6d28d9; border-color: #6d28d9; color: white; }
   #status-bar {
     flex: none;
     display: flex;
@@ -143,6 +196,7 @@
     min-height: 0;
     border-top: 1px solid var(--border);
   }
+  #execute-pane[hidden] { display: none; }
   #run-list {
     flex: 1;
     overflow-y: auto;
@@ -519,6 +573,25 @@
 </style>
 </head>
 <body>
+  <section id="startup-screen" aria-labelledby="startup-status">
+    <div class="startup-content">
+      <p class="startup-brand">Bitcraft</p>
+      <progress id="startup-progress" class="startup-progress" max="3" value="0" aria-label="Startup progress" aria-describedby="startup-progress-label startup-status"></progress>
+      <p id="startup-progress-label">Step 1 of 3</p>
+      <div role="status" aria-live="polite" aria-atomic="true">
+        <h1 id="startup-status">Opening Bitcraft...</h1>
+        <p id="startup-description">Getting your inventory ready.</p>
+      </div>
+      <p id="startup-error" role="alert" hidden></p>
+      <div id="startup-actions" hidden>
+        <button type="button" id="startup-retry">Try again</button>
+        <button type="button" id="startup-copy">Copy error</button>
+        <button type="button" id="startup-open">Open inventory</button>
+      </div>
+      <p id="startup-copy-status" role="status" hidden></p>
+    </div>
+  </section>
+  <div id="inventory-app" hidden inert>
   <nav id="tab-bar">
     <div class="tab-track" role="tablist">
       <button type="button" class="tab" role="tab" id="objects-tab" aria-controls="objects-view">Objects</button>
@@ -559,6 +632,7 @@
     <span class="status-item"><span class="status-label">Relayer status:</span> <span id="relayer-dot" class="status-dot"></span><span id="relayer-status">Checking</span></span>
     <span class="status-item"><span class="status-label">Relayer address:</span> <span id="relayer-address">n/a</span></span>
   </footer>
+  </div>
 
 <template id="file-icon">
   <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
@@ -626,21 +700,110 @@
 
   const PLUGIN_NAME = "bitcraft";
 
-  async function ensureStartupPocketknife() {
-    const isPocketknife = (className) =>
-      className.pluginName === PLUGIN_NAME && className.name === "Pocketknife";
-    const action = pluginActions.find((candidate) => candidate.action.name === "CraftPocketknife");
-    if (action === undefined || runs.some((run) => isRunInProgress(run) && (
-      qualifiedClassName(run.action.action) === qualifiedClassName(action.action)
-      || run.action.totalOutputs?.some((output) => isPocketknife(output.class))
-    ))) {
+  const STARTUP_RUN_STORAGE_KEY = "bitcraft.startup-pocketknife-run";
+  let startupPocketknifeActive = false;
+  let startupPocketknifeRun = null;
+  let startupPocketknifeTimer = null;
+
+  function isPocketknife(className) {
+    return className.pluginName === PLUGIN_NAME && className.name === "Pocketknife";
+  }
+
+  function rememberStartupRun(runId) {
+    try {
+      sessionStorage.setItem(STARTUP_RUN_STORAGE_KEY, runId);
+    } catch {}
+  }
+
+  function hideRestoredStartupRun() {
+    let runId;
+    try {
+      runId = sessionStorage.getItem(STARTUP_RUN_STORAGE_KEY);
+    } catch {
       return;
     }
-    // A restored run may have finished since the initial inventory read.
+    const run = runs.find((candidate) => candidate.runId === runId);
+    if (run) run.showInJobs = false;
+  }
+
+  function stopStartupPocketknife() {
+    startupPocketknifeActive = false;
+    clearInterval(startupPocketknifeTimer);
+    startupPocketknifeTimer = null;
+  }
+
+  function updateStartupPocketknife(run = startupPocketknifeRun) {
+    if (!startupPocketknifeActive) return;
+    startupPocketknifeRun = run;
+    if ([...objectsByFileName.values()].some((object) => isPocketknife(object.class) && isLive(object))) {
+      setStartupProgress(3);
+      stopStartupPocketknife();
+      finishStartup();
+      return;
+    }
+    if (run?.state?.status === "committing" || run?.state?.status === "succeeded"
+      || run?.state?.progress?.some((event) => event.phase === "generateProof" && event.status === "done")
+      || [...objectsByFileName.values()].some((object) => isPocketknife(object.class))) {
+      setStartupProgress(2);
+    }
+    if (run?.requestError || run?.state?.status === "failed") {
+      showStartupError(run.requestError ?? run.state.error ?? "Pocketknife creation failed.");
+      return;
+    }
+    if (run?.transportError) {
+      showStartupError(`Could not check progress: ${run.transportError}`);
+      return;
+    }
+    if (!run && [...objectsByFileName.values()].some((object) => isPocketknife(object.class) && object.status === "unknown")) {
+      showStartupError("Your pocketknife is here, but its network status could not be checked. Check your connection and try again.");
+      return;
+    }
+    if (run?.state?.status === "committing" || run?.state?.status === "succeeded" || !run) {
+      showStartup("Waiting for confirmation...", "Your pocketknife is being confirmed by the network. This can take a little while.");
+    } else {
+      showStartup("Creating your first pocketknife...", "Bitcraft is making a cryptographic proof for your starter tool. You will be ready to gather resources soon.");
+    }
+  }
+
+  async function ensureStartupPocketknife() {
+    stopStartupPocketknife();
+    startupPocketknifeRun = null;
+    hideRestoredStartupRun();
+    renderRuns();
     const objects = await fetchJson("/objects/unspent");
     showObjects(objects);
-    if (!objects.some((object) => isPocketknife(object.class))) {
-      await startRun(action, []);
+    if (objects.some((object) => isPocketknife(object.class) && isLive(object))) {
+      setStartupProgress(3);
+      finishStartup();
+      return;
+    }
+    startupPocketknifeActive = true;
+    const activeRun = runs.find((run) => isRunInProgress(run) && (
+      run.action.action.name === "CraftPocketknife"
+      || run.action.totalOutputs?.some((output) => isPocketknife(output.class))
+    ));
+    if (activeRun) {
+      activeRun.onUpdate = updateStartupPocketknife;
+      updateStartupPocketknife(activeRun);
+    } else if (objects.some((object) => isPocketknife(object.class))) {
+      updateStartupPocketknife();
+    } else {
+      const action = pluginActions.find((candidate) => candidate.action.name === "CraftPocketknife");
+      if (!action) throw new Error("The starter pocketknife recipe is unavailable. Check that the Bitcraft plugin is installed.");
+      await startRun(action, [], {
+        showInJobs: false,
+        onUpdate(run) {
+          if (run.runId) rememberStartupRun(run.runId);
+          updateStartupPocketknife(run);
+        },
+      });
+    }
+    if (startupPocketknifeActive) {
+      startupPocketknifeTimer = setInterval(() => {
+        if (!startupPocketknifeRun || !isRunInProgress(startupPocketknifeRun) || startupPocketknifeRun.transportError) {
+          return reloadObjects();
+        }
+      }, 1500);
     }
   }
 
@@ -1215,7 +1378,10 @@
       runId: null,
       state: null,
       requestError: null,
+      transportError: null,
       eventSource: null,
+      showInJobs: true,
+      onUpdate: null,
       clientStartedAt: Date.now(),
       clientEndedAt: null,
       elapsedElement: null,
@@ -1229,11 +1395,14 @@
     };
   }
 
-  async function startRun(action, fileNames) {
+  async function startRun(action, fileNames, { showInJobs = true, onUpdate = null } = {}) {
     const inputFileNames = assignInputSlots(action, fileNames).map((object) => object.fileName);
     const run = newRun(action, inputFileNames);
+    run.showInJobs = showInJobs;
+    run.onUpdate = onUpdate;
     runs.unshift(run);
     showSelection();
+    run.onUpdate?.(run);
 
     try {
       const accepted = await postJson("/actions/run", {
@@ -1241,36 +1410,52 @@
       });
       run.runId = accepted.runId;
       run.state = { status: accepted.status, progress: [], createdAtMs: accepted.createdAtMs };
+      run.onUpdate?.(run);
       followRun(run);
     } catch (error) {
       run.requestError = error.message;
       run.clientEndedAt = Date.now();
+      run.onUpdate?.(run);
     }
     renderRuns();
     if (run.id === selectedRunId) {
       renderDetails();
     }
+    return run;
   }
 
-  // Each event on the run's stream prompts a re-read of the run's state,
-  // which is also how the terminal status (absent from the events) arrives.
+  // Terminal states need polling: the last event can precede the terminal write.
   function followRun(run) {
     const runPath = `/actions/runs/${encodeURIComponent(run.runId)}`;
-    const source = new EventSource(`${DOBJD_URL}${runPath}/events`);
+    let source = null;
+    try {
+      source = new EventSource(`${DOBJD_URL}${runPath}/events`);
+    } catch (error) {
+      console.warn("Could not open run events:", error);
+    }
     run.eventSource = source;
+    let refreshing = false;
     const refresh = async () => {
+      if (refreshing || !isRunInProgress(run)) return;
+      refreshing = true;
       const wasInProgress = isRunInProgress(run);
       try {
         run.state = await fetchJson(runPath);
+        run.transportError = null;
       } catch (error) {
         if (error.status !== 404) {
+          run.transportError = error.message;
+          run.onUpdate?.(run);
           return;
         }
         run.requestError = "dobjd no longer has this run.";
+      } finally {
+        refreshing = false;
       }
       if (!isRunInProgress(run)) {
         run.clientEndedAt ??= Date.now();
-        source.close();
+        source?.close();
+        clearInterval(pollTimer);
       }
       // A run's inputs become held and its outputs appear (pending, then
       // live) while it runs, so the object list is re-read as it progresses.
@@ -1281,9 +1466,14 @@
       if (run.id === selectedRunId) {
         renderDetails();
       }
+      run.onUpdate?.(run);
     };
-    source.onmessage = refresh;
-    source.onerror = refresh;
+    const pollTimer = setInterval(refresh, 1500);
+    if (source) {
+      source.onmessage = refresh;
+      source.onerror = refresh;
+    }
+    refresh();
   }
 
   // Uses dobjd's timestamps once it has reported them. The page's own clock
@@ -1367,7 +1557,9 @@
   function renderRuns() {
     refreshOpenMenus();
     runList.replaceChildren();
-    for (const run of runs) {
+    const visibleRuns = runs.filter((run) => run.showInJobs);
+    document.getElementById("execute-pane").hidden = visibleRuns.length === 0;
+    for (const run of visibleRuns) {
       const row = document.createElement("li");
       row.className = "run-row";
       row.classList.toggle("selected", run.id === selectedRunId);
@@ -2237,6 +2429,9 @@
   }
 
   async function load() {
+    stopStartupPocketknife();
+    setStartupProgress(0);
+    showStartup("Opening Bitcraft...", "Getting your inventory ready.");
     showMessage("Loading...", false);
     try {
       const [objectsDir, objects, actions, iconPaths, actionIcons, welcome] = await Promise.all([
@@ -2247,6 +2442,7 @@
         loadUiDataFile(ACTION_ICONS_URL, { rules: [] }),
         loadUiTextFile(WELCOME_FILE),
       ]);
+      setStartupProgress(1);
       welcomeText = welcome;
       welcomeFileSize = welcome === null ? null : new TextEncoder().encode(welcome).length;
       classIconPaths = iconPaths;
@@ -2257,17 +2453,88 @@
       objectsDirHeader.title = objectsDir.path;
       showObjects(objects);
       showRecipes(pluginActions);
-      if (await restoreRuns()) {
-        await ensureStartupPocketknife();
-      }
+      if (!await restoreRuns()) throw new Error("Could not check active jobs. Please try again.");
+      await ensureStartupPocketknife();
     } catch (error) {
       const text = `Could not reach dobjd at ${DOBJD_URL}: ${error.message}`;
-      showMessage(text, true);
-      const item = document.createElement("li");
-      item.append(errorMessage(text));
-      recipeList.replaceChildren(item);
+      if (objectFileCount === null) {
+        showMessage(text, true);
+        const item = document.createElement("li");
+        item.append(errorMessage(text));
+        recipeList.replaceChildren(item);
+      }
+      showStartupError(error.message);
     }
   }
+
+  function setStartupProgress(completed) {
+    const progress = document.getElementById("startup-progress");
+    progress.value = completed;
+    updateStartupProgressLabel();
+  }
+
+  function updateStartupProgressLabel() {
+    const progress = document.getElementById("startup-progress");
+    const label = `Step ${Math.min(progress.value + 1, progress.max)} of ${progress.max}`;
+    progress.setAttribute("aria-valuetext", `${label}: ${document.getElementById("startup-status").textContent}`);
+    document.getElementById("startup-progress-label").textContent = label;
+  }
+
+  function showStartup(title, description) {
+    document.getElementById("startup-screen").hidden = false;
+    document.getElementById("inventory-app").hidden = true;
+    document.getElementById("inventory-app").inert = true;
+    const status = document.getElementById("startup-status");
+    const detail = document.getElementById("startup-description");
+    if (status.textContent !== title) {
+      status.textContent = title;
+      document.getElementById("startup-copy-status").hidden = true;
+    }
+    if (detail.textContent !== description) detail.textContent = description;
+    updateStartupProgressLabel();
+    document.getElementById("startup-error").hidden = true;
+    document.getElementById("startup-actions").hidden = true;
+  }
+
+  function showStartupError(message) {
+    showStartup("Bitcraft could not finish setup", "You can try again, or open your inventory and continue from there.");
+    const error = document.getElementById("startup-error");
+    if (error.textContent !== message) {
+      error.textContent = message;
+      document.getElementById("startup-copy-status").hidden = true;
+    }
+    error.hidden = false;
+    document.getElementById("startup-actions").hidden = false;
+  }
+
+  function finishStartup() {
+    document.getElementById("startup-screen").hidden = true;
+    document.getElementById("inventory-app").hidden = false;
+    document.getElementById("inventory-app").inert = false;
+    fitObjectNames();
+  }
+
+  document.getElementById("startup-retry").addEventListener("click", load);
+  document.getElementById("startup-copy").addEventListener("click", async () => {
+    const error = document.getElementById("startup-error");
+    const message = error.textContent;
+    let feedback;
+    try {
+      await navigator.clipboard.writeText(message);
+      feedback = "Error copied.";
+    } catch {
+      feedback = "Could not copy. Select the error text and copy it.";
+    }
+    if (error.hidden || error.textContent !== message) return;
+    const status = document.getElementById("startup-copy-status");
+    status.textContent = feedback;
+    status.hidden = false;
+  });
+  document.getElementById("startup-open").addEventListener("click", () => {
+    stopStartupPocketknife();
+    finishStartup();
+    views[currentViewName].tab.focus();
+  });
 
   // Reads a JSON file served next to this page, not by dobjd, or returns
   // `fallback` if it cannot be read.
@@ -2310,6 +2577,9 @@
       showObjects(await fetchJson("/objects/unspent"));
     } catch (error) {
       console.warn("Could not reload objects:", error);
+      if (!document.getElementById("startup-screen").hidden) {
+        showStartupError(`Could not refresh inventory: ${error.message}`);
+      }
     } finally {
       objectReloadInFlight = false;
       if (objectReloadQueued) {
@@ -2410,6 +2680,7 @@
       objectList.append(message);
     }
     showSelection();
+    updateStartupPocketknife();
   }
 
   function isPlainPress(event) {

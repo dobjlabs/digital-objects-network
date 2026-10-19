@@ -1,0 +1,12 @@
+{
+  "name": "bitcraft-ui-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test *.test.mjs",
+    "preview": "node preview.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "26.1.0"
+  }
+}

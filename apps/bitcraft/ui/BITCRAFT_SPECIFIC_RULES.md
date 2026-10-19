@@ -51,15 +51,47 @@ that block should be plugin-agnostic.
 - **Where:** `ensureStartupPocketknife()`, called by `load()` after active
   runs have been restored successfully.
 - **What:** if no unspent `bitcraft::Pocketknife` exists, start
-  `bitcraft::CraftPocketknife` with no inputs through the normal Jobs flow.
-  Pending knives and knives held by a run count as existing. An active
+  `bitcraft::CraftPocketknife` with no inputs. Pending knives and knives held
+  by a run count as existing. An active
   crafting run or another active action that outputs a pocketknife also
   suppresses creation. Re-read inventory after restoring runs so a run that
   finished during startup does not cause another knife to be crafted.
-- **Failures:** skip automatic creation if active runs cannot be read or
-  the crafting action is unavailable. A failed creation appears as a failed
-  job, with no automatic retry during the session. Inventory refreshes do
-  not trigger creation; the check runs only on page load.
+- **Startup screen:** keep inventory hidden and inert until a live
+  pocketknife is listed. Show whether Bitcraft is creating the knife or
+  waiting for network confirmation. Existing live knives, including held
+  knives, open the inventory directly. A pending knife without a retained
+  job is polled until confirmed. The desktop's cryptography startup screen
+  has the same layout, so initial preparation leads into pocketknife setup.
+  Both screens use a simple centered layout with a progress bar and status
+  text. The bar counts three completed milestones: cryptography ready,
+  pocketknife proof generated, and network confirmation. Preparation starts
+  at zero in the desktop shell; successful daemon requests complete the
+  first milestone. A committing run, a completed proof event, or an existing
+  knife completes the second; a live knife completes the third. Progress
+  stays at the last completed milestone during errors; retry starts a fresh
+  check. Opening inventory after an error does not mark setup complete.
+  Show the current step number and describe the work in progress in the
+  heading, rather than labeling the bar with the last completed milestone.
+  Errors replace the activity description while preserving the bar's value.
+  Steps do not represent time remaining. Keep both screens' appearance in
+  step when changing either.
+- **Jobs:** automatic startup runs are tracked but omitted from Jobs.
+  Remember their run ID in session storage so reloading the page keeps
+  them hidden. Manual pocketknife jobs, including restored jobs without
+  that marker, remain visible. The Jobs pane is hidden when no visible
+  jobs exist; starting a manual job reveals it.
+- **Failures:** show the cause with "Try again", "Copy error", and "Open inventory"
+  controls if setup fails, active runs cannot be read, or the recipe is
+  unavailable. An existing knife with unknown network status also offers
+  recovery instead of waiting without explanation. Retry re-reads active
+  jobs and inventory before creating anything. Opening inventory dismisses
+  setup for this page session.
+  "Copy error" copies the full displayed error, including line breaks, and
+  reports success or failure. The error text can also be selected manually.
+  Creation is never retried automatically. Run polling backs up SSE so a
+  quiet terminal transition or an unavailable event stream cannot leave
+  setup waiting forever; inventory is polled after success until the knife
+  is live. Inventory refreshes alone do not trigger creation.
 - **Generic behavior:** loading the UI never starts actions automatically.
 
 ## Action input constraints

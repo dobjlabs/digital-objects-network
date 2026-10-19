@@ -26,13 +26,42 @@ just bitcraft-bundle
 
 `just bitcraft-dev-local` uses `<checkout>/.dev/bitcraft-local` as its home, overriding `BITCRAFT_HOME`. On first use it creates `settings.json` with synchronizer `http://127.0.0.1:3000`, relayer `http://127.0.0.1:3200`, and MCP disabled. Later launches preserve existing settings, objects, and actions. This directory is ignored by Git. The local backend stack must already be running; for example, run `just dev-local` in another terminal. Its standalone daemon uses port `7717`; Bitcraft continues to use `7727` (MCP `7728` when enabled).
 
+When using Git worktrees, keep the backend stack in the checkout that owns
+its existing `data/` directory, and run `just bitcraft-dev-local` from the
+UI worktree. `just dev-local` uses shared Postgres database names
+(`synchronizer_local` and `relayer_local`) but checkout-relative RocksDB,
+chain, and blob files. Starting that stack in a fresh worktree can pair old
+Postgres roots with an empty RocksDB store, producing "node with hash ...
+not found" errors. Stop the misplaced stack and restart it in the original
+checkout to use the matching stores together.
+
 Quit any running Bitcraft instance before switching homes: they share the application's single-instance identity and ports. To use the wrappers with the local development instance, pass `--home "$PWD/.dev/bitcraft-local"` from the repository root. Edit that home's `settings.json` while the app is stopped, or use the wrapper's `settings set` command while it is running, to customize the endpoints. The local recipe preserves those changes.
 
 Quit Bitcraft and stop the local backend stack before running `just reset`. Reset removes `.dev/bitcraft-local` along with the devnet state, since its objects are grounded on that chain. The next `just bitcraft-dev-local` recreates the initial local settings; custom settings in that home are lost. If you wipe the devnet manually, also remove this home (or the custom home used with that devnet). The normal `~/.bitcraft` home is unaffected by `just reset`.
 
-`scripts/prepare.py` builds the exact binaries, checks the plugin manifest with `pexe build --check`, and stages them under `src-tauri/binaries` and `src-tauri/runtime`. It generates `src-tauri/tauri.bundle.conf.json`; those outputs are ignored by Git. Run it with `--version VERSION` for a release and `--target TRIPLE` for cross-compilation. The plugin builder runs on the native host even for a cross-compiled package.
+`scripts/prepare.py` builds the exact binaries, checks the plugin manifest with `pexe build --check`, and stages them under `src-tauri/binaries` and `src-tauri/runtime`. It verifies that the daemon embeds this checkout's UI before staging it. If the compiled UI is stale, it cleans and rebuilds only the daemon package; preparation fails if the rebuilt UI still differs. It generates `src-tauri/tauri.bundle.conf.json`; those outputs are ignored by Git. Run it with `--version VERSION` for a release and `--target TRIPLE` for cross-compilation. The plugin builder runs on the native host even for a cross-compiled package.
 
 The daemon bundles runtime Markdown files alongside other UI assets. Only the named contributor docs `AGENTS.md`, `CLAUDE.md`, `ACTION_ICONS.md`, and `BITCRAFT_SPECIFIC_RULES.md` are excluded.
+
+The startup screen covers cryptography preparation, starter pocketknife
+creation, and network confirmation. Inventory opens once a live pocketknife
+is available. Automatic setup jobs are hidden; manual jobs remain visible.
+Setup failures offer retry and an option to open inventory.
+
+To inspect the splash without waiting for a new pocketknife or resetting
+inventory, fully quit Bitcraft and run `just bitcraft-shell`. It keeps the
+desktop startup page open without launching a daemon. Existing live knives
+skip the crafting splash during a normal launch, and warm cryptography
+startup can finish before the desktop page is noticeable. Closing a window
+to the tray does not quit the application; a second launch reopens the
+existing instance.
+
+For browser behavior tests, run `pnpm --dir apps/bitcraft/tests install --frozen-lockfile`
+then `pnpm --dir apps/bitcraft/tests test`. For a visual preview without building
+the desktop or generating proofs, run `pnpm --dir apps/bitcraft/tests preview`
+and open `http://127.0.0.1:4171`. Its links demonstrate
+first launch, existing inventory, and setup failure against a simulated daemon.
+Preview data stays in memory and never reaches the network services.
 
 The desktop Cargo workspace is separate from the headless workspace to keep GTK/WebKit out of service-only builds. It contains the Tauri host and the `crates/launchers` package, which has no GUI dependencies. It uses the repository toolchain and commits its own lockfile. Both workspaces participate in the same product build.
 

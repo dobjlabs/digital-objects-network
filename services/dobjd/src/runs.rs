@@ -332,6 +332,7 @@ impl RunReporter {
     }
 
     fn finish_failure(&self, message: String) {
+        tracing::error!(run_id = %self.run_id, error = %message, "Action failed");
         // `fail` builds the event (tagged with the failing phase) and records
         // it in the registry; mirror it to the global hub.
         let event = self.entry.fail(message);

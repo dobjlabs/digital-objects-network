@@ -177,7 +177,7 @@ fn main() -> Result<()> {
         message: Mutex::new(if args.no_runtime {
             "Desktop shell only. Start without --no-runtime to launch the game.".into()
         } else {
-            "Starting Bitcraft. The first launch builds the proving cache and can take several minutes.".into()
+            "Preparing cryptography...".into()
         }),
         tray_available: AtomicBool::new(false),
         #[cfg(target_os = "linux")]

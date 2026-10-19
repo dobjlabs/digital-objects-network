@@ -19,6 +19,28 @@ def run(*command, cwd=REPO):
     subprocess.run(command, cwd=cwd, check=True)
 
 
+def build_runtime(target):
+    run("cargo", "build", "--release", "--locked", "--target", target,
+        "-p", "dobjd", "-p", "cli", "-p", "dobj-mcp", "-p", "pexe",
+        "--features", "dobjd/bundled-bitcraft-ui,dobj-mcp/proxy",
+        "--bin", "dobjd", "--bin", "dobj", "--bin", "dobj-mcp-proxy", "--bin", "pexe")
+
+
+def ensure_current_bitcraft_ui(binary, target):
+    page = (APP / "ui" / "index.html").read_bytes()
+    if page in binary.read_bytes():
+        return
+    print("The daemon contains an outdated Bitcraft UI; rebuilding dobjd.", flush=True)
+    run("cargo", "clean", "--release", "--target", target, "-p", "dobjd")
+    build_runtime(target)
+    if page not in binary.read_bytes():
+        raise RuntimeError(
+            f"{binary} still contains a different Bitcraft UI after rebuilding. "
+            "Check Cargo's target directory and build-cache configuration. "
+            "The outdated daemon will not be staged."
+        )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", help="Rust target triple; defaults to the native host")
@@ -37,13 +59,11 @@ def main():
     )
     target = args.target or host
     suffix = ".exe" if "windows" in target else ""
-    run("cargo", "build", "--release", "--locked", "--target", target,
-        "-p", "dobjd", "-p", "cli", "-p", "dobj-mcp", "-p", "pexe",
-        "--features", "dobjd/bundled-bitcraft-ui,dobj-mcp/proxy",
-        "--bin", "dobjd", "--bin", "dobj", "--bin", "dobj-mcp-proxy", "--bin", "pexe")
+    build_runtime(target)
     metadata = json.loads(subprocess.check_output(
         ["cargo", "metadata", "--format-version", "1", "--no-deps"], cwd=REPO, text=True))
     built = Path(metadata["target_directory"]) / target / "release"
+    ensure_current_bitcraft_ui(built / f"dobjd{suffix}", target)
     pexe = [str(built / f"pexe{suffix}")] if target == host else [
         "cargo", "run", "--release", "--locked", "-p", "pexe", "--"]
     run(*pexe, "build", "--check", "--out-dir", str(TAURI / "runtime"), "examples/bitcraft")
