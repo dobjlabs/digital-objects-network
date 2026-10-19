@@ -32,7 +32,10 @@ async fn main() -> Result<()> {
 
     let last_header = Arc::new(RwLock::new(None));
     let api_state = api::ApiState {
-        config: Arc::new(api::Config {
+        info: Arc::new(api::Info {
+            // Release tag stamped by build.rs
+            version: env!("DOBJ_RELEASE_TAG").to_string(),
+            init_start_slot: node.config.init_start_slot,
             filter_address: node.config.filter_address,
         }),
         store: Arc::new(node.store.clone()),

@@ -1,5 +1,6 @@
 use std::{net::SocketAddr, sync::Arc};
 
+use alloy::primitives::Address;
 use anyhow::Result;
 use axum::{
     extract::{Path, State},
@@ -9,6 +10,7 @@ use axum::{
     Json, Router,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
+use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tracing::{debug, error, info};
 use uuid::Uuid;
@@ -35,6 +37,7 @@ const MAX_TX_HASH_QUERY_ITEMS: usize = 256;
 pub struct AppState {
     pub db: Arc<Db>,
     pub parser: Arc<dyn BlobParser>,
+    info: Arc<Info>,
 }
 
 pub enum ApiError {
@@ -77,10 +80,11 @@ impl IntoResponse for ApiError {
 pub async fn run_api_server(
     db: Arc<Db>,
     parser: Arc<dyn BlobParser>,
+    info: Arc<Info>,
     bind_addr: SocketAddr,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
-    let app_state = AppState { db, parser };
+    let app_state = AppState { db, parser, info };
 
     let app = build_router(app_state);
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
@@ -106,6 +110,7 @@ pub async fn run_api_server(
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/info", get(get_info))
         .route("/api/v1/proofs", post(submit_proof))
         .route("/api/v1/proofs/{job_id}", get(get_proof))
         .route("/api/v1/proofs/tx-hashes", post(get_tx_hashes))
@@ -120,6 +125,19 @@ const TARGET_TRIPLE: &str = env!("DOBJ_TARGET_TRIPLE");
 
 async fn healthz() -> Json<HealthResponse> {
     Json(HealthResponse::stamped(RELEASE_TAG, TARGET_TRIPLE))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Info {
+    pub version: String,
+    pub to_address: Address,
+    pub txn_finalized_pred: String,
+    pub verifier_data_hash: String,
+}
+
+async fn get_info(State(app_state): State<AppState>) -> Json<Info> {
+    let info = (*app_state.info).clone();
+    Json(info)
 }
 
 /// Accept proof payload, verify/decode it, and enqueue idempotently by `tx_final`.
@@ -386,6 +404,12 @@ mod tests {
         let state = AppState {
             db,
             parser: Arc::new(MockParser { mode }),
+            info: Arc::new(Info {
+                version: "-".to_string(),
+                to_address: Address::ZERO,
+                txn_finalized_pred: "-".to_string(),
+                verifier_data_hash: "-".to_string(),
+            }),
         };
         (build_router(state), admin_url, db_name)
     }
