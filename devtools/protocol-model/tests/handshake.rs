@@ -1,22 +1,26 @@
 use protocol_model::{
     handshake::{
-        self, Fault, Message, Outcome, Scenario, Timer, Token, orchestrator_state, saved_journal,
-        saved_preparations, store, store_state,
+        HandshakeAction, HandshakeState, Message, Orchestrator, OrchestratorRules,
+        OrchestratorState, Outcome, Participant, PendingTransaction, ProtocolOrchestrator,
+        ProtocolStore, StoreRules, StoreState, StoreStorage, Timer, Token, describe_action,
+        end_lease, finish, grant, orchestrator_state, record_pending, save, saved_journal,
+        saved_pending, store_state,
     },
     objects::Objects,
+    scenarios::{self, Scenario, ScenarioModel, store},
 };
 use stateright::{
     Checker, Expectation, HasDiscoveries, Model,
-    actor::{ActorModelAction, Id},
+    actor::{ActorModelAction, Id, Out, model_timeout},
 };
 
-fn replay<M: Model>(model: &M, actions: impl IntoIterator<Item = M::Action>) -> M::State
-where
-    M::Action: std::fmt::Debug,
-{
+fn replay(
+    model: &ScenarioModel,
+    actions: impl IntoIterator<Item = HandshakeAction>,
+) -> HandshakeState {
     let mut state = model.init_states().remove(0);
     for action in actions {
-        let label = format!("{action:?}");
+        let label = describe_action(model, &action);
         state = model
             .next_state(&state, action)
             .unwrap_or_else(|| panic!("disabled step: {label}"));
@@ -38,12 +42,7 @@ const MAX_COUNTEREXAMPLE_STEPS: usize = 40;
 
 /// Searches for a shortest violation of the named safety property, allowing one more
 /// step each round, and returns the steps that lead to it.
-fn counterexample<M>(model: M, property: &'static str) -> String
-where
-    M: Model + Clone + Send + Sync + 'static,
-    M::State: std::hash::Hash + Send + Sync + Clone + PartialEq + 'static,
-    M::Action: Clone + PartialEq + std::fmt::Debug,
-{
+fn counterexample(model: ScenarioModel, property: &'static str) -> String {
     let safety = model
         .properties()
         .into_iter()
@@ -67,20 +66,18 @@ where
             if !(safety.condition)(&model, &state) {
                 return steps.join(", ");
             }
-            steps.extend(action.map(|action| model.format_action(&action)));
+            steps.extend(action.map(|action| describe_action(&model, &action)));
         }
         panic!("counterexample path never violates {property:?}");
     }
     panic!("no counterexample for {property:?} within {MAX_COUNTEREXAMPLE_STEPS} steps")
 }
 
-type Action = ActorModelAction<Message, Timer, ()>;
-
-fn deliver(src: Id, dst: Id, msg: Message) -> Action {
+fn deliver(src: Id, dst: Id, msg: Message) -> HandshakeAction {
     ActorModelAction::Deliver { src, dst, msg }
 }
 
-fn timeout(actor: Id, timer: Timer) -> Action {
+fn timeout(actor: Id, timer: Timer) -> HandshakeAction {
     ActorModelAction::Timeout(actor, timer)
 }
 
@@ -91,13 +88,15 @@ fn token(epoch: u8, sequence: u8) -> Token {
 /// Every scenario is explored exhaustively within its bounds:
 ///
 /// - Two orchestrators compete for x. Leases expire, renew, and are released, and
-///   either orchestrator may give up before the store acknowledges its preparation.
+///   either orchestrator may give up before the store confirms its transaction is
+///   pending.
 /// - One orchestrator and the store each crash and restart once, at any point.
 /// - Two orchestrators compete for x while the store restarts once, losing every
-///   reservation that was not yet prepared.
+///   reservation whose transaction was not yet pending.
 ///
-/// Messages may be delayed, reordered, or lost throughout. Each scenario also has to
-/// reach a submission, so a store that refuses everything would not pass.
+/// Messages may be delayed or reordered without bound throughout, which covers loss.
+/// Each scenario also has to reach a submission, so a store that refuses everything
+/// would not pass.
 #[test]
 fn check_all_handshake_interleavings() {
     for scenario in [
@@ -105,94 +104,322 @@ fn check_all_handshake_interleavings() {
         Scenario::Recovery,
         Scenario::StoreRestart,
     ] {
-        let checker = handshake::model(scenario, Fault::None)
-            .checker()
-            .spawn_dfs()
-            .join();
+        let checker = scenarios::model(scenario).checker().spawn_dfs().join();
         checker.assert_properties();
         println!("{scenario:?}: {} states", checker.unique_state_count());
+    }
+}
+
+/// Frees a pending transaction's inputs when its former lease expires: marking the
+/// transaction pending keeps the lease timer running, and expiry drops it.
+struct ExpirePending;
+
+impl StoreRules for ExpirePending {
+    fn mark_pending(
+        &self,
+        state: &mut StoreState,
+        from: Id,
+        token: Token,
+        outputs: Objects,
+        o: &mut Out<Participant>,
+    ) {
+        let newly_pending = state.lease_active(token) && !state.saved.pending.contains_key(&token);
+        ProtocolStore.mark_pending(state, from, token, outputs, o);
+        if newly_pending {
+            o.set_timer(Timer::LeaseExpiry(token), model_timeout());
+        }
+    }
+
+    fn lease_expired(&self, state: &mut StoreState, token: Token, o: &mut Out<Participant>) {
+        if state.saved.pending.remove(&token).is_some() {
+            save(state, o);
+        }
+        ProtocolStore.lease_expired(state, token, o);
+    }
+}
+
+/// Acknowledges a pending transaction it holds only in memory.
+struct AcknowledgeWithoutSaving;
+
+impl StoreRules for AcknowledgeWithoutSaving {
+    fn mark_pending(
+        &self,
+        state: &mut StoreState,
+        from: Id,
+        token: Token,
+        outputs: Objects,
+        o: &mut Out<Participant>,
+    ) {
+        if state.saved.pending.contains_key(&token) || !state.lease_active(token) {
+            return ProtocolStore.mark_pending(state, from, token, outputs, o);
+        }
+        let transaction = PendingTransaction {
+            inputs: state.leases[&token].inputs,
+            outputs,
+        };
+        end_lease(state, token, o);
+        state.saved.pending.insert(token, transaction);
+        o.send(from, Message::MarkedPending(token));
+    }
+}
+
+/// Marks a transaction pending under an ended lease while another lease is active.
+struct AcceptStaleReservation;
+
+impl StoreRules for AcceptStaleReservation {
+    fn mark_pending(
+        &self,
+        state: &mut StoreState,
+        from: Id,
+        token: Token,
+        outputs: Objects,
+        o: &mut Out<Participant>,
+    ) {
+        let ended = state.leases.get(&token).is_some_and(|lease| !lease.active);
+        let another_active = state.leases.values().any(|lease| lease.active);
+        if ended && another_active && !state.saved.pending.contains_key(&token) {
+            record_pending(state, from, token, outputs, o);
+        } else {
+            ProtocolStore.mark_pending(state, from, token, outputs, o);
+        }
+    }
+}
+
+/// Revives an ended lease when asked to renew it.
+struct RenewExpiredLease;
+
+impl StoreRules for RenewExpiredLease {
+    fn renew(&self, state: &mut StoreState, token: Token, o: &mut Out<Participant>) {
+        if !state.saved.pending.contains_key(&token)
+            && let Some(lease) = state.leases.get_mut(&token)
+        {
+            lease.active = true;
+            o.set_timer(Timer::LeaseExpiry(token), model_timeout());
+        }
+    }
+}
+
+/// Honors a release of a reservation whose transaction is pending.
+struct ReleasePending;
+
+impl StoreRules for ReleasePending {
+    fn release(&self, state: &mut StoreState, from: Id, token: Token, o: &mut Out<Participant>) {
+        if state.saved.pending.remove(&token).is_some() {
+            save(state, o);
+            o.send(from, Message::Released(token));
+        } else {
+            ProtocolStore.release(state, from, token, o);
+        }
+    }
+}
+
+/// Reserves inputs without checking pending transactions.
+struct ReserveOverPendingInputs;
+
+impl StoreRules for ReserveOverPendingInputs {
+    fn reserve(&self, state: &mut StoreState, from: Id, inputs: Objects, o: &mut Out<Participant>) {
+        if state.leases_cover(inputs) {
+            o.send(from, Message::Refused);
+        } else {
+            grant(state, from, inputs, o);
+        }
+    }
+}
+
+/// Saves a pending transaction without the objects it creates.
+struct SaveWithoutOutputs;
+
+impl StoreRules for SaveWithoutOutputs {
+    fn mark_pending(
+        &self,
+        state: &mut StoreState,
+        from: Id,
+        token: Token,
+        outputs: Objects,
+        o: &mut Out<Participant>,
+    ) {
+        if state.saved.pending.contains_key(&token) || !state.lease_active(token) {
+            return ProtocolStore.mark_pending(state, from, token, outputs, o);
+        }
+        record_pending(state, from, token, Objects::default(), o);
+    }
+}
+
+/// Loses the saved pending transactions when it restarts.
+struct ForgetPendingOnRestart;
+
+impl StoreRules for ForgetPendingOnRestart {
+    fn restart(&self, previous: Option<&StoreStorage>) -> StoreStorage {
+        let mut storage = ProtocolStore.restart(previous);
+        storage.pending.clear();
+        storage
+    }
+}
+
+/// Keeps its token epoch across a restart, so it issues the tokens from before the
+/// restart again.
+struct ReissueTokens;
+
+impl StoreRules for ReissueTokens {
+    fn restart(&self, previous: Option<&StoreStorage>) -> StoreStorage {
+        previous.cloned().unwrap_or_default()
+    }
+}
+
+/// Answers a release but keeps the lease.
+struct IgnoreRelease;
+
+impl StoreRules for IgnoreRelease {
+    fn release(&self, state: &mut StoreState, from: Id, token: Token, o: &mut Out<Participant>) {
+        if state.saved.pending.contains_key(&token) {
+            o.send(from, Message::StillPending(token));
+        } else {
+            o.send(from, Message::Released(token));
+        }
+    }
+}
+
+/// Submits as soon as it asks for its transaction to be marked pending, without
+/// waiting for the acknowledgement.
+struct SubmitWithoutAcknowledgement;
+
+impl OrchestratorRules for SubmitWithoutAcknowledgement {
+    fn proof_ready(
+        &self,
+        orchestrator: &Orchestrator,
+        state: &mut OrchestratorState,
+        token: Token,
+        o: &mut Out<Participant>,
+    ) {
+        ProtocolOrchestrator.proof_ready(orchestrator, state, token, o);
+        finish(state, Outcome::Submitted, o);
     }
 }
 
 /// One participant at a time breaks a rule while the others follow the protocol.
 /// For each, the checker must find a run violating the guarantee the rule protects:
 ///
-/// - Expiring, releasing, or overlooking a preparation lets a second orchestrator be
-///   acknowledged for the same input, as does accepting or reviving an ended lease.
-/// - Acknowledging before saving, or losing saved preparations on restart, leaves an
-///   acknowledgement with nothing durable behind it.
-/// - Keeping a lease after answering its release lets an abandoned attempt be
+/// - Expiring, releasing, or overlooking a pending transaction lets a second
+///   orchestrator be acknowledged for the same input, as does accepting or reviving
+///   an ended lease.
+/// - Acknowledging without saving, or losing saved pending transactions on restart,
+///   leaves an acknowledgement with nothing durable behind it.
+/// - Saving a transaction without the objects it creates leaves a saved copy that is
+///   not what the orchestrator asked for.
+/// - Issuing the tokens from before a restart again gives two reservations one token.
+/// - Keeping a lease after answering its release lets an abandoned transaction be
 ///   acknowledged.
-/// - Submitting without waiting for the acknowledgement submits a payload the store
-///   may never have prepared.
+/// - Submitting without waiting for the acknowledgement submits a transaction the
+///   store may never have saved as pending.
 #[test]
 fn handshake_faults_have_specific_counterexamples() {
-    for (scenario, fault, property) in [
+    let exclusive = "acknowledged transactions are exclusive";
+    let saved = "acknowledgements are saved";
+    let faults: [(
+        &str,
+        Scenario,
+        &'static dyn StoreRules,
+        &'static dyn OrchestratorRules,
+        &'static str,
+    ); 11] = [
         (
+            "ExpirePending",
             Scenario::Contention,
-            Fault::ExpirePrepared,
-            "acknowledged attempts are exclusive",
+            &ExpirePending,
+            &ProtocolOrchestrator,
+            exclusive,
         ),
         (
+            "AcceptStaleReservation",
             Scenario::Contention,
-            Fault::AcceptStaleReservation,
-            "acknowledged attempts are exclusive",
+            &AcceptStaleReservation,
+            &ProtocolOrchestrator,
+            exclusive,
         ),
         (
+            "RenewExpiredLease",
             Scenario::Contention,
-            Fault::RenewExpiredLease,
-            "acknowledged attempts are exclusive",
+            &RenewExpiredLease,
+            &ProtocolOrchestrator,
+            exclusive,
         ),
         (
+            "ReleasePending",
             Scenario::Contention,
-            Fault::ReleasePrepared,
-            "acknowledged attempts are exclusive",
+            &ReleasePending,
+            &ProtocolOrchestrator,
+            exclusive,
         ),
         (
+            "ReserveOverPendingInputs",
             Scenario::Contention,
-            Fault::ReserveOverPreparedInputs,
-            "acknowledged attempts are exclusive",
+            &ReserveOverPendingInputs,
+            &ProtocolOrchestrator,
+            exclusive,
         ),
         (
+            "AcknowledgeWithoutSaving",
             Scenario::Contention,
-            Fault::AcknowledgeBeforeCommit,
-            "acknowledgements are saved",
+            &AcknowledgeWithoutSaving,
+            &ProtocolOrchestrator,
+            saved,
         ),
         (
+            "ForgetPendingOnRestart",
             Scenario::Recovery,
-            Fault::ForgetPreparationOnRestart,
-            "acknowledgements are saved",
+            &ForgetPendingOnRestart,
+            &ProtocolOrchestrator,
+            saved,
         ),
         (
+            "SaveWithoutOutputs",
             Scenario::Contention,
-            Fault::IgnoreRelease,
+            &SaveWithoutOutputs,
+            &ProtocolOrchestrator,
+            "saved transactions match their requests",
+        ),
+        (
+            "ReissueTokens",
+            Scenario::StoreRestart,
+            &ReissueTokens,
+            &ProtocolOrchestrator,
+            "tokens are issued once",
+        ),
+        (
+            "IgnoreRelease",
+            Scenario::Contention,
+            &IgnoreRelease,
+            &ProtocolOrchestrator,
             "released tokens stay unacknowledged",
         ),
         (
+            "SubmitWithoutAcknowledgement",
             Scenario::Recovery,
-            Fault::SubmitWithoutAcknowledgement,
-            "submissions are prepared",
+            &ProtocolStore,
+            &SubmitWithoutAcknowledgement,
+            "submissions are saved as pending",
         ),
-    ] {
-        let trace = counterexample(handshake::model(scenario, fault), property);
-        println!("{fault:?}: {trace}");
+    ];
+    for (name, scenario, store_rules, orchestrator_rules, property) in faults {
+        let model = scenarios::with_rules(scenario, store_rules, orchestrator_rules);
+        println!("{name}: {}", counterexample(model, property));
     }
 }
 
-/// The first orchestrator reserves x and y, proves, saves its payload, and sends a
-/// preparation request. Before the request arrives, its lease ends: either the
-/// lease expires, or the orchestrator gives up and releases it. The second
-/// orchestrator then reserves x and z.
+/// The first orchestrator reserves x and y, proves, saves its payload, and asks the
+/// store to mark its transaction pending. Before the request arrives, its lease
+/// ends: either the lease expires, or the orchestrator gives up and releases it. The
+/// second orchestrator then reserves x and z.
 ///
 /// When the delayed request finally arrives, the store must reject it. The token's
 /// lease has ended, and x now belongs to another reservation; accepting the request
-/// would authorize two attempts to consume x.
+/// would authorize two transactions to consume x.
 #[test]
-fn delayed_preparation_cannot_use_an_ended_lease() {
-    let model = handshake::model(Scenario::Contention, Fault::None);
+fn delayed_mark_pending_cannot_use_an_ended_lease() {
+    let model = scenarios::model(Scenario::Contention);
     let [first, second] = [Id::from(1), Id::from(2)];
     let first_token = token(0, 0);
-    let prepare = Message::Prepare {
+    let mark_pending = Message::MarkPending {
         token: first_token,
         outputs: Objects::P,
     };
@@ -202,7 +429,7 @@ fn delayed_preparation_cannot_use_an_ended_lease() {
             store(),
             Message::Reserve(Objects::X.union(Objects::Y)),
         ),
-        deliver(store(), first, Message::Granted(first_token)),
+        deliver(store(), first, Message::Reserved(first_token)),
         timeout(first, Timer::ProofReady),
     ];
     for lease_ends in [
@@ -224,28 +451,29 @@ fn delayed_preparation_cannot_use_an_ended_lease() {
                         store(),
                         Message::Reserve(Objects::X.union(Objects::Z)),
                     ),
-                    deliver(first, store(), prepare.clone()),
+                    deliver(first, store(), mark_pending.clone()),
                 ]),
         );
-        assert!(!saved_preparations(&state).contains_key(&first_token));
-        assert!(store_state(&state).leases[&token(0, 1)].active);
+        assert!(!saved_pending(&state, store()).contains_key(&first_token));
+        assert!(store_state(&state, store()).leases[&token(0, 1)].active);
     }
 }
 
-/// The orchestrator's preparation is saved, but the acknowledgement never reaches
-/// it. The store then crashes and restarts, followed by the orchestrator.
+/// The store saves the orchestrator's transaction as pending, but the
+/// acknowledgement never reaches the orchestrator. The store then crashes and
+/// restarts, followed by the orchestrator.
 ///
-/// The restarted orchestrator does not know whether its preparation succeeded, so
-/// it repeats the request from its journal. The store finds the preparation it
+/// The restarted orchestrator does not know whether its request succeeded, so it
+/// repeats the request from its journal. The store finds the pending transaction it
 /// saved before the restart and acknowledges it again, and the orchestrator
-/// submits. The restart lost every lease, but not the preparation.
+/// submits. The restart lost every lease, but not the pending transaction.
 #[test]
 fn lost_acknowledgement_is_recovered_after_both_restarts() {
-    let model = handshake::model(Scenario::Recovery, Fault::None);
+    let model = scenarios::model(Scenario::Recovery);
     let orchestrator = Id::from(1);
-    let prepared = token(0, 0);
-    let prepare = Message::Prepare {
-        token: prepared,
+    let reservation = token(0, 0);
+    let mark_pending = Message::MarkPending {
+        token: reservation,
         outputs: Objects::P,
     };
     let state = replay(
@@ -256,16 +484,16 @@ fn lost_acknowledgement_is_recovered_after_both_restarts() {
                 store(),
                 Message::Reserve(Objects::X.union(Objects::Y)),
             ),
-            deliver(store(), orchestrator, Message::Granted(prepared)),
+            deliver(store(), orchestrator, Message::Reserved(reservation)),
             timeout(orchestrator, Timer::ProofReady),
-            deliver(orchestrator, store(), prepare.clone()),
-            // The preparation is saved; its acknowledgement is not delivered.
+            deliver(orchestrator, store(), mark_pending.clone()),
+            // The transaction is saved as pending; its acknowledgement is not delivered.
             ActorModelAction::Crash(store()),
             ActorModelAction::Recover(store()),
             ActorModelAction::Crash(orchestrator),
             ActorModelAction::Recover(orchestrator),
-            deliver(orchestrator, store(), prepare),
-            deliver(store(), orchestrator, Message::Prepared(prepared)),
+            deliver(orchestrator, store(), mark_pending),
+            deliver(store(), orchestrator, Message::MarkedPending(reservation)),
         ],
     );
     assert_eq!(
@@ -273,22 +501,23 @@ fn lost_acknowledgement_is_recovered_after_both_restarts() {
         Some(Outcome::Submitted)
     );
     assert!(orchestrator_state(&state, orchestrator).restarted);
-    assert!(saved_preparations(&state).contains_key(&prepared));
-    assert!(store_state(&state).leases.is_empty());
+    assert!(saved_pending(&state, store()).contains_key(&reservation));
+    assert!(store_state(&state, store()).leases.is_empty());
 }
 
-/// The first orchestrator holds a lease on x and y and has sent its preparation
-/// request when the store restarts. Unprepared reservations are not saved, so the
-/// lease is gone, and the second orchestrator reserves x and z under a token from
-/// the new epoch.
+/// The first orchestrator holds a lease on x and y and has asked the store to mark
+/// its transaction pending when the store restarts. Reservations are not saved, so
+/// the lease is gone, and the second orchestrator reserves x and z under a token
+/// from the new epoch.
 ///
 /// The first orchestrator's request then arrives with its old token and is
 /// rejected. It reserves again, but x is taken, so it gives up. The second
-/// orchestrator prepares and submits. Forgetting the reservation cost the first
-/// orchestrator its attempt, but never let both attempts hold x.
+/// orchestrator's transaction is marked pending and submitted. Forgetting the
+/// reservation cost the first orchestrator its transaction, but never let both
+/// transactions hold x.
 #[test]
-fn store_restart_ends_unprepared_reservations_without_sharing_inputs() {
-    let model = handshake::model(Scenario::StoreRestart, Fault::None);
+fn store_restart_ends_reservations_without_sharing_inputs() {
+    let model = scenarios::model(Scenario::StoreRestart);
     let [first, second] = [Id::from(1), Id::from(2)];
     let first_token = token(0, 0);
     let second_token = token(1, 0);
@@ -300,7 +529,7 @@ fn store_restart_ends_unprepared_reservations_without_sharing_inputs() {
                 store(),
                 Message::Reserve(Objects::X.union(Objects::Y)),
             ),
-            deliver(store(), first, Message::Granted(first_token)),
+            deliver(store(), first, Message::Reserved(first_token)),
             timeout(first, Timer::ProofReady),
             ActorModelAction::Crash(store()),
             ActorModelAction::Recover(store()),
@@ -312,29 +541,29 @@ fn store_restart_ends_unprepared_reservations_without_sharing_inputs() {
             deliver(
                 first,
                 store(),
-                Message::Prepare {
+                Message::MarkPending {
                     token: first_token,
                     outputs: Objects::P,
                 },
             ),
-            deliver(store(), first, Message::PrepareRejected(first_token)),
+            deliver(store(), first, Message::NotReserved(first_token)),
             deliver(
                 first,
                 store(),
                 Message::Reserve(Objects::X.union(Objects::Y)),
             ),
             deliver(store(), first, Message::Refused),
-            deliver(store(), second, Message::Granted(second_token)),
+            deliver(store(), second, Message::Reserved(second_token)),
             timeout(second, Timer::ProofReady),
             deliver(
                 second,
                 store(),
-                Message::Prepare {
+                Message::MarkPending {
                     token: second_token,
                     outputs: Objects::Q,
                 },
             ),
-            deliver(store(), second, Message::Prepared(second_token)),
+            deliver(store(), second, Message::MarkedPending(second_token)),
         ],
     );
     assert_eq!(
@@ -346,7 +575,7 @@ fn store_restart_ends_unprepared_reservations_without_sharing_inputs() {
         Some(Outcome::Submitted)
     );
     assert_eq!(
-        saved_preparations(&state).keys().collect::<Vec<_>>(),
+        saved_pending(&state, store()).keys().collect::<Vec<_>>(),
         [&second_token]
     );
 }

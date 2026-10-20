@@ -1,4 +1,4 @@
-use protocol_model::handshake::{self, Fault, Scenario};
+use protocol_model::scenarios::{self, Scenario};
 use stateright::Model;
 
 fn main() {
@@ -14,9 +14,7 @@ fn main() {
         "store-restart" => Scenario::StoreRestart,
         _ => usage(),
     };
-    handshake::model(scenario, Fault::None)
-        .checker()
-        .serve(address);
+    scenarios::model(scenario).checker().serve(address);
 }
 
 fn usage() -> ! {

@@ -320,6 +320,7 @@ reset:
 test:
     cargo test --workspace --release
 
+# Check the store-orchestrator handshake model
 test-protocol:
     cargo test -p protocol-model --release --locked
 
