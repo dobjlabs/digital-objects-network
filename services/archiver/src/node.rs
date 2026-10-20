@@ -325,6 +325,10 @@ impl Node {
             .process_beacon_block_blobs(beacon_block_header, prev_block)
             .await?;
 
+        // Make sure all the blob file operations are synced to disk before renaming the header
+        // because the service assumes that if `header.json` exists, then all slot processing has
+        // persisted and is in the disk.
+        File::open(&root_dir)?.sync_all()?;
         let mut header_path = root_dir.clone();
         header_path.push("header.json");
         rename(header_path_tmp, header_path)?;
