@@ -24,12 +24,12 @@ resolver = "2"
 exclude = ["apps/bitcraft/src-tauri"]
 
 [workspace.dependencies]
-pod2 = { git = "https://github.com/0xPARC/pod2", rev = "a91d87895de0f6d9bda256016572d593216e619a", default-features = false, features = [
+pod2 = { git = "https://github.com/0xPARC/pod2", rev = "af0ed4fb1bafba570b8337848826670fe52485b0", default-features = false, features = [
     "backend_plonky2",
     "disk_cache",
     "zk",
 ] }
-plonky2 = { git = "https://github.com/0xPARC/plonky2.git", rev = "109d517d09c210ae4c2cee381d3e3fbc04aa3812" }
+plonky2 = { git = "https://github.com/0xPARC/plonky2.git", rev = "890cb83dd723d5bff2955266f57ece83faa4160c" }
 serde = { version = "1.0.150", features = ["derive"] }
 serde_json = "1.0.143"
 alloy = { version = "1.2.1", features = [
@@ -70,6 +70,9 @@ wire-types = { path = "libs/wire-types" }
 # Uncomment to use a local pod2 dependency
 #[patch."https://github.com/0xPARC/pod2"]
 #pod2 = { path = "../pod2" }
+
+[patch."https://github.com/0xPARC/plonky2"]
+plonky2 = { git = "https://github.com/0xPARC//plonky2", rev = "890cb83dd723d5bff2955266f57ece83faa4160c" }
 
 # Uncomment in order to enable debug information in the release builds.  This allows getting panic backtraces with a performance similar to regular release.
 # [profile.release]
