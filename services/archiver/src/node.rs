@@ -248,6 +248,7 @@ impl Store {
             let blob_path_tmp = root_dir.join(format!("{}.tmp", name));
             let mut file_tmp = File::create(&blob_path_tmp)?;
             file_tmp.write_all(blob.inner())?;
+            file_tmp.sync_data()?;
             rename(blob_path_tmp, blob_path)?;
         }
         Ok(())
@@ -318,6 +319,7 @@ impl Node {
         let header_json = serde_json::to_vec(beacon_block_header)?;
         let mut file_tmp = File::create(&header_path_tmp)?;
         file_tmp.write_all(&header_json)?;
+        file_tmp.sync_data()?;
 
         let beacon_block = self
             .process_beacon_block_blobs(beacon_block_header, prev_block)
