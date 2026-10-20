@@ -70,6 +70,11 @@ impl StateMachine {
         }
     }
 
+    /// Sync DB to disk
+    pub fn sync(&self) -> Result<()> {
+        self.app_db.sync()
+    }
+
     /// Parse and verify each blob as a `TxFinalized` payload, returning the
     /// valid ones in order.
     ///

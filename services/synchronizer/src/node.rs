@@ -512,6 +512,10 @@ impl Node {
     /// Commit one processed slot to Postgres as the new state head, writing
     /// its created-index rows in the same transaction.
     pub async fn commit_slot(&self, processed: &ProcessedSlot) -> Result<()> {
+        // Sync merkle trees to disk to guarantee that after this point the data is persisted on
+        // disk even after a system crash.  The head is committed to Postgres next and its roots
+        // must not outlive the merkle tree nodes in a crash.
+        self.state_machine.sync()?;
         match processed {
             ProcessedSlot::Missing { slot, carried_head } => {
                 self.sync_db

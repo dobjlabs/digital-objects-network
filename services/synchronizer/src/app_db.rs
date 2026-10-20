@@ -66,6 +66,13 @@ impl AppDb {
         })
     }
 
+    /// Sync DB to disk
+    pub fn sync(&self) -> Result<()> {
+        self.db
+            .flush_wal(true)
+            .map_err(|e| anyhow!("rocksdb: flush_wal: {e}"))
+    }
+
     pub fn open_created(&self, root: Hash) -> Result<Array> {
         Ok(Array::from_db(root, self.db_box())?)
     }
