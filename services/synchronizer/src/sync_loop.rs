@@ -247,7 +247,7 @@ async fn handle_missing_slot(node: &Node, slot: u32) -> Result<MissingSlotAction
     // slot history stays contiguous.
     let processed = ProcessedSlot::Missing {
         slot,
-        carried_head: node.current_head().await?,
+        carried_state: node.current_state().await?,
     };
 
     info!(slot, "No block produced for slot");

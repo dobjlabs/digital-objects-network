@@ -45,7 +45,7 @@ pub struct BlockMetadata {
 /// Non-root metadata tracked alongside the state roots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StateMetadata {
-    /// Current state root for this head, if one exists.
+    /// State root committing to this state, if one has been derived.
     pub current_state_root: Option<Hash>,
     /// Execution block metadata associated with `current_state_root`
     pub current_block: Option<BlockMetadata>,
@@ -76,25 +76,25 @@ impl StateMetadata {
     }
 }
 
-/// State head snapshot used across sync, query, and storage code.
+/// The synchronizer's app state as of one slot, used across sync, query, and storage code.
 ///
 /// `roots` are what reopen the persistent Merkle containers in RocksDB.
 /// `metadata` is the auxiliary state carried alongside those roots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StateHead {
+pub struct GlobalState {
     /// Merkle roots for the persistent containers.
     pub roots: StateRoots,
-    /// Non-root metadata associated with the same state head.
+    /// Non-root metadata associated with the same state.
     pub metadata: StateMetadata,
 }
 
-impl Default for StateHead {
+impl Default for GlobalState {
     fn default() -> Self {
         Self::empty()
     }
 }
 
-impl StateHead {
+impl GlobalState {
     pub fn empty() -> Self {
         Self {
             roots: StateRoots::empty(),

@@ -26,7 +26,7 @@ use pod2utils::b256_to_hash;
 use tracing::{debug, info};
 
 use crate::config::AppConfig;
-use crate::head::{BlockMetadata, StateHead};
+use crate::global_state::{BlockMetadata, GlobalState};
 use crate::state_machine::{DerivedSlot, StateMachine, MAX_STATE_ROOT_AGE_BLOCKS};
 use crate::sync_db::{CommittedSlotRecord, SyncDb};
 
@@ -74,17 +74,20 @@ struct TargetBlobTx {
 /// Outcome of processing one beacon slot, ready to be committed.
 pub enum ProcessedSlot {
     /// Beacon produced no block for the slot. With no execution block there is
-    /// nothing to derive against, so the previous state head is carried
+    /// nothing to derive against, so the previous state is carried
     /// forward unchanged, committed under the new slot number to keep the
     /// slot history contiguous.
-    Missing { slot: u32, carried_head: StateHead },
+    Missing {
+        slot: u32,
+        carried_state: GlobalState,
+    },
     /// Beacon produced a block, but no execution payload became canonical with it. The state
-    /// head is carried forward as for `Missing`, while the block root is kept for reorg checks.
+    /// is carried forward as for `Missing`, while the block root is kept for reorg checks.
     WithoutPayload {
         slot: u32,
         block_root: B256,
         parent_root: B256,
-        carried_head: StateHead,
+        carried_state: GlobalState,
     },
     /// Beacon produced a block and the state machine derived the slot against
     /// it (deriving a fresh state root even when the block carries no usable blobs).
@@ -139,8 +142,8 @@ impl Node {
         self.sync_db.slot_root(slot).await
     }
 
-    pub async fn current_head(&self) -> Result<StateHead> {
-        self.sync_db.current_head().await
+    pub async fn current_state(&self) -> Result<GlobalState> {
+        self.sync_db.current_state().await
     }
 
     /// Rewind to `keep_slot` by deleting later slot rows; the created
@@ -235,7 +238,7 @@ impl Node {
             block_root: Some(header.root),
             parent_root: Some(block.parent_root),
             block_number: payload.map(|payload| payload.execution_block_number),
-            current_state_root: None,
+            derived_state_root: None,
             is_empty: false,
         })
     }
@@ -414,7 +417,7 @@ impl Node {
 
     /// Parse the slot's blobs, prefetch the array positions of their created
     /// commitments that already exist in committed state, and derive the next
-    /// head.
+    /// state.
     ///
     /// The prefetch is one batched query against the created index, mirroring how
     /// `recent_state_roots` is prefetched, so the state machine never has to query the
@@ -422,7 +425,7 @@ impl Node {
     /// state machine can cross-check each hit against the array at the base root.
     async fn derive_slot(
         &self,
-        base_head: StateHead,
+        base_state: GlobalState,
         recent_state_roots: Vec<(Hash, i64)>,
         slot: u32,
         block_meta: BlockMetadata,
@@ -436,8 +439,8 @@ impl Node {
             .flat_map(|(_, payload)| payload.created.iter().copied())
             .collect();
         let prior_indices = self.sync_db.created_indices(&candidates).await?;
-        self.state_machine.derive_slot_head(
-            base_head,
+        self.state_machine.derive_slot_state(
+            base_state,
             recent_state_roots,
             slot,
             block_meta,
@@ -449,7 +452,7 @@ impl Node {
     /// Derive the slot from a fetched `SlotContext` against the committed state. Reads the
     /// sync database but makes no network calls.
     pub(crate) async fn derive_from_context(&self, slot_ctx: SlotContext) -> Result<ProcessedSlot> {
-        let base_head = self.sync_db.current_head().await?;
+        let base_state = self.sync_db.current_state().await?;
 
         let Some(payload) = slot_ctx.payload else {
             info!(
@@ -460,7 +463,7 @@ impl Node {
                 slot: slot_ctx.slot,
                 block_root: slot_ctx.beacon_block_root,
                 parent_root: slot_ctx.parent_root,
-                carried_head: base_head,
+                carried_state: base_state,
             });
         };
 
@@ -476,9 +479,9 @@ impl Node {
             DateTime::<Utc>::from_timestamp_secs(payload.execution_block_timestamp as i64)
                 .unwrap_or_default(),
         );
-        self.state_machine.log_current_state(base_head);
+        self.state_machine.log_current_state(base_state);
 
-        let min_block_number = base_head.metadata.current_block.map(|block_meta| {
+        let min_block_number = base_state.metadata.current_block.map(|block_meta| {
             block_meta
                 .number
                 .saturating_sub(MAX_STATE_ROOT_AGE_BLOCKS as u32)
@@ -492,7 +495,7 @@ impl Node {
         };
         let derived = self
             .derive_slot(
-                base_head,
+                base_state,
                 recent_state_roots,
                 slot_ctx.slot,
                 block_meta,
@@ -509,19 +512,22 @@ impl Node {
         })
     }
 
-    /// Commit one processed slot to Postgres as the new state head, writing
+    /// Commit one processed slot to Postgres as the new current state, writing
     /// its created-index rows in the same transaction.
     pub async fn commit_slot(&self, processed: &ProcessedSlot) -> Result<()> {
         // Sync merkle trees to disk to guarantee that after this point the data is persisted on
-        // disk even after a system crash.  The head is committed to Postgres next and its roots
+        // disk even after a system crash.  The state is committed to Postgres next and its roots
         // must not outlive the merkle tree nodes in a crash.
         self.state_machine.sync()?;
         match processed {
-            ProcessedSlot::Missing { slot, carried_head } => {
+            ProcessedSlot::Missing {
+                slot,
+                carried_state,
+            } => {
                 self.sync_db
                     .commit_slot(
                         &CommittedSlotRecord::empty(*slot),
-                        carried_head,
+                        carried_state,
                         &HashMap::new(),
                     )
                     .await
@@ -530,18 +536,18 @@ impl Node {
                 slot,
                 block_root,
                 parent_root,
-                carried_head,
+                carried_state,
             } => {
                 let record = CommittedSlotRecord {
                     slot: *slot,
                     block_root: Some(*block_root),
                     parent_root: Some(*parent_root),
                     block_number: None,
-                    current_state_root: None,
+                    derived_state_root: None,
                     is_empty: false,
                 };
                 self.sync_db
-                    .commit_slot(&record, carried_head, &HashMap::new())
+                    .commit_slot(&record, carried_state, &HashMap::new())
                     .await
             }
             ProcessedSlot::Present {
@@ -556,11 +562,11 @@ impl Node {
                     block_root: Some(*block_root),
                     parent_root: Some(*parent_root),
                     block_number: Some(*block_number),
-                    current_state_root: derived.head.metadata.current_state_root,
+                    derived_state_root: derived.state.metadata.current_state_root,
                     is_empty: false,
                 };
                 self.sync_db
-                    .commit_slot(&record, &derived.head, &derived.created_added)
+                    .commit_slot(&record, &derived.state, &derived.created_added)
                     .await
             }
         }

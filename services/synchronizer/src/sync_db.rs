@@ -10,13 +10,13 @@ use sqlx::{
 
 use crate::{
     app_db::{db_bytes_to_hash, hash_to_db_bytes},
-    head::{BlockMetadata, StateHead, StateMetadata, StateRoots},
+    global_state::{BlockMetadata, GlobalState, StateMetadata, StateRoots},
 };
 
-/// Current state head plus progress metadata loaded from Postgres.
+/// Current state plus progress metadata loaded from Postgres.
 #[derive(Debug, Clone, Copy)]
 pub struct CurrentSnapshot {
-    pub head: StateHead,
+    pub state: GlobalState,
     pub last_processed_slot: u32,
     pub last_processed_block_number: Option<u32>,
 }
@@ -28,7 +28,7 @@ pub struct CommittedSlotRecord {
     pub block_root: Option<B256>,
     pub parent_root: Option<B256>,
     pub block_number: Option<u32>,
-    pub current_state_root: Option<Hash>,
+    pub derived_state_root: Option<Hash>,
     pub is_empty: bool,
 }
 
@@ -41,7 +41,7 @@ impl CommittedSlotRecord {
             block_root: None,
             parent_root: None,
             block_number: None,
-            current_state_root: None,
+            derived_state_root: None,
             is_empty: true,
         }
     }
@@ -58,9 +58,8 @@ impl SyncDb {
     /// The database must already exist — provisioning is an explicit operator
     /// step so the app role does not need the `CREATEDB` privilege.
     ///
-    /// Postgres is the sole source of state heads. Each committed slot stores its
-    /// `StateHead`,
-    /// while RocksDB only stores the content-addressed Merkle node/value backing store.
+    /// Postgres is the sole source of committed states. Each committed slot stores its
+    /// `GlobalState`, while RocksDB only stores the content-addressed Merkle node/value backing store.
     pub async fn connect(database_url: &str) -> Result<Self> {
         let pool = PgPoolOptions::new()
             .max_connections(5)
@@ -75,7 +74,7 @@ impl SyncDb {
     /// Create the Postgres schema used by the synchronizer control plane.
     ///
     /// `state_slots` stores per-slot metadata plus the committed state roots and metadata
-    /// as regular SQL columns. The highest committed slot is the current state head.
+    /// as regular SQL columns. The highest committed slot holds the current state.
     async fn bootstrap(&self) -> Result<()> {
         let statements = [
             r#"
@@ -84,19 +83,19 @@ impl SyncDb {
                 block_root BYTEA NULL,
                 parent_root BYTEA NULL,
                 execution_block_number INTEGER NULL,
-                current_state_root BYTEA NULL,
+                derived_state_root BYTEA NULL,
                 is_empty BOOLEAN NOT NULL,
-                head_created_root BYTEA NOT NULL,
-                head_nullifiers_root BYTEA NOT NULL,
-                head_prior_state_history_root BYTEA NOT NULL,
-                head_next_state_history_root BYTEA NOT NULL,
-                head_current_state_root BYTEA NULL,
-                head_current_block_number INTEGER NULL,
-                head_current_block_timestamp BIGINT NULL,
-                head_current_block_hash BYTEA NULL,
-                head_created_count BIGINT NOT NULL,
-                head_nullifier_count BIGINT NOT NULL,
-                head_state_root_count BIGINT NOT NULL,
+                created_root BYTEA NOT NULL,
+                nullifiers_root BYTEA NOT NULL,
+                prior_state_history_root BYTEA NOT NULL,
+                next_state_history_root BYTEA NOT NULL,
+                current_state_root BYTEA NULL,
+                current_block_number INTEGER NULL,
+                current_block_timestamp BIGINT NULL,
+                current_block_hash BYTEA NULL,
+                created_count BIGINT NOT NULL,
+                nullifier_count BIGINT NOT NULL,
+                state_root_count BIGINT NOT NULL,
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )
             "#,
@@ -108,13 +107,13 @@ impl SyncDb {
             r#"
             CREATE INDEX IF NOT EXISTS state_slots_state_root_block_idx
                 ON state_slots(execution_block_number)
-                WHERE current_state_root IS NOT NULL AND execution_block_number IS NOT NULL
+                WHERE derived_state_root IS NOT NULL AND execution_block_number IS NOT NULL
             "#,
             // Reverse index from object commitment to its position in the created
             // `Array`. A materialized view of committed state: rows are inserted in
             // the same transaction that commits their slot and deleted in the same
             // transaction that rolls the slot back, so the index never diverges
-            // from the state head. `slot` carries the rollback axis.
+            // from the committed state. `slot` carries the rollback axis.
             r#"
             CREATE TABLE IF NOT EXISTS created_index (
                 commitment BYTEA PRIMARY KEY,
@@ -157,7 +156,7 @@ impl SyncDb {
             return Ok(stored_last);
         }
 
-        self.commit_slot(&bootstrap_slot, &StateHead::empty(), &HashMap::new())
+        self.commit_slot(&bootstrap_slot, &GlobalState::empty(), &HashMap::new())
             .await?;
         Ok(bootstrap_slot.slot)
     }
@@ -169,34 +168,34 @@ impl SyncDb {
             .ok_or_else(|| anyhow!("sync metadata not initialized"))
     }
 
-    /// Return the current state head without sync-progress metadata.
-    pub async fn current_head(&self) -> Result<StateHead> {
-        Ok(self.current_snapshot().await?.head)
+    /// Return the current state without sync-progress metadata.
+    pub async fn current_state(&self) -> Result<GlobalState> {
+        Ok(self.current_snapshot().await?.state)
     }
 
-    /// Return the current state head plus sync progress from one Postgres snapshot.
+    /// Return the current state plus sync progress from one Postgres snapshot.
     pub async fn current_snapshot(&self) -> Result<CurrentSnapshot> {
         Self::read_snapshot(&self.pool).await
     }
 
-    /// Read the current state head plus progress over any executor (pool or
+    /// Read the current state plus progress over any executor (pool or
     /// transaction), so a caller can pin it to the same snapshot as other reads.
     async fn read_snapshot<'e, E: PgExecutor<'e>>(executor: E) -> Result<CurrentSnapshot> {
         let row = sqlx::query(
             r#"
             SELECT slot,
                    execution_block_number,
-                   head_created_root,
-                   head_nullifiers_root,
-                   head_prior_state_history_root,
-                   head_next_state_history_root,
-                   head_current_state_root,
-                   head_current_block_number,
-                   head_current_block_timestamp,
-                   head_current_block_hash,
-                   head_created_count,
-                   head_nullifier_count,
-                   head_state_root_count
+                   created_root,
+                   nullifiers_root,
+                   prior_state_history_root,
+                   next_state_history_root,
+                   current_state_root,
+                   current_block_number,
+                   current_block_timestamp,
+                   current_block_hash,
+                   created_count,
+                   nullifier_count,
+                   state_root_count
             FROM state_slots
             ORDER BY slot DESC
             LIMIT 1
@@ -212,12 +211,12 @@ impl SyncDb {
             .get::<Option<i32>, _>("execution_block_number")
             .map(|block_number| block_number as u32);
 
-        let head = decode_head_row(&row).with_context(|| {
-            format!("state_slots row for slot {last_processed_slot} had invalid head data")
+        let state = decode_state_row(&row).with_context(|| {
+            format!("state_slots row for slot {last_processed_slot} had invalid state data")
         })?;
 
         Ok(CurrentSnapshot {
-            head,
+            state,
             last_processed_slot,
             last_processed_block_number,
         })
@@ -248,13 +247,13 @@ impl SyncDb {
 
     /// Commit one new slot as the new highest slot, writing
     /// its created-index rows in the same transaction so the index is always
-    /// consistent with the committed head.
+    /// consistent with the committed state.
     ///
     /// Duplicate slot inserts are treated as logic bugs and must fail loudly.
     pub async fn commit_slot(
         &self,
         slot: &CommittedSlotRecord,
-        head: &StateHead,
+        state: &GlobalState,
         created_added: &HashMap<Hash, i64>,
     ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
@@ -266,19 +265,19 @@ impl SyncDb {
                 block_root,
                 parent_root,
                 execution_block_number,
-                current_state_root,
+                derived_state_root,
                 is_empty,
-                head_created_root,
-                head_nullifiers_root,
-                head_prior_state_history_root,
-                head_next_state_history_root,
-                head_current_state_root,
-                head_current_block_number,
-                head_current_block_timestamp,
-                head_current_block_hash,
-                head_created_count,
-                head_nullifier_count,
-                head_state_root_count
+                created_root,
+                nullifiers_root,
+                prior_state_history_root,
+                next_state_history_root,
+                current_state_root,
+                current_block_number,
+                current_block_timestamp,
+                current_block_hash,
+                created_count,
+                nullifier_count,
+                state_root_count
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
             "#,
@@ -287,27 +286,29 @@ impl SyncDb {
         .bind(slot.block_root.map(|v| v.as_slice().to_vec()))
         .bind(slot.parent_root.map(|v| v.as_slice().to_vec()))
         .bind(slot.block_number.map(|v| v as i32))
-        .bind(slot.current_state_root.map(hash_to_db_bytes))
+        .bind(slot.derived_state_root.map(hash_to_db_bytes))
         .bind(slot.is_empty)
-        .bind(hash_to_db_bytes(head.roots.created))
-        .bind(hash_to_db_bytes(head.roots.nullifiers))
-        .bind(hash_to_db_bytes(head.roots.prior_state_history))
-        .bind(hash_to_db_bytes(head.roots.next_state_history))
-        .bind(head.metadata.current_state_root.map(hash_to_db_bytes))
-        .bind(head.metadata.current_block.map(|meta| meta.number as i32))
+        .bind(hash_to_db_bytes(state.roots.created))
+        .bind(hash_to_db_bytes(state.roots.nullifiers))
+        .bind(hash_to_db_bytes(state.roots.prior_state_history))
+        .bind(hash_to_db_bytes(state.roots.next_state_history))
+        .bind(state.metadata.current_state_root.map(hash_to_db_bytes))
+        .bind(state.metadata.current_block.map(|meta| meta.number as i32))
         .bind(
-            head.metadata
+            state
+                .metadata
                 .current_block
                 .map(|meta| meta.timestamp as i64),
         )
         .bind(
-            head.metadata
+            state
+                .metadata
                 .current_block
                 .map(|meta| hash_to_db_bytes(meta.hash)),
         )
-        .bind(head.metadata.created_count as i64)
-        .bind(head.metadata.nullifier_count as i64)
-        .bind(head.metadata.state_root_count as i64)
+        .bind(state.metadata.created_count as i64)
+        .bind(state.metadata.nullifier_count as i64)
+        .bind(state.metadata.state_root_count as i64)
         .execute(&mut *tx)
         .await?;
 
@@ -389,10 +390,10 @@ impl SyncDb {
     }
 
     /// Read the current snapshot and the created indices for `commitments` from
-    /// one `REPEATABLE READ` transaction, so the head roots and the index rows
+    /// one `REPEATABLE READ` transaction, so the state roots and the index rows
     /// reflect a single consistent Postgres snapshot. Without this a concurrent
     /// `commit_slot`/`rollback_to_slot` could land between the two reads and make
-    /// the index inconsistent with the head a query is answering against. The
+    /// the index inconsistent with the state a query is answering against. The
     /// RocksDB array read needs no coordination: nodes are content-addressed and
     /// immutable by root, so reading at the pinned root is stable regardless.
     pub async fn snapshot_with_created_indices(
@@ -420,9 +421,9 @@ impl SyncDb {
 
         let rows = sqlx::query(
             r#"
-            SELECT current_state_root, execution_block_number
+            SELECT derived_state_root, execution_block_number
             FROM state_slots
-            WHERE current_state_root IS NOT NULL
+            WHERE derived_state_root IS NOT NULL
               AND execution_block_number IS NOT NULL
               AND execution_block_number >= $1
             ORDER BY execution_block_number ASC, slot ASC
@@ -434,10 +435,10 @@ impl SyncDb {
 
         rows.into_iter()
             .map(|row| {
-                let current_state_root: Vec<u8> = row.get("current_state_root");
+                let derived_state_root: Vec<u8> = row.get("derived_state_root");
                 let block_number = row.get::<i32, _>("execution_block_number");
                 Ok((
-                    db_bytes_to_hash(&current_state_root)?,
+                    db_bytes_to_hash(&derived_state_root)?,
                     i64::from(block_number),
                 ))
             })
@@ -445,12 +446,12 @@ impl SyncDb {
     }
 }
 
-fn decode_head_row(row: &PgRow) -> Result<StateHead> {
+fn decode_state_row(row: &PgRow) -> Result<GlobalState> {
     let current_block = {
-        let number = row.get::<Option<i32>, _>("head_current_block_number");
-        let timestamp = row.get::<Option<i64>, _>("head_current_block_timestamp");
+        let number = row.get::<Option<i32>, _>("current_block_number");
+        let timestamp = row.get::<Option<i64>, _>("current_block_timestamp");
         let hash = row
-            .get::<Option<Vec<u8>>, _>("head_current_block_hash")
+            .get::<Option<Vec<u8>>, _>("current_block_hash")
             .as_deref()
             .map(db_bytes_to_hash)
             .transpose()?;
@@ -464,27 +465,27 @@ fn decode_head_row(row: &PgRow) -> Result<StateHead> {
             _ => None,
         }
     };
-    Ok(StateHead {
+    Ok(GlobalState {
         roots: StateRoots {
-            created: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_created_root"))?,
-            nullifiers: db_bytes_to_hash(&row.get::<Vec<u8>, _>("head_nullifiers_root"))?,
+            created: db_bytes_to_hash(&row.get::<Vec<u8>, _>("created_root"))?,
+            nullifiers: db_bytes_to_hash(&row.get::<Vec<u8>, _>("nullifiers_root"))?,
             prior_state_history: db_bytes_to_hash(
-                &row.get::<Vec<u8>, _>("head_prior_state_history_root"),
+                &row.get::<Vec<u8>, _>("prior_state_history_root"),
             )?,
             next_state_history: db_bytes_to_hash(
-                &row.get::<Vec<u8>, _>("head_next_state_history_root"),
+                &row.get::<Vec<u8>, _>("next_state_history_root"),
             )?,
         },
         metadata: StateMetadata {
             current_state_root: row
-                .get::<Option<Vec<u8>>, _>("head_current_state_root")
+                .get::<Option<Vec<u8>>, _>("current_state_root")
                 .as_deref()
                 .map(db_bytes_to_hash)
                 .transpose()?,
             current_block,
-            created_count: row.get::<i64, _>("head_created_count") as u64,
-            nullifier_count: row.get::<i64, _>("head_nullifier_count") as u64,
-            state_root_count: row.get::<i64, _>("head_state_root_count") as u64,
+            created_count: row.get::<i64, _>("created_count") as u64,
+            nullifier_count: row.get::<i64, _>("nullifier_count") as u64,
+            state_root_count: row.get::<i64, _>("state_root_count") as u64,
         },
     })
 }
@@ -500,8 +501,8 @@ mod tests {
         hash_values(&[Value::from(n)])
     }
 
-    fn unique_head(block_number: u32, marker: i64) -> StateHead {
-        StateHead {
+    fn unique_state(block_number: u32, marker: i64) -> GlobalState {
+        GlobalState {
             roots: StateRoots {
                 created: unique_hash(marker),
                 nullifiers: unique_hash(marker + 1),
@@ -582,7 +583,7 @@ mod tests {
             block_root: None,
             parent_root: None,
             block_number: None,
-            current_state_root: None,
+            derived_state_root: None,
             is_empty: true,
         };
         let start_slot = sync_db
@@ -592,7 +593,7 @@ mod tests {
             .ok_or_else(|| anyhow!("last processed slot overflow"))?;
         assert_eq!(start_slot, 5);
         let snapshot = sync_db.current_snapshot().await?;
-        assert_eq!(snapshot.head, StateHead::empty());
+        assert_eq!(snapshot.state, GlobalState::empty());
         assert_eq!(snapshot.last_processed_slot, 4);
         assert_eq!(snapshot.last_processed_block_number, None);
         drop_db(&db_name, &admin_url).await?;
@@ -601,22 +602,22 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires local postgres"]
-    async fn test_commit_slot_persists_head_and_latest_slot() -> Result<()> {
+    async fn test_commit_slot_persists_state_and_latest_slot() -> Result<()> {
         let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
-        let head = unique_head(7, 100);
+        let state = unique_state(7, 100);
         let slot = CommittedSlotRecord {
             slot: 10,
             block_root: None,
             parent_root: None,
             block_number: Some(7),
-            current_state_root: head.metadata.current_state_root,
+            derived_state_root: state.metadata.current_state_root,
             is_empty: false,
         };
 
-        sync_db.commit_slot(&slot, &head, &HashMap::new()).await?;
+        sync_db.commit_slot(&slot, &state, &HashMap::new()).await?;
 
         let snapshot = sync_db.current_snapshot().await?;
-        assert_eq!(snapshot.head, head);
+        assert_eq!(snapshot.state, state);
         assert_eq!(snapshot.last_processed_slot, 10);
         assert_eq!(snapshot.last_processed_block_number, Some(7));
 
@@ -628,21 +629,21 @@ mod tests {
     #[ignore = "requires local postgres"]
     async fn test_commit_slot_duplicate_slot_fails() -> Result<()> {
         let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
-        let head1 = unique_head(7, 100);
-        let head2 = unique_head(8, 200);
+        let state1 = unique_state(7, 100);
+        let state2 = unique_state(8, 200);
         let slot = CommittedSlotRecord {
             slot: 10,
             block_root: None,
             parent_root: None,
             block_number: Some(7),
-            current_state_root: head1.metadata.current_state_root,
+            derived_state_root: state1.metadata.current_state_root,
             is_empty: false,
         };
 
-        sync_db.commit_slot(&slot, &head1, &HashMap::new()).await?;
+        sync_db.commit_slot(&slot, &state1, &HashMap::new()).await?;
 
         let err = sync_db
-            .commit_slot(&slot, &head2, &HashMap::new())
+            .commit_slot(&slot, &state2, &HashMap::new())
             .await
             .unwrap_err();
         assert!(
@@ -659,7 +660,7 @@ mod tests {
     #[ignore = "requires local postgres"]
     async fn test_recent_state_roots_query() -> Result<()> {
         let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
-        let h1 = unique_head(5, 10);
+        let h1 = unique_state(5, 10);
         sync_db
             .commit_slot(
                 &CommittedSlotRecord {
@@ -667,7 +668,7 @@ mod tests {
                     block_root: None,
                     parent_root: None,
                     block_number: Some(5),
-                    current_state_root: h1.metadata.current_state_root,
+                    derived_state_root: h1.metadata.current_state_root,
                     is_empty: false,
                 },
                 &h1,
@@ -675,7 +676,7 @@ mod tests {
             )
             .await?;
 
-        let h2 = unique_head(9, 20);
+        let h2 = unique_state(9, 20);
         sync_db
             .commit_slot(
                 &CommittedSlotRecord {
@@ -683,7 +684,7 @@ mod tests {
                     block_root: None,
                     parent_root: None,
                     block_number: Some(9),
-                    current_state_root: h2.metadata.current_state_root,
+                    derived_state_root: h2.metadata.current_state_root,
                     is_empty: false,
                 },
                 &h2,
@@ -700,9 +701,9 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires local postgres"]
-    async fn test_rollback_rewinds_latest_slot_and_head() -> Result<()> {
+    async fn test_rollback_rewinds_latest_slot_and_state() -> Result<()> {
         let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
-        let h1 = unique_head(1, 10);
+        let h1 = unique_state(1, 10);
         sync_db
             .commit_slot(
                 &CommittedSlotRecord {
@@ -710,7 +711,7 @@ mod tests {
                     block_root: None,
                     parent_root: None,
                     block_number: Some(1),
-                    current_state_root: h1.metadata.current_state_root,
+                    derived_state_root: h1.metadata.current_state_root,
                     is_empty: false,
                 },
                 &h1,
@@ -718,7 +719,7 @@ mod tests {
             )
             .await?;
 
-        let h2 = unique_head(2, 20);
+        let h2 = unique_state(2, 20);
         sync_db
             .commit_slot(
                 &CommittedSlotRecord {
@@ -726,7 +727,7 @@ mod tests {
                     block_root: None,
                     parent_root: None,
                     block_number: Some(2),
-                    current_state_root: h2.metadata.current_state_root,
+                    derived_state_root: h2.metadata.current_state_root,
                     is_empty: false,
                 },
                 &h2,
@@ -737,7 +738,7 @@ mod tests {
         sync_db.rollback_to_slot(1).await?;
 
         let snapshot = sync_db.current_snapshot().await?;
-        assert_eq!(snapshot.head, h1);
+        assert_eq!(snapshot.state, h1);
         assert_eq!(snapshot.last_processed_slot, 1);
 
         drop_db(&db_name, &admin_url).await?;
@@ -751,7 +752,7 @@ mod tests {
         let a = unique_hash(1);
         let b = unique_hash(2);
 
-        let h1 = unique_head(1, 10);
+        let h1 = unique_state(1, 10);
         sync_db
             .commit_slot(
                 &CommittedSlotRecord {
@@ -759,14 +760,14 @@ mod tests {
                     block_root: None,
                     parent_root: None,
                     block_number: Some(1),
-                    current_state_root: h1.metadata.current_state_root,
+                    derived_state_root: h1.metadata.current_state_root,
                     is_empty: false,
                 },
                 &h1,
                 &HashMap::from([(a, 1)]),
             )
             .await?;
-        let h2 = unique_head(2, 20);
+        let h2 = unique_state(2, 20);
         sync_db
             .commit_slot(
                 &CommittedSlotRecord {
@@ -774,7 +775,7 @@ mod tests {
                     block_root: None,
                     parent_root: None,
                     block_number: Some(2),
-                    current_state_root: h2.metadata.current_state_root,
+                    derived_state_root: h2.metadata.current_state_root,
                     is_empty: false,
                 },
                 &h2,
@@ -793,7 +794,7 @@ mod tests {
         assert_eq!(indices.get(&a), Some(&1));
         assert_eq!(indices.get(&b), None);
 
-        // The atomic read returns the same index against the current head.
+        // The atomic read returns the same index against the current state.
         let (snapshot, indices) = sync_db.snapshot_with_created_indices(&[a, b]).await?;
         assert_eq!(snapshot.last_processed_slot, 1);
         assert_eq!(indices.get(&a), Some(&1));

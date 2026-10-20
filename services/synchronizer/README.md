@@ -1,6 +1,6 @@
 # Synchronizer
 
-Service that tracks Digital Object blob transactions on Ethereum, derives app state, persists persistent-container data in RocksDB, stores state heads in Postgres, and serves proof-backed query APIs over HTTP.
+Service that tracks Digital Object blob transactions on Ethereum, derives app state, persists persistent-container data in RocksDB, stores the committed state of each slot in Postgres, and serves proof-backed query APIs over HTTP.
 
 ## What it does
 
@@ -14,9 +14,9 @@ Service that tracks Digital Object blob transactions on Ethereum, derives app st
    - fetches matching blob sidecars
    - parses and verifies `TxFinalized` payloads
    - prefetches the payloads' created-object commitments from the Postgres created index
-   - opens the current Merkle containers from the `StateHead`
-   - derives the next `StateHead`
-4. Publishes the new slot/head and its created-index rows in one Postgres transaction, and serves state/proof APIs for clients like `gui`.
+   - opens the current Merkle containers from the current `GlobalState`
+   - derives the next `GlobalState`
+4. Publishes the new slot/state and its created-index rows in one Postgres transaction, and serves state/proof APIs for clients like `gui`.
 
 ## State model
 
@@ -27,14 +27,14 @@ The synchronizer splits state into two layers:
   - persistent POD2 values
 - Postgres stores the control plane
   - slot metadata
-  - the `StateHead` for each slot
+  - the `GlobalState` for each slot
   - the created index: object commitment -> position in the created array
 
-There is no state head stored in RocksDB, and no resident in-memory head/cache. Every slot derivation and API read loads the current state head from Postgres, then reopens the needed persistent containers from RocksDB by root.
+No `GlobalState` is stored in RocksDB, and there is no resident in-memory state cache. Every slot derivation and API read loads the current state from Postgres, then reopens the needed persistent containers from RocksDB by root.
 
-### `StateHead`
+### `GlobalState`
 
-`StateHead` is the compact committed app-state snapshot stored on slot rows. It is split into:
+`GlobalState` is the compact committed app-state snapshot stored on slot rows. It is split into:
 
 - `StateRoots`
   - `created`
@@ -70,9 +70,9 @@ The Merkle-backed containers are:
 
 The synchronizer reopens those containers from the roots stored in `StateRoots`.
 
-Important: RocksDB is not the source of truth. It is an append-only backing store for Merkle data. Derivation may materialize nodes that are never committed; those orphaned nodes are harmless and are ignored unless a future `StateHead` points at them.
+Important: RocksDB is not the source of truth. It is an append-only backing store for Merkle data. Derivation may materialize nodes that are never committed; those orphaned nodes are harmless and are ignored unless a future `GlobalState` points at them.
 
-### Postgres (`SYNC_METADATA_DB_URL`) — state heads and sync metadata
+### Postgres (`SYNC_METADATA_DB_URL`) — committed states and sync metadata
 
 Postgres stores the synchronization state:
 
@@ -81,19 +81,19 @@ Postgres stores the synchronization state:
   - on first initialization, the first row is a bootstrap row at `start_slot - 1`
   - that bootstrap row uses the real beacon/execution metadata when `start_slot - 1` had a block
   - if `start_slot - 1` was an empty beacon slot, its block fields remain `NULL`
-  - includes `block_root`, `parent_root`, `execution_block_number`, `current_state_root`, `is_empty`
-  - includes normalized `head_*` columns for the `StateHead` at that slot
+  - includes `block_root`, `parent_root`, `execution_block_number`, `derived_state_root` (the state root derived at this slot, `NULL` when the slot carried the previous state forward), `is_empty`
+  - includes normalized columns for the `GlobalState` at that slot (`created_root`, `nullifiers_root`, `prior_state_history_root`, `next_state_history_root`, `current_state_root`, `current_block_*`, `created_count`, `nullifier_count`, `state_root_count`)
 - `created_index`
   - reverse index from object commitment to its position in the created array
   - one row per created object: `commitment` (primary key), `array_index`, `slot`
   - rows are inserted in the same transaction that commits their slot and
     deleted in the same transaction that rolls the slot back, so the index
-    never diverges from the state head
+    never diverges from the committed state
   - reads treat the index as a hint: every membership and proof answer
     cross-checks it against the created array at the queried root
 
-Postgres is the sole source of `StateHead`. The highest committed
-`state_slots.slot` is the current state head.
+Postgres is the sole source of `GlobalState`. The highest committed
+`state_slots.slot` holds the current state.
 
 ## Slot derivation rules
 
@@ -119,7 +119,7 @@ After processing all blobs in the slot, it computes the next state root from:
 - nullifiers set root
 - prior state root-array root
 
-Then it appends that new state root to the persistent state root history array and derives a new `StateHead`.
+Then it appends that new state root to the persistent state root history array and derives a new `GlobalState`.
 
 Important: state root history advances for each processed slot, even if that slot accepted zero app transactions.
 
@@ -129,15 +129,15 @@ Important: state root history advances for each processed slot, even if that slo
 
 The synchronizer derives candidate state by mutating persistent containers in RocksDB. Once derivation succeeds, publication is a single Postgres transaction:
 
-1. Insert the slot row, including the normalized `head_*` columns
+1. Insert the slot row, including the normalized `GlobalState` columns
 2. Insert one `created_index` row per object commitment the slot added
 
 Because the Merkle nodes were already materialized during derivation, there is no second write to RocksDB.
 
 ### Crash semantics
 
-- If the process crashes before the Postgres commit, the old state head remains in force and any newly written RocksDB nodes are just orphaned.
-- If the process crashes after the Postgres commit, the published `StateHead` is already durable and sufficient to reopen the persistent containers.
+- If the process crashes before the Postgres commit, the previously committed state remains current and any newly written RocksDB nodes are just orphaned.
+- If the process crashes after the Postgres commit, the published `GlobalState` is already durable and sufficient to reopen the persistent containers.
 
 ### Reorg handling
 
@@ -148,7 +148,7 @@ On reorg:
   rows those slots added, in one transaction
 - resumes syncing from the first divergent slot
 
-Reorg rollback does not modify RocksDB. The surviving Postgres `StateHead` determines which Merkle roots are current after rewind.
+Reorg rollback does not modify RocksDB. The surviving Postgres `GlobalState` determines which Merkle roots are current after rewind.
 
 ## API
 
@@ -169,7 +169,7 @@ Reorg rollback does not modify RocksDB. The surviving Postgres `StateHead` deter
   - request body:
     - `object_commitments` (array of hash strings)
     - `nullifiers` (array of hash strings)
-  - returns membership for both sets from one captured state head:
+  - returns membership for both sets from one captured state:
     - `last_processed_slot`
     - `current_state_root`
     - `created_results` (array of `{ commitment, present }`)
@@ -199,9 +199,9 @@ Reorg rollback does not modify RocksDB. The surviving Postgres `StateHead` deter
     - `priorStateHistoryRoot`
     - `createdProofs` (array of `{ commitment, present, index, proof }`)
 
-Membership and grounding-witness requests read the state head and the
+Membership and grounding-witness requests read the current state and the
 created index from one `REPEATABLE READ` Postgres transaction, so the index
-entries always match the captured head's roots. The RocksDB reads then run
+entries always match the captured state's roots. The RocksDB reads then run
 against those pinned roots; Merkle nodes are content-addressed and immutable
 by root, so a concurrent commit or rollback cannot change what the captured
 roots resolve to.

@@ -22,7 +22,7 @@ use wire_types::HealthResponse;
 
 use crate::{
     app_db::AppDb,
-    head::StateRoots,
+    global_state::StateRoots,
     sync_db::{CurrentSnapshot, SyncDb},
 };
 
@@ -32,7 +32,7 @@ const MAX_HASH_QUERY_ITEMS: usize = 256;
 struct AppState {
     /// RocksDB-backed read path used for membership checks and Merkle proofs.
     app_db: AppDb,
-    /// Postgres-backed state head and sync-progress store.
+    /// Postgres-backed committed-state and sync-progress store.
     sync_db: Arc<SyncDb>,
     info: Arc<Info>,
 }
@@ -248,19 +248,19 @@ async fn post_grounding_witness(
         .map_err(internal_error)?;
     let witness = grounding_witness(
         &app_state.app_db,
-        &snapshot.head.roots,
+        &snapshot.state.roots,
         &object_commitments,
         &indices,
     )
     .map_err(internal_error)?;
-    let head = snapshot.head;
-    let state_header = head.current_state_header().ok_or_else(|| {
+    let state = snapshot.state;
+    let state_header = state.current_state_header().ok_or_else(|| {
         (
             StatusCode::CONFLICT,
             "synchronizer has no grounded state yet".to_string(),
         )
     })?;
-    let state_root = head
+    let state_root = state
         .metadata
         .current_state_root
         .unwrap_or_else(|| state_header.hash());
@@ -296,15 +296,15 @@ fn build_head_snapshot(snapshot: &CurrentSnapshot) -> HeadSnapshot {
     HeadSnapshot {
         last_processed_slot: snapshot.last_processed_slot,
         last_processed_block_number: snapshot.last_processed_block_number,
-        current_state_root: snapshot.head.metadata.current_state_root,
+        current_state_root: snapshot.state.metadata.current_state_root,
         current_block_number: snapshot
-            .head
+            .state
             .metadata
             .current_block
             .map(|meta| meta.number as i64),
-        created_count: snapshot.head.metadata.created_count as usize,
-        nullifier_count: snapshot.head.metadata.nullifier_count as usize,
-        state_root_count: snapshot.head.metadata.state_root_count as usize,
+        created_count: snapshot.state.metadata.created_count as usize,
+        nullifier_count: snapshot.state.metadata.nullifier_count as usize,
+        state_root_count: snapshot.state.metadata.state_root_count as usize,
     }
 }
 
@@ -355,7 +355,7 @@ async fn load_membership_context(
         .map_err(internal_error)?;
     let membership = membership_snapshot(
         &app_state.app_db,
-        &snapshot.head.roots,
+        &snapshot.state.roots,
         &object_commitments,
         &nullifiers,
         &indices,

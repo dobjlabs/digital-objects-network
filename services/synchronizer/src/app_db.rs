@@ -11,7 +11,7 @@ use pod2::{
 };
 use rocksdb::{DBAccess, Options, ReadOptions, Transaction, TransactionDB, TransactionDBOptions};
 
-use crate::head::StateRoots;
+use crate::global_state::StateRoots;
 
 fn node_key(hash: Hash) -> Vec<u8> {
     let mut k = Vec::with_capacity(34);

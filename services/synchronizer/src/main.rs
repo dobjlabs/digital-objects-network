@@ -9,7 +9,7 @@ mod api;
 mod app_db;
 mod catchup;
 mod config;
-mod head;
+mod global_state;
 mod node;
 mod state_machine;
 mod sync_db;
