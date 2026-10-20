@@ -1,7 +1,4 @@
-use protocol_model::{
-    lifecycle::{LifecycleModel, Scenario},
-    reservations::ReservationModel,
-};
+use protocol_model::handshake::{self, Fault, Scenario};
 use stateright::Model;
 
 fn main() {
@@ -11,26 +8,18 @@ fn main() {
         [command, name, address] if command == "explore" => (name.as_str(), address.as_str()),
         _ => usage(),
     };
-    match name {
-        "leases" => {
-            ReservationModel::leases().checker().serve(address);
-        }
-        "recovery" => {
-            ReservationModel::recovery().checker().serve(address);
-        }
-        _ => {
-            let scenario = match name {
-                "effects" => Scenario::Effects,
-                "reorg" => Scenario::Reorg,
-                "expiry" => Scenario::Expiry,
-                _ => usage(),
-            };
-            LifecycleModel::new(scenario).checker().serve(address);
-        }
-    }
+    let scenario = match name {
+        "contention" => Scenario::Contention,
+        "recovery" => Scenario::Recovery,
+        "store-restart" => Scenario::StoreRestart,
+        _ => usage(),
+    };
+    handshake::model(scenario, Fault::None)
+        .checker()
+        .serve(address);
 }
 
 fn usage() -> ! {
-    eprintln!("Usage: protocol-model explore <leases|recovery|effects|reorg|expiry> [address]");
+    eprintln!("Usage: protocol-model explore <contention|recovery|store-restart> [address]");
     std::process::exit(2)
 }
