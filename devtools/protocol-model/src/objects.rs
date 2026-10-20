@@ -17,8 +17,23 @@ impl Objects {
         Self(self.0 | other.0)
     }
 
+    pub fn intersection(self, other: Self) -> Self {
+        Self(self.0 & other.0)
+    }
+
     pub fn overlaps(self, other: Self) -> bool {
         self.0 & other.0 != 0
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// Every subset, the empty set and this set included.
+    pub fn subsets(self) -> impl Iterator<Item = Self> {
+        (0..=self.0)
+            .filter(move |bits| bits & !self.0 == 0)
+            .map(Self)
     }
 }
 

@@ -3,13 +3,13 @@ use stateright::{Expectation, actor::Id};
 use crate::{
     handshake::{
         self, HandshakeModel, HandshakeState, Orchestrator, OrchestratorRules, Outcome,
-        Participant, ProtocolOrchestrator, ProtocolStore, Store, StoreRules, orchestrator_state,
-        orchestrators_of, saved_journal, store_state,
+        Participant, ProtocolOrchestrator, ProtocolStore, Store, StoreRules, Synchronizer,
+        orchestrator_state, orchestrators_of, saved_journal, store_state,
     },
     objects::Objects,
 };
 
-/// The store restarts explored; each restart begins a new token epoch.
+/// The store restarts explored; each restart begins a new reservation epoch.
 const MAX_EPOCH: u8 = 1;
 /// The reservations the store may grant within one epoch.
 const MAX_GRANTS_PER_EPOCH: usize = 3;
@@ -32,15 +32,23 @@ pub fn store() -> Id {
     Id::from(0)
 }
 
-/// The first orchestrator reserves x and y to create p. When there is a second, it
-/// reserves x and z to create q, so the two compete for x.
-pub fn orchestrators(scenario: Scenario) -> Vec<Id> {
-    let count = if scenario == Scenario::Recovery { 1 } else { 2 };
-    (1..=count).map(Id::from).collect()
+fn orchestrator_count(scenario: Scenario) -> usize {
+    if scenario == Scenario::Recovery { 1 } else { 2 }
+}
+
+/// The orchestrators follow the store. The first reserves x and y to create p; when
+/// there is a second, it reserves x and z to create q, so the two compete for x.
+pub fn orchestrators(scenario: Scenario) -> impl Iterator<Item = Id> {
+    (1..=orchestrator_count(scenario)).map(Id::from)
+}
+
+/// The synchronizer follows the orchestrators.
+pub fn synchronizer(scenario: Scenario) -> Id {
+    Id::from(orchestrator_count(scenario) + 1)
 }
 
 fn orchestrator(id: Id, scenario: Scenario, rules: &'static dyn OrchestratorRules) -> Orchestrator {
-    let first = id == orchestrators(scenario)[0];
+    let first = orchestrators(scenario).next() == Some(id);
     Orchestrator {
         store: store(),
         inputs: Objects::X.union(if first { Objects::Y } else { Objects::Z }),
@@ -51,18 +59,19 @@ fn orchestrator(id: Id, scenario: Scenario, rules: &'static dyn OrchestratorRule
 }
 
 /// The store restarts at most once. An orchestrator crashes only in the recovery
-/// scenario, and at most once.
+/// scenario, and at most once. The synchronizer never crashes.
 fn within_bounds(scenario: &Scenario, state: &HandshakeState) -> bool {
+    let scenario = *scenario;
     let current = store_state(state, store());
     let store_crashed_again =
         state.crashed[usize::from(store())] && current.saved.epoch >= MAX_EPOCH;
-    let orchestrator_crash_excluded = orchestrators(*scenario).into_iter().any(|orchestrator| {
+    let orchestrator_crash_excluded = orchestrators(scenario).any(|orchestrator| {
         state.crashed[usize::from(orchestrator)]
-            && (*scenario != Scenario::Recovery
-                || orchestrator_state(state, orchestrator).restarted)
+            && (scenario != Scenario::Recovery || orchestrator_state(state, orchestrator).restarted)
     });
     !store_crashed_again
         && !orchestrator_crash_excluded
+        && !state.crashed[usize::from(synchronizer(scenario))]
         && current.leases.len() <= MAX_GRANTS_PER_EPOCH
 }
 
@@ -70,11 +79,18 @@ fn submitted(state: &HandshakeState, orchestrator: Id) -> bool {
     saved_journal(state, orchestrator).outcome == Some(Outcome::Submitted)
 }
 
-fn an_orchestrator_submits(model: &ScenarioModel, state: &HandshakeState) -> bool {
-    orchestrators_of(model).any(|(orchestrator, _)| submitted(state, orchestrator))
+/// A settlement freed an input that another transaction then took.
+fn acknowledgement_after_a_settlement(_: &ScenarioModel, state: &HandshakeState) -> bool {
+    let history = &state.history;
+    history.acknowledged.values().any(|&acknowledged_at| {
+        history
+            .settled
+            .values()
+            .any(|(settled_at, _)| *settled_at < acknowledged_at)
+    })
 }
 
-fn submission_under_a_token_from_after_a_store_restart(
+fn submission_under_a_reservation_from_after_a_store_restart(
     model: &ScenarioModel,
     state: &HandshakeState,
 ) -> bool {
@@ -82,7 +98,7 @@ fn submission_under_a_token_from_after_a_store_restart(
         submitted(state, orchestrator)
             && saved_journal(state, orchestrator)
                 .reservation
-                .is_some_and(|token| token.epoch > 0)
+                .is_some_and(|reservation| reservation.epoch > 0)
     })
 }
 
@@ -103,35 +119,40 @@ pub fn with_rules(
     store_rules: &'static dyn StoreRules,
     orchestrator_rules: &'static dyn OrchestratorRules,
 ) -> ScenarioModel {
-    let participants = std::iter::once(Participant::Store(Store { rules: store_rules })).chain(
+    let participants = std::iter::once(Participant::Store(Store {
+        rules: store_rules,
+        synchronizer: synchronizer(scenario),
+    }))
+    .chain(
         orchestrators(scenario)
-            .into_iter()
             .map(|id| Participant::Orchestrator(orchestrator(id, scenario, orchestrator_rules))),
-    );
+    )
+    .chain(std::iter::once(Participant::Synchronizer(Synchronizer)));
     let mut model = handshake::system(scenario, participants)
         .max_crashes(if scenario == Scenario::Contention {
             0
         } else {
             1
         })
-        .within_boundary(within_bounds)
-        .property(
-            Expectation::Sometimes,
-            "an orchestrator submits",
-            an_orchestrator_submits,
-        );
+        .within_boundary(within_bounds);
     if scenario == Scenario::Recovery {
         model = model.property(
             Expectation::Sometimes,
             "submission by a restarted orchestrator",
             submission_by_a_restarted_orchestrator,
         );
+    } else {
+        model = model.property(
+            Expectation::Sometimes,
+            "acknowledgement after a settlement",
+            acknowledgement_after_a_settlement,
+        );
     }
     if scenario != Scenario::Contention {
         model = model.property(
             Expectation::Sometimes,
-            "submission under a token from after a store restart",
-            submission_under_a_token_from_after_a_store_restart,
+            "submission under a reservation from after a store restart",
+            submission_under_a_reservation_from_after_a_store_restart,
         );
     }
     model
