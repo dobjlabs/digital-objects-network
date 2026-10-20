@@ -314,6 +314,9 @@ impl StateMachine {
                 state_root_count: base_head.metadata.state_root_count + 1,
             },
         };
+        // Flush the WAL buffer and sync to disk to guarantee that after this point the data is
+        // persisted on disk even after a system crash.
+        self.app_db.sync()?;
 
         info!(
             slot,
