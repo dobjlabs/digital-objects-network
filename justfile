@@ -320,6 +320,9 @@ reset:
 test:
     cargo test --workspace --release
 
+test-protocol:
+    cargo test -p protocol-model --release --locked
+
 # Run all ignored test
 test-ignored:
     cargo test --workspace --release -- --ignored --nocapture

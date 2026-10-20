@@ -18,6 +18,7 @@ members = [
     "libs/intro-pods/lt-eq-u256-pod",
     "devtools/beacon-shim",
     "devtools/tests",
+    "devtools/protocol-model",
     "examples/bitcraft",
 ]
 resolver = "2"
