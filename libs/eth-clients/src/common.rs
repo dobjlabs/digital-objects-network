@@ -99,7 +99,7 @@ pub enum ClientError {
     /// A status worth retrying, returned once the retries are exhausted
     #[error("{url} answered with status {status}: {body}")]
     RetryableStatus {
-        url: Url,
+        url: Box<Url>,
         status: StatusCode,
         body: String,
     },
@@ -235,7 +235,7 @@ async fn fetch_text(
     if is_retryable_status(status.as_u16()) {
         return Err(FailedAttempt {
             error: ClientError::RetryableStatus {
-                url,
+                url: Box::new(url),
                 status,
                 body: text,
             },

@@ -127,11 +127,11 @@ Wrapping an existing unsafe computation with `arg(name) ??` preserves its predic
 HTTP/MCP argument values use POD2's JSON representation. CLI and GUI inputs accept the same JSON values, without requiring argument-type metadata:
 
 ```sh
-dobj run craft-basics::CraftWood --arg 'key={"Raw":"000000000000000000000000000000000000000000000000000000000000beef"}'
+dobj run craft-basics::CraftWood --arg 'key={"Untyped":"000000000000000000000000000000000000000000000000000000000000beef"}'
 dobj run example::Action --arg 'amount={"Int":"42"}' --arg 'label="hello"'
 ```
 
-For example, an API request can contain `"args": {"amount": {"Int": "42"}, "label": "hello"}`. Integers use decimal strings inside `Int`; raw values use 64 hexadecimal digits inside `Raw`; strings are ordinary JSON strings. Containers use POD2's existing container serialization. The driver deserializes each value and reports errors by argument name. Unknown names are accepted, and scripts may ignore them.
+For example, an API request can contain `"args": {"amount": {"Int": "42"}, "label": "hello"}`. Integers use decimal strings inside `Int`; raw values use 64 hexadecimal digits inside `Untyped`; strings are ordinary JSON strings. Containers use POD2's existing container serialization. The driver deserializes each value and reports errors by argument name. Unknown names are accepted, and scripts may ignore them.
 
 ## Native statements
 
@@ -260,7 +260,7 @@ wood.update("key", key);
 action.intro_lt_eq_u256(wood, target);
 ```
 
-The emitted podlang embeds `target` as a hex `Raw(0x00…)` literal.
+The emitted podlang embeds `target` as a hex `Untyped(0x00…)` literal.
 
 ## Reading the state header
 
@@ -396,7 +396,7 @@ FindLog(io FindLogIO, state_header StateHeader, chain0, chain, private: work, in
 
 CraftWood(io CraftWoodIO, state_header StateHeader, chain0, chain, private: chain1, wood0, key, initials CraftWoodInitials) = AND(
   DictUpdate(wood0, "key", key, initials.wood)
-  LtEqU256(initials.wood, Raw(0x0020000000000000000000000000000000000000000000000000000000000000))
+  LtEqU256(initials.wood, Untyped(0x0020000000000000000000000000000000000000000000000000000000000000))
   tx::TxDelete(chain0, chain1, io.in_log, @self_predicate(IsLog))
   tx::TxInsert(chain1, chain, initials.wood, io.out_wood, @self_predicate(IsWood))
 )

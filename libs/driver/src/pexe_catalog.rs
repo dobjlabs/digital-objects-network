@@ -21,13 +21,13 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use payload::decode_hash_hex;
 use pod2::middleware::Hash;
-use sdk::{ActionArgs, ActionKind, Sdk, SpendableObject, SpendableObjects, manifest::Manifest};
+use sdk::{manifest::Manifest, ActionArgs, ActionKind, Sdk, SpendableObject, SpendableObjects};
 use txlib::GroundingWitness;
 
-use crate::catalog::{ActionCatalog, CatalogClass, extract_predicate};
+use crate::catalog::{extract_predicate, ActionCatalog, CatalogClass};
 use wire_types::{ActionSummary, ClassRef, MutatedObjectSlots, QualifiedName};
 
 struct Plugin {
@@ -494,11 +494,9 @@ mod tests {
             assert!(class.consumed_by.contains(&name));
             assert!(catalog.list_actions().iter().any(|a| a.action == name));
             assert!(action.description.contains("fresh random key"));
-            assert!(
-                action
-                    .predicate_source
-                    .contains("Rekey(new, chain_start, chain_end, type")
-            );
+            assert!(action
+                .predicate_source
+                .contains("Rekey(new, chain_start, chain_end, type"));
             assert!(!action.predicate_source.contains("TX_EVENTS_MODULE_HASH"));
             assert!(!action.hash.is_empty());
             assert_eq!(shared_hash.get_or_insert(action.hash.clone()), &action.hash);
@@ -517,7 +515,7 @@ mod tests {
             )
             .unwrap();
         let foo = minted.obj(0);
-        let state = pexe::fixtures::build_synthetic_state(&[foo.obj.clone()]).unwrap();
+        let state = pexe::fixtures::build_synthetic_state(std::slice::from_ref(&foo.obj)).unwrap();
         let result = catalog
             .execute_action(
                 QualifiedName::new("alpha", "RekeyFoo"),

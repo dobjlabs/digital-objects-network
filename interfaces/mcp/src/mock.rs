@@ -460,7 +460,7 @@ fn action_predicate_source_for(action_name: &str) -> String {
                 .to_string()
         }
         "CraftWood" => {
-            "CraftWood(log, wood, chain0, chain, private: chain1, wood0, key) = AND(\n  DictUpdate(wood0, \"key\", key, wood)\n  LtEqU256(wood, Raw(0x0020000000000000000000000000000000000000000000000000000000000000))\n  DictContains(log, \"type\", @self_predicate(IsLog))\n  tx::TxDelete(chain0, chain1, log)\n  DictContains(wood, \"type\", @self_predicate(IsWood))\n  tx::TxInsert(chain1, chain, wood)\n)"
+            "CraftWood(log, wood, chain0, chain, private: chain1, wood0, key) = AND(\n  DictUpdate(wood0, \"key\", key, wood)\n  LtEqU256(wood, Untyped(0x0020000000000000000000000000000000000000000000000000000000000000))\n  DictContains(log, \"type\", @self_predicate(IsLog))\n  tx::TxDelete(chain0, chain1, log)\n  DictContains(wood, \"type\", @self_predicate(IsWood))\n  tx::TxInsert(chain1, chain, wood)\n)"
                 .to_string()
         }
         "CraftSticks" => {
@@ -563,12 +563,10 @@ mod tests {
         assert_eq!(detail.action.name, "CraftWoodPick");
         assert!(detail.total_inputs.iter().any(|r| r.class.name == "Wood"));
         assert!(detail.total_inputs.iter().any(|r| r.class.name == "Stick"));
-        assert!(
-            detail
-                .total_outputs
-                .iter()
-                .any(|r| r.class.name == "WoodPick")
-        );
+        assert!(detail
+            .total_outputs
+            .iter()
+            .any(|r| r.class.name == "WoodPick"));
         assert!(detail.predicate_source.contains("CraftWoodPick"));
     }
 

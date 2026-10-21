@@ -131,7 +131,7 @@ function normalizePod2Value(value: unknown): unknown {
   if (typeof value === "string") {
     return value
       .trim()
-      .replace(/^Raw\((.*)\)$/, "$1")
+      .replace(/^Untyped\((.*)\)$/, "$1")
       .trim();
   }
 
@@ -162,7 +162,7 @@ function normalizePod2Value(value: unknown): unknown {
     const inner = value[key];
 
     if (
-      key === "Raw" ||
+      key === "Untyped" ||
       key === "Int" ||
       key === "PublicKey" ||
       key === "SecretKey" ||

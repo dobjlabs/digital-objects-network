@@ -4255,7 +4255,7 @@ source = "git+https://github.com/0xPARC/plonky2.git?rev=60e32369b7b5c8f0ff1e4426
 [[package]]
 name = "pod2"
 version = "0.1.0"
-source = "git+https://github.com/0xPARC/pod2?rev=d436fdced3ad3a342198ac3d169f86d491d4c65c#d436fdced3ad3a342198ac3d169f86d491d4c65c"
+source = "git+https://github.com/0xPARC/pod2?rev=2ca220c0e0fa974e5d96bb376f0eafd166d260ca#2ca220c0e0fa974e5d96bb376f0eafd166d260ca"
 dependencies = [
  "annotate-snippets",
  "anyhow",

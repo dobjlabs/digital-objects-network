@@ -31,7 +31,7 @@ Identifiers (predicate names, argument names) must start with a letter or `_`, f
 - **Integer**: `0`, `42`, `-1` (64-bit signed)
 - **Boolean**: `true`, `false`
 - **String**: `"hello"`, `"escaped \" quote"`
-- **Raw (32-byte hex)**: `Raw(0x...64 hex digits...)`
+- **Untyped (32-byte hex)**: `Untyped(0x...64 hex digits...)`
 - **Public key**: `PublicKey(base58string)`
 - **Secret key**: `SecretKey(base64string)`
 - **Dictionary**: `{"key": value, ...}` or `{}` for empty. Keys must be strings.
