@@ -94,6 +94,10 @@ that block should be plugin-agnostic.
   unavailable. Retry re-reads active jobs and inventory before discarding
   or creating anything. Opening inventory dismisses
   setup for this page session.
+  When a progress read gets no HTTP response at all, the daemon has
+  stopped, so the error says the background service stopped responding,
+  suggests quitting and reopening Bitcraft, and names `dobjd.log` in the
+  data directory (the parent of the objects directory).
   "Copy error" copies the full displayed error, including line breaks, and
   reports success or failure. The error text can also be selected manually.
   A failed run is never retried automatically while the page is open;

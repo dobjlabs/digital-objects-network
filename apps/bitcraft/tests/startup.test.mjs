@@ -59,7 +59,7 @@ async function page(context, options = {}) {
         if (url === "BITCRAFT_WELCOME.md") return { ok: true, text: async () => "# Welcome" };
         const parsed = new URL(url);
         assert.equal(parsed.origin, "http://127.0.0.1:7727");
-        if (parsed.pathname === "/objects/dir") return respond({ path: "/objects" });
+        if (parsed.pathname === "/objects/dir") return respond({ path: "/Users/player/.bitcraft/objects" });
         if (parsed.pathname === "/objects/unspent") return respond(backend.objects, backend.inventoryError ? 503 : 200);
         if (parsed.pathname === "/state-root") return respond("0x00", backend.syncError ? 500 : 200);
         const discard = parsed.pathname.match(/^\/objects\/([^/]+)\/discard_unsafe$/);
@@ -85,6 +85,7 @@ async function page(context, options = {}) {
           return respond([...backend.states.values()].filter((run) => !["succeeded", "failed"].includes(run.status)), backend.listError ? 503 : 200);
         }
         if (parsed.pathname.startsWith("/actions/runs/")) {
+          if (backend.daemonDown) throw new TypeError("Failed to fetch");
           const run = backend.states.get(parsed.pathname.split("/").at(-1));
           return respond(run ?? {}, backend.runError ? 503 : run ? 200 : 404);
         }
@@ -335,6 +336,7 @@ test("polling recovers from unavailable SSE and temporary progress-read errors",
   ui.backend.runError = true;
   await ui.tick();
   assert.equal(ui.document.querySelector("#startup-actions").hidden, false);
+  assert.match(ui.document.querySelector("#startup-error").textContent, /Could not check progress: .*HTTP 503/);
   ui.backend.runError = false;
   ui.backend.states.set("run-1", state("run-1", "committing"));
   await ui.tick();
@@ -343,6 +345,17 @@ test("polling recovers from unavailable SSE and temporary progress-read errors",
   await ui.complete();
   assert.equal(ui.app.hidden, false);
   assert.equal(ui.backend.posts.length, 1);
+});
+
+test("a daemon that stops responding mid-run says how to recover", async (context) => {
+  const ui = await page(context);
+  ui.backend.daemonDown = true;
+  await ui.tick();
+  const error = ui.document.querySelector("#startup-error").textContent;
+  assert.match(error, /background service stopped responding \(Failed to fetch\)/);
+  assert.match(error, /Quit and reopen Bitcraft/);
+  assert.match(error, /dobjd\.log in \/Users\/player\/\.bitcraft\./);
+  assert.equal(ui.document.querySelector("#startup-actions").hidden, false);
 });
 
 test("a different plugin's pocketknife does not suppress startup creation", async (context) => {

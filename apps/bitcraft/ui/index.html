@@ -751,7 +751,7 @@
       return;
     }
     if (run?.transportError) {
-      showStartupError(`Could not check progress: ${run.transportError}`);
+      showStartupError(transportErrorText(run.transportError));
       return;
     }
     if (run?.state?.status === "committing" || run?.state?.status === "succeeded") {
@@ -759,6 +759,16 @@
     } else {
       showStartup("Creating your first pocketknife...", "Bitcraft is making a cryptographic proof for your starter tool. You will be ready to gather resources soon.");
     }
+  }
+
+  // A request that got no HTTP response at all means the local daemon is
+  // gone, not a transient fault, so the text says how to recover.
+  function transportErrorText(error) {
+    if (error.status !== undefined) return `Could not check progress: ${error.message}`;
+    const dobjHome = objectsDirPath.match(/^(.+)[\\/]objects[\\/]?$/)?.[1];
+    return `Bitcraft's background service stopped responding (${error.message}). `
+      + "Quit and reopen Bitcraft to restart it."
+      + (dobjHome ? ` Its log is dobjd.log in ${dobjHome}.` : "");
   }
 
   async function discardObjectUnsafe(fileName) {
@@ -1463,7 +1473,7 @@
         run.transportError = null;
       } catch (error) {
         if (error.status !== 404) {
-          run.transportError = error.message;
+          run.transportError = error;
           run.onUpdate?.(run);
           return;
         }
