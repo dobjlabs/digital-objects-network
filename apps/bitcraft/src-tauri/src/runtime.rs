@@ -56,19 +56,6 @@ fn initialize(state: &Path, resources: &Path, release: &Release) -> Result<()> {
         }
         write_atomic(&installed_plugin, &plugin)?;
     }
-    let settings = state.join("settings.json");
-    if !settings.exists() {
-        write_new(&settings, &fs::read(resources.join("settings.json"))?)?;
-    }
-    Ok(())
-}
-
-fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?
-        .write_all(bytes)?;
     Ok(())
 }
 
@@ -232,16 +219,15 @@ mod tests {
         let state = temp.path().join("state");
         fs::create_dir(&resources).unwrap();
         fs::write(resources.join("bitcraft.pexe"), b"plugin").unwrap();
-        fs::write(resources.join("settings.json"), b"initial settings").unwrap();
         let mut release = Release {
             plugin_sha256: plugin_hash(b"plugin"),
         };
         initialize(&state, &resources, &release).unwrap();
+        assert!(!state.join("settings.json").exists());
         fs::create_dir(state.join("objects")).unwrap();
         fs::write(state.join("objects/object.dobj"), b"object").unwrap();
         fs::write(state.join("settings.json"), b"custom settings").unwrap();
         fs::write(state.join("actions/other.pexe"), b"other plugin").unwrap();
-        fs::write(resources.join("settings.json"), b"new defaults").unwrap();
         fs::write(resources.join("bitcraft.pexe"), b"new plugin").unwrap();
         release.plugin_sha256 = plugin_hash(b"new plugin");
         initialize(&state, &resources, &release).unwrap();
@@ -277,7 +263,6 @@ mod tests {
         let state = temp.path().join("state");
         fs::create_dir(&resources).unwrap();
         fs::write(resources.join("bitcraft.pexe"), b"plugin").unwrap();
-        fs::write(resources.join("settings.json"), b"initial settings").unwrap();
         let release = Release {
             plugin_sha256: plugin_hash(b"plugin"),
         };

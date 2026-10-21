@@ -81,8 +81,8 @@ def main():
         assert port_closed(), "Bitcraft port 7727 is already in use"
         home = directory / "data"
         home.mkdir()
-        settings = json.loads((resources / "settings.json").read_text())
-        settings.update(synchronizerApiUrl="http://127.0.0.1:1", relayerApiUrl="http://127.0.0.1:1", mcpEnabled=False)
+        settings = {"synchronizerApiUrl": "http://127.0.0.1:1",
+                    "relayerApiUrl": "http://127.0.0.1:1", "mcpEnabled": False}
         (home / "settings.json").write_text(json.dumps(settings))
         log_path = directory / "host.log"
         with log_path.open("w") as log:
