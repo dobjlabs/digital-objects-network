@@ -185,6 +185,8 @@ test("first launch waits for proof, confirmation, and a live knife, then reveals
   assert.equal(ui.jobs().length, 0);
   assert.equal(ui.document.querySelector("#execute-pane").hidden, true);
   assert.equal(ui.document.querySelectorAll(".object-row").length, 2);
+  assert.equal(ui.document.querySelectorAll(".object-row.flashing").length, 0,
+    "the starter knife does not flash when the inventory opens");
   assert.equal(ui.backend.posts.length, 1);
 });
 
@@ -236,6 +238,20 @@ for (const status of ["queued", "generateProof", "committing"]) {
     assert.equal(ui.jobs().length, 0);
   });
 }
+
+test("objects that change after setup still flash", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  const list = ui.document.querySelector("#object-list");
+  list.dispatchEvent(new ui.dom.window.MouseEvent("contextmenu", { bubbles: true, button: 2 }));
+  ui.document.querySelector('.context-menu [role="menuitem"]').click();
+  await flush();
+  ui.backend.objects = [knife(), knife("pending", { fileName: "second-knife.dobj" })];
+  await ui.publish("run-1", "committing");
+  assert.deepEqual(
+    [...ui.document.querySelectorAll(".object-row.flashing")].map((row) => row.title),
+    ["second-knife.dobj"],
+  );
+});
 
 test("manual pocketknife jobs remain visible", async (context) => {
   const ui = await page(context, { objects: [knife()] });

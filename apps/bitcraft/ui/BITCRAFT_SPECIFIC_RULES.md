@@ -83,6 +83,9 @@ that block should be plugin-agnostic.
   Errors replace the activity description while preserving the bar's value.
   Steps do not represent time remaining. Keep both screens' appearance in
   step when changing either.
+  Object changes made while the setup screen is up do not flash in the
+  object list, so the starter knife is already settled when inventory
+  opens.
 - **Jobs:** automatic startup runs are tracked but omitted from Jobs.
   Remember their run ID in session storage so reloading the page keeps
   them hidden. Manual pocketknife jobs, including restored jobs without

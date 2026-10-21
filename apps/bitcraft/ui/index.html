@@ -2669,16 +2669,18 @@
 
   // Replaces the object list, keeping the selection of any objects that are
   // still held and dropping the rest. A row flashes when its file is new to
-  // the page or its shown state changed; nothing flashes on the first load.
+  // the page or its shown state changed; nothing flashes on the first load,
+  // or for changes made while the setup screen covers the list.
   function showObjects(objects) {
     objectFileCount = objects.length;
     const heldObjects = objects
       .filter((object) => object.class.pluginName === PLUGIN_NAME)
       .sort((left, right) => left.fileName.localeCompare(right.fileName));
     const now = Date.now();
+    const listVisible = document.getElementById("startup-screen").hidden;
     for (const object of heldObjects) {
       const state = shownState(object);
-      if (lastShownStates !== null && lastShownStates.get(object.fileName) !== state) {
+      if (listVisible && lastShownStates !== null && lastShownStates.get(object.fileName) !== state) {
         flashStartedAt.set(object.fileName, now);
       }
     }
