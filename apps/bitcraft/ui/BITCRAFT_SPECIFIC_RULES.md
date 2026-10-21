@@ -82,7 +82,12 @@ that block should be plugin-agnostic.
   heading, rather than labeling the bar with the last completed milestone.
   Errors replace the activity description while preserving the bar's value.
   Steps do not represent time remaining. Keep both screens' appearance in
-  step when changing either.
+  step when changing either. Both show the bottom status bar: live on this
+  page, and hardcoded on the desktop shell's screen, which runs before
+  dobjd is ready and shows "Loading..." with a yellow dot for each service
+  (see `CLAUDE.md`).
+  The status bar stays visible below the setup screen, so service
+  status and addresses can be checked while setup runs or after it fails.
   Object changes made while the setup screen is up do not flash in the
   object list, so the starter knife is already settled when inventory
   opens.

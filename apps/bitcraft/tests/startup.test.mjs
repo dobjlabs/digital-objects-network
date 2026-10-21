@@ -159,6 +159,8 @@ test("first launch waits for proof, confirmation, and a live knife, then reveals
   assert.deepEqual(ui.backend.posts[0], { action: qname("CraftPocketknife"), inputObjectPaths: [] });
   assert.equal(ui.app.hidden, true);
   assert.equal(ui.app.inert, true);
+  assert.equal(ui.document.querySelector("#status-bar").closest("[hidden], [inert]"), null,
+    "the status bar shows under the setup screen");
   assert.match(ui.title(), /Creating your first pocketknife/);
   assert.equal(ui.progress(), 1);
   assert.equal(ui.document.querySelector("#startup-progress-label").textContent, "Step 2 of 3");
@@ -443,6 +445,7 @@ test("a daemon that is not running on first load says how to recover", async (co
   assert.match(error, /^Bitcraft's background service isn't responding \(Failed to fetch\)\. Quit and reopen Bitcraft to restart it\.$/,
     "the log location is left out when the objects directory is unknown");
   assert.equal(ui.document.querySelector("#startup-actions").hidden, false);
+  assert.equal(ui.document.querySelector("#status-bar").closest("[hidden], [inert]"), null);
   ui.backend.inventoryDown = false;
   await ui.retry();
   assert.equal(ui.backend.posts.length, 1);
