@@ -60,6 +60,7 @@ async function page(context, options = {}) {
         if (parsed.pathname === "/objects/dir") return respond({ path: "/Users/player/.bitcraft/objects" });
         if (parsed.pathname === "/objects/unspent") {
           backend.inventoryReads++;
+          if (backend.inventoryDown) throw new TypeError("Failed to fetch");
           return respond(backend.objects, backend.inventoryError ? 503 : 200);
         }
         if (parsed.pathname === "/state-root") return respond("0x00", backend.syncError ? 500 : 200);
@@ -311,7 +312,9 @@ test("inventory lookup failure has a recoverable setup screen", async (context) 
   const ui = await page(context, { inventoryError: true });
   assert.equal(ui.backend.posts.length, 0);
   assert.equal(ui.document.querySelector("#startup-actions").hidden, false);
-  assert.equal(ui.progress(), 0, "unreachable daemon does not complete preparation");
+  assert.equal(ui.progress(), 0, "a failed inventory read does not complete preparation");
+  assert.equal(ui.document.querySelector("#startup-error").textContent, "/objects/unspent: HTTP 503",
+    "an HTTP error is shown as it is, since dobjd answered");
   ui.backend.inventoryError = false;
   await ui.retry();
   assert.equal(ui.backend.posts.length, 1);
@@ -387,7 +390,7 @@ test("a daemon that stops responding mid-run says how to recover", async (contex
   ui.backend.daemonDown = true;
   await ui.dropStream("run-1");
   const error = ui.document.querySelector("#startup-error").textContent;
-  assert.match(error, /background service stopped responding \(Failed to fetch\)/);
+  assert.match(error, /background service isn't responding \(Failed to fetch\)/);
   assert.match(error, /Quit and reopen Bitcraft/);
   assert.match(error, /dobjd\.log in \/Users\/player\/\.bitcraft\./);
   assert.equal(ui.document.querySelector("#startup-actions").hidden, false);
@@ -415,6 +418,18 @@ test("a stream close that arrives during a read is served after it", async (cont
   await flush();
   await ui.tick();
   assert.equal(ui.app.hidden, false, "the queued read sees the terminal state");
+});
+
+test("a daemon that is not running on first load says how to recover", async (context) => {
+  const ui = await page(context, { inventoryDown: true });
+  assert.equal(ui.backend.posts.length, 0);
+  const error = ui.document.querySelector("#startup-error").textContent;
+  assert.match(error, /^Bitcraft's background service isn't responding \(Failed to fetch\)\. Quit and reopen Bitcraft to restart it\.$/,
+    "the log location is left out when the objects directory is unknown");
+  assert.equal(ui.document.querySelector("#startup-actions").hidden, false);
+  ui.backend.inventoryDown = false;
+  await ui.retry();
+  assert.equal(ui.backend.posts.length, 1);
 });
 
 test("a different plugin's pocketknife does not suppress startup creation", async (context) => {

@@ -94,10 +94,11 @@ that block should be plugin-agnostic.
   There is no way into the inventory from a setup error: it opens only
   once a live knife exists. Retry re-reads active jobs and inventory before
   discarding or creating anything.
-  When a progress read gets no HTTP response at all, the daemon has
-  stopped, so the error says the background service stopped responding,
-  suggests quitting and reopening Bitcraft, and names `dobjd.log` in the
-  data directory (the parent of the objects directory).
+  When a setup request or progress read gets no HTTP response at all, the
+  daemon is not running, so the error says the background service isn't
+  responding, suggests quitting and reopening Bitcraft, and names
+  `dobjd.log` in the data directory (the parent of the objects directory)
+  once that directory is known. An HTTP error is shown as it is.
   "Copy error" copies the full displayed error, including line breaks, and
   reports success or failure. The error text can also be selected manually.
   A failed run is never retried automatically while the page is open;

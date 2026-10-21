@@ -750,7 +750,7 @@
       return;
     }
     if (run?.transportError) {
-      showStartupError(transportErrorText(run.transportError));
+      showStartupError(startupErrorText(run.transportError, "Could not check progress: "));
       return;
     }
     if (run?.state?.status === "committing" || run?.state?.status === "succeeded") {
@@ -761,11 +761,11 @@
   }
 
   // A request that got no HTTP response at all means the local daemon is
-  // gone, not a transient fault, so the text says how to recover.
-  function transportErrorText(error) {
-    if (error.status !== undefined) return `Could not check progress: ${error.message}`;
+  // not running, not a transient fault, so the text says how to recover.
+  function startupErrorText(error, httpErrorPrefix = "") {
+    if (!error.noResponse) return `${httpErrorPrefix}${error.message}`;
     const dobjHome = objectsDirPath.match(/^(.+)[\\/]objects[\\/]?$/)?.[1];
-    return `Bitcraft's background service stopped responding (${error.message}). `
+    return `Bitcraft's background service isn't responding (${error.message}). `
       + "Quit and reopen Bitcraft to restart it."
       + (dobjHome ? ` Its log is dobjd.log in ${dobjHome}.` : "");
   }
@@ -1853,13 +1853,6 @@
     }
   }
 
-  function errorMessage(text) {
-    const message = document.createElement("div");
-    message.className = "message error";
-    message.textContent = text;
-    return message;
-  }
-
   function showView(viewName) {
     currentViewName = viewName;
     for (const [name, { tab, view }] of Object.entries(views)) {
@@ -2191,8 +2184,15 @@
     detailsBody.append(icon, title, meta, identityTable, propertiesTitle, propertiesTable);
   }
 
+  // An error with `noResponse` set got no HTTP response from dobjd at all.
   async function fetchJson(path, options) {
-    const response = await fetch(DOBJD_URL + path, options);
+    let response;
+    try {
+      response = await fetch(DOBJD_URL + path, options);
+    } catch (error) {
+      error.noResponse = true;
+      throw error;
+    }
     if (!response.ok) {
       const error = new Error(`${path}: HTTP ${response.status}`);
       error.status = response.status;
@@ -2503,14 +2503,7 @@
       if (!await restoreRuns()) throw new Error("Could not check active jobs. Please try again.");
       await ensureStartupPocketknife();
     } catch (error) {
-      const text = `Could not reach dobjd at ${DOBJD_URL}: ${error.message}`;
-      if (objectFileCount === null) {
-        showMessage(text, true);
-        const item = document.createElement("li");
-        item.append(errorMessage(text));
-        recipeList.replaceChildren(item);
-      }
-      showStartupError(error.message);
+      showStartupError(startupErrorText(error));
     }
   }
 
