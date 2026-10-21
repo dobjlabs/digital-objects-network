@@ -24,12 +24,12 @@ resolver = "2"
 exclude = ["apps/bitcraft/src-tauri"]
 
 [workspace.dependencies]
-pod2 = { git = "https://github.com/0xPARC/pod2", rev = "a91d87895de0f6d9bda256016572d593216e619a", default-features = false, features = [
+pod2 = { git = "https://github.com/0xPARC/pod2", rev = "d436fdced3ad3a342198ac3d169f86d491d4c65c", default-features = false, features = [
     "backend_plonky2",
     "disk_cache",
     "zk",
 ] }
-plonky2 = { git = "https://github.com/0xPARC/plonky2.git", rev = "109d517d09c210ae4c2cee381d3e3fbc04aa3812" }
+plonky2 = { git = "https://github.com/0xPARC/plonky2.git", rev = "60e32369b7b5c8f0ff1e44265005f7c3c3a0a04b" }
 serde = { version = "1.0.150", features = ["derive"] }
 serde_json = "1.0.143"
 alloy = { version = "1.2.1", features = [
