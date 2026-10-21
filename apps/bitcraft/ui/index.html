@@ -1452,7 +1452,9 @@
     return run;
   }
 
-  // Terminal states need polling: the last event can precede the terminal write.
+  // Each event on the run's stream prompts a re-read of the run's state.
+  // The terminal status is not an event: it arrives through the re-read
+  // prompted by dobjd closing the stream once the run has finished.
   function followRun(run) {
     const runPath = `/actions/runs/${encodeURIComponent(run.runId)}`;
     let source = null;
@@ -1462,11 +1464,10 @@
       console.warn("Could not open run events:", error);
     }
     run.eventSource = source;
-    let refreshing = false;
-    const refresh = async () => {
-      if (refreshing || !isRunInProgress(run)) return;
-      refreshing = true;
-      const wasInProgress = isRunInProgress(run);
+
+    const readState = async () => {
+      if (!isRunInProgress(run)) return;
+      const previous = run.state;
       try {
         run.state = await fetchJson(runPath);
         run.transportError = null;
@@ -1477,17 +1478,16 @@
           return;
         }
         run.requestError = "dobjd no longer has this run.";
-      } finally {
-        refreshing = false;
       }
       if (!isRunInProgress(run)) {
         run.clientEndedAt ??= Date.now();
         source?.close();
-        clearInterval(pollTimer);
       }
-      // A run's inputs become held and its outputs appear (pending, then
-      // live) while it runs, so the object list is re-read as it progresses.
-      if (wasInProgress) {
+      // Inputs become held and outputs appear (pending, then live) only at
+      // a status change or a new progress step.
+      if (run.state?.status !== previous?.status
+        || run.state?.progress?.length !== previous?.progress?.length
+        || !isRunInProgress(run)) {
         reloadObjects();
       }
       renderRuns();
@@ -1496,7 +1496,26 @@
       }
       run.onUpdate?.(run);
     };
-    const pollTimer = setInterval(refresh, 1500);
+
+    // One read at a time, so an older response never lands after a newer
+    // one; a prompt that arrives mid-read is kept and served afterwards.
+    let reading = false;
+    let readQueued = false;
+    const refresh = async () => {
+      if (reading) {
+        readQueued = true;
+        return;
+      }
+      reading = true;
+      try {
+        do {
+          readQueued = false;
+          await readState();
+        } while (readQueued);
+      } finally {
+        reading = false;
+      }
+    };
     if (source) {
       source.onmessage = refresh;
       source.onerror = refresh;

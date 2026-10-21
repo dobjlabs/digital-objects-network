@@ -101,10 +101,11 @@ that block should be plugin-agnostic.
   "Copy error" copies the full displayed error, including line breaks, and
   reports success or failure. The error text can also be selected manually.
   A failed run is never retried automatically while the page is open;
-  reopening the app retries after discarding its stale knife. Run polling backs up SSE so a
-  quiet terminal transition or an unavailable event stream cannot leave
-  setup waiting forever; inventory is polled after success until the knife
-  is live. Inventory refreshes alone do not trigger creation.
+  reopening the app retries after discarding its stale knife. The startup
+  job is followed through its event stream like any other job; the
+  terminal status arrives through the read prompted by dobjd closing the
+  stream. Inventory is polled after success until the knife is live.
+  Inventory refreshes alone do not trigger creation.
 - **Generic behavior:** loading the UI never starts actions or discards objects automatically.
 
 ## Action input constraints

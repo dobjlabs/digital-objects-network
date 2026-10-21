@@ -23,7 +23,8 @@ const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(setImm
 async function page(context, options = {}) {
   const backend = {
     objects: [], actions: [recipe()], states: new Map(), posts: [], discards: [],
-    inventoryError: false, listError: false, runError: false, postError: false, syncError: false, ...options,
+    inventoryError: false, listError: false, runError: false, postError: false, syncError: false,
+    inventoryReads: 0, runGate: null, ...options,
   };
   const timers = new Map();
   const sources = [];
@@ -46,10 +47,7 @@ async function page(context, options = {}) {
       window.clearInterval = (id) => timers.delete(id);
       if (options.startupRunId) window.sessionStorage.setItem("bitcraft.startup-pocketknife-run", options.startupRunId);
       window.EventSource = class {
-        constructor(url) {
-          if (backend.streamUnavailable) throw new Error("SSE unavailable");
-          this.url = url; this.closed = false; sources.push(this);
-        }
+        constructor(url) { this.url = url; this.closed = false; sources.push(this); }
         close() { this.closed = true; }
       };
       window.fetch = async (url, init = {}) => {
@@ -60,7 +58,10 @@ async function page(context, options = {}) {
         const parsed = new URL(url);
         assert.equal(parsed.origin, "http://127.0.0.1:7727");
         if (parsed.pathname === "/objects/dir") return respond({ path: "/Users/player/.bitcraft/objects" });
-        if (parsed.pathname === "/objects/unspent") return respond(backend.objects, backend.inventoryError ? 503 : 200);
+        if (parsed.pathname === "/objects/unspent") {
+          backend.inventoryReads++;
+          return respond(backend.objects, backend.inventoryError ? 503 : 200);
+        }
         if (parsed.pathname === "/state-root") return respond("0x00", backend.syncError ? 500 : 200);
         const discard = parsed.pathname.match(/^\/objects\/([^/]+)\/discard_unsafe$/);
         if (discard && init.method === "POST") {
@@ -86,8 +87,11 @@ async function page(context, options = {}) {
         }
         if (parsed.pathname.startsWith("/actions/runs/")) {
           if (backend.daemonDown) throw new TypeError("Failed to fetch");
-          const run = backend.states.get(parsed.pathname.split("/").at(-1));
-          return respond(run ?? {}, backend.runError ? 503 : run ? 200 : 404);
+          // Read before waiting, so a held read answers with the state it saw.
+          const run = backend.states.get(decodeURIComponent(parsed.pathname.split("/").at(-1)));
+          const runError = backend.runError;
+          if (backend.runGate) await backend.runGate;
+          return respond(run ?? {}, runError ? 503 : run ? 200 : 404);
         }
         throw new Error(`Unexpected request ${url}`);
       };
@@ -96,14 +100,44 @@ async function page(context, options = {}) {
   context.after(() => { dom.window.close(); assert.deepEqual(errors, []); });
   await flush();
   const { document } = dom.window;
+  // Fires the startup screen's inventory poll.
   const tick = async () => {
     for (const [id, timer] of [...timers]) {
       if (timer.delay === 1500 && timers.has(id)) await timer.callback();
     }
     await flush();
   };
+  const openStreams = (runId) => sources.filter((source) => !source.closed
+    && source.url.endsWith(`/actions/runs/${encodeURIComponent(runId)}/events`));
+  // A progress event on the run's stream, with no change to its state.
+  const emit = async (runId) => {
+    for (const source of openStreams(runId)) source.onmessage?.({ data: "{}" });
+    await flush();
+  };
+  // The stream erroring, as when its connection drops or dobjd closes it.
+  const dropStream = async (runId) => {
+    for (const source of openStreams(runId)) source.onerror?.({});
+    await flush();
+  };
+  // Mirrors dobjd: a state change is recorded with a progress event, and the
+  // stream closes once the run has finished.
+  const publish = async (runId, status, extra = {}) => {
+    const previous = backend.states.get(runId) ?? state(runId);
+    const progress = extra.progress ?? [...previous.progress, {
+      phase: status === "generateProof" ? "generateProof" : "commit",
+      status: status === "failed" ? "failed" : "running",
+      message: status,
+    }];
+    backend.states.set(runId, { ...previous, status, ...extra, progress });
+    const streams = openStreams(runId);
+    for (const source of streams) source.onmessage?.({ data: JSON.stringify(progress.at(-1)) });
+    if (status === "succeeded" || status === "failed") {
+      for (const source of streams) source.onerror?.({});
+    }
+    await flush();
+  };
   return {
-    backend, document, dom, tick, sources,
+    backend, document, dom, tick, sources, emit, dropStream, publish,
     splash: document.querySelector("#startup-screen"),
     app: document.querySelector("#inventory-app"),
     jobs: () => [...document.querySelectorAll(".run-row")],
@@ -111,8 +145,8 @@ async function page(context, options = {}) {
     progress: () => document.querySelector("#startup-progress").value,
     async retry() { document.querySelector("#startup-retry").click(); await flush(); },
     async complete(runId = "run-1") {
-      backend.states.set(runId, state(runId, "succeeded", { result: { outputFiles: ["pocketknife.dobj"], nullifiedFiles: [] } }));
       backend.objects = [knife()];
+      await publish(runId, "succeeded", { result: { outputFiles: ["pocketknife.dobj"], nullifiedFiles: [] } });
       await tick();
     },
   };
@@ -129,19 +163,17 @@ test("first launch waits for proof, confirmation, and a live knife, then reveals
   assert.equal(ui.document.querySelector("#startup-progress-label").textContent, "Step 2 of 3");
   assert.match(ui.document.querySelector("#startup-progress").getAttribute("aria-valuetext"), /Step 2 of 3.*Creating your first pocketknife/);
   assert.equal(ui.jobs().length, 0);
-  ui.backend.states.set("run-1", state("run-1", "generateProof"));
-  await ui.tick();
+  await ui.publish("run-1", "generateProof");
   assert.equal(ui.progress(), 1, "starting proof generation does not complete a milestone");
-  ui.backend.states.set("run-1", state("run-1", "committing"));
   ui.backend.objects = [knife("pending")];
-  await ui.tick();
+  await ui.publish("run-1", "committing");
   assert.match(ui.title(), /Waiting for confirmation/);
   assert.equal(ui.document.querySelector("#startup-progress-label").textContent, "Step 3 of 3");
   assert.match(ui.document.querySelector("#startup-progress").getAttribute("aria-valuetext"), /Step 3 of 3.*Waiting for confirmation/);
   assert.equal(ui.progress(), 2);
   assert.equal(ui.app.hidden, true);
-  ui.backend.states.set("run-1", state("run-1", "succeeded"));
-  await ui.tick();
+  await ui.publish("run-1", "succeeded");
+  assert.equal(ui.sources[0].closed, true, "the stream closing delivers the terminal state");
   assert.equal(ui.splash.hidden, false, "terminal success alone does not make the knife usable");
   assert.equal(ui.progress(), 2, "confirmation requires a live knife");
   await ui.complete();
@@ -153,7 +185,6 @@ test("first launch waits for proof, confirmation, and a live knife, then reveals
   assert.equal(ui.document.querySelector("#execute-pane").hidden, true);
   assert.equal(ui.document.querySelectorAll(".object-row").length, 2);
   assert.equal(ui.backend.posts.length, 1);
-  assert.equal(ui.sources[0].closed, true, "polling handles terminal writes without another SSE event");
 });
 
 test("an existing live knife opens inventory immediately, including a held knife", async (context) => {
@@ -226,8 +257,7 @@ test("a restored manual crafting job is not mistaken for an automatic one", asyn
 
 test("failed setup reports the cause and retries only on request", async (context) => {
   const ui = await page(context);
-  ui.backend.states.set("run-1", state("run-1", "failed", { error: "Network rejected the proof" }));
-  await ui.tick();
+  await ui.publish("run-1", "failed", { error: "Network rejected the proof" });
   assert.match(ui.document.querySelector("#startup-error").textContent, /Network rejected/);
   assert.equal(ui.document.querySelector("#startup-actions").hidden, false);
   await ui.tick();
@@ -291,9 +321,8 @@ test("inventory lookup failure has a recoverable setup screen", async (context) 
 for (const status of ["pending", "unknown"]) {
   test(`retry after a failed commit discards the ${status} knife it left and crafts another`, async (context) => {
     const ui = await page(context);
-    ui.backend.states.set("run-1", state("run-1", "failed", { error: "Submission failed" }));
     ui.backend.objects = [knife(status)];
-    await ui.tick();
+    await ui.publish("run-1", "failed", { error: "Submission failed" });
     assert.match(ui.document.querySelector("#startup-error").textContent, /Submission failed/);
     assert.deepEqual(ui.backend.discards, [], "nothing is discarded until the user retries");
     assert.equal(ui.backend.posts.length, 1);
@@ -308,12 +337,11 @@ for (const status of ["pending", "unknown"]) {
 
 test("a failed commit retains its completed proof milestone and retry checks progress afresh", async (context) => {
   const ui = await page(context);
-  ui.backend.states.set("run-1", state("run-1", "failed", {
+  ui.backend.objects = [knife("unknown")];
+  await ui.publish("run-1", "failed", {
     error: "Submission failed",
     progress: [{ phase: "generateProof", status: "done", message: "Proof generation complete" }],
-  }));
-  ui.backend.objects = [knife("unknown")];
-  await ui.tick();
+  });
   assert.equal(ui.progress(), 2, "a missed committing event still preserves the completed proof");
   assert.equal(ui.document.querySelector("#startup-progress-label").textContent, "Step 3 of 3");
   assert.match(ui.document.querySelector("#startup-progress").getAttribute("aria-valuetext"), /could not finish setup/);
@@ -338,16 +366,15 @@ test("a missing recipe gives an explanation and retry picks up the installed rec
   assert.equal(ui.app.hidden, false);
 });
 
-test("polling recovers from unavailable SSE and temporary progress-read errors", async (context) => {
-  const ui = await page(context, { streamUnavailable: true });
+test("a failed progress read clears on the next stream event", async (context) => {
+  const ui = await page(context);
   assert.equal(ui.backend.posts.length, 1);
   ui.backend.runError = true;
-  await ui.tick();
+  await ui.emit("run-1");
   assert.equal(ui.document.querySelector("#startup-actions").hidden, false);
   assert.match(ui.document.querySelector("#startup-error").textContent, /Could not check progress: .*HTTP 503/);
   ui.backend.runError = false;
-  ui.backend.states.set("run-1", state("run-1", "committing"));
-  await ui.tick();
+  await ui.publish("run-1", "committing");
   assert.match(ui.title(), /Waiting for confirmation/);
   assert.equal(ui.document.querySelector("#startup-actions").hidden, true);
   await ui.complete();
@@ -358,12 +385,36 @@ test("polling recovers from unavailable SSE and temporary progress-read errors",
 test("a daemon that stops responding mid-run says how to recover", async (context) => {
   const ui = await page(context);
   ui.backend.daemonDown = true;
-  await ui.tick();
+  await ui.dropStream("run-1");
   const error = ui.document.querySelector("#startup-error").textContent;
   assert.match(error, /background service stopped responding \(Failed to fetch\)/);
   assert.match(error, /Quit and reopen Bitcraft/);
   assert.match(error, /dobjd\.log in \/Users\/player\/\.bitcraft\./);
   assert.equal(ui.document.querySelector("#startup-actions").hidden, false);
+});
+
+test("progress reads reload the inventory only when the run's state changed", async (context) => {
+  const ui = await page(context);
+  const before = ui.backend.inventoryReads;
+  await ui.emit("run-1");
+  await ui.emit("run-1");
+  assert.equal(ui.backend.inventoryReads, before, "unchanged state leaves the inventory alone");
+  await ui.publish("run-1", "generateProof");
+  assert.equal(ui.backend.inventoryReads, before + 1);
+});
+
+test("a stream close that arrives during a read is served after it", async (context) => {
+  const ui = await page(context);
+  let releaseRead;
+  ui.backend.runGate = new Promise((resolve) => { releaseRead = resolve; });
+  await ui.emit("run-1");
+  ui.backend.objects = [knife()];
+  await ui.publish("run-1", "succeeded");
+  ui.backend.runGate = null;
+  releaseRead();
+  await flush();
+  await ui.tick();
+  assert.equal(ui.app.hidden, false, "the queued read sees the terminal state");
 });
 
 test("a different plugin's pocketknife does not suppress startup creation", async (context) => {
