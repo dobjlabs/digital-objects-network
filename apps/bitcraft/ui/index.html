@@ -747,11 +747,11 @@
       setStartupProgress(2);
     }
     if (run?.requestError || run?.state?.status === "failed") {
-      showStartupError(run.requestError ?? run.state.error ?? "Pocketknife creation failed.");
+      showStartupError(run.requestError ?? run.state.error ?? "Pocketknife creation failed.", { canOpenInventory: false });
       return;
     }
     if (run?.transportError) {
-      showStartupError(transportErrorText(run.transportError));
+      showStartupError(transportErrorText(run.transportError), { canOpenInventory: false });
       return;
     }
     if (run?.state?.status === "committing" || run?.state?.status === "succeeded") {
@@ -2525,8 +2525,13 @@
     document.getElementById("startup-actions").hidden = true;
   }
 
-  function showStartupError(message) {
-    showStartup("Bitcraft could not finish setup", "You can try again, or open your inventory and continue from there.");
+  // A failed pocketknife craft offers only retry: inventory opens once a
+  // live knife exists.
+  function showStartupError(message, { canOpenInventory = true } = {}) {
+    showStartup("Bitcraft could not finish setup", canOpenInventory
+      ? "You can try again, or open your inventory and continue from there."
+      : "Try again to make your starter pocketknife.");
+    document.getElementById("startup-open").hidden = !canOpenInventory;
     const error = document.getElementById("startup-error");
     if (error.textContent !== message) {
       error.textContent = message;

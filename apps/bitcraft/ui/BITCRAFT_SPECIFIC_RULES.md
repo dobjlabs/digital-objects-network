@@ -94,6 +94,9 @@ that block should be plugin-agnostic.
   unavailable. Retry re-reads active jobs and inventory before discarding
   or creating anything. Opening inventory dismisses
   setup for this page session.
+  A failed pocketknife craft (the request, the run, or reading its
+  progress) offers no "Open inventory": the only way past it is a retry
+  that ends with a live knife.
   When a progress read gets no HTTP response at all, the daemon has
   stopped, so the error says the background service stopped responding,
   suggests quitting and reopening Bitcraft, and names `dobjd.log` in the
