@@ -46,7 +46,7 @@ The daemon bundles runtime Markdown files alongside other UI assets. Only the na
 The startup screen covers cryptography preparation, starter pocketknife
 creation, and network confirmation. Inventory opens once a live pocketknife
 is available. Automatic setup jobs are hidden; manual jobs remain visible.
-Setup failures offer retry and an option to open inventory.
+Setup failures offer retry; the inventory stays closed until a live pocketknife exists.
 
 To inspect the splash without waiting for a new pocketknife or resetting
 inventory, fully quit Bitcraft and run `just bitcraft-shell`. It keeps the

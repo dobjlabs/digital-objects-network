@@ -15,8 +15,7 @@ older name) opens the Recipe Info tab with that action selected and shown.
 
 Startup keeps the inventory hidden until the player has a live pocketknife.
 Automatic setup jobs stay out of Jobs; manual jobs stay visible. Failures
-offer retry; only failures other than the pocketknife craft itself also
-offer to open inventory. See `BITCRAFT_SPECIFIC_RULES.md`.
+offer retry and never open the inventory. See `BITCRAFT_SPECIFIC_RULES.md`.
 The simple progress bar and status layout also appears in the desktop `shell/`.
 Keep both splash screens visually consistent. The bar counts completed
 milestones: cryptography ready, pocketknife proof generated, and network

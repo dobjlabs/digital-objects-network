@@ -230,7 +230,6 @@ test("failed setup reports the cause and retries only on request", async (contex
   await ui.tick();
   assert.match(ui.document.querySelector("#startup-error").textContent, /Network rejected/);
   assert.equal(ui.document.querySelector("#startup-actions").hidden, false);
-  assert.equal(ui.document.querySelector("#startup-open").hidden, true);
   await ui.tick();
   assert.equal(ui.backend.posts.length, 1);
   await ui.retry();
@@ -244,8 +243,11 @@ test("POST failure offers retry but no way into inventory", async (context) => {
   const ui = await page(context, { postError: true });
   assert.match(ui.title(), /could not finish setup/);
   assert.equal(ui.document.querySelector("#startup-actions").hidden, false);
-  assert.equal(ui.document.querySelector("#startup-open").hidden, true);
-  assert.match(ui.document.querySelector("#startup-description").textContent, /Try again to make your starter pocketknife/);
+  assert.deepEqual(
+    [...ui.document.querySelectorAll("#startup-actions button")].map((button) => button.textContent),
+    ["Try again", "Copy error"],
+  );
+  assert.match(ui.document.querySelector("#startup-description").textContent, /opens once you have a starter pocketknife/);
   assert.equal(ui.progress(), 1);
   ui.backend.postError = false;
   await ui.retry();
@@ -264,11 +266,11 @@ test("retry after a lost POST response resumes the accepted job without a duplic
   assert.equal(ui.app.hidden, false);
 });
 
-test("active-run lookup failure preserves inventory, prevents blind creation, and can be retried", async (context) => {
+test("active-run lookup failure prevents blind creation and can be retried", async (context) => {
   const ui = await page(context, { listError: true, objects: [knife("pending")] });
   assert.equal(ui.backend.posts.length, 0);
   assert.equal(ui.document.querySelector("#startup-actions").hidden, false);
-  assert.equal(ui.document.querySelectorAll(".object-row").length, 2, "opening inventory still offers the loaded objects");
+  assert.equal(ui.app.hidden, true);
   ui.backend.listError = false;
   ui.backend.objects = [];
   await ui.retry();
@@ -323,17 +325,17 @@ test("a failed commit retains its completed proof milestone and retry checks pro
   assert.equal(ui.progress(), 1, "the new attempt has not completed its proof");
 });
 
-test("a missing recipe gives an explanation and allows opening inventory", async (context) => {
+test("a missing recipe gives an explanation and retry picks up the installed recipe", async (context) => {
   const ui = await page(context, { actions: [] });
   assert.equal(ui.backend.posts.length, 0);
   assert.match(ui.document.querySelector("#startup-error").textContent, /recipe is unavailable/);
-  assert.equal(ui.document.querySelector("#startup-open").hidden, false);
-  ui.document.querySelector("#startup-open").click();
+  assert.equal(ui.app.hidden, true);
+  assert.equal(ui.progress(), 1);
+  ui.backend.actions = [recipe()];
+  await ui.retry();
+  assert.equal(ui.backend.posts.length, 1);
+  await ui.complete();
   assert.equal(ui.app.hidden, false);
-  assert.equal(ui.splash.hidden, true);
-  assert.equal(ui.progress(), 1, "dismissing an error does not complete setup");
-  await ui.tick();
-  assert.equal(ui.splash.hidden, true, "background refreshes must not reopen dismissed setup");
 });
 
 test("polling recovers from unavailable SSE and temporary progress-read errors", async (context) => {
@@ -361,7 +363,6 @@ test("a daemon that stops responding mid-run says how to recover", async (contex
   assert.match(error, /background service stopped responding \(Failed to fetch\)/);
   assert.match(error, /Quit and reopen Bitcraft/);
   assert.match(error, /dobjd\.log in \/Users\/player\/\.bitcraft\./);
-  assert.equal(ui.document.querySelector("#startup-open").hidden, true);
   assert.equal(ui.document.querySelector("#startup-actions").hidden, false);
 });
 

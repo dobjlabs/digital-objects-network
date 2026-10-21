@@ -77,7 +77,7 @@ that block should be plugin-agnostic.
   first milestone. A committing run, a completed proof event, or an existing
   knife that has not been discarded completes the second; a live knife completes the third. Progress
   stays at the last completed milestone during errors; retry starts a fresh
-  check. Opening inventory after an error does not mark setup complete.
+  check.
   Show the current step number and describe the work in progress in the
   heading, rather than labeling the bar with the last completed milestone.
   Errors replace the activity description while preserving the bar's value.
@@ -88,15 +88,12 @@ that block should be plugin-agnostic.
   them hidden. Manual pocketknife jobs, including restored jobs without
   that marker, remain visible. The Jobs pane is hidden when no visible
   jobs exist; starting a manual job reveals it.
-- **Failures:** show the cause with "Try again", "Copy error", and "Open inventory"
-  controls if setup fails, active runs cannot be read, the synchronizer
-  cannot be reached before discarding a stale knife, or the recipe is
-  unavailable. Retry re-reads active jobs and inventory before discarding
-  or creating anything. Opening inventory dismisses
-  setup for this page session.
-  A failed pocketknife craft (the request, the run, or reading its
-  progress) offers no "Open inventory": the only way past it is a retry
-  that ends with a live knife.
+- **Failures:** show the cause with "Try again" and "Copy error" controls
+  if setup fails, active runs cannot be read, the synchronizer cannot be
+  reached before discarding a stale knife, or the recipe is unavailable.
+  There is no way into the inventory from a setup error: it opens only
+  once a live knife exists. Retry re-reads active jobs and inventory before
+  discarding or creating anything.
   When a progress read gets no HTTP response at all, the daemon has
   stopped, so the error says the background service stopped responding,
   suggests quitting and reopening Bitcraft, and names `dobjd.log` in the
