@@ -563,10 +563,12 @@ mod tests {
         assert_eq!(detail.action.name, "CraftWoodPick");
         assert!(detail.total_inputs.iter().any(|r| r.class.name == "Wood"));
         assert!(detail.total_inputs.iter().any(|r| r.class.name == "Stick"));
-        assert!(detail
-            .total_outputs
-            .iter()
-            .any(|r| r.class.name == "WoodPick"));
+        assert!(
+            detail
+                .total_outputs
+                .iter()
+                .any(|r| r.class.name == "WoodPick")
+        );
         assert!(detail.predicate_source.contains("CraftWoodPick"));
     }
 

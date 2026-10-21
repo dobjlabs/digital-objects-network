@@ -13,10 +13,10 @@ pub mod test_state;
 
 use std::io;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use hex::{FromHex, ToHex};
-use pod2::middleware::{Hash, RawValue, F};
-use tracing_subscriber::{fmt::time::OffsetTime, prelude::*, EnvFilter};
+use pod2::middleware::{F, Hash, RawValue};
+use tracing_subscriber::{EnvFilter, fmt::time::OffsetTime, prelude::*};
 
 pub fn load_dotenv() -> Result<()> {
     for filename in [".env.default", ".env"] {

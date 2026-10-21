@@ -1,10 +1,10 @@
 use std::collections::HashSet;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use payload::{
     decode_hash_hex,
     payload::{Payload, PayloadProof},
-    shrink::{shrink_compress_pod, ShrunkMainPodSetup},
+    shrink::{ShrunkMainPodSetup, shrink_compress_pod},
 };
 use pod2::middleware::{Hash, Params, StrKey, Value};
 use sdk::{ActionArgs, SpendableObjects};
@@ -15,7 +15,7 @@ use std::path::Path;
 use crate::driver::extract_basename;
 use crate::error::DriverError;
 use crate::object_record::ObjectRecord as StoredObjectRecord;
-use crate::object_store::{object_file_name, write_object_file, ObjectFileEntry};
+use crate::object_store::{ObjectFileEntry, object_file_name, write_object_file};
 use crate::types::{DriverPaths, ExecuteActionInput};
 use wire_types::{ActionArgValues, ActionSummary, ObjectStatus};
 
