@@ -235,6 +235,36 @@ impl Driver {
             .with_context(|| format!("failed to read object file {file_name}"))
     }
 
+    /// Moves an unspent object's file into the discarded directory, whatever
+    /// its status, so the driver stops tracking it, and returns its summary
+    /// from before the move. Spent objects are not found.
+    ///
+    /// None of the driver's usual guarantees about object state hold here:
+    /// nothing is checked against the chain or reconciled, so a discarded
+    /// object whose transaction has landed, or later lands, is simply no
+    /// longer held, and the driver never reads the discarded directory back.
+    pub fn discard_object_unsafe(&self, path: &Path) -> Result<ObjectSummary> {
+        let file_name = extract_basename(path)?;
+        let source = self.paths.objects_dir.join(&file_name);
+        if !source.exists() {
+            return Err(DriverError::ObjectFileNotFound(file_name).into());
+        }
+        let record = parse_object_record_file(&source)?;
+        let summary = self.object_summary(&ObjectFileEntry { file_name, record });
+        fs::create_dir_all(&self.paths.discarded_objects_dir).with_context(|| {
+            format!(
+                "failed to create discarded directory {}",
+                self.paths.discarded_objects_dir.display()
+            )
+        })?;
+        fs::rename(
+            &source,
+            self.paths.discarded_objects_dir.join(&summary.file_name),
+        )
+        .with_context(|| format!("failed to discard object file {}", summary.file_name))?;
+        Ok(summary)
+    }
+
     /// Look up a basename in the live dir, falling back to the nullified
     /// dir. Either path is returned even if the file doesn't exist on
     /// disk — the caller is expected to follow up with an existence check

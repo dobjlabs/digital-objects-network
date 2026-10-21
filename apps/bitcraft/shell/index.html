@@ -7,9 +7,23 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main>
-    <h1>Bitcraft</h1>
-    <p id="status">Starting Bitcraft. The first launch builds the proving cache and can take several minutes.</p>
-  </main>
+  <div class="screen">
+    <main>
+      <p class="brand">Bitcraft</p>
+      <progress class="startup-progress" max="3" value="0" aria-label="Startup progress" aria-describedby="startup-progress-label status"></progress>
+      <p id="startup-progress-label">Step 1 of 3</p>
+      <h1 id="status" role="status" aria-live="polite">Preparing cryptography...</h1>
+      <p class="description">On first launch, Bitcraft prepares the cryptography used to certify your items. This can take several minutes.</p>
+    </main>
+  </div>
+  <!-- Static stand-in for the game page's status bar: services cannot be
+       read or probed until the daemon is ready. -->
+  <footer class="status-bar">
+    <span class="status-item"><span class="status-label">Bitcraft version:</span> Alpha 1.0</span>
+    <span class="status-item"><span class="status-label">Synchronizer status:</span> <span class="status-dot loading"></span>Loading...</span>
+    <span class="status-item"><span class="status-label">Synchronizer address:</span> Loading...</span>
+    <span class="status-item"><span class="status-label">Relayer status:</span> <span class="status-dot loading"></span>Loading...</span>
+    <span class="status-item"><span class="status-label">Relayer address:</span> Loading...</span>
+  </footer>
 </body>
 </html>

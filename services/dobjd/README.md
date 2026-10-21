@@ -49,6 +49,7 @@ All routes return JSON unless noted; errors come back as
 | `POST` | `/objects/import`               | `import_object` (body: `{ "dobj": "<json>" }`)               |
 | `GET`  | `/objects/{file_name}`          | `read_object(&Path)` (basename in `~/.dobj/objects/`)        |
 | `GET`  | `/objects/{file_name}/raw`      | `read_object_raw(&Path)` (file contents verbatim)            |
+| `POST` | `/objects/{file_name}/discard_unsafe` | `discard_object_unsafe(&Path)` (see below; no state guarantees) |
 | `GET`  | `/classes`                      | `list_classes`                                               |
 | `GET`  | `/classes/{name}`               | `get_class`                                                  |
 | `GET`  | `/settings`                     | `load_settings`                                              |
@@ -60,6 +61,27 @@ All routes return JSON unless noted; errors come back as
 | `GET`  | `/actions/{id}`                 | `get_action`                                                 |
 | `GET`  | `/actions/{id}/feasibility`     | `check_action`                                               |
 | `GET`  | `/events`                       | global broadcast hub stream (SSE)                            |
+
+### Discarding objects is unsafe
+
+`POST /objects/{file_name}/discard_unsafe` moves an unspent object's file
+straight into `~/.dobj/objects/.discarded/`, whatever its status (`live`,
+`pending`, or `unknown`) and even while a run holds it, and returns the
+object's summary from before the move. Spent (`nullified`) objects are left
+alone and come back as `404`. It is an escape hatch for clients that have decided an object is
+stale, such as a pending output whose commit failed, not an object-state
+transition.
+
+None of the guarantees dobjd otherwise keeps about object state are promised
+for it:
+
+- nothing is checked against the chain or reconciled first, so a live object,
+  or a pending one whose transaction later lands, is dropped all the same;
+- a run holding the object as an input is not told or stopped;
+- discarded files are never listed, synced, or used as action inputs again;
+  to recover one, re-import it with `POST /objects/import`.
+
+A missing or spent object is a `404`.
 
 ### Runs are non-blocking
 
