@@ -53,6 +53,30 @@ pub async fn read_object_raw(
     Ok(([(header::CONTENT_TYPE, "application/json")], contents))
 }
 
+/// `POST /objects/{file_name}/discard_unsafe` -- move an unspent object's
+/// file into `objects/.discarded/` directly, whatever its status (live,
+/// pending, or unknown) and even while a run holds it, returning its summary
+/// from before the move. Spent objects are not found (404).
+///
+/// This is an escape hatch, not an object-state transition: none of the
+/// guarantees dobjd otherwise keeps about object state are promised. Nothing
+/// is checked against the chain or reconciled, a live or soon-to-land object
+/// is dropped from the store all the same, a run holding the object is not
+/// told, and discarded files are never listed, synced, or used as action
+/// inputs again unless re-imported.
+pub async fn discard_object_unsafe(
+    State(state): State<AppState>,
+    Path(file_name): Path<String>,
+) -> ApiResult<Json<ObjectSummary>> {
+    let driver = state.driver.clone();
+    let summary = tokio::task::spawn_blocking(move || {
+        driver.discard_object_unsafe(&PathBuf::from(&file_name))
+    })
+    .await
+    .map_err(|err| anyhow::anyhow!("discard_object_unsafe task panicked: {err}"))??;
+    Ok(Json(summary))
+}
+
 /// `POST /objects/import` — adopt an external `.dobj` (one not produced by
 /// this driver, e.g. from outside `~/.dobj/`) into the local object store. Body is `{ "dobj": "<json>" }`;
 /// the driver validates class identity + on-chain grounding and files it

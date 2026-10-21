@@ -754,14 +754,18 @@
       showStartupError(`Could not check progress: ${run.transportError}`);
       return;
     }
-    if (!run && [...objectsByFileName.values()].some((object) => isPocketknife(object.class) && object.status === "unknown")) {
-      showStartupError("Your pocketknife is here, but its network status could not be checked. Check your connection and try again.");
-      return;
-    }
-    if (run?.state?.status === "committing" || run?.state?.status === "succeeded" || !run) {
+    if (run?.state?.status === "committing" || run?.state?.status === "succeeded") {
       showStartup("Waiting for confirmation...", "Your pocketknife is being confirmed by the network. This can take a little while.");
     } else {
       showStartup("Creating your first pocketknife...", "Bitcraft is making a cryptographic proof for your starter tool. You will be ready to gather resources soon.");
+    }
+  }
+
+  async function discardObjectUnsafe(fileName) {
+    try {
+      await postJson(`/objects/${encodeURIComponent(fileName)}/discard_unsafe`, {});
+    } catch (error) {
+      if (error.status !== 404) throw new Error(`Could not discard ${fileName}: ${error.message}`);
     }
   }
 
@@ -785,9 +789,24 @@
     if (activeRun) {
       activeRun.onUpdate = updateStartupPocketknife;
       updateStartupPocketknife(activeRun);
-    } else if (objects.some((object) => isPocketknife(object.class))) {
-      updateStartupPocketknife();
     } else {
+      // No run is left to finish these. The object listing reports local
+      // state when it cannot reach the synchronizer, so reaching it here is
+      // what shows the listing really found them off chain.
+      const staleKnives = objects.filter((object) => isPocketknife(object.class));
+      if (staleKnives.length > 0) {
+        try {
+          await fetchJson("/state-root");
+        } catch (error) {
+          throw new Error(`Could not check your pocketknife on the network: ${error.message}`);
+        }
+      }
+      for (const knife of staleKnives) {
+        await discardObjectUnsafe(knife.fileName);
+      }
+      if (staleKnives.length > 0) {
+        showObjects(objects.filter((object) => !staleKnives.includes(object)));
+      }
       const action = pluginActions.find((candidate) => candidate.action.name === "CraftPocketknife");
       if (!action) throw new Error("The starter pocketknife recipe is unavailable. Check that the Bitcraft plugin is installed.");
       await startRun(action, [], {

@@ -26,6 +26,10 @@ pub const OBJECTS_DIR: &str = "objects";
 /// Subdirectory (inside [`OBJECTS_DIR`]) holding already-nullified objects.
 pub const NULLIFIED_DIR: &str = ".nullified";
 
+/// Subdirectory (inside [`OBJECTS_DIR`]) holding objects set aside by
+/// `Driver::discard_object_unsafe`. The driver never reads it back.
+pub const DISCARDED_DIR: &str = ".discarded";
+
 /// Subdirectory (inside [`DOBJ_HOME_DIR`]) holding installed `.pexe` plugins.
 pub const ACTIONS_DIR: &str = "actions";
 
@@ -40,10 +44,12 @@ impl DriverPaths {
         let root = root.into();
         let objects_dir = root.join(OBJECTS_DIR);
         let nullified_objects_dir = objects_dir.join(NULLIFIED_DIR);
+        let discarded_objects_dir = objects_dir.join(DISCARDED_DIR);
         Self {
             settings_path: root.join(SETTINGS_FILE),
             objects_dir,
             nullified_objects_dir,
+            discarded_objects_dir,
             actions_dir: root.join(ACTIONS_DIR),
         }
     }
@@ -107,10 +113,12 @@ mod tests {
         let expect_settings = format!("{DOBJ_HOME_DIR}/{SETTINGS_FILE}");
         let expect_objects = format!("{DOBJ_HOME_DIR}/{OBJECTS_DIR}");
         let expect_nullified = format!("{DOBJ_HOME_DIR}/{OBJECTS_DIR}/{NULLIFIED_DIR}");
+        let expect_discarded = format!("{DOBJ_HOME_DIR}/{OBJECTS_DIR}/{DISCARDED_DIR}");
         let expect_actions = format!("{DOBJ_HOME_DIR}/{ACTIONS_DIR}");
         assert!(paths.settings_path.ends_with(&expect_settings));
         assert!(paths.objects_dir.ends_with(&expect_objects));
         assert!(paths.nullified_objects_dir.ends_with(&expect_nullified));
+        assert!(paths.discarded_objects_dir.ends_with(&expect_discarded));
         assert!(paths.actions_dir.ends_with(&expect_actions));
     }
 

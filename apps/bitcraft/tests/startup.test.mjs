@@ -22,8 +22,8 @@ const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(setImm
 
 async function page(context, options = {}) {
   const backend = {
-    objects: [], actions: [recipe()], states: new Map(), posts: [],
-    inventoryError: false, listError: false, runError: false, postError: false, ...options,
+    objects: [], actions: [recipe()], states: new Map(), posts: [], discards: [],
+    inventoryError: false, listError: false, runError: false, postError: false, syncError: false, ...options,
   };
   const timers = new Map();
   const sources = [];
@@ -61,6 +61,16 @@ async function page(context, options = {}) {
         assert.equal(parsed.origin, "http://127.0.0.1:7727");
         if (parsed.pathname === "/objects/dir") return respond({ path: "/objects" });
         if (parsed.pathname === "/objects/unspent") return respond(backend.objects, backend.inventoryError ? 503 : 200);
+        if (parsed.pathname === "/state-root") return respond("0x00", backend.syncError ? 500 : 200);
+        const discard = parsed.pathname.match(/^\/objects\/([^/]+)\/discard_unsafe$/);
+        if (discard && init.method === "POST") {
+          const fileName = decodeURIComponent(discard[1]);
+          const object = backend.objects.find((candidate) => candidate.fileName === fileName);
+          if (!object) return respond({}, 404);
+          backend.discards.push(fileName);
+          backend.objects = backend.objects.filter((candidate) => candidate !== object);
+          return respond(object);
+        }
         if (parsed.pathname === "/settings") return respond({});
         if (parsed.pathname === "/actions") return respond(backend.actions);
         if (parsed.pathname === "/actions/run") {
@@ -152,26 +162,31 @@ test("an existing live knife opens inventory immediately, including a held knife
   assert.equal(ui.app.hidden, false);
 });
 
-test("a pending knife without a retained job is confirmed without creating another", async (context) => {
-  const ui = await page(context, { objects: [knife("pending")] });
-  assert.equal(ui.backend.posts.length, 0);
-  assert.match(ui.title(), /Waiting for confirmation/);
-  assert.equal(ui.progress(), 2);
-  ui.backend.objects = [knife()];
-  await ui.tick();
-  assert.equal(ui.splash.hidden, true);
-  assert.equal(ui.backend.posts.length, 0);
-});
+for (const status of ["pending", "unknown"]) {
+  test(`reopening with a stale ${status} knife and no job discards it and crafts another`, async (context) => {
+    const ui = await page(context, { objects: [knife(status)] });
+    assert.deepEqual(ui.backend.discards, ["pocketknife.dobj"]);
+    assert.equal(ui.backend.posts.length, 1);
+    assert.match(ui.title(), /Creating your first pocketknife/);
+    assert.equal(ui.progress(), 1, "the discarded knife does not count as a completed proof");
+    assert.equal(ui.document.querySelectorAll(".object-row").length, 1, "only the guide is listed");
+    await ui.complete();
+    assert.equal(ui.app.hidden, false);
+    assert.equal(ui.jobs().length, 0);
+  });
+}
 
-test("an unknown knife status offers recovery without creating a duplicate", async (context) => {
-  const ui = await page(context, { objects: [knife("unknown")] });
+test("a stale knife is kept when the synchronizer cannot be reached", async (context) => {
+  const ui = await page(context, { objects: [knife("pending")], syncError: true });
+  assert.deepEqual(ui.backend.discards, []);
   assert.equal(ui.backend.posts.length, 0);
-  assert.match(ui.document.querySelector("#startup-error").textContent, /network status could not be checked/);
+  assert.match(ui.document.querySelector("#startup-error").textContent, /Could not check your pocketknife on the network/);
   assert.equal(ui.document.querySelector("#startup-actions").hidden, false);
+  ui.backend.syncError = false;
   ui.backend.objects = [knife()];
-  await ui.tick();
+  await ui.retry();
+  assert.deepEqual(ui.backend.discards, [], "a knife that landed meanwhile is kept");
   assert.equal(ui.app.hidden, false);
-  assert.equal(ui.backend.posts.length, 0);
 });
 
 for (const status of ["queued", "generateProof", "committing"]) {
@@ -269,12 +284,31 @@ test("inventory lookup failure has a recoverable setup screen", async (context) 
   assert.equal(ui.progress(), 1);
 });
 
+for (const status of ["pending", "unknown"]) {
+  test(`retry after a failed commit discards the ${status} knife it left and crafts another`, async (context) => {
+    const ui = await page(context);
+    ui.backend.states.set("run-1", state("run-1", "failed", { error: "Submission failed" }));
+    ui.backend.objects = [knife(status)];
+    await ui.tick();
+    assert.match(ui.document.querySelector("#startup-error").textContent, /Submission failed/);
+    assert.deepEqual(ui.backend.discards, [], "nothing is discarded until the user retries");
+    assert.equal(ui.backend.posts.length, 1);
+    await ui.retry();
+    assert.deepEqual(ui.backend.discards, ["pocketknife.dobj"]);
+    assert.equal(ui.backend.posts.length, 2);
+    assert.match(ui.title(), /Creating your first pocketknife/);
+    await ui.complete("run-2");
+    assert.equal(ui.app.hidden, false);
+  });
+}
+
 test("a failed commit retains its completed proof milestone and retry checks progress afresh", async (context) => {
   const ui = await page(context);
   ui.backend.states.set("run-1", state("run-1", "failed", {
     error: "Submission failed",
     progress: [{ phase: "generateProof", status: "done", message: "Proof generation complete" }],
   }));
+  ui.backend.objects = [knife("unknown")];
   await ui.tick();
   assert.equal(ui.progress(), 2, "a missed committing event still preserves the completed proof");
   assert.equal(ui.document.querySelector("#startup-progress-label").textContent, "Step 3 of 3");
