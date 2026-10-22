@@ -1,4 +1,4 @@
-use pod2::middleware::{Hash, containers::Dictionary};
+use pod2::middleware::{containers::Dictionary, Hash};
 use sdk::SpendableObject;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
@@ -59,7 +59,6 @@ pub fn parse_object_record_file(path: &Path) -> anyhow::Result<ObjectRecord> {
         })?;
     let contents = fs::read_to_string(path)
         .map_err(|err| anyhow::anyhow!("failed to read input file {}: {err}", path.display()))?;
-    println!("DBG {}", contents);
     serde_json::from_str::<ObjectRecord>(&contents)
         .map_err(|err| anyhow::anyhow!("failed to parse {file_name} as object file: {err}"))
 }
