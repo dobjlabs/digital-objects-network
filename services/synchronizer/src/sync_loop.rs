@@ -55,7 +55,7 @@ pub(crate) async fn run_sync_forever(
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
     loop {
-        let result = match initialize_sync(&node, node.config.init_start_slot).await {
+        let result = match initialize_sync(&node).await {
             Ok(sync_start) => {
                 run_sync_loop(
                     Arc::clone(&node),
@@ -245,10 +245,7 @@ async fn handle_missing_slot(node: &Node, slot: u32) -> Result<MissingSlotAction
 
     // Skipped slots are valid on beacon; commit a Missing slot so the
     // slot history stays contiguous.
-    let processed = ProcessedSlot::Missing {
-        slot,
-        carried_state: node.current_state().await?,
-    };
+    let processed = ProcessedSlot::Missing { slot };
 
     info!(slot, "No block produced for slot");
     node.commit_slot(&processed).await?;
@@ -265,7 +262,7 @@ async fn handle_reorgs_for_present_slot(
 ) -> Result<Option<u32>> {
     let last_processed_slot = node.last_processed_slot().await?;
     let stored_root_for_slot = node.slot_root(slot).await?;
-    if last_processed_slot >= slot && stored_root_for_slot.is_none() {
+    if last_processed_slot.is_some_and(|last| last >= slot) && stored_root_for_slot.is_none() {
         // A previously empty slot becoming non-empty implies chain history changed.
         warn!(
             slot,
@@ -317,9 +314,13 @@ async fn rewind_for_reorg(node: &Node, current_slot: u32) -> Result<u32> {
     Ok(rewind_start)
 }
 
+/// Find the first slot to re-derive from. The walk never goes below `INIT_START_SLOT`: nothing
+/// before it is synced, so re-deriving from it is always valid.
 async fn find_divergence_slot(node: &Node, current_slot: u32) -> Result<u32> {
+    let init_start_slot = node.config.init_start_slot;
     let mut slot = current_slot;
-    while let Some(prev_slot) = slot.checked_sub(1) {
+    while slot > init_start_slot {
+        let prev_slot = slot - 1;
         // Walk backward until stored and live roots match (last common ancestor).
         let stored_root = node.slot_root(prev_slot).await?;
         let live_root = node
@@ -337,39 +338,30 @@ async fn find_divergence_slot(node: &Node, current_slot: u32) -> Result<u32> {
         }
         slot = prev_slot;
     }
-    Err(anyhow!(
-        "No common ancestor found while handling reorg at slot {current_slot};"
-    ))
+    warn!(
+        current_slot,
+        init_start_slot, "No common ancestor after INIT_START_SLOT; re-deriving from it"
+    );
+    Ok(init_start_slot)
 }
 
-async fn initialize_sync(node: &Node, init_start_slot: u32) -> Result<SyncStart> {
+async fn initialize_sync(node: &Node) -> Result<SyncStart> {
     let spec = node.beacon_cli.get_spec().await?;
     info!(?spec, "Loaded beacon spec");
 
     let head = node.get_beacon_head_header().await?;
     info!(head_slot = head.slot, head_root = ?head.root, "Fetched initial beacon head");
 
-    let bootstrap_start_slot = init_start_slot;
-    let bootstrap_slot = bootstrap_start_slot.checked_sub(1).ok_or_else(|| {
-        anyhow!("bootstrap start slot must be > 0 to insert initial bootstrap row")
-    })?;
-
-    if bootstrap_slot > head.slot {
-        return Err(anyhow!(
-            "INIT_START_SLOT {bootstrap_start_slot} is ahead of current beacon head {}; cannot bootstrap slot {}",
-            head.slot,
-            bootstrap_slot
-        ));
-    }
-
-    let bootstrap_record = node.load_committed_slot_record(bootstrap_slot).await?;
-
-    let start_slot = node
-        .sync_db
-        .ensure_bootstrap_row(bootstrap_record)
-        .await?
-        .checked_add(1)
-        .ok_or_else(|| anyhow!("last processed slot overflow"))?;
+    let start_slot = match node.last_processed_slot().await? {
+        Some(last_processed_slot) => last_processed_slot
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("last processed slot overflow"))?,
+        None => {
+            let init_start_slot = node.config.init_start_slot;
+            node.validate_genesis_slot(init_start_slot).await?;
+            init_start_slot
+        }
+    };
 
     info!(
         start_slot,

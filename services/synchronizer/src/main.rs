@@ -6,18 +6,18 @@ use tokio::task::JoinError;
 use tracing::{error, info};
 
 mod api;
-mod app_db;
 mod catchup;
 mod config;
-mod global_state;
+mod don_state;
+mod key_value_db;
 mod node;
 mod state_machine;
 mod sync_db;
 mod sync_loop;
 
 use api::run_api_server;
-use app_db::AppDb;
 use config::load_config;
+use key_value_db::KeyValueDb;
 use node::Node;
 use payload::proof::ProofParser;
 use state_machine::StateMachine;
@@ -41,18 +41,18 @@ async fn main() -> Result<()> {
 
     let cfg = load_config()?;
 
-    let app_db = AppDb::connect(&cfg.app_state_db_path)?;
-    let api_app_db = app_db.clone();
-    let sync_db = Arc::new(SyncDb::connect(&cfg.sync_metadata_db_url).await?);
+    let key_value_db = KeyValueDb::connect(&cfg.key_value_db_path)?;
+    let api_key_value_db = key_value_db.clone();
+    let sync_db = Arc::new(SyncDb::connect(&cfg.sync_metadata_db_url, cfg.init_start_slot).await?);
     let proof_parser = ProofParser::new()?;
     let info = Arc::new(new_info(&cfg, &proof_parser));
-    let state_machine = Arc::new(StateMachine::new(app_db, Arc::new(proof_parser)));
+    let state_machine = Arc::new(StateMachine::new(key_value_db, Arc::new(proof_parser)));
     let node = Arc::new(Node::new(cfg, Arc::clone(&state_machine), Arc::clone(&sync_db)).await?);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let server_task = tokio::spawn(run_api_server(
         Arc::clone(&sync_db),
-        api_app_db,
+        api_key_value_db,
         info,
         node.config.http_bind,
         shutdown_rx.clone(),

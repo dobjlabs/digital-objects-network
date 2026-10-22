@@ -8,9 +8,10 @@ use std::{
 use tracing::{info, warn};
 
 use crate::{
-    app_db::{created_array_holds, AppDb},
-    global_state::{BlockMetadata, GlobalState, StateMetadata, StateRoots},
+    don_state::{DonState, ExecutionBlock, StateMetadata, StateRoots},
+    key_value_db::{created_array_holds, KeyValueDb},
 };
+use pod2utils::b256_to_hash;
 use txlib::StateHeader;
 
 /// The maximum age of a state root used as grounding for a transaction.
@@ -22,8 +23,10 @@ pub const MAX_STATE_ROOT_AGE_BLOCKS: i64 = 300;
 /// This view opens the persistent POD2 containers used during slot derivation so validation can
 /// query and mutate the created-object set, nullifiers, and state root history for one slot.
 struct WorkingState {
-    /// Mutable non-root metadata accumulated while deriving the slot.
-    metadata: StateMetadata,
+    /// Objects in the created set, counting those this slot appended so far.
+    created_count: u64,
+    /// Spent nullifiers, counting those this slot inserted so far.
+    nullifier_count: u64,
     /// Persistent global created-object set (a pod2 `Array`) opened from
     /// `base_state.roots.created`.
     created: Array,
@@ -45,34 +48,34 @@ struct WorkingState {
 /// object commitments (with array indices) it appended to `created`. The caller
 /// persists the additions to the created index when committing the slot.
 pub struct DerivedSlot {
-    pub state: GlobalState,
+    pub state: DonState,
     pub created_added: HashMap<Hash, i64>,
 }
 
 /// Domain logic for the synchronizer: proof verification, state validation, and Merkle storage.
 ///
-/// `StateMachine` is intentionally decoupled from networking and from tracking the current state.
-/// Callers supply the `GlobalState` they want to operate against, and Postgres remains the sole
-/// source of truth for which state is current.
+/// `StateMachine` is intentionally decoupled from networking and from tracking the head state.
+/// Callers supply the `DonState` they want to operate against, and Postgres remains the sole
+/// source of truth for which state is the head.
 pub struct StateMachine {
-    /// RocksDB-backed app-state store used to open the created, nullifier, and
+    /// Key-value (RocksDB) store used to open the created, nullifier, and
     /// state root containers during derivation.
-    app_db: AppDb,
+    key_value_db: KeyValueDb,
     /// Blob parser/verifier used to decode TxFinalized payloads from blob bytes.
     proof_parser: Arc<dyn BlobParser>,
 }
 
 impl StateMachine {
-    pub fn new(app_db: AppDb, proof_parser: Arc<dyn BlobParser>) -> Self {
+    pub fn new(key_value_db: KeyValueDb, proof_parser: Arc<dyn BlobParser>) -> Self {
         Self {
-            app_db,
+            key_value_db,
             proof_parser,
         }
     }
 
     /// Sync DB to disk
     pub fn sync(&self) -> Result<()> {
-        self.app_db.sync()
+        self.key_value_db.sync()
     }
 
     /// Parse and verify each blob as a `TxFinalized` payload, returning the
@@ -194,21 +197,21 @@ impl StateMachine {
         for obj in &payload.created {
             // The created array is 0-indexed: the next object lands at slot
             // `created_count`, which doubles as the true object count.
-            let index = state.metadata.created_count as usize;
+            let index = state.created_count as usize;
             state.created.insert(index, Value::from(*obj))?;
             state.created_added.insert(*obj, index as i64);
-            state.metadata.created_count += 1;
+            state.created_count += 1;
         }
         for nullifier in &payload.nullifiers {
             state.nullifiers.insert(&Value::from(*nullifier))?;
-            state.metadata.nullifier_count += 1;
+            state.nullifier_count += 1;
         }
 
         info!(
             slot,
             block_number,
-            created_count = state.metadata.created_count,
-            nullifier_count = state.metadata.nullifier_count,
+            created_count = state.created_count,
+            nullifier_count = state.nullifier_count,
             "Validated blob state update in slot derivation"
         );
         Ok(())
@@ -237,6 +240,9 @@ impl StateMachine {
     /// Derive the next state for one execution slot from a caller
     /// provided base state and the slot's already-parsed payloads.
     ///
+    /// A `None` base derives the genesis state: empty containers, zero counts, and an empty
+    /// state root history.
+    ///
     /// It:
     /// - reopens the persistent created-object, nullifiers, and state root-history containers from
     ///   `base_state.roots`
@@ -246,7 +252,7 @@ impl StateMachine {
     ///   prefetched from the created index) for the creation-collision check
     /// - computes the next state root from the updated created/nullifiers roots and the prior
     ///   state root-history root committed into the resulting `StateHeader`
-    /// - appends that new state root to the full history array and returns the resulting `GlobalState`
+    /// - appends that new state root to the full history array and returns the resulting `DonState`
     ///   together with the object commitments this slot added, as a `DerivedSlot`
     ///
     /// The returned state is only a candidate. By the time this method
@@ -255,56 +261,54 @@ impl StateMachine {
     /// index rows) in Postgres.
     ///
     /// Empty or fully rejected slots still produce a new state with the same created and
-    /// nullifiers roots as `base_state`, but with a newly derived `current_state_root` and an appended
+    /// nullifiers roots as `base_state`, but with a newly derived `state_root` and an appended
     /// state root-history entry for the slot's execution block.
     pub fn derive_slot_state(
         &self,
-        base_state: GlobalState,
+        base_state: Option<DonState>,
         recent_state_roots: impl IntoIterator<Item = (Hash, i64)>,
         slot: u32,
-        block_meta: BlockMetadata,
+        block: ExecutionBlock,
         payloads: &[(u32, Payload)],
         prior_indices: &HashMap<Hash, i64>,
     ) -> Result<DerivedSlot> {
+        let base_roots = base_state.map_or(StateRoots::empty(), |state| state.roots);
+        let base_state_root_count = base_state.map_or(0, |state| state.metadata.state_root_count);
         let mut working = WorkingState {
-            metadata: base_state.metadata,
-            created: self.app_db.open_created(base_state.roots.created)?,
-            nullifiers: self.app_db.open_nullifiers(base_state.roots.nullifiers)?,
+            created_count: base_state.map_or(0, |state| state.metadata.created_count),
+            nullifier_count: base_state.map_or(0, |state| state.metadata.nullifier_count),
+            created: self.key_value_db.open_created(base_roots.created)?,
+            nullifiers: self.key_value_db.open_nullifiers(base_roots.nullifiers)?,
             next_state_history: self
-                .app_db
-                .open_next_state_history(base_state.roots.next_state_history)?,
+                .key_value_db
+                .open_next_state_history(base_roots.next_state_history)?,
             recent_state_roots: recent_state_roots.into_iter().collect(),
             created_added: HashMap::new(),
         };
 
         for (blob_index, payload) in payloads {
-            self.apply_payload(
-                &mut working,
-                payload,
-                prior_indices,
-                slot,
-                block_meta.number,
-            )
-            .with_context(|| format!("applying blob at slot {slot}, blob_index {blob_index}"))?;
+            self.apply_payload(&mut working, payload, prior_indices, slot, block.number)
+                .with_context(|| {
+                    format!("applying blob at slot {slot}, blob_index {blob_index}")
+                })?;
         }
 
-        let prior_state_history_root = base_state.roots.next_state_history;
+        let prior_state_history_root = base_roots.next_state_history;
         let new_state_root = StateHeader::new(
-            i64::from(block_meta.number),
-            block_meta.timestamp as i64,
-            block_meta.hash,
+            i64::from(block.number),
+            block.timestamp as i64,
+            b256_to_hash(block.hash),
             working.created.commitment(),
             working.nullifiers.commitment(),
             prior_state_history_root,
         )
         .hash();
 
-        working.next_state_history.insert(
-            base_state.metadata.state_root_count as usize,
-            Value::from(new_state_root),
-        )?;
+        working
+            .next_state_history
+            .insert(base_state_root_count as usize, Value::from(new_state_root))?;
 
-        let new_state = GlobalState {
+        let new_state = DonState {
             roots: StateRoots {
                 created: working.created.commitment(),
                 nullifiers: working.nullifiers.commitment(),
@@ -312,17 +316,17 @@ impl StateMachine {
                 next_state_history: working.next_state_history.commitment(),
             },
             metadata: StateMetadata {
-                current_state_root: Some(new_state_root),
-                current_block: Some(block_meta),
-                created_count: working.metadata.created_count,
-                nullifier_count: working.metadata.nullifier_count,
-                state_root_count: base_state.metadata.state_root_count + 1,
+                state_root: new_state_root,
+                block,
+                created_count: working.created_count,
+                nullifier_count: working.nullifier_count,
+                state_root_count: base_state_root_count + 1,
             },
         };
 
         info!(
             slot,
-            block_number = block_meta.number,
+            block_number = block.number,
             state_root_count = new_state.metadata.state_root_count,
             "Slot data"
         );
@@ -333,18 +337,13 @@ impl StateMachine {
         })
     }
 
-    pub fn log_current_state(&self, state: GlobalState) {
-        let current_state_root = state
-            .metadata
-            .current_state_root
-            .map(|state_root| format!("{state_root:#}"))
-            .unwrap_or_else(|| "none".to_string());
+    pub fn log_state(&self, state: DonState) {
         info!(
             created_count = state.metadata.created_count,
             nullifier_count = state.metadata.nullifier_count,
             state_root_count = state.metadata.state_root_count,
-            current_state_root = %current_state_root,
-            "Current state"
+            state_root = %format!("{:#}", state.metadata.state_root),
+            "State"
         );
     }
 }
@@ -352,27 +351,27 @@ impl StateMachine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_db::AppDb;
+    use crate::key_value_db::KeyValueDb;
     use payload::proof::MockBlobParser;
     use pod2::middleware::hash_values;
     use tempfile::TempDir;
 
-    fn make_sm() -> (StateMachine, AppDb, TempDir) {
+    fn make_sm() -> (StateMachine, KeyValueDb, TempDir) {
         let dir = TempDir::new().unwrap();
-        let app_db = AppDb::connect(dir.path().to_str().unwrap()).unwrap();
-        let sm = StateMachine::new(app_db.clone(), Arc::new(MockBlobParser));
-        (sm, app_db, dir)
+        let key_value_db = KeyValueDb::connect(dir.path().to_str().unwrap()).unwrap();
+        let sm = StateMachine::new(key_value_db.clone(), Arc::new(MockBlobParser));
+        (sm, key_value_db, dir)
     }
 
     fn unique_hash(n: i64) -> Hash {
         hash_values(&[Value::from(n)])
     }
 
-    fn block_meta(n: u32) -> BlockMetadata {
-        BlockMetadata {
+    fn block_meta(n: u32) -> ExecutionBlock {
+        ExecutionBlock {
             number: n,
             timestamp: (n as u64) * 1000,
-            hash: unique_hash(n as i64),
+            hash: alloy::primitives::B256::repeat_byte(n as u8),
         }
     }
 
@@ -399,27 +398,20 @@ mod tests {
         .into_bytes()
     }
 
-    fn seed_state_root0(sm: &StateMachine) -> GlobalState {
-        sm.derive_slot_state(
-            GlobalState::empty(),
-            [],
-            0,
-            block_meta(0),
-            &[],
-            &HashMap::new(),
-        )
-        .unwrap()
-        .state
+    fn seed_state_root0(sm: &StateMachine) -> DonState {
+        sm.derive_slot_state(None, [], 0, block_meta(0), &[], &HashMap::new())
+            .unwrap()
+            .state
     }
 
     /// Parse blobs and derive one slot in one step (mirroring `Node::derive_slot`
     /// minus the Postgres existence prefetch, which tests supply directly).
     fn derive(
         sm: &StateMachine,
-        base_state: GlobalState,
+        base_state: Option<DonState>,
         recent_state_roots: impl IntoIterator<Item = (Hash, i64)>,
         slot: u32,
-        block_meta: BlockMetadata,
+        block_meta: ExecutionBlock,
         blobs: &[(u32, Vec<u8>)],
         prior_indices: &HashMap<Hash, i64>,
     ) -> DerivedSlot {
@@ -437,26 +429,17 @@ mod tests {
 
     #[test]
     fn test_empty_slot_produces_new_state() {
-        let (sm, _app_db, _dir) = make_sm();
-        let state = derive(
-            &sm,
-            GlobalState::empty(),
-            [],
-            1,
-            block_meta(7),
-            &[],
-            &HashMap::new(),
-        )
-        .state;
-        assert_eq!(state.metadata.current_block.map(|m| m.number), Some(7));
+        let (sm, _key_value_db, _dir) = make_sm();
+        let state = derive(&sm, None, [], 1, block_meta(7), &[], &HashMap::new()).state;
+        assert_eq!(state.metadata.block.number, 7);
         assert_eq!(state.metadata.state_root_count, 1);
     }
 
     #[test]
     fn test_accepts_valid_blob_and_updates_counts() {
-        let (sm, app_db, _dir) = make_sm();
+        let (sm, key_value_db, _dir) = make_sm();
         let state0 = seed_state_root0(&sm);
-        let state_root0 = state0.metadata.current_state_root.unwrap();
+        let state_root0 = state0.metadata.state_root;
 
         let tx_final = unique_hash(10);
         let nullifier = unique_hash(11);
@@ -464,7 +447,7 @@ mod tests {
         let blob = mock_txn_bytes(tx_final, &[nullifier], &[created_obj], state_root0);
         let derived = derive(
             &sm,
-            state0,
+            Some(state0),
             [(state_root0, 0)],
             1,
             block_meta(1),
@@ -472,10 +455,10 @@ mod tests {
             &HashMap::new(),
         );
         let state1 = derived.state;
-        let created_present = app_db
+        let created_present = key_value_db
             .created_exists_for(&state1.roots, &[created_obj], &derived.created_added)
             .unwrap();
-        let nullifier_present = app_db
+        let nullifier_present = key_value_db
             .nullifier_exists_batch(&state1.roots, &[nullifier])
             .unwrap();
 
@@ -489,9 +472,9 @@ mod tests {
     #[test]
     fn records_intermediate_states_alongside_their_nullifiers() {
         use pod2::middleware::{containers::Dictionary, StrKey};
-        let (sm, app_db, _dir) = make_sm();
+        let (sm, key_value_db, _dir) = make_sm();
         let state0 = seed_state_root0(&sm);
-        let state_root0 = state0.metadata.current_state_root.unwrap();
+        let state_root0 = state0.metadata.state_root;
         let intermediate = Dictionary::new(HashMap::from([
             (StrKey::from("key"), Value::from(1_i64)),
             (StrKey::from("version"), Value::from(0_i64)),
@@ -505,7 +488,7 @@ mod tests {
         let blob = mock_txn_bytes(unique_hash(70), &[nullifier], &created, state_root0);
         let derived = derive(
             &sm,
-            state0,
+            Some(state0),
             [(state_root0, 0)],
             1,
             block_meta(1),
@@ -515,19 +498,19 @@ mod tests {
         assert_eq!(derived.state.metadata.created_count, 2);
         assert_eq!(derived.state.metadata.nullifier_count, 1);
         assert_eq!(
-            app_db
+            key_value_db
                 .created_exists_for(&derived.state.roots, &created, &derived.created_added)
                 .unwrap(),
             vec![true, true]
         );
         assert_eq!(
-            app_db
+            key_value_db
                 .nullifier_exists_batch(&derived.state.roots, &[nullifier])
                 .unwrap(),
             vec![true]
         );
 
-        let state_root1 = derived.state.metadata.current_state_root.unwrap();
+        let state_root1 = derived.state.metadata.state_root;
         let replay = mock_txn_bytes(
             unique_hash(71),
             &[],
@@ -536,7 +519,7 @@ mod tests {
         );
         let state2 = derive(
             &sm,
-            derived.state,
+            Some(derived.state),
             [(state_root1, 1)],
             2,
             block_meta(2),
@@ -552,14 +535,14 @@ mod tests {
 
     #[test]
     fn test_rejects_unknown_grounding_state_root() {
-        let (sm, _app_db, _dir) = make_sm();
+        let (sm, _key_value_db, _dir) = make_sm();
         let state0 = seed_state_root0(&sm);
 
         let tx_final = unique_hash(21);
         let blob = mock_txn_bytes(tx_final, &[], &[unique_hash(22)], unique_hash(99));
         let state1 = derive(
             &sm,
-            state0,
+            Some(state0),
             [],
             2,
             block_meta(2),
@@ -572,18 +555,18 @@ mod tests {
 
     #[test]
     fn test_membership_is_scoped_to_state_roots() {
-        let (sm, app_db, _dir) = make_sm();
+        let (sm, key_value_db, _dir) = make_sm();
         let state0 = seed_state_root0(&sm);
-        let state_root0 = state0.metadata.current_state_root.unwrap();
+        let state_root0 = state0.metadata.state_root;
 
         let created_obj = unique_hash(32);
         let blob = mock_txn_bytes(unique_hash(31), &[], &[created_obj], state_root0);
         let derived = derive(
             &sm,
-            state0,
+            Some(state0),
             [(state_root0, 0)],
             1,
-            BlockMetadata::default(),
+            block_meta(0),
             &[(0, blob)],
             &HashMap::new(),
         );
@@ -592,10 +575,10 @@ mod tests {
 
         // The same index cross-checks against each state's root: present under
         // the new state, absent under the old.
-        let old_membership = app_db
+        let old_membership = key_value_db
             .created_exists_for(&state0.roots, &[created_obj], &indices)
             .unwrap();
-        let new_membership = app_db
+        let new_membership = key_value_db
             .created_exists_for(&state1.roots, &[created_obj], &indices)
             .unwrap();
 
@@ -605,15 +588,15 @@ mod tests {
 
     #[test]
     fn test_rejects_duplicate_created_object() {
-        let (sm, _app_db, _dir) = make_sm();
+        let (sm, _key_value_db, _dir) = make_sm();
         let state0 = seed_state_root0(&sm);
-        let state_root0 = state0.metadata.current_state_root.unwrap();
+        let state_root0 = state0.metadata.state_root;
 
         let created_obj = unique_hash(40);
         let blob1 = mock_txn_bytes(unique_hash(41), &[], &[created_obj], state_root0);
         let derived1 = derive(
             &sm,
-            state0,
+            Some(state0),
             [(state_root0, 0)],
             1,
             block_meta(1),
@@ -625,11 +608,11 @@ mod tests {
 
         // A second tx in a later slot re-creates the same object. In production
         // slot 1's index row is committed; here it is passed as prior-existing.
-        let state_root1 = state1.metadata.current_state_root.unwrap();
+        let state_root1 = state1.metadata.state_root;
         let blob2 = mock_txn_bytes(unique_hash(42), &[], &[created_obj], state_root1);
         let state2 = derive(
             &sm,
-            state1,
+            Some(state1),
             [(state_root1, 1)],
             2,
             block_meta(2),
@@ -642,9 +625,9 @@ mod tests {
 
     #[test]
     fn test_rejects_duplicate_created_object_within_slot() {
-        let (sm, _app_db, _dir) = make_sm();
+        let (sm, _key_value_db, _dir) = make_sm();
         let state0 = seed_state_root0(&sm);
-        let state_root0 = state0.metadata.current_state_root.unwrap();
+        let state_root0 = state0.metadata.state_root;
 
         // Two blobs in one slot create the same object; the second is rejected
         // via the in-slot view, with no prior committed state.
@@ -653,7 +636,7 @@ mod tests {
         let blob_b = mock_txn_bytes(unique_hash(52), &[], &[dup], state_root0);
         let derived = derive(
             &sm,
-            state0,
+            Some(state0),
             [(state_root0, 0)],
             1,
             block_meta(1),
@@ -666,9 +649,9 @@ mod tests {
 
     #[test]
     fn test_phantom_prior_index_does_not_reject_creation() {
-        let (sm, _app_db, _dir) = make_sm();
+        let (sm, _key_value_db, _dir) = make_sm();
         let state0 = seed_state_root0(&sm);
-        let state_root0 = state0.metadata.current_state_root.unwrap();
+        let state_root0 = state0.metadata.state_root;
 
         // The prefetched index claims this object exists at index 1, but the
         // array at the base root does not actually hold it (a phantom/stale
@@ -679,7 +662,7 @@ mod tests {
         let blob = mock_txn_bytes(unique_hash(61), &[], &[obj], state_root0);
         let derived = derive(
             &sm,
-            state0,
+            Some(state0),
             [(state_root0, 0)],
             1,
             block_meta(1),

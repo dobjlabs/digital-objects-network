@@ -21,31 +21,31 @@ use wire_types::synchronizer::{
 use wire_types::HealthResponse;
 
 use crate::{
-    app_db::AppDb,
-    global_state::StateRoots,
-    sync_db::{CurrentSnapshot, SyncDb},
+    don_state::StateRoots,
+    key_value_db::KeyValueDb,
+    sync_db::{HeadSnapshot, SyncDb},
 };
 
 const MAX_HASH_QUERY_ITEMS: usize = 256;
 
 #[derive(Clone)]
 struct AppState {
-    /// RocksDB-backed read path used for membership checks and Merkle proofs.
-    app_db: AppDb,
+    /// Key-value (RocksDB) read path used for membership checks and Merkle proofs.
+    key_value_db: KeyValueDb,
     /// Postgres-backed committed-state and sync-progress store.
     sync_db: Arc<SyncDb>,
     info: Arc<Info>,
 }
 
 /// Internal view of head/progress fields shaped for HTTP responses.
-struct HeadSnapshot {
+struct HeadView {
     /// Last slot fully committed by the synchronizer.
     last_processed_slot: u32,
     /// Execution block number associated with the last processed slot, if any.
     last_processed_block_number: Option<u32>,
-    /// Current state root, if one exists.
+    /// Head state root, if one exists.
     current_state_root: Option<Hash>,
-    /// Execution block number committed inside the current state root, if any.
+    /// Execution block number committed inside the head state root, if any.
     current_block_number: Option<i64>,
     /// Number of objects in the global created set.
     created_count: usize,
@@ -65,7 +65,7 @@ struct MembershipSnapshot {
 }
 
 #[derive(Debug, Clone)]
-/// Membership proof for an object against the current created-set root.
+/// Membership proof for an object against the head state's created-set root.
 struct ObjectMembershipProof {
     /// Object commitment the client asked about.
     commitment: Hash,
@@ -83,7 +83,7 @@ struct GroundingWitnessSnapshot {
 }
 
 struct MembershipContext {
-    head: HeadSnapshot,
+    head: HeadView,
     object_commitments: Vec<Hash>,
     nullifiers: Vec<Hash>,
     membership: MembershipSnapshot,
@@ -91,7 +91,7 @@ struct MembershipContext {
 
 pub async fn run_api_server(
     sync_db: Arc<SyncDb>,
-    app_db: AppDb,
+    key_value_db: KeyValueDb,
     info: Arc<Info>,
     bind_addr: SocketAddr,
     mut shutdown_rx: watch::Receiver<bool>,
@@ -113,7 +113,7 @@ pub async fn run_api_server(
         .route("/v1/txlib/grounding-witness", post(post_grounding_witness))
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(AppState {
-            app_db,
+            key_value_db,
             sync_db,
             info,
         });
@@ -165,8 +165,8 @@ async fn get_sync_progress(
 async fn get_state_head(
     State(app_state): State<AppState>,
 ) -> Result<Json<StateHeadResponse>, (StatusCode, String)> {
-    let snapshot = load_current_snapshot(&app_state).await?;
-    let head = build_head_snapshot(&snapshot);
+    let snapshot = load_head_snapshot(&app_state).await?;
+    let head = build_head_view(&snapshot);
     Ok(Json(StateHeadResponse {
         last_processed_slot: head.last_processed_slot,
         last_processed_block_number: head.last_processed_block_number,
@@ -246,24 +246,17 @@ async fn post_grounding_witness(
         .snapshot_with_created_indices(&object_commitments)
         .await
         .map_err(internal_error)?;
+    let snapshot = snapshot.ok_or_else(not_initialized)?;
     let witness = grounding_witness(
-        &app_state.app_db,
+        &app_state.key_value_db,
         &snapshot.state.roots,
         &object_commitments,
         &indices,
     )
     .map_err(internal_error)?;
     let state = snapshot.state;
-    let state_header = state.current_state_header().ok_or_else(|| {
-        (
-            StatusCode::CONFLICT,
-            "synchronizer has no grounded state yet".to_string(),
-        )
-    })?;
-    let state_root = state
-        .metadata
-        .current_state_root
-        .unwrap_or_else(|| state_header.hash());
+    let state_header = state.state_header();
+    let state_root = state.metadata.state_root;
 
     Ok(Json(GroundingWitnessResponse {
         state_root,
@@ -292,16 +285,12 @@ async fn post_grounding_witness(
     }))
 }
 
-fn build_head_snapshot(snapshot: &CurrentSnapshot) -> HeadSnapshot {
-    HeadSnapshot {
+fn build_head_view(snapshot: &HeadSnapshot) -> HeadView {
+    HeadView {
         last_processed_slot: snapshot.last_processed_slot,
         last_processed_block_number: snapshot.last_processed_block_number,
-        current_state_root: snapshot.state.metadata.current_state_root,
-        current_block_number: snapshot
-            .state
-            .metadata
-            .current_block
-            .map(|meta| meta.number as i64),
+        current_state_root: Some(snapshot.state.metadata.state_root),
+        current_block_number: Some(snapshot.state.metadata.block.number as i64),
         created_count: snapshot.state.metadata.created_count as usize,
         nullifier_count: snapshot.state.metadata.nullifier_count as usize,
         state_root_count: snapshot.state.metadata.state_root_count as usize,
@@ -309,25 +298,25 @@ fn build_head_snapshot(snapshot: &CurrentSnapshot) -> HeadSnapshot {
 }
 
 fn membership_snapshot(
-    app_db: &AppDb,
+    key_value_db: &KeyValueDb,
     roots: &StateRoots,
     object_commitments: &[Hash],
     nullifiers: &[Hash],
     indices: &HashMap<Hash, i64>,
 ) -> anyhow::Result<MembershipSnapshot> {
     Ok(MembershipSnapshot {
-        created_present: app_db.created_exists_for(roots, object_commitments, indices)?,
-        nullifier_present: app_db.nullifier_exists_batch(roots, nullifiers)?,
+        created_present: key_value_db.created_exists_for(roots, object_commitments, indices)?,
+        nullifier_present: key_value_db.nullifier_exists_batch(roots, nullifiers)?,
     })
 }
 
 fn grounding_witness(
-    app_db: &AppDb,
+    key_value_db: &KeyValueDb,
     roots: &StateRoots,
     object_commitments: &[Hash],
     indices: &HashMap<Hash, i64>,
 ) -> anyhow::Result<GroundingWitnessSnapshot> {
-    let witnesses = app_db.prove_created_for(roots, object_commitments, indices)?;
+    let witnesses = key_value_db.prove_created_for(roots, object_commitments, indices)?;
     let object_proofs = object_commitments
         .iter()
         .zip(witnesses)
@@ -353,8 +342,9 @@ async fn load_membership_context(
         .snapshot_with_created_indices(&object_commitments)
         .await
         .map_err(internal_error)?;
+    let snapshot = snapshot.ok_or_else(not_initialized)?;
     let membership = membership_snapshot(
-        &app_state.app_db,
+        &app_state.key_value_db,
         &snapshot.state.roots,
         &object_commitments,
         &nullifiers,
@@ -363,27 +353,34 @@ async fn load_membership_context(
     .map_err(internal_error)?;
 
     Ok(MembershipContext {
-        head: build_head_snapshot(&snapshot),
+        head: build_head_view(&snapshot),
         object_commitments,
         nullifiers,
         membership,
     })
 }
 
-async fn load_current_snapshot(
-    app_state: &AppState,
-) -> Result<CurrentSnapshot, (StatusCode, String)> {
+async fn load_head_snapshot(app_state: &AppState) -> Result<HeadSnapshot, (StatusCode, String)> {
     app_state
         .sync_db
-        .current_snapshot()
+        .head_snapshot()
         .await
-        .map_err(internal_error)
+        .map_err(internal_error)?
+        .ok_or_else(not_initialized)
+}
+
+/// The synchronizer has not committed its first slot, so it has no state to answer from yet.
+fn not_initialized() -> (StatusCode, String) {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "synchronizer has not derived its genesis state yet".to_string(),
+    )
 }
 
 async fn load_sync_progress(
     app_state: &AppState,
 ) -> Result<(u32, Option<u32>), (StatusCode, String)> {
-    let snapshot = load_current_snapshot(app_state).await?;
+    let snapshot = load_head_snapshot(app_state).await?;
     Ok((
         snapshot.last_processed_slot,
         snapshot.last_processed_block_number,
