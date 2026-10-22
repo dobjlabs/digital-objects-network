@@ -92,10 +92,9 @@ impl SynchronizerClient for HttpSynchronizerClient {
             &endpoint,
             "synchronizer head response",
         )?;
-        let current_state_root = payload
-            .current_state_root
-            .ok_or_else(|| anyhow!("synchronizer has no grounded state yet"))?;
-        Ok(SynchronizerHead { current_state_root })
+        Ok(SynchronizerHead {
+            current_state_root: payload.current_state_root,
+        })
     }
 
     fn fetch_grounding_witness(

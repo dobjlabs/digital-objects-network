@@ -94,6 +94,7 @@ Default paths are defined in [`src/paths.rs`](src/paths.rs).
 - settings file: `~/.dobj/settings.json`
 - objects dir: `~/.dobj/objects`
 - nullified dir: `~/.dobj/objects/.nullified`
+- discarded dir: `~/.dobj/objects/.discarded`
 
 Current settings are intentionally small:
 
@@ -131,6 +132,14 @@ Live objects are stored in:
 Consumed objects are moved to:
 
 - `~/.dobj/objects/.nullified`
+
+`Driver::discard_object_unsafe` moves an unspent object, whatever its status, to:
+
+- `~/.dobj/objects/.discarded`
+
+The driver never reads that directory back, and the move keeps none of its
+usual guarantees about object state: nothing is checked against the chain
+or reconciled first.
 
 File names are preserved as:
 

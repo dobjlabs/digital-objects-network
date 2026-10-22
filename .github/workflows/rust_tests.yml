@@ -21,7 +21,9 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: interfaces/gui/pnpm-lock.yaml
+          cache-dependency-path: |
+            interfaces/gui/pnpm-lock.yaml
+            apps/bitcraft/tests/pnpm-lock.yaml
       - name: Build default browser UI
         working-directory: interfaces/gui
         run: |
@@ -32,5 +34,10 @@ jobs:
           toolchain: nightly-2026-01-25
           cache-shared-key: test-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           cache-workspace-crates: true
+      - name: Test Bitcraft UI and preparation
+        run: |
+          pnpm --dir apps/bitcraft/tests install --frozen-lockfile
+          pnpm --dir apps/bitcraft/tests test
+          python3 -m unittest discover -s apps/bitcraft/tests -p '*_test.py'
       - name: Run tests
         run: cargo test --release --locked --features dobjd/bundled-ui,dobjd/bundled-bitcraft-ui

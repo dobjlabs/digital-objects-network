@@ -13,6 +13,25 @@ address tracks the open tab and the Recipe Info tab's selected action, so
 `?page=recipebook&action=bitcraft::GatherWood` (the parameter keeps its
 older name) opens the Recipe Info tab with that action selected and shown.
 
+Startup keeps the inventory hidden until the player has a live pocketknife.
+Automatic setup jobs stay out of Jobs; manual jobs stay visible. Failures
+offer retry and never open the inventory. See `BITCRAFT_SPECIFIC_RULES.md`.
+The simple progress bar and status layout also appears in the desktop `shell/`.
+Keep both splash screens visually consistent, including the bottom status
+bar, which both show. On this page the bar is live: it reads the service
+addresses from dobjd's settings and probes each service. The desktop shell's
+"Preparing cryptography..." screen runs before dobjd is ready, so it cannot
+do either; its bar is hardcoded static markup that shows "Loading..." for
+the synchronizer and relayer statuses and addresses, with a yellow dot by
+each status, and a hardcoded version that must match `BITCRAFT_VERSION`
+here. The progress bar counts completed milestones: cryptography ready, pocketknife proof generated, and network
+confirmation. The step counter and heading describe the current work rather
+than the last completed milestone. Errors preserve the bar's completed progress.
+
+Run browser behavior checks with `pnpm --dir apps/bitcraft/tests install --frozen-lockfile`
+and `pnpm --dir apps/bitcraft/tests test` from the repository root. The tests
+use a simulated daemon and need no Tauri host or proving artifacts.
+
 ## Bitcraft-specific rules
 
 `BITCRAFT_SPECIFIC_RULES.md` lists every place where this UI behaves

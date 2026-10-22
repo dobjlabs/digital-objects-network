@@ -606,6 +606,50 @@ fn test_read_object_raw_missing_file_is_not_found() {
 }
 
 #[test]
+fn test_discard_object_unsafe_moves_file_out_of_store() {
+    let (json, _source_tx, _nullifier) = make_importable_log();
+    let driver = import_driver(HashSet::new(), HashSet::new(), false);
+    let record: ObjectRecord = serde_json::from_str(&json).unwrap();
+    let record = ObjectRecord {
+        status: ObjectStatus::Pending,
+        ..record
+    };
+    write_object_file(driver.paths(), &record, "stale.dobj").unwrap();
+    let on_disk = std::fs::read_to_string(driver.paths().objects_dir.join("stale.dobj")).unwrap();
+
+    let summary = driver
+        .discard_object_unsafe(std::path::Path::new("stale.dobj"))
+        .unwrap();
+    assert_eq!(summary.status, ObjectStatus::Pending);
+    assert!(driver.list_objects(None).unwrap().is_empty());
+    let discarded =
+        std::fs::read_to_string(driver.paths().discarded_objects_dir.join("stale.dobj")).unwrap();
+    assert_eq!(discarded, on_disk);
+
+    let spent = ObjectRecord {
+        status: ObjectStatus::Nullified,
+        ..record
+    };
+    write_object_file(driver.paths(), &spent, "spent.dobj").unwrap();
+    for file_name in ["stale.dobj", "spent.dobj"] {
+        let err = driver
+            .discard_object_unsafe(std::path::Path::new(file_name))
+            .unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<crate::error::DriverError>(),
+            Some(crate::error::DriverError::ObjectFileNotFound(_))
+        ));
+    }
+    assert!(
+        driver
+            .paths()
+            .nullified_objects_dir
+            .join("spent.dobj")
+            .exists()
+    );
+}
+
+#[test]
 fn test_list_objects_can_exclude_nullified() {
     let (json, _source_tx, _nullifier) = make_importable_log();
     let driver = import_driver(HashSet::new(), HashSet::new(), false);

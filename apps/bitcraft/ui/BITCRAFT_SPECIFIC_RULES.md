@@ -46,6 +46,77 @@ that block should be plugin-agnostic.
   agent).
 - **Why:** same scope as the object list.
 
+## Startup pocketknife
+
+- **Where:** `ensureStartupPocketknife()`, called by `load()` after active
+  runs have been restored successfully.
+- **What:** if no live `bitcraft::Pocketknife` exists, start
+  `bitcraft::CraftPocketknife` with no inputs. Live knives, including knives
+  held by a run, count as existing. An active crafting run or another active
+  action that outputs a pocketknife suppresses creation. Re-read inventory
+  after restoring runs so a run that finished during startup does not cause
+  another knife to be crafted.
+- **Stale knives:** with no live knife and no such active run, a pending or
+  unknown knife is one whose commit failed. The inventory re-read has already
+  checked it against the synchronizer, so it is moved aside with
+  `POST /objects/{file_name}/discard_unsafe`, which keeps none of dobjd's
+  object-state guarantees, and a new knife is crafted. This
+  happens on "Try again" after a failed commit and on reopening the app.
+  Discarding first requires the synchronizer to answer `GET /state-root`,
+  because the inventory falls back to local state when it is unreachable;
+  otherwise setup shows an error and keeps the knife.
+- **Startup screen:** keep inventory hidden and inert until a live
+  pocketknife is listed. Show whether Bitcraft is creating the knife or
+  waiting for network confirmation. Existing live knives, including held
+  knives, open the inventory directly. The desktop's cryptography startup screen
+  has the same layout, so initial preparation leads into pocketknife setup.
+  Both screens use a simple centered layout with a progress bar and status
+  text. The bar counts three completed milestones: cryptography ready,
+  pocketknife proof generated, and network confirmation. Preparation starts
+  at zero in the desktop shell; successful daemon requests complete the
+  first milestone. A committing run, a completed proof event, or an existing
+  knife that has not been discarded completes the second; a live knife completes the third. Progress
+  stays at the last completed milestone during errors; retry starts a fresh
+  check.
+  Show the current step number and describe the work in progress in the
+  heading, rather than labeling the bar with the last completed milestone.
+  Errors replace the activity description while preserving the bar's value.
+  Steps do not represent time remaining. Keep both screens' appearance in
+  step when changing either. Both show the bottom status bar: live on this
+  page, and hardcoded on the desktop shell's screen, which runs before
+  dobjd is ready and shows "Loading..." with a yellow dot for each service
+  (see `CLAUDE.md`).
+  The status bar stays visible below the setup screen, so service
+  status and addresses can be checked while setup runs or after it fails.
+  Object changes made while the setup screen is up do not flash in the
+  object list, so the starter knife is already settled when inventory
+  opens.
+- **Jobs:** automatic startup runs are tracked but omitted from Jobs.
+  Remember their run ID in session storage so reloading the page keeps
+  them hidden. Manual pocketknife jobs, including restored jobs without
+  that marker, remain visible. The Jobs pane is hidden when no visible
+  jobs exist; starting a manual job reveals it.
+- **Failures:** show the cause with "Try again" and "Copy error" controls
+  if setup fails, active runs cannot be read, the synchronizer cannot be
+  reached before discarding a stale knife, or the recipe is unavailable.
+  There is no way into the inventory from a setup error: it opens only
+  once a live knife exists. Retry re-reads active jobs and inventory before
+  discarding or creating anything.
+  When a setup request or progress read gets no HTTP response at all, the
+  daemon is not running, so the error says the background service isn't
+  responding, suggests quitting and reopening Bitcraft, and names
+  `dobjd.log` in the data directory (the parent of the objects directory)
+  once that directory is known. An HTTP error is shown as it is.
+  "Copy error" copies the full displayed error, including line breaks, and
+  reports success or failure. The error text can also be selected manually.
+  A failed run is never retried automatically while the page is open;
+  reopening the app retries after discarding its stale knife. The startup
+  job is followed through its event stream like any other job; the
+  terminal status arrives through the read prompted by dobjd closing the
+  stream. Inventory is polled after success until the knife is live.
+  Inventory refreshes alone do not trigger creation.
+- **Generic behavior:** loading the UI never starts actions or discards objects automatically.
+
 ## Action input constraints
 
 `GET /actions` reports only the classes an action takes as inputs. Some
