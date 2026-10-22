@@ -2529,18 +2529,24 @@ fn test_generated_class_rekey() {
     let pod = prove(ctx.builder, &MockProver {});
     pod.pod.verify().unwrap();
 
-    assert!(tx_out
-        .created
-        .contains(&Value::from(moved.clone()))
-        .unwrap());
-    assert!(!tx_out
-        .created
-        .contains(&Value::from(foo.obj.commitment()))
-        .unwrap());
-    assert!(tx_out
-        .nullifiers
-        .contains(&Value::from(txlib::compute_nullifier(&foo.obj)))
-        .unwrap());
+    assert!(
+        tx_out
+            .created
+            .contains(&Value::from(moved.clone()))
+            .unwrap()
+    );
+    assert!(
+        !tx_out
+            .created
+            .contains(&Value::from(foo.obj.commitment()))
+            .unwrap()
+    );
+    assert!(
+        tx_out
+            .nullifiers
+            .contains(&Value::from(txlib::compute_nullifier(&foo.obj)))
+            .unwrap()
+    );
     assert_eq!(
         moved.get(&StrKey::from("key")).unwrap().unwrap(),
         receiver_key
@@ -2584,10 +2590,12 @@ fn test_builtin_rekey_discovery_execution_and_planning() {
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs, outputs);
         assert_eq!(action.name, format!("Rekey{}", inputs[0]));
-        assert!(module
-            .module()
-            .predicate_ref_by_name(&action.name)
-            .is_none());
+        assert!(
+            module
+                .module()
+                .predicate_ref_by_name(&action.name)
+                .is_none()
+        );
     }
     assert_eq!(
         module.action_hash("RekeyFoo"),
@@ -2629,22 +2637,28 @@ fn test_builtin_rekey_discovery_execution_and_planning() {
                 assert_eq!(new.obj.get(&StrKey::from(key)).unwrap().unwrap(), value);
             }
         }
-        assert!(result
-            .tx
-            .created
-            .contains(&Value::from(new.obj.clone()))
-            .unwrap());
-        assert!(!result
-            .tx
-            .created
-            .contains(&Value::from(foo.obj.commitment()))
-            .unwrap());
+        assert!(
+            result
+                .tx
+                .created
+                .contains(&Value::from(new.obj.clone()))
+                .unwrap()
+        );
+        assert!(
+            !result
+                .tx
+                .created
+                .contains(&Value::from(foo.obj.commitment()))
+                .unwrap()
+        );
         assert_eq!(result.tx.nullifiers.iter().count(), 1);
-        assert!(result
-            .tx
-            .nullifiers
-            .contains(&Value::from(txlib::compute_nullifier(&foo.obj)))
-            .unwrap());
+        assert!(
+            result
+                .tx
+                .nullifiers
+                .contains(&Value::from(txlib::compute_nullifier(&foo.obj)))
+                .unwrap()
+        );
         apply_tx(&mut state, &result.tx);
         foo = new;
     }
@@ -2730,10 +2744,11 @@ fn test_stable_identifier() {
     let [ore] = res.objs();
 
     println!("{}", serde_json::to_string(&ore.obj).unwrap());
-    assert!(ore
-        .obj
-        .get(&"stable_identifier".into())
-        .unwrap()
-        .unwrap()
-        .is_untyped());
+    assert!(
+        ore.obj
+            .get(&"stable_identifier".into())
+            .unwrap()
+            .unwrap()
+            .is_untyped()
+    );
 }
