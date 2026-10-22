@@ -19,7 +19,6 @@ use crate::{
 pub struct HeadSnapshot {
     pub state: DonState,
     pub last_processed_slot: u32,
-    pub last_processed_block_number: Option<u32>,
 }
 
 #[derive(Clone)]
@@ -158,34 +157,23 @@ impl SyncDb {
     async fn read_snapshot<'e, E: PgExecutor<'e>>(executor: E) -> Result<Option<HeadSnapshot>> {
         let row = sqlx::query(
             r#"
-            WITH latest AS (
-                SELECT slot, el_block_number
-                FROM slots
-                ORDER BY slot DESC
-                LIMIT 1
-            ),
-            head AS (
-                SELECT slot,
-                       el_block_number,
-                       el_block_timestamp,
-                       el_block_hash,
-                       don_created_root,
-                       don_nullifiers_root,
-                       don_prior_state_history_root,
-                       don_next_state_history_root,
-                       don_state_root,
-                       don_created_count,
-                       don_nullifier_count,
-                       don_state_root_count
-                FROM slots
-                WHERE el_block_number IS NOT NULL
-                ORDER BY slot DESC
-                LIMIT 1
-            )
-            SELECT latest.slot AS last_processed_slot,
-                   latest.el_block_number AS last_processed_block_number,
-                   head.*
-            FROM latest, head
+            SELECT (SELECT MAX(slot) FROM slots) AS last_processed_slot,
+                   slot,
+                   el_block_number,
+                   el_block_timestamp,
+                   el_block_hash,
+                   don_created_root,
+                   don_nullifiers_root,
+                   don_prior_state_history_root,
+                   don_next_state_history_root,
+                   don_state_root,
+                   don_created_count,
+                   don_nullifier_count,
+                   don_state_root_count
+            FROM slots
+            WHERE el_block_number IS NOT NULL
+            ORDER BY slot DESC
+            LIMIT 1
             "#,
         )
         .fetch_optional(executor)
@@ -198,9 +186,6 @@ impl SyncDb {
                     format!("slots row for slot {head_slot} had invalid state data")
                 })?,
                 last_processed_slot: row.get::<i32, _>("last_processed_slot") as u32,
-                last_processed_block_number: row
-                    .get::<Option<i32>, _>("last_processed_block_number")
-                    .map(|block_number| block_number as u32),
             })
         })
         .transpose()
@@ -551,7 +536,6 @@ mod tests {
         let snapshot = sync_db.head_snapshot().await?.expect("a slot is committed");
         assert_eq!(snapshot.state, state);
         assert_eq!(snapshot.last_processed_slot, 10);
-        assert_eq!(snapshot.last_processed_block_number, Some(7));
 
         drop_db(&db_name, &admin_url).await?;
         Ok(())
@@ -572,7 +556,6 @@ mod tests {
         let snapshot = sync_db.head_snapshot().await?.expect("a slot is committed");
         assert_eq!(snapshot.state, state);
         assert_eq!(snapshot.last_processed_slot, 12);
-        assert_eq!(snapshot.last_processed_block_number, None);
 
         drop_db(&db_name, &admin_url).await?;
         Ok(())

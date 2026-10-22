@@ -168,11 +168,10 @@ Reorg rollback does not modify RocksDB. The surviving Postgres `DonState` determ
 - `GET /healthz`
   - returns `{"ok": true}`
 - `GET /sync-progress`
-  - returns `last_processed_slot`, `last_processed_block_number`
+  - returns `last_processed_slot`
 - `GET /v1/state/head`
   - returns:
     - `last_processed_slot`
-    - `last_processed_block_number`
     - `state_root`
     - `block_number`
     - `created_count`

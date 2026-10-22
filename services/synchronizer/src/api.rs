@@ -111,7 +111,6 @@ async fn get_sync_progress(
     let head = load_head_snapshot(&app_state).await?;
     Ok(Json(SyncProgressResponse {
         last_processed_slot: head.last_processed_slot,
-        last_processed_block_number: head.last_processed_block_number,
     }))
 }
 
@@ -122,7 +121,6 @@ async fn get_state_head(
     let metadata = head.state.metadata;
     Ok(Json(StateHeadResponse {
         last_processed_slot: head.last_processed_slot,
-        last_processed_block_number: head.last_processed_block_number,
         state_root: metadata.state_root,
         block_number: metadata.block.number as i64,
         created_count: metadata.created_count as usize,

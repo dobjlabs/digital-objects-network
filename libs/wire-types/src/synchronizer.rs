@@ -21,8 +21,6 @@ use serde::{Deserialize, Serialize};
 pub struct SyncProgressResponse {
     /// Last slot fully committed by the synchronizer.
     pub last_processed_slot: u32,
-    /// Execution block number associated with the last processed slot, if any.
-    pub last_processed_block_number: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,8 +28,6 @@ pub struct SyncProgressResponse {
 pub struct StateHeadResponse {
     /// Last slot fully committed by the synchronizer.
     pub last_processed_slot: u32,
-    /// Execution block number associated with the last processed slot, if any.
-    pub last_processed_block_number: Option<u32>,
     /// Head state root.
     pub state_root: Hash,
     /// Execution block number committed inside the head state root.
