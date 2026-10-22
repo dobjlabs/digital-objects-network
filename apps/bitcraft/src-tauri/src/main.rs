@@ -16,6 +16,7 @@ use tauri::{
     tray::TrayIconBuilder,
 };
 
+mod onboarding;
 mod runtime;
 
 #[derive(Parser)]
@@ -32,6 +33,7 @@ struct Args {
 }
 
 struct Desktop {
+    home: PathBuf,
     runtime: Mutex<Option<Arc<runtime::Runtime>>>,
     message: Mutex<String>,
     tray_available: AtomicBool,
@@ -68,7 +70,11 @@ fn report(app: &tauri::AppHandle, message: &str) {
 }
 
 fn close_window(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
+    let windows = app.webview_windows();
+    let focused = windows
+        .values()
+        .find(|window| window.is_focused().unwrap_or(false));
+    if let Some(window) = focused.cloned().or_else(|| app.get_webview_window("main")) {
         let _ = window.close();
     }
 }
@@ -77,6 +83,11 @@ fn run_menu_action(app: &tauri::AppHandle, id: &str) {
     match id {
         "open" => show_window(app),
         "close" => close_window(app),
+        "agent-guide" => {
+            if let Err(error) = onboarding::show(app) {
+                eprintln!("Could not open agent guide: {error:#}");
+            }
+        }
         "quit" => app.exit(0),
         _ => {}
     }
@@ -86,7 +97,14 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let open = MenuItem::with_id(app, "open", "Open Bitcraft", true, None::<&str>)?;
     let close = MenuItem::with_id(app, "close", "Close Window", true, Some("CmdOrCtrl+W"))?;
     let quit = MenuItem::with_id(app, "quit", "Quit Bitcraft", true, Some("CmdOrCtrl+Q"))?;
-    Menu::with_items(app, &[&open, &close, &quit])
+    let agent = MenuItem::with_id(
+        app,
+        "agent-guide",
+        "Play with an agent...",
+        true,
+        None::<&str>,
+    )?;
+    Menu::with_items(app, &[&open, &agent, &close, &quit])
 }
 
 fn is_daemon_url(url: &tauri::Url) -> bool {
@@ -110,13 +128,16 @@ fn show_page_title(window: tauri::WebviewWindow, title: String) {
     let _ = window.set_title(&title);
 }
 
-fn allow_navigation(url: &tauri::Url) -> bool {
-    is_daemon_url(url)
-        || url.scheme() == "tauri"
+fn is_local_app_url(url: &tauri::Url) -> bool {
+    url.scheme() == "tauri"
         || (matches!(url.scheme(), "http" | "https") && url.host_str() == Some("tauri.localhost"))
 }
 
-fn launch_runtime(app: &tauri::AppHandle, home: PathBuf) -> Result<Arc<runtime::Runtime>> {
+fn allow_navigation(url: &tauri::Url) -> bool {
+    is_daemon_url(url) || is_local_app_url(url)
+}
+
+fn runtime_paths(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf)> {
     let (resources, binary) = if cfg!(debug_assertions) {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         (
@@ -136,6 +157,11 @@ fn launch_runtime(app: &tauri::AppHandle, home: PathBuf) -> Result<Arc<runtime::
                 .join(format!("bitcraft-dobjd{}", std::env::consts::EXE_SUFFIX)),
         )
     };
+    Ok((resources, binary))
+}
+
+fn launch_runtime(app: &tauri::AppHandle, home: PathBuf) -> Result<Arc<runtime::Runtime>> {
+    let (resources, binary) = runtime_paths(app)?;
     Ok(Arc::new(runtime::Runtime::launch(
         &home, &resources, &binary,
     )?))
@@ -188,6 +214,7 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let home = bitcraft_launchers::resolve_home(args.home)?;
     let desktop = Desktop {
+        home: home.clone(),
         runtime: Mutex::new(None),
         message: Mutex::new(if args.no_runtime {
             "Desktop shell only. Start without --no-runtime to launch the game.".into()

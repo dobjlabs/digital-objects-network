@@ -28,6 +28,9 @@ def verify_payload(binaries, resources, args):
     if hashlib.sha256((resources / "bitcraft.pexe").read_bytes()).hexdigest() != release["pluginSha256"]:
         raise ValueError("Packaged Bitcraft plugin does not match its release manifest")
     json.loads((resources / "settings.json").read_text())
+    skill = resources / "skills/bitcraft-play/SKILL.md"
+    if not skill.is_file() or "name: bitcraft-play" not in skill.read_text():
+        raise ValueError("Packaged Bitcraft player skill is missing")
     suffix = ".exe" if "windows" in args.target else ""
     for name in sorted(TOOLS | {"bitcraft-desktop"}):
         executable = binaries / f"{name}{suffix}"
