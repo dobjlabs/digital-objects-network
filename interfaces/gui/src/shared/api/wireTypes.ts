@@ -1,6 +1,28 @@
 export type ProofPhase = "generateProof" | "commit";
 export type ProofProgressStatus = "running" | "done" | "failed";
 
+export type ExecutionStage =
+  | "verifyingInputs"
+  | "loadingModule"
+  | "building"
+  | "mining"
+  | "solving"
+  | "proving"
+  | "shrinking"
+  | "writingFiles"
+  | "submitting"
+  | "awaitingTransaction"
+  | "awaitingConfirmation"
+  | "awaitingSynchronization"
+  | "finalizing";
+
+export interface RunStageTiming {
+  stage: ExecutionStage;
+  status: ProofProgressStatus;
+  startedAtMs: number;
+  elapsedMs: number;
+}
+
 /** Lifecycle state of a run in the daemon's run registry. Mirrors
  * `wire_types::RunStatus` (camelCase). */
 export type RunStatus =
@@ -98,6 +120,8 @@ export interface RunState {
   createdAtMs?: number;
   startedAtMs?: number | null;
   finishedAtMs?: number | null;
+  elapsedMs?: number;
+  stageTimings?: RunStageTiming[];
   result: RunActionResult | null;
   error: string | null;
   progress: RunActionProgress[];
@@ -129,6 +153,8 @@ export interface RunActionProgress {
   outputStatus: ObjectStatus | null;
   inputFiles: string[] | null;
   atMs?: number;
+  stage?: ExecutionStage;
+  elapsedMs?: number;
 }
 
 export interface AppSettingsPayload {

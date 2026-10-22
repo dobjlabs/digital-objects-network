@@ -125,6 +125,12 @@ To separate proving from submitting, use `start_proof_job`, then `get_proof_job`
 when ready, and `get_transaction` with `wait_ms` until it is `landed` or
 `expired`.
 
+Run state also includes `elapsedMs` and ordered `stageTimings`: mining,
+statement building, layout solving, ZK proving, shrinking, recording,
+submission, and waiting for settlement. Progress entries identify their `stage` when available.
+The active timing advances when the state is read; terminal durations are
+fixed. These are elapsed measurements, without percentages or ETAs.
+
 Pass `inputObjectPaths` explicitly (one per the action's required input
 classes, in order); resolve them from `list_objects` / `check_feasibility`
 first. An input count that doesn't match the action makes the run fail.

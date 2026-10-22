@@ -138,6 +138,22 @@ result/error in an in-memory registry. Follow a run either way:
   progress (honoring `Last-Event-ID` on reconnect) then tails live events
   until the run is terminal.
 
+Run snapshots include monotonic `elapsedMs` and ordered `stageTimings`
+intervals (`stage`, `status`, `startedAtMs`, `elapsedMs`). Local work separates
+module loading, action/statement building, proof-of-work mining, layout
+solving, ZK proving, and shrinking. Commit work separates file writes,
+submission, and waiting for settlement. The settlement interval includes
+relayer processing, chain inclusion, and synchronization. Mining interrupts
+building; a resumed building interval gets
+its own entry, so durations do not overlap. A supplied mining key skips the
+search interval, while solving and proving still run.
+
+The active interval's elapsed time advances on each snapshot; completed
+intervals and total time freeze when the run finishes. Errors and worker
+panics mark the active interval failed. Progress events include `stage`
+when available and total `elapsedMs` at the event, shared by HTTP SSE and
+MCP run reads. These are elapsed measurements, with no percentage or ETA.
+
 Each accepted `POST` mints a fresh `runId`; clients don't choose it. Terminal
 runs and proof jobs are retained for a short TTL then reaped; both are
 in-memory only, and the transaction records they produced are on disk.

@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use driver::{ExecuteActionInput, ExecutionReporter, ExecutionStepContext, now_ms};
 use wire_types::transactions::TransactionRecord;
-use wire_types::{ActionInput, ExecutionPhase, ProofJobState, ProofJobStatus};
+use wire_types::{ActionInput, ExecutionPhase, ExecutionStage, ProofJobState, ProofJobStatus};
 
 use crate::events::Event;
 use crate::registry::{Registry, Retained};
@@ -94,6 +94,7 @@ impl ProofJobEntry {
     }
 }
 
+#[derive(Clone)]
 struct ProofJobReporter {
     services: Services,
     entry: Arc<ProofJobEntry>,
@@ -184,16 +185,21 @@ pub(crate) fn execute_input(input: &ActionInput) -> ExecuteActionInput {
     }
 }
 
-struct HeldInputReporter<'a, R> {
-    services: &'a Services,
-    reporter: &'a R,
-    files: std::cell::RefCell<Vec<String>>,
+struct HeldInputs {
+    services: Services,
+    files: Mutex<Vec<String>>,
 }
 
-impl<R: ExecutionReporter> ExecutionReporter for HeldInputReporter<'_, R> {
+#[derive(Clone)]
+struct HeldInputReporter<R> {
+    reporter: R,
+    held: Arc<HeldInputs>,
+}
+
+impl<R: ExecutionReporter> ExecutionReporter for HeldInputReporter<R> {
     fn on_inputs_held(&self, files: &[String]) {
-        *self.files.borrow_mut() = files.to_vec();
-        self.services.publish_objects(files);
+        *self.held.files.lock().unwrap() = files.to_vec();
+        self.held.services.publish_objects(files);
         self.reporter.on_inputs_held(files);
     }
 
@@ -206,11 +212,11 @@ impl<R: ExecutionReporter> ExecutionReporter for HeldInputReporter<'_, R> {
     }
 }
 
-impl<R> Drop for HeldInputReporter<'_, R> {
+impl Drop for HeldInputs {
     fn drop(&mut self) {
         // Proving and recording have released their holds before this guard,
         // including when the worker unwinds.
-        self.services.publish_objects(self.files.get_mut());
+        self.services.publish_objects(self.files.get_mut().unwrap());
     }
 }
 
@@ -222,13 +228,24 @@ pub(crate) fn prove_and_record<R: ExecutionReporter>(
     reporter: &R,
 ) -> anyhow::Result<TransactionRecord> {
     let reporter = HeldInputReporter {
-        services,
-        reporter,
-        files: Default::default(),
+        reporter: reporter.clone(),
+        held: Arc::new(HeldInputs {
+            services: services.clone(),
+            files: Default::default(),
+        }),
     };
     let proved = services.driver.prove(input, owner, &reporter)?;
+    reporter.on_step(
+        ExecutionPhase::Commit,
+        ExecutionStage::WritingFiles.message(),
+        &ExecutionStepContext {
+            stage: Some(ExecutionStage::WritingFiles),
+            old_root: Some(proved.grounding_root),
+            ..Default::default()
+        },
+    );
     let record = services.driver.record(proved)?;
-    reporter.files.borrow_mut().clear();
+    reporter.held.files.lock().unwrap().clear();
     services.announce_transaction(&record);
     Ok(record)
 }

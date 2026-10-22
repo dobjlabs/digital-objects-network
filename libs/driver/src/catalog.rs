@@ -34,6 +34,16 @@ pub trait ActionCatalog: Send + Sync {
         inputs: Vec<SpendableObject>,
         args: &ActionArgs,
     ) -> Result<SpendableObjects>;
+    fn execute_action_with_progress(
+        &self,
+        action: QualifiedName,
+        grounding_witness: GroundingWitness,
+        inputs: Vec<SpendableObject>,
+        args: &ActionArgs,
+        _progress: sdk::ExecutionProgress,
+    ) -> Result<SpendableObjects> {
+        self.execute_action(action, grounding_witness, inputs, args)
+    }
     fn generated_podlang(&self) -> Option<String> {
         None
     }

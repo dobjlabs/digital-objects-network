@@ -33,6 +33,9 @@ to the app's own daemon, without a repository checkout or a separate server.
 - Runs can execute concurrently when they use distinct inputs. Limit active
   work to the machine's available compute and memory. A run is complete only
   when its status is `succeeded` or `failed`.
+- Run states include `elapsedMs` and `stageTimings` for mining, building,
+  solving, proving, shrinking, and network waits. These measure elapsed
+  time; do not interpret them as a percentage or estimate time remaining.
 - If following a run is interrupted, inspect `runs list --active --json`
   or `runs show RUN_ID --json`, and reattach with `runs wait RUN_ID --json`.
   Reattaching does not submit another action. Runs are kept in memory for

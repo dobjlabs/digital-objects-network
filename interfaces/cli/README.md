@@ -64,6 +64,12 @@ and retained for about ten minutes after completion, until daemon restart.
 SSE carries progress; bounded HTTP requests and a reconnect/poll fallback
 recover the final state when the stream is interrupted.
 
+Progress includes total elapsed seconds at each boundary. Final states and
+`runs show --json` include `elapsedMs` and `stageTimings`, separating mining,
+building, solving, proving, shrinking, and network waits. Active intervals
+advance in snapshots; completed durations are fixed. These measurements do
+not estimate time remaining.
+
 ### Daemon lifecycle — operates on local files, not HTTP
 
 | Command            | What it does                                                                                       |

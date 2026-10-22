@@ -190,6 +190,8 @@ impl DobjOps for MockDobjOps {
             created_at_ms: 0,
             started_at_ms: Some(0),
             finished_at_ms: Some(0),
+            elapsed_ms: 0,
+            stage_timings: vec![],
             result: Some(RunActionInner {
                 run_id: run_id.to_string(),
                 old_root: "0xmockoldroot".to_string(),

@@ -89,6 +89,8 @@ mod tests {
             output_status: None,
             input_files: None,
             at_ms: 0,
+            stage: None,
+            elapsed_ms: 0,
         }));
         hub.publish(Event::ObjectRemoved {
             file_name: "gone.dobj".to_string(),
