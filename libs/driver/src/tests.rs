@@ -663,13 +663,58 @@ fn prove_holds_its_inputs_until_recorded() {
 }
 
 #[test]
+fn proving_reports_local_stage_boundaries() {
+    #[derive(Clone, Default)]
+    struct Reporter(Arc<Mutex<Vec<wire_types::ExecutionStage>>>);
+
+    impl crate::ExecutionReporter for Reporter {
+        fn on_step(
+            &self,
+            _: wire_types::ExecutionPhase,
+            _: &str,
+            ctx: &crate::ExecutionStepContext,
+        ) {
+            if let Some(stage) = ctx.stage {
+                let mut stages = self.0.lock().unwrap();
+                if stages.last() != Some(&stage) {
+                    stages.push(stage);
+                }
+            }
+        }
+    }
+
+    let fx = fixture("log_1.dobj");
+    let reporter = Reporter::default();
+    let proved = fx
+        .driver
+        .prove(fx.input("CraftWood"), "run-1", &reporter)
+        .unwrap();
+    use wire_types::ExecutionStage::*;
+    assert_eq!(
+        *reporter.0.lock().unwrap(),
+        [
+            VerifyingInputs,
+            LoadingModule,
+            Building,
+            Mining,
+            Building,
+            Solving,
+            Proving,
+            Shrinking
+        ]
+    );
+    assert_eq!(proved.input_files(), &[fx.input_file]);
+}
+
+#[test]
 fn input_hold_notification_precedes_proving_and_unwinds_with_the_holds() {
-    struct Reporter<'a> {
-        driver: &'a Driver,
-        notified: &'a std::sync::atomic::AtomicBool,
+    #[derive(Clone)]
+    struct Reporter {
+        driver: Arc<Driver>,
+        notified: Arc<std::sync::atomic::AtomicBool>,
         panic: bool,
     }
-    impl crate::ExecutionReporter for Reporter<'_> {
+    impl crate::ExecutionReporter for Reporter {
         fn on_inputs_held(&self, files: &[String]) {
             assert_eq!(files, ["log_1.dobj"]);
             assert_eq!(
@@ -690,21 +735,23 @@ fn input_hold_notification_precedes_proving_and_unwinds_with_the_holds() {
             message: &str,
             _: &crate::ExecutionStepContext,
         ) {
-            if message == "Generating proof" {
+            if message == wire_types::ExecutionStage::Building.message() {
                 assert!(self.notified.load(std::sync::atomic::Ordering::Relaxed));
             }
         }
     }
     for panic in [false, true] {
         let fx = fixture("log_1.dobj");
-        let notified = std::sync::atomic::AtomicBool::new(false);
+        let notified = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let input = fx.input("CraftWood");
+        let driver = Arc::new(fx.driver);
         let reporter = Reporter {
-            driver: &fx.driver,
-            notified: &notified,
+            driver: driver.clone(),
+            notified: notified.clone(),
             panic,
         };
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            fx.driver.prove(fx.input("CraftWood"), "run-1", &reporter)
+            driver.prove(input, "run-1", &reporter)
         }));
         assert!(notified.load(std::sync::atomic::Ordering::Relaxed));
         if panic {
@@ -712,8 +759,14 @@ fn input_hold_notification_precedes_proving_and_unwinds_with_the_holds() {
         } else {
             drop(outcome.unwrap().unwrap());
         }
-        assert_eq!(fx.summary(&fx.input_file).held_by_run_id, None);
-        assert!(fx.driver.list_transactions().unwrap().is_empty());
+        assert_eq!(
+            driver
+                .read_object(std::path::Path::new(&fx.input_file))
+                .unwrap()
+                .held_by_run_id,
+            None
+        );
+        assert!(driver.list_transactions().unwrap().is_empty());
     }
 }
 

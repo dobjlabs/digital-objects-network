@@ -332,6 +332,18 @@ impl ActionCatalog for PexeCatalog {
         inputs: Vec<SpendableObject>,
         args: &ActionArgs,
     ) -> Result<SpendableObjects> {
+        self.execute_action_with_progress(action, grounding_witness, inputs, args, Arc::new(|_| {}))
+    }
+
+    fn execute_action_with_progress(
+        &self,
+        action: QualifiedName,
+        grounding_witness: GroundingWitness,
+        inputs: Vec<SpendableObject>,
+        args: &ActionArgs,
+        progress: sdk::ExecutionProgress,
+    ) -> Result<SpendableObjects> {
+        progress(sdk::ExecutionStage::LoadingModule);
         let plugin_idx = *self
             .action_plugin_idx
             .get(&action)
@@ -346,7 +358,9 @@ impl ActionCatalog for PexeCatalog {
                     plugin.manifest.plugin.name
                 )
             })?;
-        let executor = module.executor(self.mock_proofs, Arc::new(grounding_witness));
+        let executor = module
+            .executor(self.mock_proofs, Arc::new(grounding_witness))
+            .with_progress(progress);
         Ok(executor.action_with_args(&action.name, inputs, args)?)
     }
 

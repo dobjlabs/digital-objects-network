@@ -8,8 +8,8 @@ use std::time::Instant;
 use driver::{ExecutionReporter, ExecutionStepContext, now_ms};
 use wire_types::transactions::{TransactionRecord, TransactionState};
 use wire_types::{
-    ActionInput, ExecutionPhase, ObjectStatus, ProofProgressStatus, QualifiedName, RunAccepted,
-    RunActionProgress, RunActionResult, RunState, RunStatus,
+    ActionInput, ExecutionPhase, ExecutionStage, ObjectStatus, ProofProgressStatus, QualifiedName,
+    RunAccepted, RunActionProgress, RunActionResult, RunStageTiming, RunState, RunStatus,
 };
 
 use crate::events::{Event, EventHub};
@@ -27,6 +27,45 @@ struct RunInner {
     finished_at: Option<Instant>,
     started_at_ms: Option<u64>,
     finished_at_ms: Option<u64>,
+    stage_timings: Vec<RunStageTiming>,
+    stage_started: Option<Instant>,
+}
+
+impl RunInner {
+    fn finish_stage(&mut self, status: ProofProgressStatus, now: Instant) {
+        if let Some(started) = self.stage_started.take() {
+            let timing = self.stage_timings.last_mut().unwrap();
+            timing.elapsed_ms = now.duration_since(started).as_millis() as u64;
+            timing.status = status;
+        }
+    }
+
+    fn begin_stage(&mut self, stage: ExecutionStage, now: Instant, at_ms: u64) {
+        if self.stage_started.is_some()
+            && self
+                .stage_timings
+                .last()
+                .is_some_and(|timing| timing.stage == stage)
+        {
+            return;
+        }
+        self.finish_stage(ProofProgressStatus::Done, now);
+        self.stage_timings.push(RunStageTiming {
+            stage,
+            status: ProofProgressStatus::Running,
+            started_at_ms: at_ms,
+            elapsed_ms: 0,
+        });
+        self.stage_started = Some(now);
+    }
+
+    fn timings_at(&self, now: Instant) -> Vec<RunStageTiming> {
+        let mut timings = self.stage_timings.clone();
+        if let Some(started) = self.stage_started {
+            timings.last_mut().unwrap().elapsed_ms = now.duration_since(started).as_millis() as u64;
+        }
+        timings
+    }
 }
 
 /// One run's mutable state plus its identity.
@@ -35,6 +74,7 @@ pub struct RunEntry {
     action: QualifiedName,
     input_object_paths: Vec<String>,
     created_at_ms: u64,
+    created_at: Instant,
     sequence: u64,
     inner: Mutex<RunInner>,
 }
@@ -61,6 +101,7 @@ impl RunEntry {
             action,
             input_object_paths,
             created_at_ms: now_ms(),
+            created_at: Instant::now(),
             sequence,
             inner: Mutex::new(RunInner {
                 status: RunStatus::Queued,
@@ -70,6 +111,8 @@ impl RunEntry {
                 finished_at: None,
                 started_at_ms: None,
                 finished_at_ms: None,
+                stage_timings: Vec::new(),
+                stage_started: None,
             }),
         }
     }
@@ -77,7 +120,7 @@ impl RunEntry {
     /// Append a non-terminal progress event and advance the status to match
     /// its phase. Asserts the run is still in flight -- the worker never emits
     /// events after the run finishes.
-    fn push_progress(&self, progress: RunActionProgress) {
+    fn push_progress(&self, mut progress: RunActionProgress) -> RunActionProgress {
         let mut inner = self.inner.lock().unwrap();
         assert!(
             inner.finished_at.is_none(),
@@ -88,7 +131,16 @@ impl RunEntry {
             ExecutionPhase::Commit => RunStatus::Committing,
         };
         inner.started_at_ms.get_or_insert(progress.at_ms);
-        inner.progress.push(progress);
+        let now = Instant::now();
+        progress.elapsed_ms = now.duration_since(self.created_at).as_millis() as u64;
+        if let Some(stage) = progress.stage {
+            inner.begin_stage(stage, now, progress.at_ms);
+        }
+        if progress.status != ProofProgressStatus::Running {
+            inner.finish_stage(progress.status, now);
+        }
+        inner.progress.push(progress.clone());
+        progress
     }
 
     fn succeed(&self, result: RunActionResult) {
@@ -99,7 +151,9 @@ impl RunEntry {
         );
         inner.status = RunStatus::Succeeded;
         inner.result = Some(result);
-        inner.finished_at = Some(Instant::now());
+        let now = Instant::now();
+        inner.finish_stage(ProofProgressStatus::Done, now);
+        inner.finished_at = Some(now);
         inner.finished_at_ms = Some(now_ms());
     }
 
@@ -118,18 +172,29 @@ impl RunEntry {
             RunStatus::Committing => ExecutionPhase::Commit,
             _ => ExecutionPhase::GenerateProof,
         };
-        let event = progress_event(
-            &self.run_id,
+        let now = Instant::now();
+        let stage = inner
+            .stage_started
+            .and_then(|_| inner.stage_timings.last().map(|timing| timing.stage));
+        inner.finish_stage(ProofProgressStatus::Failed, now);
+        let event = RunActionProgress {
+            run_id: self.run_id.clone(),
             phase,
-            ProofProgressStatus::Failed,
-            message.clone(),
-            &ExecutionStepContext::default(),
-        );
+            status: ProofProgressStatus::Failed,
+            message: message.clone(),
+            old_root: None,
+            output_files: None,
+            output_status: None,
+            input_files: None,
+            at_ms: now_ms(),
+            stage,
+            elapsed_ms: now.duration_since(self.created_at).as_millis() as u64,
+        };
         inner.started_at_ms.get_or_insert(event.at_ms);
         inner.progress.push(event.clone());
         inner.status = RunStatus::Failed;
         inner.error = Some(message);
-        inner.finished_at = Some(Instant::now());
+        inner.finished_at = Some(now);
         inner.finished_at_ms = Some(event.at_ms);
         event
     }
@@ -150,6 +215,7 @@ impl RunEntry {
 
     pub fn snapshot(&self) -> RunState {
         let inner = self.inner.lock().unwrap();
+        let now = inner.finished_at.unwrap_or_else(Instant::now);
         RunState {
             run_id: self.run_id.clone(),
             action: self.action.clone(),
@@ -158,6 +224,8 @@ impl RunEntry {
             created_at_ms: self.created_at_ms,
             started_at_ms: inner.started_at_ms,
             finished_at_ms: inner.finished_at_ms,
+            elapsed_ms: now.duration_since(self.created_at).as_millis() as u64,
+            stage_timings: inner.timings_at(now),
             result: inner.result.clone(),
             error: inner.error.clone(),
             progress: inner.progress.clone(),
@@ -182,6 +250,8 @@ fn progress_event(
         output_status: ctx.output_status,
         input_files: None,
         at_ms: now_ms(),
+        stage: ctx.stage,
+        elapsed_ms: 0,
     }
 }
 
@@ -225,9 +295,8 @@ impl RunReporter {
     }
 
     fn emit(&self, progress: RunActionProgress) {
-        self.events
-            .publish(Event::RunActionProgress(progress.clone()));
-        self.entry.push_progress(progress);
+        let progress = self.entry.push_progress(progress);
+        self.events.publish(Event::RunActionProgress(progress));
     }
 
     #[cfg(test)]
@@ -240,6 +309,7 @@ impl RunReporter {
         record: &TransactionRecord,
         status: ProofProgressStatus,
         message: &str,
+        stage: Option<ExecutionStage>,
     ) {
         self.emit(RunActionProgress {
             run_id: self.run_id().to_string(),
@@ -255,12 +325,19 @@ impl RunReporter {
             }),
             input_files: Some(record.input_files.clone()),
             at_ms: now_ms(),
+            stage,
+            elapsed_ms: 0,
         });
     }
 
     fn finish_landed(&self, record: &TransactionRecord) {
         tracing::info!(run_id = %self.run_id(), tx_final = %record.tx_final, "Transaction landed");
-        self.transaction_progress(record, ProofProgressStatus::Done, "Transaction landed");
+        self.transaction_progress(
+            record,
+            ProofProgressStatus::Done,
+            "Transaction landed",
+            None,
+        );
         self.entry.succeed(RunActionResult {
             run_id: self.run_id().to_string(),
             old_root: record.grounding_root.clone(),
@@ -335,11 +412,13 @@ fn submit_record(
         &record,
         ProofProgressStatus::Running,
         "Transaction recorded",
+        Some(ExecutionStage::WritingFiles),
     );
     reporter.transaction_progress(
         &record,
         ProofProgressStatus::Running,
         "Submitting proof to relayer",
+        Some(ExecutionStage::Submitting),
     );
     let tx_final = payload::decode_hash_hex(&record.tx_final)?;
     let record = match services.submit_transaction(&tx_final) {
@@ -350,7 +429,12 @@ fn submit_record(
                 }
                 _ => format!("Transaction {}", submitted.state),
             };
-            reporter.transaction_progress(&submitted, ProofProgressStatus::Running, &message);
+            reporter.transaction_progress(
+                &submitted,
+                ProofProgressStatus::Running,
+                &message,
+                Some(ExecutionStage::AwaitingSynchronization),
+            );
             submitted
         }
         Err(err) => {
@@ -362,6 +446,7 @@ fn submit_record(
                     "Relayer submission failed: {err:#}; transaction is {}",
                     current.state
                 ),
+                Some(ExecutionStage::Submitting),
             );
             services.announce_transaction(&current);
             current
@@ -372,6 +457,7 @@ fn submit_record(
             &record,
             ProofProgressStatus::Running,
             "Waiting for the transaction to land",
+            Some(ExecutionStage::AwaitingSynchronization),
         );
     }
     Ok(record)
@@ -541,6 +627,99 @@ mod tests {
     }
 
     #[test]
+    fn stage_intervals_separate_mining_and_resumed_building() {
+        let entry = RunEntry::new("r1".into(), action("A"), vec![], 0);
+        let mut inner = entry.inner.lock().unwrap();
+        let start = Instant::now();
+        inner.begin_stage(ExecutionStage::Building, start, 100);
+        inner.begin_stage(
+            ExecutionStage::Mining,
+            start + Duration::from_millis(20),
+            120,
+        );
+        inner.begin_stage(
+            ExecutionStage::Mining,
+            start + Duration::from_millis(30),
+            130,
+        );
+        let active = inner.timings_at(start + Duration::from_millis(60));
+        assert_eq!(active.len(), 2);
+        assert_eq!(active[0].elapsed_ms, 20);
+        assert_eq!(active[1].elapsed_ms, 40);
+        assert_eq!(active[1].status, ProofProgressStatus::Running);
+        inner.begin_stage(
+            ExecutionStage::Building,
+            start + Duration::from_millis(70),
+            170,
+        );
+        inner.finish_stage(
+            ProofProgressStatus::Done,
+            start + Duration::from_millis(100),
+        );
+        let finished = inner.timings_at(start + Duration::from_secs(100));
+        assert_eq!(
+            finished
+                .iter()
+                .map(|timing| timing.elapsed_ms)
+                .collect::<Vec<_>>(),
+            [20, 50, 30]
+        );
+        assert!(
+            finished
+                .iter()
+                .all(|timing| timing.status == ProofProgressStatus::Done)
+        );
+        assert_eq!(
+            finished
+                .iter()
+                .map(|timing| timing.stage)
+                .collect::<Vec<_>>(),
+            [
+                ExecutionStage::Building,
+                ExecutionStage::Mining,
+                ExecutionStage::Building
+            ]
+        );
+    }
+
+    #[test]
+    fn stage_progress_is_shared_by_broadcast_snapshots_and_replay() {
+        let entry = Arc::new(RunEntry::new("r1".into(), action("A"), vec![], 0));
+        let events = EventHub::new();
+        let mut receiver = events.subscribe();
+        let reporter = RunReporter::new(events, entry.clone());
+        reporter.on_step(
+            ExecutionPhase::GenerateProof,
+            ExecutionStage::Proving.message(),
+            &ExecutionStepContext {
+                stage: Some(ExecutionStage::Proving),
+                ..Default::default()
+            },
+        );
+        let Event::RunActionProgress(broadcast) = receiver.try_recv().unwrap().event else {
+            panic!("expected run progress");
+        };
+        let snapshot = entry.snapshot();
+        assert_eq!(snapshot.progress[0], broadcast);
+        assert_eq!(snapshot.progress[0], entry.events_from(0).0[0].1);
+        assert_eq!(snapshot.stage_timings[0].stage, ExecutionStage::Proving);
+        assert_eq!(
+            snapshot.stage_timings[0].status,
+            ProofProgressStatus::Running
+        );
+        assert!(snapshot.elapsed_ms >= broadcast.elapsed_ms);
+        reporter.finish_failure("prover failed".into());
+        let failed = entry.snapshot();
+        assert_eq!(
+            failed.progress.last().unwrap().stage,
+            Some(ExecutionStage::Proving)
+        );
+        assert_eq!(failed.stage_timings[0].status, ProofProgressStatus::Failed);
+        assert_eq!(entry.snapshot(), failed);
+        assert!(entry.inner.lock().unwrap().stage_started.is_none());
+    }
+
+    #[test]
     fn transaction_progress_preserves_the_record_root_and_state() {
         let registry = RunRegistry::default();
         let entry = start(&registry, "run");
@@ -556,6 +735,7 @@ mod tests {
                 &record,
                 ProofProgressStatus::Running,
                 "Transaction updated",
+                None,
             );
             let snapshot = entry.snapshot();
             let progress = snapshot.progress.last().unwrap();
@@ -720,13 +900,24 @@ mod tests {
             events.clone(),
             action("panic"),
             Vec::new(),
-            |_| {
+            |reporter| {
+                reporter.on_step(
+                    ExecutionPhase::GenerateProof,
+                    ExecutionStage::Proving.message(),
+                    &ExecutionStepContext {
+                        stage: Some(ExecutionStage::Proving),
+                        ..Default::default()
+                    },
+                );
                 panic!("worker panic");
             },
             still_open,
         );
         let state = wait_terminal(&registry, &panicked).await;
         assert_eq!(state.status, RunStatus::Failed);
+        assert_eq!(state.stage_timings[0].stage, ExecutionStage::Proving);
+        assert_eq!(state.stage_timings[0].status, ProofProgressStatus::Failed);
+        assert_eq!(registry.get(&panicked.run_id).unwrap().snapshot(), state);
         assert!(state.error.unwrap().contains("worker panic"));
     }
 
@@ -741,11 +932,12 @@ mod tests {
         assert_eq!(queued.started_at_ms, None);
         assert_eq!(queued.finished_at_ms, None);
 
-        let first = step(
+        let mut first = step(
             ExecutionPhase::GenerateProof,
             ProofProgressStatus::Running,
             "gen",
         );
+        first.stage = Some(ExecutionStage::Proving);
         let first_at_ms = first.at_ms;
         entry.push_progress(first);
         assert_eq!(entry.status(), RunStatus::GenerateProof);
@@ -755,6 +947,7 @@ mod tests {
             "commit",
         );
         committing.at_ms = first_at_ms + 1;
+        committing.stage = Some(ExecutionStage::AwaitingSynchronization);
         entry.push_progress(committing);
         let running = entry.snapshot();
         assert_eq!(running.status, RunStatus::Committing);
@@ -775,6 +968,14 @@ mod tests {
         entry.succeed(ok_result());
         let finished = entry.snapshot();
         assert_eq!(finished.status, RunStatus::Succeeded);
+        assert_eq!(entry.snapshot(), finished);
+        assert_eq!(finished.stage_timings.len(), 2);
+        assert!(
+            finished
+                .stage_timings
+                .iter()
+                .all(|timing| timing.status == ProofProgressStatus::Done)
+        );
         assert_eq!(finished.result, Some(ok_result()));
         assert!(finished.error.is_none());
         assert_eq!(finished.progress, running.progress);

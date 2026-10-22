@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 
 use pod2::middleware::Hash;
-use wire_types::{ActionArgValues, ExecutionPhase, ObjectStatus, QualifiedName};
+use wire_types::{ActionArgValues, ExecutionPhase, ExecutionStage, ObjectStatus, QualifiedName};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverPaths {
@@ -46,6 +46,8 @@ pub struct ExecuteActionInput {
 /// Optional context passed alongside execution progress steps.
 #[derive(Debug, Clone, Default)]
 pub struct ExecutionStepContext {
+    /// Measured substage, independent of the broader proof/commit phase.
+    pub stage: Option<ExecutionStage>,
     /// The state root hash before this execution (available during Commit phase).
     pub old_root: Option<Hash>,
     /// Output files touched by this step, when the step corresponds to a
@@ -56,7 +58,8 @@ pub struct ExecutionStepContext {
     pub output_status: Option<ObjectStatus>,
 }
 
-pub trait ExecutionReporter {
+/// Cloned into SDK callbacks that outlive the borrowed execution context.
+pub trait ExecutionReporter: Clone + Send + Sync + 'static {
     /// Called after acquiring inputs, before network requests or proving.
     fn on_inputs_held(&self, _files: &[String]) {}
     fn on_step(&self, _phase: ExecutionPhase, _message: &str, _ctx: &ExecutionStepContext) {}

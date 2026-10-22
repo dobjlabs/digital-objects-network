@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow};
@@ -11,7 +12,7 @@ use pod2::middleware::{Hash, containers::Dictionary};
 use txlib::{grounding_aged_out, object_nullifier_hash};
 use wire_types::relayer::JobStatus;
 use wire_types::transactions::{TransactionRecord, TransactionState};
-use wire_types::{ExecutionPhase, ObjectSummary, QualifiedName};
+use wire_types::{ExecutionPhase, ExecutionStage, ObjectSummary, QualifiedName};
 
 use crate::driver::Driver;
 use crate::error::DriverError;
@@ -111,8 +112,14 @@ impl Driver {
         validate_execute_request(&input, &action)?;
         let args = decode_action_args(&input.args)?;
 
-        let no_ctx = ExecutionStepContext::default();
-        reporter.on_step(ExecutionPhase::GenerateProof, "Verifying inputs", &no_ctx);
+        reporter.on_step(
+            ExecutionPhase::GenerateProof,
+            ExecutionStage::VerifyingInputs.message(),
+            &ExecutionStepContext {
+                stage: Some(ExecutionStage::VerifyingInputs),
+                ..Default::default()
+            },
+        );
         let (resolved_inputs, holds) = {
             let _store = self.store_lock.lock().expect("store lock poisoned");
             let entries = load_object_files(&self.paths)?;
@@ -138,16 +145,34 @@ impl Driver {
         let grounding_root = grounding_witness.state_header.hash();
         let grounding_block = grounding_witness.state_header.block_number;
 
-        reporter.on_step(ExecutionPhase::GenerateProof, "Generating proof", &no_ctx);
         let execution_inputs = resolved_inputs
             .iter()
             .map(|input| input.record.spendable())
             .collect::<Vec<_>>();
-        let spendable_outputs = catalog.execute_action(
+        let stage_reporter = reporter.clone();
+        let progress = Arc::new(move |stage| {
+            let stage = match stage {
+                sdk::ExecutionStage::LoadingModule => ExecutionStage::LoadingModule,
+                sdk::ExecutionStage::Building => ExecutionStage::Building,
+                sdk::ExecutionStage::Mining => ExecutionStage::Mining,
+                sdk::ExecutionStage::Solving => ExecutionStage::Solving,
+                sdk::ExecutionStage::Proving => ExecutionStage::Proving,
+            };
+            stage_reporter.on_step(
+                ExecutionPhase::GenerateProof,
+                stage.message(),
+                &ExecutionStepContext {
+                    stage: Some(stage),
+                    ..Default::default()
+                },
+            );
+        });
+        let spendable_outputs = catalog.execute_action_with_progress(
             input.action.clone(),
             grounding_witness,
             execution_inputs,
             &args,
+            progress,
         )?;
         if spendable_outputs.objs.len() != action.total_outputs.len() {
             return Err(anyhow!(
@@ -160,6 +185,7 @@ impl Driver {
         reporter.on_done(ExecutionPhase::GenerateProof);
 
         let shrink_ctx = ExecutionStepContext {
+            stage: Some(ExecutionStage::Shrinking),
             old_root: Some(grounding_root),
             output_files: Vec::new(),
             output_status: None,

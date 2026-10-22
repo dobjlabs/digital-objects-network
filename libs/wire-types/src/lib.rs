@@ -401,6 +401,12 @@ pub struct RunState {
     /// When the run reached `succeeded` or `failed`. Absent until then.
     #[serde(default)]
     pub finished_at_ms: Option<u64>,
+    /// Monotonic time since acceptance, frozen at completion. No ETA is implied.
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    /// Ordered, non-overlapping stage intervals. A resumed stage has a new entry.
+    #[serde(default)]
+    pub stage_timings: Vec<RunStageTiming>,
     /// Populated once `status` is `succeeded`.
     pub result: Option<RunActionResult>,
     /// Populated once `status` is `failed`.
@@ -517,6 +523,56 @@ pub enum ProofProgressStatus {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum ExecutionStage {
+    VerifyingInputs,
+    LoadingModule,
+    Building,
+    Mining,
+    Solving,
+    Proving,
+    Shrinking,
+    WritingFiles,
+    Submitting,
+    AwaitingTransaction,
+    AwaitingConfirmation,
+    AwaitingSynchronization,
+    Finalizing,
+}
+
+impl ExecutionStage {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::VerifyingInputs => "Verifying inputs and fetching grounding witness",
+            Self::LoadingModule => "Loading action module",
+            Self::Building => "Building action and proof statements",
+            Self::Mining => "Searching for a proof-of-work key",
+            Self::Solving => "Solving proof layout",
+            Self::Proving => "Generating ZK proof",
+            Self::Shrinking => "Shrinking proof",
+            Self::WritingFiles => "Writing output files",
+            Self::Submitting => "Submitting proof to relayer",
+            Self::AwaitingTransaction => "Waiting for transaction hash",
+            Self::AwaitingConfirmation => "Waiting for transaction confirmation",
+            Self::AwaitingSynchronization => "Waiting for synchronizer",
+            Self::Finalizing => "Finalizing local object state",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RunStageTiming {
+    pub stage: ExecutionStage,
+    pub status: ProofProgressStatus,
+    pub started_at_ms: u64,
+    /// Monotonic duration of this interval; advances while status is running.
+    pub elapsed_ms: u64,
+}
+
 /// Wire shape for a single `run-action-progress` SSE event. Subscribers
 /// filter by `run_id` to scope events to their own action.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -534,6 +590,11 @@ pub struct RunActionProgress {
     /// When the event was recorded, in Unix epoch milliseconds.
     #[serde(default)]
     pub at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage: Option<ExecutionStage>,
+    /// Monotonic time since the run was accepted, at this event.
+    #[serde(default)]
+    pub elapsed_ms: u64,
 }
 
 // ===========================================================================

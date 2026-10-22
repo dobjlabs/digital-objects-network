@@ -59,8 +59,11 @@ async fn follow_inner(client: &DobjdClient, run_id: &str, quiet: bool) -> Result
                 failures = 0;
                 if !quiet {
                     eprintln!(
-                        "[{:?}/{:?}] {}",
-                        progress.phase, progress.status, progress.message
+                        "[{:?}/{:?} +{:.1}s] {}",
+                        progress.phase,
+                        progress.status,
+                        progress.elapsed_ms as f64 / 1000.0,
+                        progress.message
                     );
                 }
             }
@@ -118,6 +121,15 @@ fn print_state(state: &RunState, json: bool) -> Result<()> {
     );
     if let Some(error) = &state.error {
         println!("error: {error}");
+    }
+    println!("elapsed: {:.1}s", state.elapsed_ms as f64 / 1000.0);
+    for timing in &state.stage_timings {
+        println!(
+            "{:?}: {:.3}s ({:?})",
+            timing.stage,
+            timing.elapsed_ms as f64 / 1000.0,
+            timing.status
+        );
     }
     if let Some(result) = &state.result {
         println!("grounding root: {}", result.old_root);
