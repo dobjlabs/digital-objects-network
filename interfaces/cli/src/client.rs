@@ -14,12 +14,26 @@ impl DobjdClient {
     pub fn new(base: String) -> Self {
         Self {
             base: base.trim_end_matches('/').to_string(),
-            http: Client::new(),
+            http: Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .timeout(std::time::Duration::from_secs(40))
+                .build()
+                .expect("HTTP client configuration is valid"),
         }
     }
 
     pub fn base_url(&self) -> &str {
         &self.base
+    }
+
+    pub fn event_stream(&self, path: &str) -> Result<reqwest_eventsource::EventSource> {
+        let http = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .read_timeout(std::time::Duration::from_secs(45))
+            .build()?;
+        Ok(reqwest_eventsource::EventSource::new(
+            http.get(self.url(path)),
+        )?)
     }
 
     fn url(&self, path: &str) -> String {

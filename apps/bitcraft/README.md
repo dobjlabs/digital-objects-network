@@ -121,6 +121,22 @@ bitcraft-dobj --home /path/to/bitcraft-data objects
 bitcraft-dobj-mcp-proxy --home /path/to/bitcraft-data
 ```
 
+Choose **Play with an agent...** in the app or tray menu to copy a prompt
+for a local agent with filesystem and shell access. It points to the bundled
+`runtime/skills/bitcraft-play/SKILL.md`, the installed CLI, and the app's
+actual home directory, including custom `--home` installations. The agent
+can read the skill directly; no checkout or permanent agent configuration
+is needed. Packaging includes this skill alongside the runtime resources.
+
+The skill leads with CLI discovery and long-running shell commands. The
+CLI exposes inventory fields, recipe outputs and arguments, and `runs
+list/show/wait` for recovering an interrupted connection without another
+submission. `run --json` and `runs wait --json` return the final run state on
+stdout, progress on stderr, and nonzero exit status for a failed run.
+The guide also provides an optional MCP enable command and direct HTTP
+configuration. It does not change the agent's configuration or enable MCP
+automatically.
+
 MCP clients can launch the proxy with no port arguments once MCP is enabled in the running app. `--home PATH` must precede tool arguments. Help/version work without a running app. Endpoint overrides are rejected, as are the CLI's standalone `start`, `stop`, `status`, `logs`, `ui`, and `update` commands, whose pid-file and installation assumptions do not match the desktop host. Manage the daemon through Bitcraft. `bitcraft-pexe` remains the packaging tool; it is not a connection-aware wrapper.
 
 ## Releases and updates

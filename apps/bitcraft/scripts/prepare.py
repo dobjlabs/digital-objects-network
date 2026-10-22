@@ -84,6 +84,9 @@ def main():
             packaged_name += "-inner"
         destination = binaries / f"{packaged_name}-{target}{suffix}"
         shutil.copy2(source, destination)
+        if tool in ["dobj", "dobj-mcp-proxy"] and target == host:
+            # Development prompts use the staged launcher before bundle renaming.
+            shutil.copy2(source, binaries / f"{packaged_name}{suffix}")
         hashes[packaged_name] = hashlib.sha256(destination.read_bytes()).hexdigest()
 
     launcher_metadata = json.loads(subprocess.check_output(
@@ -96,6 +99,7 @@ def main():
         hashes[name] = hashlib.sha256(destination.read_bytes()).hexdigest()
 
     resources = TAURI / "runtime"
+    shutil.copytree(APP / "skills", resources / "skills", dirs_exist_ok=True)
     plugin_hash = hashlib.sha256((resources / "bitcraft.pexe").read_bytes()).hexdigest()
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
     (resources / "release.json").write_text(json.dumps({

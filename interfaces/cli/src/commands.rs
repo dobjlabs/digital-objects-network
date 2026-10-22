@@ -1,22 +1,18 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use futures_util::StreamExt;
 use reqwest_eventsource::{Event as SseEvent, EventSource};
 use serde_json::Value;
-use tokio::time::sleep;
 
 use crate::client::DobjdClient;
 use wire_types::transactions::TransactionRecord;
 use wire_types::{
     ActionArgValues, ActionInput, ActionSummary, CheckActionReport, ClassRef, ClassSummary,
     DriverSettings, ImportObjectRequest, ObjectSummary, ObjectsDirInfo, ProofJobState,
-    QualifiedName, RunAccepted, RunState, RunStatus, StartRunRequest, SubmitTransactionsRequest,
+    QualifiedName, RunAccepted, StartRunRequest, SubmitTransactionsRequest,
 };
-
-const MAX_CONSECUTIVE_RUN_POLL_ERRORS: usize = 5;
 
 fn parse_qualified(id: &str) -> Result<QualifiedName> {
     QualifiedName::parse(id).map_err(|err| anyhow!("{err}"))
@@ -53,6 +49,7 @@ pub async fn objects(client: &DobjdClient, json: bool) -> Result<()> {
                     .map(|o| serde_json::json!({
                         "contentHash": o.content_hash, "fileName": o.file_name, "class": o.class,
                         "status": o.status, "txHash": o.tx_hash,
+                        "fields": o.fields, "heldByRunId": o.held_by_run_id,
                     }))
                     .collect::<Vec<_>>()
             )?
@@ -66,11 +63,12 @@ pub async fn objects(client: &DobjdClient, json: bool) -> Result<()> {
     }
     for obj in &objects {
         println!(
-            "[{:<10}] {} {:<28} content_hash={}",
+            "[{:<10}] {} {:<28} content_hash={} file={}",
             obj.status,
             obj.emoji,
             obj.class,
             short_hex(&obj.content_hash),
+            obj.file_name,
         );
     }
     Ok(())
@@ -90,6 +88,8 @@ pub async fn actions(client: &DobjdClient, json: bool) -> Result<()> {
                         "action": a.action,
                         "description": a.description,
                         "totalInputs": a.total_inputs.iter().map(|r| &r.class).collect::<Vec<_>>(),
+                        "totalOutputs": a.total_outputs.iter().map(|r| &r.class).collect::<Vec<_>>(),
+                        "args": a.args, "mutatedObjects": a.mutated_objects,
                     }))
                     .collect::<Vec<_>>()
             )?
@@ -192,6 +192,7 @@ pub async fn run(
     input_paths: Vec<String>,
     raw_args: Vec<String>,
     quiet: bool,
+    json: bool,
 ) -> Result<()> {
     let action = parse_qualified(&action_id)?;
 
@@ -216,84 +217,8 @@ pub async fn run(
         eprintln!("run id:   {run_id}");
     }
 
-    // Follow progress over the run's own SSE stream. `EventSource` reconnects
-    // on a dropped connection, resending the last event id it saw, and the
-    // endpoint replays from there — so a hiccup mid-run just resumes where it
-    // left off. We stop at the first terminal event; the authoritative outcome
-    // is read below either way.
-    let events_url = format!("{}/runs/{}/events", client.base_url(), run_id);
-    let mut es = EventSource::get(&events_url);
-    // Bound consecutive reconnect failures so a genuinely-down daemon falls
-    // through to the poll (which surfaces the error) instead of retrying
-    // forever. A successful (re)connect resets the count.
-    const MAX_RECONNECTS: u32 = 5;
-    let mut failures = 0u32;
-    while let Some(event) = es.next().await {
-        match event {
-            Ok(SseEvent::Open) => failures = 0,
-            Ok(SseEvent::Message(msg)) => {
-                failures = 0;
-                let Ok(value) = serde_json::from_str::<Value>(&msg.data) else {
-                    continue;
-                };
-                let phase = value.get("phase").and_then(|v| v.as_str()).unwrap_or("?");
-                let status = value.get("status").and_then(|v| v.as_str()).unwrap_or("?");
-                let message = value.get("message").and_then(|v| v.as_str()).unwrap_or("");
-                if !quiet {
-                    eprintln!("[{phase}/{status}] {message}");
-                }
-                let terminal = status == "failed" || (phase == "commit" && status == "done");
-                if terminal {
-                    es.close();
-                    break;
-                }
-            }
-            // A hiccup isn't a run failure: let EventSource reconnect and
-            // resume from the last event id. Only give up after repeated
-            // failures (dobjd is likely down), then poll for the result.
-            Err(err) => {
-                failures += 1;
-                if failures > MAX_RECONNECTS {
-                    if !quiet {
-                        eprintln!("(progress stream lost: {err}; polling for result)");
-                    }
-                    break;
-                }
-            }
-        }
-    }
-
-    // Authoritative outcome, and the recovery path if the stream dropped:
-    // poll the run until it reaches a terminal state.
-    let state = poll_run_to_terminal(client, &run_id, quiet).await?;
-    match state.status {
-        RunStatus::Succeeded => {
-            let result = state
-                .result
-                .ok_or_else(|| anyhow!("run {run_id} reported success but no result"))?;
-            println!("action:   {action}");
-            println!("run id:   {run_id}");
-            println!("grounding root: {}", result.old_root);
-            if !result.output_files.is_empty() {
-                println!("outputs:");
-                for f in &result.output_files {
-                    println!("  + {f}");
-                }
-            }
-            if !result.input_files.is_empty() {
-                println!("nullified:");
-                for f in &result.input_files {
-                    println!("  - {f}");
-                }
-            }
-            Ok(())
-        }
-        RunStatus::Failed => Err(anyhow!(
-            "run {run_id} failed: {}",
-            state.error.unwrap_or_else(|| "unknown error".to_string())
-        )),
-        other => Err(anyhow!("run {run_id} ended in unexpected state: {other:?}")),
-    }
+    let state = crate::runs::follow(client, &run_id, quiet).await?;
+    crate::runs::finish(&state, json)
 }
 
 /// Timeout for each daemon wait request; repeat until the state is terminal.
@@ -513,40 +438,6 @@ fn parse_action_args(raw: &[String]) -> Result<ActionArgValues> {
     Ok(args)
 }
 
-/// Poll `GET /runs/{run_id}` until the run reaches a terminal state,
-/// tolerating transient follow-up failures so a brief HTTP hiccup is not
-/// reported as an action failure.
-async fn poll_run_to_terminal(client: &DobjdClient, run_id: &str, quiet: bool) -> Result<RunState> {
-    let path = format!("/runs/{run_id}");
-    let mut consecutive_errors = 0usize;
-    loop {
-        match client.get_json::<RunState>(&path).await {
-            Ok(state) => {
-                consecutive_errors = 0;
-                match state.status {
-                    RunStatus::Succeeded | RunStatus::Failed => return Ok(state),
-                    _ => sleep(Duration::from_millis(500)).await,
-                }
-            }
-            Err(err) => {
-                consecutive_errors += 1;
-                if consecutive_errors >= MAX_CONSECUTIVE_RUN_POLL_ERRORS {
-                    return Err(anyhow!(
-                        "lost contact while following run {run_id}; it may still complete. Run `dobj objects` to reconcile. Last error: {err:#}"
-                    ));
-                }
-                if !quiet {
-                    eprintln!(
-                        "(poll failed {consecutive_errors}/{MAX_CONSECUTIVE_RUN_POLL_ERRORS}: {err}; retrying)"
-                    );
-                }
-                let delay_ms = 500 * consecutive_errors.min(10) as u64;
-                sleep(Duration::from_millis(delay_ms)).await;
-            }
-        }
-    }
-}
-
 /// Stream dobjd's shared event hub as JSON lines, including activity from
 /// the desktop, browser UI, MCP, and other CLI invocations.
 pub async fn events(client: &DobjdClient) -> Result<()> {
@@ -581,7 +472,7 @@ pub async fn inspect_object(client: &DobjdClient, file_name: String, json: bool)
             serde_json::to_string_pretty(&serde_json::json!({
                 "contentHash": obj.content_hash, "fileName": obj.file_name, "class": obj.class,
                 "status": obj.status, "txHash": obj.tx_hash,
-                "fields": obj.fields,
+                "fields": obj.fields, "heldByRunId": obj.held_by_run_id,
             }))?
         );
         return Ok(());

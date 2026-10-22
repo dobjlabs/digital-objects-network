@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Play with an agent</title>
+  <link rel="stylesheet" href="agent.css">
+  <script src="agent.js" defer></script>
+</head>
+<body>
+  <main>
+    <h1>Play with an agent</h1>
+    <p>Keep Bitcraft open. Start a fresh conversation in a local agent such as Codex, with access to files and the terminal. Copy and paste this prompt to get started.</p>
+    <p>The agent reads the player skill included with this app and uses the installed CLI. No source checkout or permanent skill installation is needed.</p>
+    <label for="prompt">Your agent prompt</label>
+    <textarea id="prompt" rows="13" readonly></textarea>
+    <button id="copy" type="button">Copy prompt</button>
+    <span id="copy-status" role="status"></span>
+    <p class="path">Player skill: <span id="skill-path"></span></p>
+    <details>
+      <summary>Use MCP instead</summary>
+      <p>The CLI works without MCP. If you prefer MCP, run this command while Bitcraft is open:</p>
+      <pre id="enable-mcp"></pre>
+      <p>For Codex, add the following to your test profile's <code>config.toml</code>, then restart the agent. Other local MCP clients can connect to the same URL.</p>
+      <pre id="mcp-config"></pre>
+    </details>
+  </main>
+</body>
+</html>

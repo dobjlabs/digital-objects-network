@@ -39,10 +39,30 @@ Two flavors of commands.
 | `transactions`                                  | `GET /transactions`; lists durable records |
 | `inspect-transaction <txFinal> [--wait]`          | `GET /transactions/{txFinal}`; optionally waits for landing or expiry |
 | `delete-transaction <txFinal>`                   | `DELETE /transactions/{txFinal}`; abandons a record before any submission attempt |
+| `runs list [--active]`                         | `GET /runs`, optionally filtered to active runs |
+| `runs show <run-id>`                           | `GET /runs/{id}` |
+| `runs wait <run-id>`                           | Follows an existing run through SSE and a final state read; never submits an action |
 | `events`                                        | `GET /events` SSE — prints every event as JSON lines                                                                |
 
 Each command renders human-friendly output by default. Pass `--json`
-for the raw payload (suitable for `jq`).
+for machine-readable output (suitable for `jq`). Inventory includes object
+fields and `heldByRunId`; actions include outputs, mutation slots, and
+argument names.
+
+`run --json` and `runs wait --json` print the final `RunState` to stdout,
+with progress on stderr. Failed runs print their state and exit nonzero.
+`runs show` can inspect a failed run without treating that status as a CLI
+failure. Run IDs are printed to stderr when submitting; `--quiet` suppresses
+progress and the ID announcement.
+
+Keep the CLI process running while an action executes. Shell-capable agents
+can use their host's background-process support and collect the result when
+the process exits. If interrupted, use `runs list --active --json` and
+`runs wait <run-id> --json` to reattach. Disconnecting does not cancel an
+action; inspect runs and inventory before resubmitting. Runs are in memory
+and retained for about ten minutes after completion, until daemon restart.
+SSE carries progress; bounded HTTP requests and a reconnect/poll fallback
+recover the final state when the stream is interrupted.
 
 ### Daemon lifecycle — operates on local files, not HTTP
 

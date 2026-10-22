@@ -85,8 +85,8 @@ def wait_for(predicate, label, timeout=15):
         time.sleep(0.1)
     raise AssertionError(label)
 
-def find_window(pid):
-    result = subprocess.run(['xdotool', 'search', '--pid', str(pid), '--name', '^Bitcraft$'], capture_output=True, text=True)
+def find_window(pid, title='Bitcraft'):
+    result = subprocess.run(['xdotool', 'search', '--all', '--pid', str(pid), '--name', f'^{title}$'], capture_output=True, text=True)
     if result.returncode == 0:
         for candidate in result.stdout.splitlines():
             properties = subprocess.run(['xprop', '-id', candidate, '_NET_WM_WINDOW_TYPE'], capture_output=True, text=True)
@@ -130,7 +130,15 @@ with tempfile.TemporaryDirectory(prefix='bitcraft-desktop-smoke-') as temporary:
             _, layout = menu.GetLayout(0, -1, dbus.Array([], signature='s'))
             manage = find_menu(layout, 'Open Bitcraft')
             quit_id = find_menu(layout, 'Quit Bitcraft')
-            assert manage is not None and quit_id is not None
+            agent_id = find_menu(layout, 'Play with an agent...')
+            assert manage is not None and quit_id is not None and agent_id is not None
+            menu.Event(agent_id, 'clicked', dbus.Int32(0, variant_level=1), dbus.UInt32(0))
+            guide = wait_for(lambda: find_window(app.pid, 'Play Bitcraft with an agent'), 'agent guide opens from tray')
+            wait_for(lambda: visible(guide), 'agent guide is visible while game stays hidden')
+            assert not visible(window)
+            close_window(guide)
+            wait_for(lambda: find_window(app.pid, 'Play Bitcraft with an agent') is None, 'agent guide closes instead of hiding to tray')
+            assert app.poll() is None
             menu.Event(manage, 'clicked', dbus.Int32(0, variant_level=1), dbus.UInt32(0))
             wait_for(lambda: visible(window), 'tray Open restores hidden window')
             close_window(window)
