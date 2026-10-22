@@ -11,6 +11,7 @@ use sqlx::{
 use crate::{
     don_state::{DonState, ExecutionBlock, StateMetadata, StateRoots},
     key_value_db::{db_bytes_to_hash, hash_to_db_bytes},
+    state_machine::DerivedSlot,
 };
 
 /// Head state plus progress metadata loaded from Postgres.
@@ -19,28 +20,6 @@ pub struct HeadSnapshot {
     pub state: DonState,
     pub last_processed_slot: u32,
     pub last_processed_block_number: Option<u32>,
-}
-
-/// Consensus-layer metadata written when a slot is committed.
-#[derive(Debug, Clone, Copy)]
-pub struct CommittedSlotRecord {
-    pub slot: u32,
-    pub block_root: Option<B256>,
-    pub parent_root: Option<B256>,
-    pub is_empty: bool,
-}
-
-impl CommittedSlotRecord {
-    /// Record for a slot with no block content: every block field
-    /// absent, marked empty.
-    pub fn empty(slot: u32) -> Self {
-        Self {
-            slot,
-            block_root: None,
-            parent_root: None,
-            is_empty: true,
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -53,9 +32,6 @@ impl SyncDb {
     ///
     /// The database must already exist — provisioning is an explicit operator
     /// step so the app role does not need the `CREATEDB` privilege.
-    ///
-    /// Postgres is the sole source of committed states. Each committed slot stores its
-    /// `DonState`, while RocksDB only stores the content-addressed Merkle node/value backing store.
     ///
     /// Fails if the stored slots do not start at `init_start_slot`, which happens when the
     /// setting changed after the database was first synced.
@@ -88,11 +64,9 @@ impl SyncDb {
             CREATE TABLE IF NOT EXISTS slots (
                 slot INTEGER PRIMARY KEY,
                 cl_block_root BYTEA NULL,
-                cl_parent_root BYTEA NULL,
                 el_block_number INTEGER NULL,
                 el_block_timestamp BIGINT NULL,
                 el_block_hash BYTEA NULL,
-                cl_is_empty BOOLEAN NOT NULL,
                 don_created_root BYTEA NULL,
                 don_nullifiers_root BYTEA NULL,
                 don_prior_state_history_root BYTEA NULL,
@@ -153,34 +127,22 @@ impl SyncDb {
         Ok(())
     }
 
-    async fn latest_committed_slot(&self) -> Result<Option<u32>> {
-        let row = sqlx::query(
-            r#"
-            SELECT slot
-            FROM slots
-            ORDER BY slot DESC
-            LIMIT 1
-            "#,
-        )
-        .fetch_optional(&self.pool)
-        .await?;
-
-        Ok(row.map(|row| row.get::<i32, _>("slot") as u32))
-    }
-
     async fn first_committed_slot(&self) -> Result<Option<u32>> {
-        let row = sqlx::query("SELECT MIN(slot) AS slot FROM slots")
+        let slot: Option<i32> = sqlx::query_scalar("SELECT MIN(slot) FROM slots")
             .fetch_one(&self.pool)
             .await?;
-        Ok(row.get::<Option<i32>, _>("slot").map(|slot| slot as u32))
+        Ok(slot.map(|slot| slot as u32))
     }
 
-    /// Return the last slot fully committed by the synchronizer, or `None` before the first.
+    /// Return the last committed slot, or `None` before the first.
     pub async fn last_processed_slot(&self) -> Result<Option<u32>> {
-        self.latest_committed_slot().await
+        let slot: Option<i32> = sqlx::query_scalar("SELECT MAX(slot) FROM slots")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(slot.map(|slot| slot as u32))
     }
 
-    /// Return the head state without sync-progress metadata, or `None` before the first slot.
+    /// Return the head state, or `None` before the first slot.
     pub async fn head_state(&self) -> Result<Option<DonState>> {
         Ok(self.head_snapshot().await?.map(|snapshot| snapshot.state))
     }
@@ -223,72 +185,50 @@ impl SyncDb {
             SELECT latest.slot AS last_processed_slot,
                    latest.el_block_number AS last_processed_block_number,
                    head.*
-            FROM latest LEFT JOIN head ON true
+            FROM latest, head
             "#,
         )
         .fetch_optional(executor)
         .await?;
 
-        let Some(row) = row else {
-            return Ok(None);
-        };
-
-        let last_processed_slot = row.get::<i32, _>("last_processed_slot") as u32;
-        let last_processed_block_number = row
-            .get::<Option<i32>, _>("last_processed_block_number")
-            .map(|block_number| block_number as u32);
-
-        // The first slot always has an execution block, so a non-empty table has a head state.
-        let head_slot = row.get::<Option<i32>, _>("slot").ok_or_else(|| {
-            anyhow!("slots has rows but none with an execution block, so no head state")
-        })?;
-        let state = decode_state_row(&row)
-            .with_context(|| format!("slots row for slot {head_slot} had invalid state data"))?;
-
-        Ok(Some(HeadSnapshot {
-            state,
-            last_processed_slot,
-            last_processed_block_number,
-        }))
+        row.map(|row| {
+            let head_slot = row.get::<i32, _>("slot");
+            Ok(HeadSnapshot {
+                state: decode_state_row(&row).with_context(|| {
+                    format!("slots row for slot {head_slot} had invalid state data")
+                })?,
+                last_processed_slot: row.get::<i32, _>("last_processed_slot") as u32,
+                last_processed_block_number: row
+                    .get::<Option<i32>, _>("last_processed_block_number")
+                    .map(|block_number| block_number as u32),
+            })
+        })
+        .transpose()
     }
 
-    /// Return the beacon block root for a committed slot.
+    /// Return the beacon block root for a committed slot, `None` when it has none or is not
+    /// committed.
     pub async fn slot_root(&self, slot: u32) -> Result<Option<B256>> {
-        let row = sqlx::query("SELECT cl_block_root FROM slots WHERE slot = $1")
-            .bind(slot as i32)
-            .fetch_optional(&self.pool)
-            .await?;
-
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        let root: Option<Vec<u8>> = row.get("cl_block_root");
-        match root {
-            Some(bytes) => {
-                let arr: [u8; 32] = bytes
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| anyhow!("invalid cl_block_root length"))?;
-                Ok(Some(B256::from(arr)))
-            }
-            None => Ok(None),
-        }
+        let root: Option<Option<Vec<u8>>> =
+            sqlx::query_scalar("SELECT cl_block_root FROM slots WHERE slot = $1")
+                .bind(slot as i32)
+                .fetch_optional(&self.pool)
+                .await?;
+        root.flatten().as_deref().map(db_bytes_to_b256).transpose()
     }
 
     /// Commit one new slot as the new highest slot, writing
     /// its created-index rows in the same transaction so the index is always
     /// consistent with the committed state.
     ///
-    /// `derived_state` is the state the slot derived at its execution block, or `None` when the
-    /// slot has no execution block and the previous state stays the head state.
-    ///
     /// Duplicate slot inserts are treated as logic bugs and must fail loudly.
     pub async fn commit_slot(
         &self,
-        slot: &CommittedSlotRecord,
-        derived_state: Option<&DonState>,
-        created_added: &HashMap<Hash, i64>,
+        slot: u32,
+        block_root: Option<B256>,
+        derived: Option<&DerivedSlot>,
     ) -> Result<()> {
+        let state = derived.map(|derived| &derived.state);
         let mut tx = self.pool.begin().await?;
 
         sqlx::query(
@@ -296,11 +236,9 @@ impl SyncDb {
             INSERT INTO slots(
                 slot,
                 cl_block_root,
-                cl_parent_root,
                 el_block_number,
                 el_block_timestamp,
                 el_block_hash,
-                cl_is_empty,
                 don_created_root,
                 don_nullifiers_root,
                 don_prior_state_history_root,
@@ -310,42 +248,37 @@ impl SyncDb {
                 don_nullifier_count,
                 don_state_root_count
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             "#,
         )
-        .bind(slot.slot as i32)
-        .bind(slot.block_root.map(|v| v.as_slice().to_vec()))
-        .bind(slot.parent_root.map(|v| v.as_slice().to_vec()))
-        .bind(derived_state.map(|state| state.metadata.block.number as i32))
-        .bind(derived_state.map(|state| state.metadata.block.timestamp as i64))
-        .bind(derived_state.map(|state| state.metadata.block.hash.as_slice().to_vec()))
-        .bind(slot.is_empty)
-        .bind(derived_state.map(|state| hash_to_db_bytes(state.roots.created)))
-        .bind(derived_state.map(|state| hash_to_db_bytes(state.roots.nullifiers)))
-        .bind(derived_state.map(|state| hash_to_db_bytes(state.roots.prior_state_history)))
-        .bind(derived_state.map(|state| hash_to_db_bytes(state.roots.next_state_history)))
-        .bind(derived_state.map(|state| hash_to_db_bytes(state.metadata.state_root)))
-        .bind(derived_state.map(|state| state.metadata.created_count as i64))
-        .bind(derived_state.map(|state| state.metadata.nullifier_count as i64))
-        .bind(derived_state.map(|state| state.metadata.state_root_count as i64))
+        .bind(slot as i32)
+        .bind(block_root.map(|root| root.as_slice().to_vec()))
+        .bind(state.map(|state| state.metadata.block.number as i32))
+        .bind(state.map(|state| state.metadata.block.timestamp as i64))
+        .bind(state.map(|state| state.metadata.block.hash.as_slice().to_vec()))
+        .bind(state.map(|state| hash_to_db_bytes(state.roots.created)))
+        .bind(state.map(|state| hash_to_db_bytes(state.roots.nullifiers)))
+        .bind(state.map(|state| hash_to_db_bytes(state.roots.prior_state_history)))
+        .bind(state.map(|state| hash_to_db_bytes(state.roots.next_state_history)))
+        .bind(state.map(|state| hash_to_db_bytes(state.metadata.state_root)))
+        .bind(state.map(|state| state.metadata.created_count as i64))
+        .bind(state.map(|state| state.metadata.nullifier_count as i64))
+        .bind(state.map(|state| state.metadata.state_root_count as i64))
         .execute(&mut *tx)
         .await?;
 
-        for (commitment, index) in created_added {
+        for (commitment, index) in derived.iter().flat_map(|derived| &derived.created_added) {
             // `commitment` is the PRIMARY KEY; a conflict is a bug and fails loudly.
             sqlx::query(
                 "INSERT INTO created_index(commitment, array_index, slot) VALUES ($1, $2, $3)",
             )
             .bind(hash_to_db_bytes(*commitment))
             .bind(*index)
-            .bind(slot.slot as i32)
+            .bind(slot as i32)
             .execute(&mut *tx)
             .await
             .with_context(|| {
-                format!(
-                    "inserting created_index row for {commitment:#} at slot {}",
-                    slot.slot
-                )
+                format!("inserting created_index row for {commitment:#} at slot {slot}")
             })?;
         }
 
@@ -429,15 +362,8 @@ impl SyncDb {
         Ok((snapshot, indices))
     }
 
-    /// Return the recent state roots at or above the given execution block number.
-    pub async fn recent_state_roots(
-        &self,
-        min_block_number: Option<u32>,
-    ) -> Result<Vec<(Hash, i64)>> {
-        let Some(min_block_number) = min_block_number else {
-            return Ok(Vec::new());
-        };
-
+    /// Return the state roots derived at or above the given execution block number.
+    pub async fn recent_state_roots(&self, min_block_number: u32) -> Result<Vec<(Hash, i64)>> {
         let rows = sqlx::query(
             r#"
             SELECT don_state_root, el_block_number
@@ -460,17 +386,16 @@ impl SyncDb {
     }
 }
 
+fn db_bytes_to_b256(bytes: &[u8]) -> Result<B256> {
+    B256::try_from(bytes).map_err(|_| anyhow!("expected 32 bytes, got {}", bytes.len()))
+}
+
 /// Decode the DON state from a row with an execution block, the block the state was derived at.
 fn decode_state_row(row: &PgRow) -> Result<DonState> {
-    let hash_bytes: Vec<u8> = row.get("el_block_hash");
-    let hash: [u8; 32] = hash_bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| anyhow!("invalid el_block_hash length"))?;
     let block = ExecutionBlock {
         number: row.get::<i32, _>("el_block_number") as u32,
         timestamp: row.get::<i64, _>("el_block_timestamp") as u64,
-        hash: B256::from(hash),
+        hash: db_bytes_to_b256(&row.get::<Vec<u8>, _>("el_block_hash"))?,
     };
     Ok(DonState {
         roots: StateRoots {
@@ -499,6 +424,13 @@ mod tests {
     use pod2::middleware::{hash_values, Value};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn derived(state: DonState) -> DerivedSlot {
+        DerivedSlot {
+            state,
+            created_added: HashMap::new(),
+        }
+    }
 
     fn unique_hash(n: i64) -> Hash {
         hash_values(&[Value::from(n)])
@@ -599,9 +531,7 @@ mod tests {
         let (db_name, db_url, admin_url) = test_urls();
         create_db(&db_name, &admin_url).await?;
         let sync_db = SyncDb::connect(&db_url, 5).await?;
-        sync_db
-            .commit_slot(&CommittedSlotRecord::empty(5), None, &HashMap::new())
-            .await?;
+        sync_db.commit_slot(5, None, None).await?;
 
         assert!(SyncDb::connect(&db_url, 5).await.is_ok());
         assert!(SyncDb::connect(&db_url, 4).await.is_err());
@@ -615,16 +545,8 @@ mod tests {
     async fn test_commit_slot_persists_state_and_latest_slot() -> Result<()> {
         let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
         let state = unique_state(7, 100);
-        let slot = CommittedSlotRecord {
-            slot: 10,
-            block_root: None,
-            parent_root: None,
-            is_empty: false,
-        };
 
-        sync_db
-            .commit_slot(&slot, Some(&state), &HashMap::new())
-            .await?;
+        sync_db.commit_slot(10, None, Some(&derived(state))).await?;
 
         let snapshot = sync_db.head_snapshot().await?.expect("a slot is committed");
         assert_eq!(snapshot.state, state);
@@ -640,28 +562,12 @@ mod tests {
     async fn test_head_state_comes_from_last_slot_with_execution_block() -> Result<()> {
         let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
         let state = unique_state(7, 100);
-        let derived = CommittedSlotRecord {
-            slot: 10,
-            block_root: None,
-            parent_root: None,
-            is_empty: false,
-        };
-        sync_db
-            .commit_slot(&derived, Some(&state), &HashMap::new())
-            .await?;
+        sync_db.commit_slot(10, None, Some(&derived(state))).await?;
         // Later slots without an execution block derive no state.
-        let without_payload = CommittedSlotRecord {
-            slot: 11,
-            block_root: Some(B256::repeat_byte(11)),
-            parent_root: None,
-            is_empty: false,
-        };
         sync_db
-            .commit_slot(&without_payload, None, &HashMap::new())
+            .commit_slot(11, Some(B256::repeat_byte(11)), None)
             .await?;
-        sync_db
-            .commit_slot(&CommittedSlotRecord::empty(12), None, &HashMap::new())
-            .await?;
+        sync_db.commit_slot(12, None, None).await?;
 
         let snapshot = sync_db.head_snapshot().await?.expect("a slot is committed");
         assert_eq!(snapshot.state, state);
@@ -678,19 +584,13 @@ mod tests {
         let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
         let state1 = unique_state(7, 100);
         let state2 = unique_state(8, 200);
-        let slot = CommittedSlotRecord {
-            slot: 10,
-            block_root: None,
-            parent_root: None,
-            is_empty: false,
-        };
 
         sync_db
-            .commit_slot(&slot, Some(&state1), &HashMap::new())
+            .commit_slot(10, None, Some(&derived(state1)))
             .await?;
 
         let err = sync_db
-            .commit_slot(&slot, Some(&state2), &HashMap::new())
+            .commit_slot(10, None, Some(&derived(state2)))
             .await
             .unwrap_err();
         assert!(
@@ -708,34 +608,12 @@ mod tests {
     async fn test_recent_state_roots_query() -> Result<()> {
         let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
         let h1 = unique_state(5, 10);
-        sync_db
-            .commit_slot(
-                &CommittedSlotRecord {
-                    slot: 1,
-                    block_root: None,
-                    parent_root: None,
-                    is_empty: false,
-                },
-                Some(&h1),
-                &HashMap::new(),
-            )
-            .await?;
+        sync_db.commit_slot(1, None, Some(&derived(h1))).await?;
 
         let h2 = unique_state(9, 20);
-        sync_db
-            .commit_slot(
-                &CommittedSlotRecord {
-                    slot: 2,
-                    block_root: None,
-                    parent_root: None,
-                    is_empty: false,
-                },
-                Some(&h2),
-                &HashMap::new(),
-            )
-            .await?;
+        sync_db.commit_slot(2, None, Some(&derived(h2))).await?;
 
-        let recent = sync_db.recent_state_roots(Some(6)).await?;
+        let recent = sync_db.recent_state_roots(6).await?;
         assert_eq!(recent, vec![(h2.metadata.state_root, 9)]);
 
         drop_db(&db_name, &admin_url).await?;
@@ -747,32 +625,10 @@ mod tests {
     async fn test_rollback_rewinds_latest_slot_and_state() -> Result<()> {
         let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
         let h1 = unique_state(1, 10);
-        sync_db
-            .commit_slot(
-                &CommittedSlotRecord {
-                    slot: 1,
-                    block_root: None,
-                    parent_root: None,
-                    is_empty: false,
-                },
-                Some(&h1),
-                &HashMap::new(),
-            )
-            .await?;
+        sync_db.commit_slot(1, None, Some(&derived(h1))).await?;
 
         let h2 = unique_state(2, 20);
-        sync_db
-            .commit_slot(
-                &CommittedSlotRecord {
-                    slot: 2,
-                    block_root: None,
-                    parent_root: None,
-                    is_empty: false,
-                },
-                Some(&h2),
-                &HashMap::new(),
-            )
-            .await?;
+        sync_db.commit_slot(2, None, Some(&derived(h2))).await?;
 
         sync_db.rollback_to_slot(1).await?;
 
@@ -794,27 +650,23 @@ mod tests {
         let h1 = unique_state(1, 10);
         sync_db
             .commit_slot(
-                &CommittedSlotRecord {
-                    slot: 1,
-                    block_root: None,
-                    parent_root: None,
-                    is_empty: false,
-                },
-                Some(&h1),
-                &HashMap::from([(a, 1)]),
+                1,
+                None,
+                Some(&DerivedSlot {
+                    state: h1,
+                    created_added: HashMap::from([(a, 1)]),
+                }),
             )
             .await?;
         let h2 = unique_state(2, 20);
         sync_db
             .commit_slot(
-                &CommittedSlotRecord {
-                    slot: 2,
-                    block_root: None,
-                    parent_root: None,
-                    is_empty: false,
-                },
-                Some(&h2),
-                &HashMap::from([(b, 2)]),
+                2,
+                None,
+                Some(&DerivedSlot {
+                    state: h2,
+                    created_added: HashMap::from([(b, 2)]),
+                }),
             )
             .await?;
 

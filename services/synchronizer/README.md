@@ -27,7 +27,7 @@ The synchronizer splits state into two layers:
   - persistent POD2 values
 - Postgres stores the control plane
   - slot metadata
-  - the `DonState` for each slot
+  - the `DonState` derived at each slot with an execution block
   - the created index: object commitment -> position in the created array
 
 No `DonState` is stored in RocksDB, and there is no resident in-memory state cache. Every slot derivation and API read loads the head state from Postgres, then reopens the needed persistent containers from RocksDB by root.
@@ -53,17 +53,11 @@ No `DonState` is stored in RocksDB, and there is no resident in-memory state cac
 
 ### Genesis
 
-`INIT_START_SLOT` is the genesis slot. It must be finalized, so it can never be reorged out, and
-must have an execution block. On first run the synchronizer checks both, waiting while the slot
-is not yet finalized and failing if it has no execution block. It then derives that slot like
-any other, from empty containers and zero counts: the result is the genesis state, a real
-`StateHeader` at the genesis block with empty created and nullifier roots and an empty history.
-It is stored, appended to the state root history, and can be used for grounding like any later
-state root. Every slot with an execution block derives a new state, so the head state is only
-the genesis state until the next one.
-
-`just ensure-start-slot` picks the latest finalized slot for a fresh synchronizer. This relies on
-no DON transactions existing before `INIT_START_SLOT`.
+`INIT_START_SLOT` is the genesis slot: a finalized slot with an execution block, which the
+synchronizer checks on first run (waiting for finalization if needed). It is derived like any
+other slot, from empty containers, and its state root grounds transactions like any later one.
+No DON transactions may exist before it. `just ensure-start-slot` picks the latest finalized
+slot.
 
 ## Storage model
 
@@ -91,20 +85,12 @@ Important: RocksDB is not the source of truth. It is an append-only backing stor
 Postgres stores the synchronization state:
 
 - `slots`
-  - one row per slot, keyed by `slot`; column prefixes say where the data comes from:
-    `cl_` the consensus layer, `el_` the execution layer, `don_` the DON state
-  - the first row is always `INIT_START_SLOT`, which derives the genesis state; startup fails
-    if the stored rows start elsewhere, since the setting cannot change once a database has
-    synced
-  - `cl_block_root`, `cl_parent_root`, `cl_is_empty` (no beacon block at this slot)
-  - `el_block_number`, `el_block_timestamp`, `el_block_hash`: the execution block that became
-    canonical with this slot
-  - the `DonState` roots and counts derived at that block: `don_created_root`,
-    `don_nullifiers_root`, `don_prior_state_history_root`, `don_next_state_history_root`,
-    `don_state_root`, `don_created_count`, `don_nullifier_count`, `don_state_root_count`
-  - a slot derives a state exactly when it has an execution block, so the `el_*` and `don_*`
-    columns are all set or all `NULL` (enforced by a `CHECK`); nothing is carried forward to
-    slots without one
+  - one row per slot from `INIT_START_SLOT` on (checked at startup); column prefixes say where
+    the data comes from: `cl_` the consensus layer, `el_` the execution layer, `don_` the DON
+    state
+  - `cl_block_root`: `NULL` when the beacon chain produced no block
+  - `el_block_*`: the execution block that became canonical with the slot, and `don_*`: the
+    `DonState` derived at it; all set or all `NULL` (enforced by a `CHECK`)
 - `created_index`
   - reverse index from object commitment to its position in the created array
   - one row per created object: `commitment` (primary key), `array_index`, `slot`
@@ -114,11 +100,8 @@ Postgres stores the synchronization state:
   - reads treat the index as a hint: every membership and proof answer
     cross-checks it against the created array at the queried root
 
-Postgres is the sole source of `DonState`. The head state is read from the highest slot with an
-execution block: its `don_*` columns, plus its `el_block_*` columns as the block committed inside
-`don_state_root`. The first row derives the genesis state, so every non-empty table has a head
-state. The highest committed `slots.slot` is the last processed slot, which may be later than
-the slot the head state comes from. Until the genesis slot is committed, the state and progress
+The head state is the `DonState` of the highest slot with an execution block; the highest slot
+overall is the last processed one. Until the genesis slot is committed, the state and progress
 APIs answer `503`.
 
 ## Slot derivation rules

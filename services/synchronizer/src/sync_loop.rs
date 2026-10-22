@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use eth_clients::{
     beacon::types::{BlockAndRoot, BlockHeader, BlockId, HeadEventData, Topic},
     common::is_node_error,
@@ -233,7 +233,7 @@ async fn run_sync_loop(
 /// Returns whether the loop should continue from a rewind slot or from the next slot.
 async fn handle_missing_slot(node: &Node, slot: u32) -> Result<MissingSlotAction> {
     // A previously committed slot becoming empty implies chain history changed.
-    if node.slot_root(slot).await?.is_some() {
+    if node.sync_db.slot_root(slot).await?.is_some() {
         warn!(
             slot,
             "Detected reorg: slot was previously present but is now missing; rewinding"
@@ -243,12 +243,14 @@ async fn handle_missing_slot(node: &Node, slot: u32) -> Result<MissingSlotAction
         ));
     }
 
-    // Skipped slots are valid on beacon; commit a Missing slot so the
-    // slot history stays contiguous.
-    let processed = ProcessedSlot::Missing { slot };
-
+    // Skipped slots are valid on beacon; commit one anyway so the slot history stays contiguous.
     info!(slot, "No block produced for slot");
-    node.commit_slot(&processed).await?;
+    node.commit_slot(&ProcessedSlot {
+        slot,
+        block_root: None,
+        derived: None,
+    })
+    .await?;
     Ok(MissingSlotAction::Applied)
 }
 
@@ -260,8 +262,8 @@ async fn handle_reorgs_for_present_slot(
     slot: u32,
     beacon_block_header: &BlockHeader,
 ) -> Result<Option<u32>> {
-    let last_processed_slot = node.last_processed_slot().await?;
-    let stored_root_for_slot = node.slot_root(slot).await?;
+    let last_processed_slot = node.sync_db.last_processed_slot().await?;
+    let stored_root_for_slot = node.sync_db.slot_root(slot).await?;
     if last_processed_slot.is_some_and(|last| last >= slot) && stored_root_for_slot.is_none() {
         // A previously empty slot becoming non-empty implies chain history changed.
         warn!(
@@ -284,18 +286,15 @@ async fn handle_reorgs_for_present_slot(
         }
     }
 
-    if let Some(prev_slot) = slot.checked_sub(1) {
-        if let Some(prev_root) = node.slot_root(prev_slot).await? {
-            // Parent mismatch means our local chain view diverged from current chain.
-            if beacon_block_header.parent_root != prev_root {
-                warn!(
-                    slot,
-                    expected_parent = ?prev_root,
-                    actual_parent = ?beacon_block_header.parent_root,
-                    "Detected reorg: parent linkage mismatch; rewinding"
-                );
-                return Ok(Some(rewind_for_reorg(node, slot).await?));
-            }
+    if let Some(prev_root) = node.sync_db.slot_root(slot - 1).await? {
+        if beacon_block_header.parent_root != prev_root {
+            warn!(
+                slot,
+                expected_parent = ?prev_root,
+                actual_parent = ?beacon_block_header.parent_root,
+                "Detected reorg: parent linkage mismatch; rewinding"
+            );
+            return Ok(Some(rewind_for_reorg(node, slot).await?));
         }
     }
 
@@ -306,7 +305,7 @@ async fn handle_reorgs_for_present_slot(
 async fn rewind_for_reorg(node: &Node, current_slot: u32) -> Result<u32> {
     let rewind_start = find_divergence_slot(node, current_slot).await?;
     let keep_slot = rewind_start - 1;
-    node.rollback_to_slot(keep_slot).await?;
+    node.sync_db.rollback_to_slot(keep_slot).await?;
     info!(
         current_slot,
         rewind_start, keep_slot, "Rewound state to divergence boundary"
@@ -314,27 +313,21 @@ async fn rewind_for_reorg(node: &Node, current_slot: u32) -> Result<u32> {
     Ok(rewind_start)
 }
 
-/// Find the first slot to re-derive from. The walk never goes below `INIT_START_SLOT`: nothing
-/// before it is synced, so re-deriving from it is always valid.
+/// Find the first slot to re-derive from: the one after the last block both the stored and the
+/// live chain have. The walk stops at `INIT_START_SLOT`, which is finalized.
 async fn find_divergence_slot(node: &Node, current_slot: u32) -> Result<u32> {
     let init_start_slot = node.config.init_start_slot;
     let mut slot = current_slot;
     while slot > init_start_slot {
         let prev_slot = slot - 1;
-        // Walk backward until stored and live roots match (last common ancestor).
-        let stored_root = node.slot_root(prev_slot).await?;
+        let stored_root = node.sync_db.slot_root(prev_slot).await?;
         let live_root = node
             .beacon_cli
             .get_block_header(BlockId::Slot(prev_slot))
             .await?
             .map(|header| header.root);
-        match (stored_root, live_root) {
-            // Both sides agree on an actual block root: true common ancestor.
-            (Some(s), Some(l)) if s == l => return Ok(prev_slot + 1),
-            // Both empty: not a real anchor, keep walking.
-            (None, None) => {}
-            // Otherwise: diverged (roots differ, or one side has a block the other doesn't).
-            _ => {}
+        if stored_root.is_some() && stored_root == live_root {
+            return Ok(slot);
         }
         slot = prev_slot;
     }
@@ -352,10 +345,8 @@ async fn initialize_sync(node: &Node) -> Result<SyncStart> {
     let head = node.get_beacon_head_header().await?;
     info!(head_slot = head.slot, head_root = ?head.root, "Fetched initial beacon head");
 
-    let start_slot = match node.last_processed_slot().await? {
-        Some(last_processed_slot) => last_processed_slot
-            .checked_add(1)
-            .ok_or_else(|| anyhow!("last processed slot overflow"))?,
+    let start_slot = match node.sync_db.last_processed_slot().await? {
+        Some(last_processed_slot) => last_processed_slot + 1,
         None => {
             let init_start_slot = node.config.init_start_slot;
             node.validate_genesis_slot(init_start_slot).await?;

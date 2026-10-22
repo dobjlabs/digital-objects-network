@@ -18,21 +18,14 @@ use txlib::StateHeader;
 /// At one block per 12 seconds, this is one hour.
 pub const MAX_STATE_ROOT_AGE_BLOCKS: i64 = 300;
 
-/// Ephemeral mutable view used while deriving one slot.
-///
-/// This view opens the persistent POD2 containers used during slot derivation so validation can
-/// query and mutate the created-object set, nullifiers, and state root history for one slot.
+/// The base state's containers and counts, mutated while deriving one slot.
 struct WorkingState {
     /// Objects in the created set, counting those this slot appended so far.
     created_count: u64,
     /// Spent nullifiers, counting those this slot inserted so far.
     nullifier_count: u64,
-    /// Persistent global created-object set (a pod2 `Array`) opened from
-    /// `base_state.roots.created`.
     created: Array,
-    /// Persistent nullifiers set opened from `base_state.roots.nullifiers`.
     nullifiers: Set,
-    /// Persistent full state root history array opened from `base_state.roots.next_state_history`.
     next_state_history: Array,
     /// Recent state roots keyed by hash for grounding validation.
     recent_state_roots: HashMap<Hash, i64>,
@@ -53,10 +46,7 @@ pub struct DerivedSlot {
 }
 
 /// Domain logic for the synchronizer: proof verification, state validation, and Merkle storage.
-///
-/// `StateMachine` is intentionally decoupled from networking and from tracking the head state.
-/// Callers supply the `DonState` they want to operate against, and Postgres remains the sole
-/// source of truth for which state is the head.
+/// Callers supply the base state; which state is the head is decided by Postgres.
 pub struct StateMachine {
     /// Key-value (RocksDB) store used to open the created, nullifier, and
     /// state root containers during derivation.
@@ -237,32 +227,13 @@ impl StateMachine {
         }
     }
 
-    /// Derive the next state for one execution slot from a caller
-    /// provided base state and the slot's already-parsed payloads.
+    /// Derive the state at `block` from `base_state` (`None` derives the genesis state) by
+    /// applying the slot's parsed payloads and appending the new state root to the history.
+    /// `prior_indices` are the created-index positions of the payloads' created commitments,
+    /// for the creation-collision check.
     ///
-    /// A `None` base derives the genesis state: empty containers, zero counts, and an empty
-    /// state root history.
-    ///
-    /// It:
-    /// - reopens the persistent created-object, nullifiers, and state root-history containers from
-    ///   `base_state.roots`
-    /// - seeds the per-slot `WorkingState` with the caller-provided recent-state root window
-    /// - applies every payload via `apply_payload`, using `prior_indices` (the created-object
-    ///   commitments already committed as of the base state, with their array positions,
-    ///   prefetched from the created index) for the creation-collision check
-    /// - computes the next state root from the updated created/nullifiers roots and the prior
-    ///   state root-history root committed into the resulting `StateHeader`
-    /// - appends that new state root to the full history array and returns the resulting `DonState`
-    ///   together with the object commitments this slot added, as a `DerivedSlot`
-    ///
-    /// The returned state is only a candidate. By the time this method
-    /// returns, RocksDB may already contain Merkle nodes for the derived containers, but it
-    /// is not committed until the caller persists it (and the `created_added`
-    /// index rows) in Postgres.
-    ///
-    /// Empty or fully rejected slots still produce a new state with the same created and
-    /// nullifiers roots as `base_state`, but with a newly derived `state_root` and an appended
-    /// state root-history entry for the slot's execution block.
+    /// The result is only a candidate: RocksDB may already hold its Merkle nodes, but it is not
+    /// committed until the caller persists it, with its `created_added` rows, in Postgres.
     pub fn derive_slot_state(
         &self,
         base_state: Option<DonState>,

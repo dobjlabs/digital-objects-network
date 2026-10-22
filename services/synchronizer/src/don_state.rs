@@ -35,7 +35,6 @@ pub struct ExecutionBlock {
     pub hash: B256,
 }
 
-/// Non-root metadata tracked alongside the state roots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StateMetadata {
     /// Hash of this state's `StateHeader`.
@@ -51,16 +50,10 @@ pub struct StateMetadata {
     pub state_root_count: u64,
 }
 
-/// The Digital Objects Network (DON) state derived at one slot, used across sync, query, and
-/// storage code.
-///
-/// `roots` are what reopen the persistent Merkle containers in RocksDB.
-/// `metadata` is the auxiliary state carried alongside those roots.
+/// The Digital Objects Network (DON) state derived at one execution block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DonState {
-    /// Merkle roots for the persistent containers.
     pub roots: StateRoots,
-    /// Non-root metadata associated with the same state.
     pub metadata: StateMetadata,
 }
 

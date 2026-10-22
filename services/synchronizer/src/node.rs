@@ -27,7 +27,7 @@ use tracing::{debug, info};
 use crate::config::AppConfig;
 use crate::don_state::{DonState, ExecutionBlock};
 use crate::state_machine::{DerivedSlot, StateMachine, MAX_STATE_ROOT_AGE_BLOCKS};
-use crate::sync_db::{CommittedSlotRecord, SyncDb};
+use crate::sync_db::SyncDb;
 
 /// Runtime integration layer that connects network inputs (beacon/execution),
 /// pure state derivation (`StateMachine`), and sync metadata (`SyncDb`).
@@ -44,7 +44,6 @@ pub struct Node {
 pub(crate) struct SlotContext {
     slot: u32,
     beacon_block_root: B256,
-    parent_root: B256,
     /// `None` when no payload becomes canonical with this block, which from Gloas on happens
     /// when its bid does not build on the parent's payload (withheld or not revealed in time).
     payload: Option<CanonicalPayload>,
@@ -69,26 +68,12 @@ struct TargetBlobTx {
 }
 
 /// Outcome of processing one beacon slot, ready to be committed.
-pub enum ProcessedSlot {
-    /// Beacon produced no block for the slot. With no execution block there is
-    /// nothing to derive against, so the slot is committed without a state to keep the slot
-    /// history contiguous, and the previous state stays the head state.
-    Missing { slot: u32 },
-    /// Beacon produced a block, but no execution payload became canonical with it. No state is
-    /// derived, as for `Missing`, while the block root is kept for reorg checks.
-    WithoutPayload {
-        slot: u32,
-        block_root: B256,
-        parent_root: B256,
-    },
-    /// Beacon produced a block and the state machine derived the slot against
-    /// it (deriving a fresh state root even when the block carries no usable blobs).
-    Present {
-        slot: u32,
-        block_root: B256,
-        parent_root: B256,
-        derived: Box<DerivedSlot>,
-    },
+pub struct ProcessedSlot {
+    pub slot: u32,
+    /// `None` when the beacon chain produced no block for the slot.
+    pub block_root: Option<B256>,
+    /// `None` when no execution block became canonical with the slot.
+    pub derived: Option<DerivedSlot>,
 }
 
 impl Node {
@@ -125,10 +110,6 @@ impl Node {
         })
     }
 
-    pub async fn last_processed_slot(&self) -> Result<Option<u32>> {
-        self.sync_db.last_processed_slot().await
-    }
-
     /// Check that `slot` can be the genesis slot: finalized, so it can never be reorged out, and
     /// with an execution block for the genesis state to be derived at. Waiting for finalization
     /// ends in a node error, so the sync loop retries it.
@@ -160,16 +141,6 @@ impl Node {
             "INIT_START_SLOT {slot} has no execution block; pick a finalized slot with one"
         );
         Ok(())
-    }
-
-    pub async fn slot_root(&self, slot: u32) -> Result<Option<B256>> {
-        self.sync_db.slot_root(slot).await
-    }
-
-    /// Rewind to `keep_slot` by deleting later slot rows; the created
-    /// index rows those slots added are pruned in the same Postgres transaction.
-    pub async fn rollback_to_slot(&self, keep_slot: u32) -> Result<()> {
-        self.sync_db.rollback_to_slot(keep_slot).await
     }
 
     pub(crate) async fn get_beacon_head_header(&self) -> Result<BlockHeader> {
@@ -406,7 +377,6 @@ impl Node {
         Ok(SlotContext {
             slot,
             beacon_block_root: beacon_block_header.root,
-            parent_root: beacon_block.parent_root,
             payload,
             blob_payloads,
         })
@@ -454,10 +424,10 @@ impl Node {
                 slot = slot_ctx.slot,
                 "No execution payload became canonical with this slot's block"
             );
-            return Ok(ProcessedSlot::WithoutPayload {
+            return Ok(ProcessedSlot {
                 slot: slot_ctx.slot,
-                block_root: slot_ctx.beacon_block_root,
-                parent_root: slot_ctx.parent_root,
+                block_root: Some(slot_ctx.beacon_block_root),
+                derived: None,
             });
         };
         let base_state = self.sync_db.head_state().await?;
@@ -479,7 +449,7 @@ impl Node {
             None => info!(slot = slot_ctx.slot, "Deriving the genesis state"),
         }
 
-        let min_block_number = base_state.map(|state| {
+        let min_block_number = base_state.map_or(0, |state| {
             state
                 .metadata
                 .block
@@ -498,11 +468,10 @@ impl Node {
             )
             .await?;
 
-        Ok(ProcessedSlot::Present {
+        Ok(ProcessedSlot {
             slot: slot_ctx.slot,
-            block_root: slot_ctx.beacon_block_root,
-            parent_root: slot_ctx.parent_root,
-            derived: Box::new(derived),
+            block_root: Some(slot_ctx.beacon_block_root),
+            derived: Some(derived),
         })
     }
 
@@ -513,43 +482,12 @@ impl Node {
         // disk even after a system crash.  The state is committed to Postgres next and its roots
         // must not outlive the merkle tree nodes in a crash.
         self.state_machine.sync()?;
-        match processed {
-            ProcessedSlot::Missing { slot } => {
-                self.sync_db
-                    .commit_slot(&CommittedSlotRecord::empty(*slot), None, &HashMap::new())
-                    .await
-            }
-            ProcessedSlot::WithoutPayload {
-                slot,
-                block_root,
-                parent_root,
-            } => {
-                let record = CommittedSlotRecord {
-                    slot: *slot,
-                    block_root: Some(*block_root),
-                    parent_root: Some(*parent_root),
-                    is_empty: false,
-                };
-                self.sync_db
-                    .commit_slot(&record, None, &HashMap::new())
-                    .await
-            }
-            ProcessedSlot::Present {
-                slot,
-                block_root,
-                parent_root,
-                derived,
-            } => {
-                let record = CommittedSlotRecord {
-                    slot: *slot,
-                    block_root: Some(*block_root),
-                    parent_root: Some(*parent_root),
-                    is_empty: false,
-                };
-                self.sync_db
-                    .commit_slot(&record, Some(&derived.state), &derived.created_added)
-                    .await
-            }
-        }
+        self.sync_db
+            .commit_slot(
+                processed.slot,
+                processed.block_root,
+                processed.derived.as_ref(),
+            )
+            .await
     }
 }
