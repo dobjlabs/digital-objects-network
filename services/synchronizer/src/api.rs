@@ -123,8 +123,8 @@ async fn get_state_head(
     Ok(Json(StateHeadResponse {
         last_processed_slot: head.last_processed_slot,
         last_processed_block_number: head.last_processed_block_number,
-        current_state_root: metadata.state_root,
-        current_block_number: metadata.block.number as i64,
+        state_root: metadata.state_root,
+        block_number: metadata.block.number as i64,
         created_count: metadata.created_count as usize,
         nullifier_count: metadata.nullifier_count as usize,
         state_root_count: metadata.state_root_count as usize,
@@ -138,7 +138,7 @@ async fn post_state_object_contains(
     let membership = load_membership(&app_state, &body.object_commitments, &[]).await?;
     Ok(Json(ObjectContainsResponse {
         last_processed_slot: membership.head.last_processed_slot,
-        current_state_root: membership.head.state.metadata.state_root,
+        state_root: membership.head.state.metadata.state_root,
         results: object_contains_entries(&body.object_commitments, membership.created_present),
     }))
 }
@@ -150,7 +150,7 @@ async fn post_state_nullifier_contains(
     let membership = load_membership(&app_state, &[], &body.nullifiers).await?;
     Ok(Json(NullifierContainsResponse {
         last_processed_slot: membership.head.last_processed_slot,
-        current_state_root: membership.head.state.metadata.state_root,
+        state_root: membership.head.state.metadata.state_root,
         results: nullifier_contains_entries(&body.nullifiers, membership.nullifier_present),
     }))
 }
@@ -163,7 +163,7 @@ async fn post_state_membership(
         load_membership(&app_state, &body.object_commitments, &body.nullifiers).await?;
     Ok(Json(MembershipResponse {
         last_processed_slot: membership.head.last_processed_slot,
-        current_state_root: membership.head.state.metadata.state_root,
+        state_root: membership.head.state.metadata.state_root,
         created_results: object_contains_entries(
             &body.object_commitments,
             membership.created_present,

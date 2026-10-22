@@ -28,7 +28,7 @@ const HASH_BATCH_LIMIT: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SynchronizerHead {
-    pub current_state_root: Hash,
+    pub state_root: Hash,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,7 +93,7 @@ impl SynchronizerClient for HttpSynchronizerClient {
             "synchronizer head response",
         )?;
         Ok(SynchronizerHead {
-            current_state_root: payload.current_state_root,
+            state_root: payload.state_root,
         })
     }
 

@@ -26,16 +26,16 @@ pub struct SyncProgressResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Summary of the current state head exposed to clients.
+/// Summary of the head state exposed to clients.
 pub struct StateHeadResponse {
     /// Last slot fully committed by the synchronizer.
     pub last_processed_slot: u32,
     /// Execution block number associated with the last processed slot, if any.
     pub last_processed_block_number: Option<u32>,
     /// Head state root.
-    pub current_state_root: Hash,
+    pub state_root: Hash,
     /// Execution block number committed inside the head state root.
-    pub current_block_number: i64,
+    pub block_number: i64,
     /// Number of objects in the global created set.
     pub created_count: usize,
     /// Number of spent nullifiers in committed state.
@@ -66,7 +66,7 @@ pub struct ObjectContainsResponse {
     /// Last slot fully committed by the synchronizer.
     pub last_processed_slot: u32,
     /// Head state root the results are answered against.
-    pub current_state_root: Hash,
+    pub state_root: Hash,
     /// Per-commitment membership results.
     pub results: Vec<ObjectContainsEntry>,
 }
@@ -93,7 +93,7 @@ pub struct NullifierContainsResponse {
     /// Last slot fully committed by the synchronizer.
     pub last_processed_slot: u32,
     /// Head state root the results are answered against.
-    pub current_state_root: Hash,
+    pub state_root: Hash,
     /// Per-hash membership results.
     pub results: Vec<NullifierContainsEntry>,
 }
@@ -113,7 +113,7 @@ pub struct MembershipResponse {
     /// Last slot fully committed by the synchronizer.
     pub last_processed_slot: u32,
     /// Head state root the results are answered against.
-    pub current_state_root: Hash,
+    pub state_root: Hash,
     /// Per-object created-set membership results.
     pub created_results: Vec<ObjectContainsEntry>,
     /// Per-nullifier membership results.

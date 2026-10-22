@@ -173,8 +173,8 @@ Reorg rollback does not modify RocksDB. The surviving Postgres `DonState` determ
   - returns:
     - `last_processed_slot`
     - `last_processed_block_number`
-    - `current_state_root`
-    - `current_block_number`
+    - `state_root`
+    - `block_number`
     - `created_count`
     - `nullifier_count`
     - `state_root_count`
@@ -184,7 +184,7 @@ Reorg rollback does not modify RocksDB. The surviving Postgres `DonState` determ
     - `nullifiers` (array of hash strings)
   - returns membership for both sets from one captured state:
     - `last_processed_slot`
-    - `current_state_root`
+    - `state_root`
     - `created_results` (array of `{ commitment, present }`)
     - `nullifier_results` (array of `{ nullifier, present }`)
 - `POST /v1/state/object/contains`
@@ -192,14 +192,14 @@ Reorg rollback does not modify RocksDB. The surviving Postgres `DonState` determ
     - `object_commitments` (array of hash strings)
   - returns:
     - `last_processed_slot`
-    - `current_state_root`
+    - `state_root`
     - `results` (array of `{ commitment, present }`)
 - `POST /v1/state/nullifier/contains`
   - request body:
     - `nullifiers` (array of hash strings)
   - returns:
     - `last_processed_slot`
-    - `current_state_root`
+    - `state_root`
     - `results` (array of `{ nullifier, present }`)
 - `POST /v1/txlib/grounding-witness`
   - request body:

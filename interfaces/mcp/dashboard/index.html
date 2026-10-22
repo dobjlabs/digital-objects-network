@@ -526,10 +526,10 @@
             keys.map((k) => j[k]).find((v) => v !== undefined);
           gsrEl.className = "";
           gsrEl.textContent =
-            pick("current_state_root", "currentStateRoot") ?? "—";
+            pick("state_root", "stateRoot") ?? "—";
           setText(
             "u-block",
-            fmtNum(pick("current_block_number", "currentBlockNumber")),
+            fmtNum(pick("block_number", "blockNumber")),
           );
           setText("u-tx", fmtNum(pick("created_count", "createdCount")));
           setText("u-null", fmtNum(pick("nullifier_count", "nullifierCount")));
