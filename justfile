@@ -130,10 +130,11 @@ dev-local: ensure-anvil ensure-db-local (ensure-local-settings LOCAL_DOBJ_ROOT) 
     export FILTER_ADDRESS="$TO_ADDRESS"
     # anvil's first genesis-funded dev account. Published test key, local only.
     export PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
-    # Must be >= 1: the synchronizer bootstraps from INIT_START_SLOT - 1.
+    # The synchronizer derives its genesis state at this slot, so it needs an execution block:
+    # anvil's block 1, which the synchronizer waits for on a fresh devnet.
     export INIT_START_SLOT=1
     export BLOBS_PATH=data/blobs-local/
-    export APP_STATE_DB_PATH=data/synchronizer-db-local
+    export KEY_VALUE_DB_PATH=data/synchronizer-db-local
     export SYNC_METADATA_DB_URL=postgres://postgres@localhost:5432/synchronizer_local
     export DB_URL=postgres://postgres@localhost:5432/relayer_local
     # The shipped defaults pace requests for a 15 req/s public endpoint.
@@ -278,9 +279,11 @@ ensure-start-slot:
         mv "$tmp" "$file"
     }
 
-    head_slot() {  # <beacon_url> -> head slot number
+    # The synchronizer derives its genesis state at INIT_START_SLOT, which must be finalized
+    # and have an execution block; the finalized checkpoint block is both.
+    finalized_slot() {  # <beacon_url> -> finalized slot number
         local beacon="${1%/}" json
-        json="$(curl -fsSL "${beacon}/eth/v1/beacon/headers/head")" || return 1
+        json="$(curl -fsSL "${beacon}/eth/v1/beacon/headers/finalized")" || return 1
         printf '%s' "$json" | jq -r '.data.header.message.slot'
     }
 
@@ -293,16 +296,16 @@ ensure-start-slot:
         fi
         beacon="$(read_env "$env" BEACON_URL)"
         if [ -z "$beacon" ]; then echo "$label: no BEACON_URL in $env; leaving INIT_START_SLOT as-is"; return 0; fi
-        slot="$(head_slot "$beacon" 2>/dev/null || true)"
+        slot="$(finalized_slot "$beacon" 2>/dev/null || true)"
         if [[ "$slot" =~ ^[0-9]+$ ]]; then
             set_env "$env" INIT_START_SLOT "$slot"
-            echo "$label: INIT_START_SLOT -> $slot (head)"
+            echo "$label: INIT_START_SLOT -> $slot (finalized)"
         else
-            echo "$label: could not resolve beacon head; leaving INIT_START_SLOT as-is"
+            echo "$label: could not resolve the finalized slot; leaving INIT_START_SLOT as-is"
         fi
     }
 
-    sync_db="$(read_env services/synchronizer/.env APP_STATE_DB_PATH)"; sync_db="${sync_db:-data/synchronizer-db}"
+    sync_db="$(read_env services/synchronizer/.env KEY_VALUE_DB_PATH)"; sync_db="${sync_db:-data/synchronizer-db}"
     [ -d "$sync_db" ] && sync_fresh=false || sync_fresh=true
     ensure_slot synchronizer services/synchronizer/.env "$sync_fresh"
 

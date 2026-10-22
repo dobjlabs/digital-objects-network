@@ -22,7 +22,7 @@ These figures are for running each service. Running the full compose stack on a
 single host requires their combined resources. The archiver's disk usage grows
 proportionally with the number of blobs matching `FILTER_ADDRESS`; size the
 volume accordingly and monitor it. The synchronizer's RocksDB store
-(`APP_STATE_DB_PATH`) is a rebuildable cache, but mounting a volume for it
+(`KEY_VALUE_DB_PATH`) is a rebuildable cache, but mounting a volume for it
 avoids a slow cold re-sync on restart.
 
 ## Quick start
@@ -89,7 +89,7 @@ docker run -d --name archiver -p 3001:3001 \
 
 Set via `.env` (compose) or `-e` flags (`docker run`). Image defaults:
 `HTTP_BIND=0.0.0.0:<port>`, and the synchronizer's
-`APP_STATE_DB_PATH=/var/lib/don/synchronizer-db`.
+`KEY_VALUE_DB_PATH=/var/lib/don/synchronizer-db`.
 
 | Variable               | Service                | Required     | Notes                                                                           |
 | ---------------------- | ---------------------- | ------------ | ------------------------------------------------------------------------------- |
@@ -103,7 +103,7 @@ Set via `.env` (compose) or `-e` flags (`docker run`). Image defaults:
 | `DB_URL`               | relayer                | no           | Defaults to the bundled Postgres; set to point at an external one               |
 | `BLOBS_PATH`           | archiver               | no           | On-disk blob store path; mount a volume here                                    |
 | `IMAGE_TAG`            | compose                | no           | Image tag to run; pin to a release                                              |
-| `APP_STATE_DB_PATH`    | synchronizer           | no           | RocksDB cache path; mount a volume here                                         |
+| `KEY_VALUE_DB_PATH`    | synchronizer           | no           | RocksDB cache path; mount a volume here                                         |
 | `HTTP_BIND`            | all                    | no           | Defaults to `0.0.0.0:3000` / `:3200` / `:3001`                                  |
 | `RUST_LOG`             | all                    | no           | e.g. `info`                                                                     |
 
