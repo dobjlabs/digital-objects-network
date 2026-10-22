@@ -2529,24 +2529,18 @@ fn test_generated_class_rekey() {
     let pod = prove(ctx.builder, &MockProver {});
     pod.pod.verify().unwrap();
 
-    assert!(
-        tx_out
-            .created
-            .contains(&Value::from(moved.clone()))
-            .unwrap()
-    );
-    assert!(
-        !tx_out
-            .created
-            .contains(&Value::from(foo.obj.commitment()))
-            .unwrap()
-    );
-    assert!(
-        tx_out
-            .nullifiers
-            .contains(&Value::from(txlib::compute_nullifier(&foo.obj)))
-            .unwrap()
-    );
+    assert!(tx_out
+        .created
+        .contains(&Value::from(moved.clone()))
+        .unwrap());
+    assert!(!tx_out
+        .created
+        .contains(&Value::from(foo.obj.commitment()))
+        .unwrap());
+    assert!(tx_out
+        .nullifiers
+        .contains(&Value::from(txlib::compute_nullifier(&foo.obj)))
+        .unwrap());
     assert_eq!(
         moved.get(&StrKey::from("key")).unwrap().unwrap(),
         receiver_key
@@ -2590,12 +2584,10 @@ fn test_builtin_rekey_discovery_execution_and_planning() {
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs, outputs);
         assert_eq!(action.name, format!("Rekey{}", inputs[0]));
-        assert!(
-            module
-                .module()
-                .predicate_ref_by_name(&action.name)
-                .is_none()
-        );
+        assert!(module
+            .module()
+            .predicate_ref_by_name(&action.name)
+            .is_none());
     }
     assert_eq!(
         module.action_hash("RekeyFoo"),
@@ -2637,28 +2629,22 @@ fn test_builtin_rekey_discovery_execution_and_planning() {
                 assert_eq!(new.obj.get(&StrKey::from(key)).unwrap().unwrap(), value);
             }
         }
-        assert!(
-            result
-                .tx
-                .created
-                .contains(&Value::from(new.obj.clone()))
-                .unwrap()
-        );
-        assert!(
-            !result
-                .tx
-                .created
-                .contains(&Value::from(foo.obj.commitment()))
-                .unwrap()
-        );
+        assert!(result
+            .tx
+            .created
+            .contains(&Value::from(new.obj.clone()))
+            .unwrap());
+        assert!(!result
+            .tx
+            .created
+            .contains(&Value::from(foo.obj.commitment()))
+            .unwrap());
         assert_eq!(result.tx.nullifiers.iter().count(), 1);
-        assert!(
-            result
-                .tx
-                .nullifiers
-                .contains(&Value::from(txlib::compute_nullifier(&foo.obj)))
-                .unwrap()
-        );
+        assert!(result
+            .tx
+            .nullifiers
+            .contains(&Value::from(txlib::compute_nullifier(&foo.obj)))
+            .unwrap());
         apply_tx(&mut state, &result.tx);
         foo = new;
     }
@@ -2721,4 +2707,33 @@ fn test_builtin_rekey_name_is_reserved() {
         .err()
         .expect("script must not shadow the built-in");
     assert!(err.to_string().contains("RekeyFoo is reserved"), "{err}");
+}
+
+/// For better UX make sure the stable_identifier is untyped in order to not confuse the user
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_stable_identifier() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn FindOre(action) {
+            var ore = action.output("Ore");
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["FindOre"])
+        .unwrap();
+
+    let state = TestState::default();
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("FindOre", vec![]).unwrap();
+    let [ore] = res.objs();
+
+    println!("{}", serde_json::to_string(&ore.obj).unwrap());
+    assert!(ore
+        .obj
+        .get(&"stable_identifier".into())
+        .unwrap()
+        .unwrap()
+        .is_untyped());
 }

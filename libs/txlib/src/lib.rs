@@ -32,11 +32,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use pod2::{
     backends::plonky2::primitives::merkletree::MerkleProof,
-    frontend::{Operation, entry},
+    frontend::{entry, Operation},
     middleware::{
-        EMPTY_VALUE, Hash, NativeOperation, OperationAux, OperationType, Statement, StrKey, Value,
         containers::{Array, Dictionary, Set},
-        hash_values,
+        hash_values, Hash, NativeOperation, OperationAux, OperationType, Statement, StrKey, Value,
+        EMPTY_VALUE,
     },
 };
 use pod2utils::{dict, macros::BuildContext, map, op, rand_raw_value, set, st_custom};
@@ -307,10 +307,16 @@ pub const STABLE_IDENTIFIER_FIELD: &str = "stable_identifier";
 /// outside of `TxBuilder::insert` (e.g. tests, builders that pre-compute
 /// the finalized object) should go through this helper to stay consistent.
 pub fn with_stable_identifier(initial: &Dictionary) -> Dictionary {
+    // Make a deep copy of the original dictionary into new so that new's db doesn't have the
+    // preimage of stable_identifier, otherwise getting the "stable_identifier" would return a
+    // dictionary instead of an untyped value, which could be consufing for the user.
     let stable_identifier = Value::from(initial.commitment());
-    let mut new = initial.clone();
-    new.insert(&StrKey::from(STABLE_IDENTIFIER_FIELD), &stable_identifier)
-        .unwrap();
+    let mut new =
+        Dictionary::new([(StrKey::from(STABLE_IDENTIFIER_FIELD), stable_identifier)].into());
+    for entry in initial.iter() {
+        let (key, value) = entry.unwrap();
+        new.insert(&StrKey::from(key), &value).unwrap();
+    }
     new
 }
 
@@ -1214,7 +1220,7 @@ mod tests {
     use pod2::{
         backends::plonky2::mock::mainpod::MockProver,
         frontend::{MainPod, MultiPodBuilder},
-        middleware::{F, Params, Predicate, VDSet, containers::Array},
+        middleware::{containers::Array, Params, Predicate, VDSet, F},
     };
     use pod2utils::{macros::BuildContext, set};
 
@@ -1885,12 +1891,10 @@ mod tests {
         ctx.builder.reveal(&st).unwrap();
         solve_and_verify(ctx.builder);
 
-        assert!(
-            tx_out
-                .nullifiers
-                .contains(&Value::from(compute_nullifier(&pick)))
-                .unwrap()
-        );
+        assert!(tx_out
+            .nullifiers
+            .contains(&Value::from(compute_nullifier(&pick)))
+            .unwrap());
     }
 
     /// Tx 1: FindLog (genesis insert).
@@ -2127,12 +2131,10 @@ mod tests {
         assert!(tx3_out.created.contains(&Value::from(stick_a)).unwrap());
         assert!(tx3_out.created.contains(&Value::from(stick_b)).unwrap());
         // Wood should be nullified
-        assert!(
-            tx3_out
-                .nullifiers
-                .contains(&Value::from(compute_nullifier(&wood)))
-                .unwrap()
-        );
+        assert!(tx3_out
+            .nullifiers
+            .contains(&Value::from(compute_nullifier(&wood)))
+            .unwrap());
     }
 
     /// Grounding three inputs exercises InputsGroundedRecursive (peel two per
@@ -2219,12 +2221,10 @@ mod tests {
         solve_and_verify(ctx.builder);
 
         for log in &logs {
-            assert!(
-                burn_out
-                    .nullifiers
-                    .contains(&Value::from(compute_nullifier(log)))
-                    .unwrap()
-            );
+            assert!(burn_out
+                .nullifiers
+                .contains(&Value::from(compute_nullifier(log)))
+                .unwrap());
         }
     }
 }
