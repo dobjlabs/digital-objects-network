@@ -29,11 +29,11 @@ that block should be plugin-agnostic.
   no-input actions, would also show other plugins' no-input actions.
 - **Why:** same scope as the object list.
 
-### Only bitcraft actions are listed in the Recipe Info tab
+### Only bitcraft actions are listed in the Recipe Info window
 
-- **Where:** `PLUGIN_NAME`, applied in `load()` to the result of
-  `GET /actions`; the Recipe Info tab lists the same filtered actions the
-  context menu offers from.
+- **Where:** `PLUGIN_NAME`, applied to the result of `GET /actions` in
+  `loadReferenceWindow()`, the same filter `load()` applies to the actions
+  the context menu offers from.
 - **Generic behavior:** list every installed plugin's actions.
 - **Why:** same scope as the object list.
 
@@ -167,24 +167,29 @@ the selected objects.
   keys in step with the classes in `../../../examples/bitcraft/manifest.toml`. Generic behavior:
   plain page icons only, since the API reports no icons.
 
-## Object list footer and status bar
+## Window title, Inventory Summary and status bar
 
-A one-line footer under the object list (the file count and "Total Bit
-Value: 31", separated by a middle dot, like Finder's item count), and the status bar along the bottom of the
-page. Two of their entries know about bitcraft:
+The main window's title ("Bitcraft (Total Bit Value: 31)", which the
+desktop app shows in its title bar), the Inventory Summary window opened
+from the top bar, and the status bar along the bottom of the page. Three of
+their entries know about bitcraft:
 
 - **Bitcraft version** (status bar): `BITCRAFT_VERSION` ("Alpha 1.0"), a
   fixed string in the page; dobjd and the plugin manifest report no game
   version.
-- **Total Bit Value** (footer): the summed value of the live objects in
-  the list (pending ones are left out); see below.
-- **Generic behavior:** no version or Total Bit Value. The other entries
+- **Total Bit Value** (window title and Inventory Summary): the summed value of
+  the live bitcraft objects (pending ones are left out); see below.
+- **Inventory Summary icon:** `SUMMARY_ICON_CLASS` (`Bit`), the class whose
+  art heads the window, since it totals the inventory in bits.
+- **Website link:** `BITCRAFT_SITE_URL`, opened by the top bar's info
+  icon. Generic behavior: no site link.
+- **Generic behavior:** no version, Total Bit Value or summary icon. The
+  Inventory Summary's live object total and per-class counts are generic:
+  the total covers every plugin's live objects, the per-class counts this
+  plugin's. The other entries
   are generic: the synchronizer and relayer statuses and addresses in the
   status bar (the page probes each service's `/healthz` at the URLs
-  `GET /settings` reports, every 10 seconds), and the footer's count of
-  files: every unspent object in the objects folder, pending ones
-  included, whatever their plugin, plus the welcome guide when it is
-  listed. Unlike the Total Bit Value, it counts pending objects.
+  `GET /settings` reports, every 10 seconds).
 
 ### Total Bit Value
 

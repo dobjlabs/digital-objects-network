@@ -34,10 +34,11 @@ async function page(context, options = {}) {
   virtualConsole.on("jsdomError", (error) => errors.push(error));
   const dom = new JSDOM(html.replace('<meta charset="utf-8">',
     '<meta charset="utf-8"><meta name="dobjd-api-url" content="/">'), {
-    url: "http://127.0.0.1:7727/bitcraft/", runScripts: "dangerously", virtualConsole,
+    url: options.url ?? "http://127.0.0.1:7727/bitcraft/", runScripts: "dangerously", virtualConsole,
     beforeParse(window) {
       window.TextEncoder = TextEncoder;
       window.ResizeObserver = class { observe() {} };
+      window.Element.prototype.scrollIntoView = () => {};
       window.HTMLCanvasElement.prototype.getContext = () => ({ measureText: (text) => ({ width: text.length * 7 }) });
       window.setInterval = (callback, delay) => {
         const id = ++nextTimer;
@@ -73,7 +74,7 @@ async function page(context, options = {}) {
           backend.objects = backend.objects.filter((candidate) => candidate !== object);
           return respond(object);
         }
-        if (parsed.pathname === "/settings") return respond({});
+        if (parsed.pathname === "/settings") return respond(backend.settings ?? {});
         if (parsed.pathname === "/actions") return respond(backend.actions);
         if (parsed.pathname === "/actions/run") {
           const input = JSON.parse(init.body).input;
@@ -138,7 +139,7 @@ async function page(context, options = {}) {
     await flush();
   };
   return {
-    backend, document, dom, tick, sources, emit, dropStream, publish,
+    backend, document, dom, tick, sources, timers, emit, dropStream, publish,
     splash: document.querySelector("#startup-screen"),
     app: document.querySelector("#inventory-app"),
     jobs: () => [...document.querySelectorAll(".run-row")],
@@ -467,4 +468,162 @@ test("an active mutation that outputs a pocketknife prevents duplicate crafting"
   await ui.complete("gather");
   assert.equal(ui.app.hidden, false);
   assert.equal(ui.jobs().length, 1);
+});
+
+test("the top bar keeps the files view selected and opens Recipe Info in one window", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  const { document } = ui;
+  assert.equal(document.querySelector("#tab-bar"), null);
+  assert.equal(document.querySelector("#objects-view").hidden, false);
+  assert.equal(document.querySelector("#recipebook-view").hidden, true);
+  const files = document.querySelector("#top-bar .toolbar-button.selected");
+  assert.equal(files.tagName, "SPAN");
+  assert.equal(files.getAttribute("aria-label"), "Files");
+
+  const opened = [];
+  let focused = 0;
+  const referenceWindow = { closed: false, focus: () => { focused++; } };
+  ui.dom.window.open = (url, name, features) => {
+    opened.push({ url: String(url), name, features });
+    return referenceWindow;
+  };
+  const book = document.querySelector("#reference-button");
+  book.click();
+  assert.deepEqual(opened.map(({ url, name }) => ({ url, name })), [
+    { url: "http://127.0.0.1:7727/bitcraft/?page=recipebook", name: "bitcraft-recipe-info" },
+  ]);
+  book.click();
+  assert.equal(opened.length, 1);
+  assert.equal(focused, 1);
+  referenceWindow.closed = true;
+  book.click();
+  assert.equal(opened.length, 2);
+});
+
+test("the Recipe Info window shows only recipes and runs no startup", async (context) => {
+  const ui = await page(context, {
+    url: "http://127.0.0.1:7727/bitcraft/?page=recipebook&action=bitcraft::CraftPocketknife",
+    actions: [recipe(), recipe("GatherWood"), recipe("Other", "another-plugin")].map((action, index) =>
+      index === 2 ? { ...action, action: qname("Other", "another-plugin") } : action),
+  });
+  const { document } = ui;
+  assert.equal(document.body.classList.contains("reference-window"), true);
+  assert.equal(document.title, "Bitcraft reference");
+  assert.equal(document.querySelector("#recipebook-view").hidden, false);
+  assert.deepEqual(ui.backend.posts, []);
+  assert.equal(ui.backend.inventoryReads, 0);
+  assert.deepEqual([...document.querySelectorAll(".recipe-row .action-name")].map((name) => name.textContent),
+    ["bitcraft::CraftPocketknife", "bitcraft::GatherWood"]);
+  assert.equal(document.querySelector("#recipe-details-body .details-title").textContent, "bitcraft::CraftPocketknife");
+  document.querySelectorAll(".recipe-row")[1].dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  assert.equal(new URL(ui.dom.window.location.href).searchParams.get("action"), "bitcraft::GatherWood");
+});
+
+test("the summary icon opens the Inventory Summary in one window", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  const opened = [];
+  ui.dom.window.open = (url, name) => {
+    opened.push({ url: String(url), name });
+    return { closed: false, focus() {} };
+  };
+  const button = ui.document.querySelector("#summary-button");
+  button.click();
+  button.click();
+  assert.deepEqual(opened, [
+    { url: "http://127.0.0.1:7727/bitcraft/?page=summary", name: "bitcraft-inventory-summary" },
+  ]);
+});
+
+test("the Inventory Summary counts live objects and refreshes on job events", async (context) => {
+  const item = (fileName, name, status = "live", pluginName = "bitcraft") => ({
+    fileName, class: qname(name, pluginName), status, fields: { kvs: [] },
+  });
+  const ui = await page(context, {
+    url: "http://127.0.0.1:7727/bitcraft/?page=summary",
+    objects: [
+      knife(), item("wood-1.dobj", "Wood"), item("wood-2.dobj", "Wood"),
+      item("stick.dobj", "Stick", "pending"), item("log.dobj", "Log", "live", "craft-basics"),
+    ],
+  });
+  const { document } = ui;
+  const text = (selector) => document.querySelector(selector).textContent;
+  const fields = (section) => [...document.querySelectorAll(`[data-section="${section}"] dt`)]
+    .map((term) => `${term.textContent.trim()} ${term.nextElementSibling.textContent}`);
+  assert.equal(document.title, "Bitcraft Inventory Summary");
+  assert.equal(document.body.classList.contains("secondary-window"), true);
+  assert.deepEqual(ui.backend.posts, []);
+  assert.equal(text(".summary-total"), "2 bits");
+  assert.equal(text(".summary-subtitle"), "4 live objects in total");
+  assert.deepEqual(fields("general"), ["Total Bit Value: 2", "Total objects: 4"]);
+  assert.deepEqual(fields("classes"), ["bitcraft::Pocketknife: 1", "bitcraft::Wood: 2"]);
+
+  const polls = () => [...ui.timers.values()].filter((timer) => timer.delay === 10000);
+  assert.equal(polls().length, 1, "polls while the stick is pending");
+
+  document.querySelector('[data-section="general"]').open = false;
+  ui.backend.objects.push(item("wood-3.dobj", "Wood"));
+  const events = ui.sources.find((source) => source.url.endsWith("/events"));
+  events.onmessage({ data: "{}" });
+  await flush();
+  assert.deepEqual(fields("classes"), ["bitcraft::Pocketknife: 1", "bitcraft::Wood: 3"]);
+  assert.equal(document.querySelector('[data-section="general"]').open, false);
+
+  const reads = ui.backend.inventoryReads;
+  events.onopen();
+  await flush();
+  assert.equal(ui.backend.inventoryReads, reads, "the first connection does not read again");
+  events.onopen();
+  await flush();
+  assert.equal(ui.backend.inventoryReads, reads + 1, "a reconnect reads the inventory");
+
+  ui.backend.objects.find((object) => object.fileName === "stick.dobj").status = "live";
+  await polls()[0].callback();
+  await flush();
+  assert.deepEqual(fields("classes"), ["bitcraft::Pocketknife: 1", "bitcraft::Stick: 1", "bitcraft::Wood: 3"]);
+  assert.equal(polls().length, 0, "stops polling once everything is live");
+});
+
+test("the right-hand buttons open the site and Settings; Discord does nothing yet", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  const opened = [];
+  ui.dom.window.open = (url, name) => {
+    opened.push({ url: String(url), name });
+    return { closed: false, focus() {} };
+  };
+  ui.document.querySelector("#discord-button").click();
+  assert.deepEqual(opened, []);
+  ui.document.querySelector("#about-button").click();
+  ui.document.querySelector("#settings-button").click();
+  assert.deepEqual(opened, [
+    { url: "https://bitcraft.digiobjects.net/", name: "_blank" },
+    { url: "http://127.0.0.1:7727/bitcraft/?page=settings", name: "bitcraft-settings" },
+  ]);
+});
+
+test("the Settings window shows the connection addresses read-only and runs no startup", async (context) => {
+  const ui = await page(context, {
+    url: "http://127.0.0.1:7727/bitcraft/?page=settings",
+    settings: { synchronizerApiUrl: "http://127.0.0.1:3000", relayerApiUrl: "http://127.0.0.1:3200", mcpEnabled: false },
+  });
+  const { document } = ui;
+  const field = (id) => document.querySelector(`#settings-${id}`);
+  assert.equal(document.title, "Bitcraft Settings");
+  assert.equal(document.querySelector("#settings-view").hidden, false);
+  assert.deepEqual(ui.backend.posts, []);
+  assert.equal(ui.backend.inventoryReads, 0);
+  assert.equal(field("synchronizer").value, "http://127.0.0.1:3000");
+  assert.equal(field("relayer").value, "http://127.0.0.1:3200");
+  assert.equal(field("synchronizer").readOnly, true);
+  assert.equal(field("relayer").readOnly, true);
+});
+
+test("the main window's title carries the Total Bit Value of live objects", async (context) => {
+  const wood = (fileName, status = "live") => ({ fileName, class: qname("Wood"), status, fields: { kvs: [] } });
+  const ui = await page(context, { objects: [knife(), wood("wood-1.dobj"), wood("wood-2.dobj"), wood("wood-3.dobj", "pending")] });
+  assert.equal(ui.document.title, "Bitcraft (Total Bit Value: 2)");
+  assert.equal(ui.document.querySelector("#objects-footer"), null);
+  ui.backend.objects.find((object) => object.fileName === "wood-3.dobj").status = "live";
+  await ui.dom.window.reloadObjects();
+  await flush();
+  assert.equal(ui.document.title, "Bitcraft (Total Bit Value: 3)");
 });
