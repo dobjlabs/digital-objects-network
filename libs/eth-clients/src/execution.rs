@@ -124,7 +124,7 @@ fn failed_attempt(error: TransportError) -> FailedAttempt<TransportError> {
     FailedAttempt {
         retry_after: policy.backoff_hint(&error),
         retryable,
-        error,
+        error: Box::new(error),
     }
 }
 

@@ -234,11 +234,11 @@ async fn fetch_text(
     let text = resp.text().await.map_err(FailedAttempt::from_reqwest)?;
     if is_retryable_status(status.as_u16()) {
         return Err(FailedAttempt {
-            error: ClientError::RetryableStatus {
+            error: Box::new(ClientError::RetryableStatus {
                 url: Box::new(url),
                 status,
                 body: text,
-            },
+            }),
             retryable: true,
             retry_after,
         });
@@ -259,7 +259,7 @@ pub(crate) fn is_transient_reqwest_error(err: &reqwest::Error) -> bool {
 
 /// One failed attempt of a request.
 pub(crate) struct FailedAttempt<E> {
-    pub(crate) error: E,
+    pub(crate) error: Box<E>,
     pub(crate) retryable: bool,
     /// How long the server asked to wait before retrying.
     pub(crate) retry_after: Option<Duration>,
@@ -269,7 +269,7 @@ impl FailedAttempt<ClientError> {
     fn from_reqwest(err: reqwest::Error) -> Self {
         Self {
             retryable: is_transient_reqwest_error(&err),
-            error: err.into(),
+            error: Box::new(err.into()),
             retry_after: None,
         }
     }
@@ -295,11 +295,11 @@ where
             Err(failed) => failed,
         };
         if !failed.retryable {
-            return Err(failed.error);
+            return Err(*failed.error);
         }
         let Some(backoff_delay) = backoff.next_backoff() else {
             warn!(target, error = ?failed.error, "Request failed. All retries failed");
-            return Err(failed.error);
+            return Err(*failed.error);
         };
         let delay = failed.retry_after.map_or(backoff_delay, |delay| {
             delay
