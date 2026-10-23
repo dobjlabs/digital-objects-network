@@ -47,7 +47,7 @@ It waits for anvil at startup, so the two can be launched in any order.
 `just dev-local` handles all of this, but the constraints it encodes are worth knowing:
 
 - **Block time is 2s.** Grounding state roots expire after `MAX_STATE_ROOT_AGE_BLOCKS` (300), so faster blocks can expire a root while a proof is still being generated. That surfaces as a grounding failure rather than a config error.
-- **`INIT_START_SLOT` must be >= 1**, because the synchronizer bootstraps from `INIT_START_SLOT - 1`.
+- **`INIT_START_SLOT` must be >= 1** and have an execution block, because the synchronizer derives its genesis state there. The shim reports anvil's latest block as finalized, so on a fresh devnet the synchronizer waits for block 1 to be mined.
 - **anvil state persists** to `data/anvil-state.json`, blob sidecars included, so a restart resumes the chain the archiver and synchronizer already indexed. It has to stay in step with their stores and the objects in `data/dobj-local` and `.dev/bitcraft-local`: `just reset` drops all of it together, and keeping one side while wiping the other leaves services and objects referring to roots that no longer exist.
 - **Devnet state is fully separate** from `just dev`'s, because the two point at different chains and an object created against one can be neither proven nor synced against the other. That covers the Postgres databases, the RocksDB path, the blobs directory, and — via `DOBJ_HOME` — the driver's own root, so objects, installed plugins, and `settings.json` do not mix either. Without the last of those the isolation would be pointless: the services would stay coherent while `~/.dobj` filled with objects that only work in one mode.
 

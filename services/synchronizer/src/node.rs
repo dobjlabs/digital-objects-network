@@ -22,30 +22,28 @@ use anyhow::{anyhow, Context, Result};
 use backoff::ExponentialBackoffBuilder;
 use chrono::{DateTime, Utc};
 use pod2::middleware::Hash;
-use pod2utils::b256_to_hash;
 use tracing::{debug, info};
 
 use crate::config::AppConfig;
-use crate::head::{BlockMetadata, StateHead};
+use crate::don_state::{DonState, ExecutionBlock};
+use crate::state_log_db::StateLogDb;
 use crate::state_machine::{DerivedSlot, StateMachine, MAX_STATE_ROOT_AGE_BLOCKS};
-use crate::sync_db::{CommittedSlotRecord, SyncDb};
 
 /// Runtime integration layer that connects network inputs (beacon/execution),
-/// pure state derivation (`StateMachine`), and sync metadata (`SyncDb`).
+/// pure state derivation (`StateMachine`), and the state log (`StateLogDb`).
 pub struct Node {
     pub beacon_cli: BeaconClient,
     pub archiver_cli: BeaconClient,
     pub rpc_cli: RootProvider,
     pub config: AppConfig,
     pub state_machine: Arc<StateMachine>,
-    pub sync_db: Arc<SyncDb>,
+    pub state_log: Arc<StateLogDb>,
 }
 
 /// Everything fetched from the network to derive one present slot.
 pub(crate) struct SlotContext {
     slot: u32,
     beacon_block_root: B256,
-    parent_root: B256,
     /// `None` when no payload becomes canonical with this block, which from Gloas on happens
     /// when its bid does not build on the parent's payload (withheld or not revealed in time).
     payload: Option<CanonicalPayload>,
@@ -58,9 +56,7 @@ pub(crate) struct SlotContext {
 /// block whose bid committed to its blobs. From Gloas on that is the parent of the slot's block.
 struct CanonicalPayload {
     committing_block_root: B256,
-    execution_block_hash: B256,
-    execution_block_number: u32,
-    execution_block_timestamp: u64,
+    execution_block: ExecutionBlock,
     kzg_blob_commitments: Vec<(B256, KzgCommitment)>,
     /// The payload's blob transactions sent to the target address, in block order.
     target_blob_txs: Vec<TargetBlobTx>,
@@ -72,29 +68,12 @@ struct TargetBlobTx {
 }
 
 /// Outcome of processing one beacon slot, ready to be committed.
-pub enum ProcessedSlot {
-    /// Beacon produced no block for the slot. With no execution block there is
-    /// nothing to derive against, so the previous state head is carried
-    /// forward unchanged, committed under the new slot number to keep the
-    /// slot history contiguous.
-    Missing { slot: u32, carried_head: StateHead },
-    /// Beacon produced a block, but no execution payload became canonical with it. The state
-    /// head is carried forward as for `Missing`, while the block root is kept for reorg checks.
-    WithoutPayload {
-        slot: u32,
-        block_root: B256,
-        parent_root: B256,
-        carried_head: StateHead,
-    },
-    /// Beacon produced a block and the state machine derived the slot against
-    /// it (deriving a fresh state root even when the block carries no usable blobs).
-    Present {
-        slot: u32,
-        block_root: B256,
-        parent_root: B256,
-        block_number: u32,
-        derived: DerivedSlot,
-    },
+pub struct ProcessedSlot {
+    pub slot: u32,
+    /// `None` when the beacon chain produced no block for the slot.
+    pub block_root: Option<B256>,
+    /// `None` when no execution block became canonical with the slot.
+    pub derived: Option<DerivedSlot>,
 }
 
 impl Node {
@@ -102,7 +81,7 @@ impl Node {
     pub async fn new(
         cfg: AppConfig,
         state_machine: Arc<StateMachine>,
-        sync_db: Arc<SyncDb>,
+        state_log: Arc<StateLogDb>,
     ) -> Result<Self> {
         let http_cli = reqwest::Client::builder()
             .timeout(Duration::from_secs(8))
@@ -127,26 +106,48 @@ impl Node {
             rpc_cli,
             config: cfg,
             state_machine,
-            sync_db,
+            state_log,
         })
     }
 
-    pub async fn last_processed_slot(&self) -> Result<u32> {
-        self.sync_db.last_processed_slot().await
-    }
-
-    pub async fn slot_root(&self, slot: u32) -> Result<Option<B256>> {
-        self.sync_db.slot_root(slot).await
-    }
-
-    pub async fn current_head(&self) -> Result<StateHead> {
-        self.sync_db.current_head().await
-    }
-
-    /// Rewind to `keep_slot` by deleting later slot rows; the created
-    /// index rows those slots added are pruned in the same Postgres transaction.
-    pub async fn rollback_to_slot(&self, keep_slot: u32) -> Result<()> {
-        self.sync_db.rollback_to_slot(keep_slot).await
+    /// Check that `slot` can be the genesis slot: finalized, so it can never be reorged out, and
+    /// with an execution block for the genesis state to be derived at. Waiting for finalization
+    /// ends in a node error, so the sync loop retries it.
+    pub(crate) async fn validate_genesis_slot(&self, slot: u32) -> Result<()> {
+        fetch_once_available(
+            self.config.availability_polling,
+            "finalization of INIT_START_SLOT",
+            || async {
+                let finalized = self.beacon_cli.get_block_header(BlockId::Finalized).await?;
+                if let Some(header) = &finalized {
+                    info!(
+                        INIT_START_SLOT = slot,
+                        last_finalized_slot = header.slot,
+                        "Waiting for INIT_START_SLOT to be finalized"
+                    );
+                }
+                Ok(finalized.filter(|header| header.slot >= slot).map(|_| ()))
+            },
+        )
+        .await?;
+        let header = self
+            .beacon_cli
+            .get_block_header(BlockId::Slot(slot))
+            .await?
+            .ok_or_else(|| {
+                anyhow!(
+                    "INIT_START_SLOT {slot} has no beacon block; pick a finalized slot with an \
+                     execution block"
+                )
+            })?;
+        let block = self.get_beacon_block(header.root).await?;
+        anyhow::ensure!(
+            self.canonical_payload(&header, &block, None)
+                .await?
+                .is_some(),
+            "INIT_START_SLOT {slot} has no execution block; pick a finalized slot with one"
+        );
+        Ok(())
     }
 
     pub(crate) async fn get_beacon_head_header(&self) -> Result<BlockHeader> {
@@ -213,31 +214,6 @@ impl Node {
                 .await?)
         })
         .await
-    }
-
-    pub(crate) async fn load_committed_slot_record(
-        &self,
-        slot: u32,
-    ) -> Result<CommittedSlotRecord> {
-        let Some(header) = self
-            .beacon_cli
-            .get_block_header(BlockId::Slot(slot))
-            .await?
-        else {
-            return Ok(CommittedSlotRecord::empty(slot));
-        };
-
-        let block = self.get_beacon_block(header.root).await?;
-        let payload = self.canonical_payload(&header, &block, None).await?;
-
-        Ok(CommittedSlotRecord {
-            slot,
-            block_root: Some(header.root),
-            parent_root: Some(block.parent_root),
-            block_number: payload.map(|payload| payload.execution_block_number),
-            current_state_root: None,
-            is_empty: false,
-        })
     }
 
     /// Resolve the execution payload that becomes canonical with `beacon_block`: its own
@@ -322,9 +298,11 @@ impl Node {
 
         Ok(Some(CanonicalPayload {
             committing_block_root,
-            execution_block_hash,
-            execution_block_number: execution_block.header.number.try_into()?,
-            execution_block_timestamp: execution_block.header.timestamp,
+            execution_block: ExecutionBlock {
+                number: execution_block.header.number.try_into()?,
+                timestamp: execution_block.header.timestamp,
+                hash: execution_block_hash,
+            },
             kzg_blob_commitments,
             target_blob_txs,
         }))
@@ -406,7 +384,6 @@ impl Node {
         Ok(SlotContext {
             slot,
             beacon_block_root: beacon_block_header.root,
-            parent_root: beacon_block.parent_root,
             payload,
             blob_payloads,
         })
@@ -414,7 +391,7 @@ impl Node {
 
     /// Parse the slot's blobs, prefetch the array positions of their created
     /// commitments that already exist in committed state, and derive the next
-    /// head.
+    /// state.
     ///
     /// The prefetch is one batched query against the created index, mirroring how
     /// `recent_state_roots` is prefetched, so the state machine never has to query the
@@ -422,25 +399,25 @@ impl Node {
     /// state machine can cross-check each hit against the array at the base root.
     async fn derive_slot(
         &self,
-        base_head: StateHead,
+        base_state: Option<DonState>,
         recent_state_roots: Vec<(Hash, i64)>,
         slot: u32,
-        block_meta: BlockMetadata,
+        block: ExecutionBlock,
         blob_payloads: &[(u32, Vec<u8>)],
     ) -> Result<DerivedSlot> {
         let parsed = self
             .state_machine
-            .parse_blobs(blob_payloads, slot, block_meta.number);
+            .parse_blobs(blob_payloads, slot, block.number);
         let candidates: Vec<Hash> = parsed
             .iter()
             .flat_map(|(_, payload)| payload.created.iter().copied())
             .collect();
-        let prior_indices = self.sync_db.created_indices(&candidates).await?;
-        self.state_machine.derive_slot_head(
-            base_head,
+        let prior_indices = self.state_log.created_indices(&candidates).await?;
+        self.state_machine.derive_slot_state(
+            base_state,
             recent_state_roots,
             slot,
-            block_meta,
+            block,
             &parsed,
             &prior_indices,
         )
@@ -449,120 +426,76 @@ impl Node {
     /// Derive the slot from a fetched `SlotContext` against the committed state. Reads the
     /// sync database but makes no network calls.
     pub(crate) async fn derive_from_context(&self, slot_ctx: SlotContext) -> Result<ProcessedSlot> {
-        let base_head = self.sync_db.current_head().await?;
-
         let Some(payload) = slot_ctx.payload else {
             info!(
                 slot = slot_ctx.slot,
                 "No execution payload became canonical with this slot's block"
             );
-            return Ok(ProcessedSlot::WithoutPayload {
+            return Ok(ProcessedSlot {
                 slot: slot_ctx.slot,
-                block_root: slot_ctx.beacon_block_root,
-                parent_root: slot_ctx.parent_root,
-                carried_head: base_head,
+                block_root: Some(slot_ctx.beacon_block_root),
+                derived: None,
             });
         };
+        let base_state = self.state_log.head_state().await?;
 
         debug!(
             slot = slot_ctx.slot,
-            execution_block_hash = ?payload.execution_block_hash,
-            execution_block_number = payload.execution_block_number,
+            execution_block_hash = ?payload.execution_block.hash,
+            execution_block_number = payload.execution_block.number,
             "Resolved execution payload for slot"
         );
         info!(
             "Processing slot {} from {}",
             slot_ctx.slot,
-            DateTime::<Utc>::from_timestamp_secs(payload.execution_block_timestamp as i64)
+            DateTime::<Utc>::from_timestamp_secs(payload.execution_block.timestamp as i64)
                 .unwrap_or_default(),
         );
-        self.state_machine.log_current_state(base_head);
+        match base_state {
+            Some(base_state) => self.state_machine.log_state(base_state),
+            None => info!(slot = slot_ctx.slot, "Deriving the genesis state"),
+        }
 
-        let min_block_number = base_head.metadata.current_block.map(|block_meta| {
-            block_meta
+        let min_block_number = base_state.map_or(0, |state| {
+            state
+                .metadata
+                .block
                 .number
                 .saturating_sub(MAX_STATE_ROOT_AGE_BLOCKS as u32)
         });
-        let recent_state_roots = self.sync_db.recent_state_roots(min_block_number).await?;
+        let recent_state_roots = self.state_log.recent_state_roots(min_block_number).await?;
 
-        let block_meta = BlockMetadata {
-            number: payload.execution_block_number,
-            timestamp: payload.execution_block_timestamp,
-            hash: b256_to_hash(payload.execution_block_hash),
-        };
         let derived = self
             .derive_slot(
-                base_head,
+                base_state,
                 recent_state_roots,
                 slot_ctx.slot,
-                block_meta,
+                payload.execution_block,
                 &slot_ctx.blob_payloads,
             )
             .await?;
 
-        Ok(ProcessedSlot::Present {
+        Ok(ProcessedSlot {
             slot: slot_ctx.slot,
-            block_root: slot_ctx.beacon_block_root,
-            parent_root: slot_ctx.parent_root,
-            block_number: payload.execution_block_number,
-            derived,
+            block_root: Some(slot_ctx.beacon_block_root),
+            derived: Some(derived),
         })
     }
 
-    /// Commit one processed slot to Postgres as the new state head, writing
+    /// Commit one processed slot to Postgres as the new head state, writing
     /// its created-index rows in the same transaction.
     pub async fn commit_slot(&self, processed: &ProcessedSlot) -> Result<()> {
-        // Sync merkle trees to disk to guarantee that after this point the data is persisted on
-        // disk even after a system crash.  The head is committed to Postgres next and its roots
-        // must not outlive the merkle tree nodes in a crash.
-        self.state_machine.sync()?;
-        match processed {
-            ProcessedSlot::Missing { slot, carried_head } => {
-                self.sync_db
-                    .commit_slot(
-                        &CommittedSlotRecord::empty(*slot),
-                        carried_head,
-                        &HashMap::new(),
-                    )
-                    .await
-            }
-            ProcessedSlot::WithoutPayload {
-                slot,
-                block_root,
-                parent_root,
-                carried_head,
-            } => {
-                let record = CommittedSlotRecord {
-                    slot: *slot,
-                    block_root: Some(*block_root),
-                    parent_root: Some(*parent_root),
-                    block_number: None,
-                    current_state_root: None,
-                    is_empty: false,
-                };
-                self.sync_db
-                    .commit_slot(&record, carried_head, &HashMap::new())
-                    .await
-            }
-            ProcessedSlot::Present {
-                slot,
-                block_root,
-                parent_root,
-                block_number,
-                derived,
-            } => {
-                let record = CommittedSlotRecord {
-                    slot: *slot,
-                    block_root: Some(*block_root),
-                    parent_root: Some(*parent_root),
-                    block_number: Some(*block_number),
-                    current_state_root: derived.head.metadata.current_state_root,
-                    is_empty: false,
-                };
-                self.sync_db
-                    .commit_slot(&record, &derived.head, &derived.created_added)
-                    .await
-            }
+        // Only a derived state wrote Merkle nodes. Its roots are committed to Postgres next and
+        // must not outlive those nodes in a crash, so they are synced to disk first.
+        if processed.derived.is_some() {
+            self.state_machine.sync()?;
         }
+        self.state_log
+            .commit_slot(
+                processed.slot,
+                processed.block_root,
+                processed.derived.as_ref(),
+            )
+            .await
     }
 }
