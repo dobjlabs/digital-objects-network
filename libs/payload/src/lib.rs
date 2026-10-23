@@ -76,13 +76,9 @@ pub fn hash_to_db_bytes(hash: Hash) -> Vec<u8> {
 /// Decode the little-endian limb bytes from a `BYTEA` column back into a `Hash`.
 pub fn db_bytes_to_hash(bytes: &[u8]) -> Result<Hash> {
     let limbs: [[u8; 8]; 4] = bytes
-        .chunks_exact(8)
-        .map(|chunk| {
-            chunk
-                .try_into()
-                .map_err(|_| anyhow!("invalid hash limb length"))
-        })
-        .collect::<Result<Vec<[u8; 8]>>>()?
+        .as_chunks::<8>()
+        .0
+        .to_vec()
         .try_into()
         .map_err(|_| anyhow!("invalid hash byte length"))?;
 

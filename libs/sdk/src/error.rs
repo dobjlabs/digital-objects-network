@@ -30,7 +30,7 @@ impl From<Box<EvalAltResult>> for SdkError {
         if let EvalAltResult::ErrorRuntime(payload, pos) = innermost(&e)
             && let Some(e) = payload.read_lock::<Rc<anyhow::Error>>()
         {
-            return Self::Eval(format!("{}", &*e), *pos);
+            return Self::Eval(format!("{}", *e), *pos);
         }
         Self::Eval(format!("{e}"), e.position())
     }

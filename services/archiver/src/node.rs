@@ -514,7 +514,7 @@ impl Node {
             self.store
                 .store_blobs_disk(beacon_block_header, &missing_blobs)
                 .await?;
-            result.extend(missing_blobs.into_iter());
+            result.extend(missing_blobs);
         }
         Ok(result)
     }

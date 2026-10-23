@@ -72,7 +72,7 @@ checksum = "6d9d22005bf31b018f31ef9ecadb5d2c39cf4f6acc8db0456f72c815f3d7f757"
 dependencies = [
  "alloy-primitives",
  "num_enum",
- "strum 0.27.2",
+ "strum",
 ]
 
 [[package]]
@@ -550,7 +550,7 @@ dependencies = [
  "derive_more",
  "rand 0.8.5",
  "serde",
- "strum 0.27.2",
+ "strum",
 ]
 
 [[package]]
@@ -1688,7 +1688,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "urlencoding",
- "uuid",
  "windows-sys 0.59.0",
  "wire-types",
 ]
@@ -2522,15 +2521,6 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "fixed-hash"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfcf0ed7fe52a17a03854ec54a9f76d6d84508d1c0e66bc1793301c73fc8493c"
-dependencies = [
- "static_assertions",
-]
-
-[[package]]
-name = "fixed-hash"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "835c052cb0c08c1acf6ffd71c022172e18723949c8282f2b9f27efbc51e64534"
@@ -2540,12 +2530,6 @@ dependencies = [
  "rustc-hex",
  "static_assertions",
 ]
-
-[[package]]
-name = "fixedbitset"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80"
 
 [[package]]
 name = "flate2"
@@ -3194,6 +3178,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "impl-codec"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d40b9d5e17727407e55028eafc22b2dc68781786e6d7eb8a21103f5058e3a14"
+dependencies = [
+ "parity-scale-codec",
+]
+
+[[package]]
 name = "impl-trait-for-tuples"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3413,11 +3406,11 @@ dependencies = [
 
 [[package]]
 name = "keccak-hash"
-version = "0.8.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce2bd4c29270e724d3eaadf7bdc8700af4221fc0ed771b855eadcd1b98d52851"
+checksum = "5fba6b43ea4db600de48a9611dfaa0dc190710defdf5203e21f084504de77787"
 dependencies = [
- "primitive-types 0.10.1",
+ "primitive-types 0.14.0",
  "tiny-keccak",
 ]
 
@@ -4094,16 +4087,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "petgraph"
-version = "0.6.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4c5cc86750666a3ed20bdaf5ca2a0344f9c67674cae0515bec2da16fbaa47db"
-dependencies = [
- "fixedbitset",
- "indexmap 2.13.0",
-]
-
-[[package]]
 name = "pexe"
 version = "0.1.0"
 dependencies = [
@@ -4207,7 +4190,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 [[package]]
 name = "plonky2"
 version = "1.1.0"
-source = "git+https://github.com/0xPARC/plonky2.git?rev=109d517d09c210ae4c2cee381d3e3fbc04aa3812#109d517d09c210ae4c2cee381d3e3fbc04aa3812"
+source = "git+https://github.com/0xPARC/plonky2.git?rev=60e32369b7b5c8f0ff1e44265005f7c3c3a0a04b#60e32369b7b5c8f0ff1e44265005f7c3c3a0a04b"
 dependencies = [
  "ahash",
  "anyhow",
@@ -4233,7 +4216,7 @@ dependencies = [
 [[package]]
 name = "plonky2_field"
 version = "1.0.0"
-source = "git+https://github.com/0xPARC/plonky2.git?rev=109d517d09c210ae4c2cee381d3e3fbc04aa3812#109d517d09c210ae4c2cee381d3e3fbc04aa3812"
+source = "git+https://github.com/0xPARC/plonky2.git?rev=60e32369b7b5c8f0ff1e44265005f7c3c3a0a04b#60e32369b7b5c8f0ff1e44265005f7c3c3a0a04b"
 dependencies = [
  "anyhow",
  "itertools 0.11.0",
@@ -4248,7 +4231,7 @@ dependencies = [
 [[package]]
 name = "plonky2_maybe_rayon"
 version = "1.0.0"
-source = "git+https://github.com/0xPARC/plonky2.git?rev=109d517d09c210ae4c2cee381d3e3fbc04aa3812#109d517d09c210ae4c2cee381d3e3fbc04aa3812"
+source = "git+https://github.com/0xPARC/plonky2.git?rev=60e32369b7b5c8f0ff1e44265005f7c3c3a0a04b#60e32369b7b5c8f0ff1e44265005f7c3c3a0a04b"
 dependencies = [
  "rayon",
 ]
@@ -4256,7 +4239,7 @@ dependencies = [
 [[package]]
 name = "plonky2_u32"
 version = "0.1.0"
-source = "git+https://github.com/ax0/plonky2-u32?rev=cb8e2d9681eb06d069157edbb5ec1d05038611c4#cb8e2d9681eb06d069157edbb5ec1d05038611c4"
+source = "git+https://github.com/ax0/plonky2-u32?rev=0e1346c3c946ff87c4f99af9f3d8673542f4828e#0e1346c3c946ff87c4f99af9f3d8673542f4828e"
 dependencies = [
  "anyhow",
  "itertools 0.10.5",
@@ -4267,12 +4250,12 @@ dependencies = [
 [[package]]
 name = "plonky2_util"
 version = "1.0.0"
-source = "git+https://github.com/0xPARC/plonky2.git?rev=109d517d09c210ae4c2cee381d3e3fbc04aa3812#109d517d09c210ae4c2cee381d3e3fbc04aa3812"
+source = "git+https://github.com/0xPARC/plonky2.git?rev=60e32369b7b5c8f0ff1e44265005f7c3c3a0a04b#60e32369b7b5c8f0ff1e44265005f7c3c3a0a04b"
 
 [[package]]
 name = "pod2"
 version = "0.1.0"
-source = "git+https://github.com/0xPARC/pod2?rev=a91d87895de0f6d9bda256016572d593216e619a#a91d87895de0f6d9bda256016572d593216e619a"
+source = "git+https://github.com/0xPARC/pod2?rev=331a1145a8a5679a63058953464969fb960d9955#331a1145a8a5679a63058953464969fb960d9955"
 dependencies = [
  "annotate-snippets",
  "anyhow",
@@ -4280,7 +4263,6 @@ dependencies = [
  "bs58",
  "directories",
  "dyn-clone",
- "env_logger",
  "hashbrown 0.14.5",
  "hex",
  "itertools 0.14.0",
@@ -4291,7 +4273,6 @@ dependencies = [
  "num-bigint",
  "pest",
  "pest_derive",
- "petgraph",
  "plonky2",
  "plonky2_u32",
  "rand 0.8.5",
@@ -4303,7 +4284,6 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "sha2",
- "strum 0.26.3",
  "strum_macros 0.26.4",
  "thiserror 2.0.18",
  "vergen-gitcl",
@@ -4375,23 +4355,24 @@ dependencies = [
 
 [[package]]
 name = "primitive-types"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05e4722c697a58a99d5d06a08c30821d7c082a4632198de1eaa5a6c22ef42373"
-dependencies = [
- "fixed-hash 0.7.0",
- "uint",
-]
-
-[[package]]
-name = "primitive-types"
 version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b34d9fd68ae0b74a41b21c03c2f62847aa0ffea044eee893b4c140b37e244e2"
 dependencies = [
- "fixed-hash 0.8.0",
- "impl-codec",
- "uint",
+ "fixed-hash",
+ "impl-codec 0.6.0",
+ "uint 0.9.5",
+]
+
+[[package]]
+name = "primitive-types"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "721a1da530b5a2633218dc9f75713394c983c352be88d2d7c9ee85e2c4c21794"
+dependencies = [
+ "fixed-hash",
+ "impl-codec 0.7.1",
+ "uint 0.10.2",
 ]
 
 [[package]]
@@ -5206,8 +5187,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
- "time",
- "tinytemplate",
  "toml",
  "txlib",
  "vdfpod",
@@ -5833,12 +5812,6 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "strum"
-version = "0.26.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fec0f0aef304996cf250b31b5a10dee7980c85da9d759361292b8bca5a18f06"
-
-[[package]]
-name = "strum"
 version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af23d6f6c1a224baef9d3f61e287d2761385a5b88fdab4eb4c6f11aeb54c4bcf"
@@ -6160,16 +6133,6 @@ checksum = "42d3e9c45c09de15d06dd8acf5f4e0e399e85927b7f00711024eb7ae10fa4869"
 dependencies = [
  "displaydoc",
  "zerovec",
-]
-
-[[package]]
-name = "tinytemplate"
-version = "1.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be4d6b5f19ff7664e8c98d03e2139cb510db9b0a60b55f8e8709b689d939b6bc"
-dependencies = [
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -6527,6 +6490,18 @@ name = "uint"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76f64bba2c53b04fcab63c01a7d7427eadc821e3bc48c34dc9ba29c501164b52"
+dependencies = [
+ "byteorder",
+ "crunchy",
+ "hex",
+ "static_assertions",
+]
+
+[[package]]
+name = "uint"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2833f28e3adbd1b867292ee4053252ea89ab85e44e5e4701ffead8cada0539fa"
 dependencies = [
  "byteorder",
  "crunchy",

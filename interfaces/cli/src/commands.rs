@@ -616,11 +616,16 @@ mod tests {
 
     #[test]
     fn parse_action_args_from_json() {
-        let raw = [r#"n={"Int":"-3"}"#, r#"text="a=b""#, r#"key={"Raw":"00"}"#].map(str::to_string);
+        let raw = [
+            r#"n={"Int":"-3"}"#,
+            r#"text="a=b""#,
+            r#"key={"Untyped":"00"}"#,
+        ]
+        .map(str::to_string);
         let args = parse_action_args(&raw).unwrap();
         assert_eq!(args["n"], serde_json::json!({"Int": "-3"}));
         assert_eq!(args["text"], serde_json::json!("a=b"));
-        assert_eq!(args["key"], serde_json::json!({"Raw": "00"}));
+        assert_eq!(args["key"], serde_json::json!({"Untyped": "00"}));
         assert!(parse_action_args(&["key".to_string()]).is_err());
         assert!(parse_action_args(&["n=1".to_string(), "n=2".to_string()]).is_err());
         let err = parse_action_args(&["n=invalid".to_string()])

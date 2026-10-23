@@ -517,7 +517,7 @@ mod tests {
             )
             .unwrap();
         let foo = minted.obj(0);
-        let state = pexe::fixtures::build_synthetic_state(&[foo.obj.clone()]).unwrap();
+        let state = pexe::fixtures::build_synthetic_state(std::slice::from_ref(&foo.obj)).unwrap();
         let result = catalog
             .execute_action(
                 QualifiedName::new("alpha", "RekeyFoo"),

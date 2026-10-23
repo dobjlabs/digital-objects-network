@@ -887,7 +887,7 @@ impl ActionHandle {
                     Type::Int
                 } else if value.as_str().is_some() {
                     Type::Str
-                } else if !value.is_raw() && value.as_dictionary().is_some() {
+                } else if !value.is_untyped() && value.as_dictionary().is_some() {
                     Type::Dict
                 } else {
                     Type::Raw
@@ -3549,14 +3549,14 @@ impl Sdk {
         let manifest_classes: HashSet<_> =
             manifest.classes.iter().map(|c| c.name.as_str()).collect();
         if manifest_classes != loaded_classes {
-            return Err(anyhow!(
+            Err(anyhow!(
                 "manifest classes = {:?} but module classes = {:?}",
                 manifest_classes,
                 loaded_classes
             ))?;
         }
         if manifest.plugin.module_hash != sdk_module.module.batch.id() {
-            return Err(anyhow!(
+            Err(anyhow!(
                 "manifest.plugin.module_hash = {:#} but module.hash = {:#}",
                 manifest.plugin.module_hash,
                 sdk_module.module.batch.id()

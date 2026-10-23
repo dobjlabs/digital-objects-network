@@ -2722,3 +2722,33 @@ fn test_builtin_rekey_name_is_reserved() {
         .expect("script must not shadow the built-in");
     assert!(err.to_string().contains("RekeyFoo is reserved"), "{err}");
 }
+
+/// For better UX make sure the stable_identifier is untyped in order to not confuse the user
+#[allow(clippy::cloned_ref_to_slice_refs)]
+#[test]
+fn test_stable_identifier() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let craft_src = r#"
+        fn FindOre(action) {
+            var ore = action.output("Ore");
+        }
+"#;
+    let sdk = Sdk::default();
+    let module = sdk
+        .load_module_from_src_actions(craft_src, &["FindOre"])
+        .unwrap();
+
+    let state = TestState::default();
+    let executor = module.executor(true, grounding_witness(&state, &[]));
+    let res = executor.action("FindOre", vec![]).unwrap();
+    let [ore] = res.objs();
+
+    println!("{}", serde_json::to_string(&ore.obj).unwrap());
+    assert!(
+        ore.obj
+            .get(&"stable_identifier".into())
+            .unwrap()
+            .unwrap()
+            .is_untyped()
+    );
+}

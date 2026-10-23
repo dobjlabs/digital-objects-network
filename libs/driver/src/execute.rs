@@ -142,7 +142,7 @@ pub(crate) fn decode_action_args(args: &ActionArgValues) -> Result<ActionArgs> {
         .map(|(name, json)| {
             let value: Value = serde_json::from_value(json.clone()).map_err(|err| {
                 anyhow!(
-                    "argument `{name}`: not a pod2 value ({err}); use {{\"Raw\": \"<64 hex \
+                    "argument `{name}`: not a pod2 value ({err}); use {{\"Untyped\": \"<64 hex \
                      chars>\"}}, {{\"Int\": \"<decimal>\"}} or a string"
                 )
             })?;
@@ -317,7 +317,7 @@ mod action_args_tests {
         let json: ActionArgValues = [
             (
                 "key".to_string(),
-                serde_json::json!({"Raw": format!("{:0>64}", "beef")}),
+                serde_json::json!({"Untyped": format!("{:0>64}", "beef")}),
             ),
             ("n".to_string(), serde_json::json!({"Int": "42"})),
         ]
