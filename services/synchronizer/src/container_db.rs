@@ -43,17 +43,17 @@ pub fn created_array_holds(created: &Array, index: i64, commitment: Hash) -> Res
 }
 
 #[derive(Clone)]
-pub struct KeyValueDb {
+pub struct ContainerDb {
     db: Arc<TransactionDB>,
 }
 
-impl fmt::Debug for KeyValueDb {
+impl fmt::Debug for ContainerDb {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "KeyValueDb(path: {:?})", self.db.path())
+        writeln!(f, "ContainerDb(path: {:?})", self.db.path())
     }
 }
 
-impl KeyValueDb {
+impl ContainerDb {
     pub fn connect(db_path: &str) -> Result<Self> {
         let mut options = Options::default();
         options.create_if_missing(true);
@@ -176,30 +176,30 @@ fn store_node_tx<'a>(tx: &Transaction<'a, TransactionDB>, node: merkletree::Node
         .map_err(|e| anyhow!("rocksdb transaction put failed: {e}"))
 }
 
-impl merkletree::db::Read for KeyValueDb {
+impl merkletree::db::Read for ContainerDb {
     fn load_node(&self, hash: Hash) -> Result<Option<merkletree::Node>> {
         load_node_db(&*self.db, hash)
     }
 }
 
-impl merkletree::db::DB for KeyValueDb {
+impl merkletree::db::DB for ContainerDb {
     fn tx<'a>(&'a self) -> Box<dyn merkletree::db::TX + 'a> {
         PodDb::tx(self)
     }
 }
 
-pub(crate) struct KeyValueTx<'a> {
+pub(crate) struct ContainerTx<'a> {
     tx: rocksdb::Transaction<'a, rocksdb::TransactionDB>,
-    db: KeyValueDb,
+    db: ContainerDb,
 }
 
-impl<'a> merkletree::db::Read for KeyValueTx<'a> {
+impl<'a> merkletree::db::Read for ContainerTx<'a> {
     fn load_node(&self, hash: Hash) -> anyhow::Result<Option<merkletree::Node>> {
         load_node_db(&self.tx, hash)
     }
 }
 
-impl<'a> merkletree::db::TX for KeyValueTx<'a> {
+impl<'a> merkletree::db::TX for ContainerTx<'a> {
     fn store_node(&mut self, node: merkletree::Node) -> anyhow::Result<()> {
         store_node_tx(&self.tx, node)
     }
@@ -208,7 +208,7 @@ impl<'a> merkletree::db::TX for KeyValueTx<'a> {
     }
 }
 
-impl<'a> Read for KeyValueTx<'a> {
+impl<'a> Read for ContainerTx<'a> {
     fn load_value(&self, raw: RawValue) -> anyhow::Result<Option<Value>> {
         match self.tx.get(value_key(raw))? {
             None => Ok(None),
@@ -245,7 +245,7 @@ impl<'a> Read for KeyValueTx<'a> {
     }
 }
 
-impl<'a> PodTx for KeyValueTx<'a> {
+impl<'a> PodTx for ContainerTx<'a> {
     fn store_value(&mut self, value: Value) -> anyhow::Result<()> {
         let value_key = value_key(value.raw());
         if let Some(old_value_bytes) = self.tx.get(&value_key)? {
@@ -277,7 +277,7 @@ impl<'a> PodTx for KeyValueTx<'a> {
     }
 }
 
-impl Read for KeyValueDb {
+impl Read for ContainerDb {
     fn load_value(&self, raw: RawValue) -> anyhow::Result<Option<Value>> {
         match self.db.get(value_key(raw))? {
             None => Ok(None),
@@ -308,9 +308,9 @@ impl Read for KeyValueDb {
     }
 }
 
-impl PodDb for KeyValueDb {
+impl PodDb for ContainerDb {
     fn tx<'a>(&'a self) -> Box<dyn PodTx + 'a> {
-        Box::new(KeyValueTx {
+        Box::new(ContainerTx {
             tx: self.db.transaction(),
             db: self.clone(),
         })
@@ -333,16 +333,16 @@ mod tests {
         Hash::from_hex(hex::encode([byte; 32])).expect("valid test hash")
     }
 
-    fn open_test_db() -> (KeyValueDb, TempDir) {
+    fn open_test_db() -> (ContainerDb, TempDir) {
         let dir = TempDir::new().expect("tempdir");
-        let key_value_db = KeyValueDb::connect(dir.path().to_str().unwrap()).expect("connect");
-        (key_value_db, dir)
+        let container_db = ContainerDb::connect(dir.path().to_str().unwrap()).expect("connect");
+        (container_db, dir)
     }
 
     #[test]
     fn test_created_membership_via_index() {
-        let (key_value_db, _dir) = open_test_db();
-        let mut created = key_value_db.open_created(EMPTY_HASH).unwrap();
+        let (container_db, _dir) = open_test_db();
+        let mut created = container_db.open_created(EMPTY_HASH).unwrap();
         let obj_commitment = test_hash(9);
         created.insert(0, Value::from(obj_commitment)).unwrap();
 
@@ -353,12 +353,12 @@ mod tests {
         let indices = HashMap::from([(obj_commitment, 0i64)]);
 
         assert_eq!(
-            key_value_db
+            container_db
                 .created_exists_for(&roots, &[obj_commitment], &indices)
                 .unwrap(),
             vec![true]
         );
-        let witnesses = key_value_db
+        let witnesses = container_db
             .prove_created_for(&roots, &[obj_commitment], &indices)
             .unwrap();
         let witness = witnesses.into_iter().next().unwrap();
@@ -368,14 +368,14 @@ mod tests {
         // does not actually contain resolves to absent too.
         let absent = test_hash(7);
         assert_eq!(
-            key_value_db
+            container_db
                 .created_exists_for(&roots, &[absent], &HashMap::new())
                 .unwrap(),
             vec![false]
         );
         let empty_roots = StateRoots::empty();
         assert_eq!(
-            key_value_db
+            container_db
                 .created_exists_for(&empty_roots, &[obj_commitment], &indices)
                 .unwrap(),
             vec![false]

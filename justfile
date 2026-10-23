@@ -134,7 +134,7 @@ dev-local: ensure-anvil ensure-db-local (ensure-local-settings LOCAL_DOBJ_ROOT) 
     # anvil's block 1, which the synchronizer waits for on a fresh devnet.
     export INIT_START_SLOT=1
     export BLOBS_PATH=data/blobs-local/
-    export KEY_VALUE_DB_PATH=data/synchronizer-db-local
+    export CONTAINER_DB_PATH=data/synchronizer-db-local
     export SYNC_METADATA_DB_URL=postgres://postgres@localhost:5432/synchronizer_local
     export DB_URL=postgres://postgres@localhost:5432/relayer_local
     # The shipped defaults pace requests for a 15 req/s public endpoint.
@@ -305,7 +305,7 @@ ensure-start-slot:
         fi
     }
 
-    sync_db="$(read_env services/synchronizer/.env KEY_VALUE_DB_PATH)"; sync_db="${sync_db:-data/synchronizer-db}"
+    sync_db="$(read_env services/synchronizer/.env CONTAINER_DB_PATH)"; sync_db="${sync_db:-data/synchronizer-db}"
     [ -d "$sync_db" ] && sync_fresh=false || sync_fresh=true
     ensure_slot synchronizer services/synchronizer/.env "$sync_fresh"
 

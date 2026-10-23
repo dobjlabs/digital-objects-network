@@ -377,7 +377,7 @@ jobs:
           RPC_RETRIES=10 \
           RPC_RETRY_MS=4000 \
           SYNC_METADATA_DB_URL="postgres://postgres@127.0.0.1:5432/synchronizer" \
-          KEY_VALUE_DB_PATH="$GITHUB_WORKSPACE/synchronizer-db" \
+          CONTAINER_DB_PATH="$GITHUB_WORKSPACE/synchronizer-db" \
             nohup "$GITHUB_WORKSPACE/server-bin/synchronizer" \
               > logs/synchronizer.log 2>&1 &
           echo "synchronizer pid: $!"
@@ -455,7 +455,7 @@ jobs:
           # step via GITHUB_ENV. Both Start-Process children inherit all of
           # those plus the per-server vars set inline below.
           $env:SYNC_METADATA_DB_URL = "postgres://postgres:root@127.0.0.1:5432/synchronizer"
-          $env:KEY_VALUE_DB_PATH    = "$env:GITHUB_WORKSPACE\synchronizer-db"
+          $env:CONTAINER_DB_PATH    = "$env:GITHUB_WORKSPACE\synchronizer-db"
           $env:RPC_RETRIES          = "10"
           $env:RPC_RETRY_MS         = "4000"
           Start-Process -FilePath "$env:GITHUB_WORKSPACE\server-bin\synchronizer.exe" `

@@ -97,7 +97,7 @@ RUN mkdir -p /var/lib/don && chown -R don:don /var/lib/don
 # controls public exposure. RocksDB lives on a path meant to be a mounted volume
 # (it is a rebuildable cache, but a volume avoids slow cold re-sync on restart).
 ENV HTTP_BIND=0.0.0.0:3000 \
-    KEY_VALUE_DB_PATH=/var/lib/don/synchronizer-db
+    CONTAINER_DB_PATH=/var/lib/don/synchronizer-db
 VOLUME ["/var/lib/don"]
 USER don
 EXPOSE 3000

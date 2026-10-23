@@ -1,6 +1,6 @@
 # Synchronizer
 
-Service that tracks Digital Object blob transactions on Ethereum, derives the Digital Objects Network (DON) state, persists persistent-container data in a RocksDB key-value store, stores the committed state of each slot in Postgres, and serves proof-backed query APIs over HTTP.
+Service that tracks Digital Object blob transactions on Ethereum, derives the Digital Objects Network (DON) state, persists its Merkle containers in RocksDB, stores the committed state of each slot in Postgres, and serves proof-backed query APIs over HTTP.
 
 ## What it does
 
@@ -61,7 +61,7 @@ slot.
 
 ## Storage model
 
-### RocksDB (`KEY_VALUE_DB_PATH`) — persistent Merkle backing store
+### RocksDB (`CONTAINER_DB_PATH`) — persistent Merkle backing store
 
 RocksDB stores:
 
@@ -229,7 +229,7 @@ Hashes in request and response bodies are pod2 `Hash` values, serialized as lowe
 
 ## Optional env vars
 
-- `KEY_VALUE_DB_PATH` (default: `data/synchronizer-db`)
+- `CONTAINER_DB_PATH` (default: `data/synchronizer-db`)
 - `SYNC_METADATA_DB_URL` (default: `postgres://postgres@localhost:5432/synchronizer`)
 - `HTTP_BIND` (default: `127.0.0.1:3000`)
 - `RPC_RETRIES` (default: `6`) — how many times to ask again for a beacon block, execution block or archived blobs that a lagging node does not serve yet. Failed requests (rate limits, gateway errors, broken connections) are retried separately by the clients, with exponential backoff.

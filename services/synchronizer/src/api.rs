@@ -21,7 +21,7 @@ use wire_types::synchronizer::{
 use wire_types::HealthResponse;
 
 use crate::{
-    key_value_db::KeyValueDb,
+    container_db::ContainerDb,
     sync_db::{HeadSnapshot, SyncDb},
 };
 
@@ -29,8 +29,8 @@ const MAX_HASH_QUERY_ITEMS: usize = 256;
 
 #[derive(Clone)]
 struct AppState {
-    /// Key-value (RocksDB) read path used for membership checks and Merkle proofs.
-    key_value_db: KeyValueDb,
+    /// RocksDB store of the Merkle containers, read for membership checks and Merkle proofs.
+    container_db: ContainerDb,
     /// Postgres-backed committed-state and sync-progress store.
     sync_db: Arc<SyncDb>,
     info: Arc<Info>,
@@ -45,7 +45,7 @@ struct Membership {
 
 pub async fn run_api_server(
     sync_db: Arc<SyncDb>,
-    key_value_db: KeyValueDb,
+    container_db: ContainerDb,
     info: Arc<Info>,
     bind_addr: SocketAddr,
     mut shutdown_rx: watch::Receiver<bool>,
@@ -67,7 +67,7 @@ pub async fn run_api_server(
         .route("/v1/txlib/grounding-witness", post(post_grounding_witness))
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(AppState {
-            key_value_db,
+            container_db,
             sync_db,
             info,
         });
@@ -186,7 +186,7 @@ async fn post_grounding_witness(
         .map_err(internal_error)?;
     let state = snapshot.ok_or_else(not_initialized)?.state;
     let witnesses = app_state
-        .key_value_db
+        .container_db
         .prove_created_for(&state.roots, &object_commitments, &indices)
         .map_err(internal_error)?;
     let state_header = state.state_header();
@@ -227,12 +227,12 @@ async fn load_membership(
         .await
         .map_err(internal_error)?;
     let head = snapshot.ok_or_else(not_initialized)?;
-    let key_value_db = &app_state.key_value_db;
+    let container_db = &app_state.container_db;
     Ok(Membership {
-        created_present: key_value_db
+        created_present: container_db
             .created_exists_for(&head.state.roots, object_commitments, &indices)
             .map_err(internal_error)?,
-        nullifier_present: key_value_db
+        nullifier_present: container_db
             .nullifier_exists_batch(&head.state.roots, nullifiers)
             .map_err(internal_error)?,
         head,
