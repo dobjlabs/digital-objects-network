@@ -119,6 +119,13 @@ impl Node {
             "finalization of INIT_START_SLOT",
             || async {
                 let finalized = self.beacon_cli.get_block_header(BlockId::Finalized).await?;
+                if let Some(header) = &finalized {
+                    info!(
+                        INIT_START_SLOT = slot,
+                        last_finalized_slot = header.slot,
+                        "Waiting for INIT_START_SLOT to be finalized"
+                    );
+                }
                 Ok(finalized.filter(|header| header.slot >= slot).map(|_| ()))
             },
         )
