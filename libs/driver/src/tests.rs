@@ -401,6 +401,103 @@ fn test_list_actions_filters_by_input_class() {
 }
 
 #[test]
+fn test_confirmed_actions_update_input_and_output_liveness() {
+    for action_name in ["CraftWood", "RekeyLog"] {
+        let (mut entry, deps) = make_input_record("log_1.dobj");
+        entry.record.tx_hash = Some("0xcreation".to_string());
+        let paths = temp_paths();
+        write_object_file(&paths, &entry.record, &entry.file_name).unwrap();
+        let driver = Driver::open(paths.clone(), deps).unwrap();
+        let action = craft_basics(action_name);
+        assert!(driver.check_action(&action).unwrap().feasible);
+
+        let result = driver
+            .execute(ExecuteActionInput {
+                action: action.clone(),
+                input_objects: vec![entry.file_name.clone()],
+                args: Default::default(),
+            })
+            .unwrap();
+
+        let report = driver.check_action(&action).unwrap();
+        assert!(
+            report
+                .available_inputs
+                .iter()
+                .all(|candidate| candidate.file_name != entry.file_name),
+            "{action_name} suggested its consumed input: {report:?}"
+        );
+        assert_eq!(report.feasible, action_name == "RekeyLog");
+        if action_name == "RekeyLog" {
+            assert_eq!(report.available_inputs.len(), 1);
+            assert!(
+                result
+                    .output_files
+                    .contains(&report.available_inputs[0].file_name)
+            );
+        }
+
+        assert_eq!(result.nullified_files, vec![entry.file_name.clone()]);
+        assert!(!paths.objects_dir.join(&entry.file_name).exists());
+        let consumed = crate::object_record::parse_object_record_file(
+            &paths.nullified_objects_dir.join(&entry.file_name),
+        )
+        .unwrap();
+        assert_eq!(consumed.status, ObjectStatus::Nullified);
+        assert_eq!(consumed.tx_hash, entry.record.tx_hash);
+        assert_eq!(consumed.tx_final, entry.record.tx_final);
+        assert_eq!(consumed.content_hash, entry.record.content_hash);
+        for file_name in &result.output_files {
+            let output =
+                crate::object_record::parse_object_record_file(&paths.objects_dir.join(file_name))
+                    .unwrap();
+            assert_eq!(output.status, ObjectStatus::Live);
+            assert_eq!(output.tx_hash.as_deref(), Some("0xtx"));
+        }
+    }
+}
+
+#[test]
+fn test_execute_keeps_inputs_live_without_synchronizer_confirmation() {
+    let (entry, mut deps) = make_input_record("log_1.dobj");
+    let mut state = TestState::default();
+    state.apply_tx(vec![entry.record.obj.commitment()], vec![]);
+    deps.synchronizer = Arc::new(MockSynchronizer {
+        state,
+        fail_wait: true,
+        ..MockSynchronizer::default()
+    });
+    let paths = temp_paths();
+    write_object_file(&paths, &entry.record, &entry.file_name).unwrap();
+    let driver = Driver::open(paths.clone(), deps).unwrap();
+    let action = craft_basics("CraftWood");
+
+    let error = driver
+        .execute(ExecuteActionInput {
+            action: action.clone(),
+            input_objects: vec![entry.file_name.clone()],
+            args: Default::default(),
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("synchronizer timeout"));
+
+    let report = driver.check_action(&action).unwrap();
+    assert!(report.feasible);
+    assert_eq!(report.available_inputs[0].file_name, entry.file_name);
+    assert!(!paths.nullified_objects_dir.join(&entry.file_name).exists());
+    let records = load_object_files(&paths).unwrap();
+    assert_eq!(records.len(), 2);
+    for stored in records {
+        if stored.file_name == entry.file_name {
+            assert_eq!(stored.record.status, ObjectStatus::Live);
+        } else {
+            assert_eq!(stored.record.status, ObjectStatus::Unknown);
+            assert_eq!(stored.record.tx_hash.as_deref(), Some("0xtx"));
+        }
+    }
+}
+
+#[test]
 fn test_execute_rolls_back_on_relayer_submit_failure() {
     let (entry, mut deps) = make_input_record("log_1.dobj");
     deps.relayer = Arc::new(MockRelayer {
