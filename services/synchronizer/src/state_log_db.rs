@@ -29,7 +29,7 @@ pub struct StateLogDb {
 impl StateLogDb {
     /// Connect to the synchronizer's Postgres metadata database.
     ///
-    /// The database must already exist — provisioning is an explicit operator
+    /// The database must already exist: provisioning is an explicit operator
     /// step so the app role does not need the `CREATEDB` privilege.
     ///
     /// Fails if the stored slots do not start at `init_start_slot`, which happens when the

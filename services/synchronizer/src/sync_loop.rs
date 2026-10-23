@@ -153,7 +153,7 @@ async fn run_sync_loop(
             }
 
             if reorg_detected {
-                // Re-fetch beacon head before restarting — chain view may have changed.
+                // Re-fetch beacon head before restarting: the chain view may have changed.
                 head_tracker.head = node.get_beacon_head_header().await?;
             }
 

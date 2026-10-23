@@ -59,14 +59,29 @@ pub struct DonState {
 
 impl DonState {
     pub fn state_header(&self) -> StateHeader {
-        let block = self.metadata.block;
-        StateHeader::new(
-            block.number as i64,
-            block.timestamp as i64,
-            b256_to_hash(block.hash),
+        state_header(
+            self.metadata.block,
             self.roots.created,
             self.roots.nullifiers,
             self.roots.prior_state_history,
         )
     }
+}
+
+/// The `StateHeader` of a state derived at `block` with the given roots; its hash is the state's
+/// root.
+pub fn state_header(
+    block: ExecutionBlock,
+    created_root: Hash,
+    nullifiers_root: Hash,
+    prior_state_history_root: Hash,
+) -> StateHeader {
+    StateHeader::new(
+        block.number as i64,
+        block.timestamp as i64,
+        b256_to_hash(block.hash),
+        created_root,
+        nullifiers_root,
+        prior_state_history_root,
+    )
 }

@@ -9,10 +9,8 @@ use tracing::{info, warn};
 
 use crate::{
     container_db::{created_array_holds, ContainerDb},
-    don_state::{DonState, ExecutionBlock, StateMetadata, StateRoots},
+    don_state::{state_header, DonState, ExecutionBlock, StateMetadata, StateRoots},
 };
-use pod2utils::b256_to_hash;
-use txlib::StateHeader;
 
 /// The maximum age of a state root used as grounding for a transaction.
 /// At one block per 12 seconds, this is one hour.
@@ -265,10 +263,8 @@ impl StateMachine {
         }
 
         let prior_state_history_root = base_roots.next_state_history;
-        let new_state_root = StateHeader::new(
-            i64::from(block.number),
-            block.timestamp as i64,
-            b256_to_hash(block.hash),
+        let new_state_root = state_header(
+            block,
             working.created.commitment(),
             working.nullifiers.commitment(),
             prior_state_history_root,

@@ -485,10 +485,11 @@ impl Node {
     /// Commit one processed slot to Postgres as the new head state, writing
     /// its created-index rows in the same transaction.
     pub async fn commit_slot(&self, processed: &ProcessedSlot) -> Result<()> {
-        // Sync merkle trees to disk to guarantee that after this point the data is persisted on
-        // disk even after a system crash.  The state is committed to Postgres next and its roots
-        // must not outlive the merkle tree nodes in a crash.
-        self.state_machine.sync()?;
+        // Only a derived state wrote Merkle nodes. Its roots are committed to Postgres next and
+        // must not outlive those nodes in a crash, so they are synced to disk first.
+        if processed.derived.is_some() {
+            self.state_machine.sync()?;
+        }
         self.state_log
             .commit_slot(
                 processed.slot,
