@@ -567,7 +567,7 @@ dependencies = [
  "alloy-rlp",
  "alloy-serde",
  "alloy-sol-types",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "serde",
  "serde_json",
  "serde_with",
@@ -750,7 +750,7 @@ dependencies = [
  "hyper",
  "hyper-tls",
  "hyper-util",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "reqwest",
  "serde_json",
  "tower",
@@ -902,7 +902,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -913,7 +913,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1594,13 +1594,14 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chacha20"
-version = "0.10.0"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f8d983286843e49675a4b7a2d174efe136dc93a18d69130dd18198a6c167601"
+checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
  "rand_core 0.10.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -2174,7 +2175,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2408,7 +2409,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3709,7 +3710,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4190,15 +4191,17 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 [[package]]
 name = "plonky2"
 version = "1.1.0"
-source = "git+https://github.com/0xPARC/plonky2.git?rev=60e32369b7b5c8f0ff1e44265005f7c3c3a0a04b#60e32369b7b5c8f0ff1e44265005f7c3c3a0a04b"
+source = "git+https://github.com/robknight/plonky2?rev=035c827656e00ac390cf11cb45c6df3c715b181d#035c827656e00ac390cf11cb45c6df3c715b181d"
 dependencies = [
  "ahash",
  "anyhow",
+ "chacha20",
  "dyn-clone",
  "getrandom 0.2.17",
  "hashbrown 0.14.5",
  "itertools 0.11.0",
  "keccak-hash",
+ "libc",
  "log",
  "num",
  "plonky2_field",
@@ -4206,17 +4209,19 @@ dependencies = [
  "plonky2_util",
  "rand 0.8.5",
  "rand_chacha 0.3.1",
+ "rayon",
  "serde",
  "serde_arrays",
  "static_assertions",
  "unroll",
  "web-time",
+ "zeroize",
 ]
 
 [[package]]
 name = "plonky2_field"
 version = "1.0.0"
-source = "git+https://github.com/0xPARC/plonky2.git?rev=60e32369b7b5c8f0ff1e44265005f7c3c3a0a04b#60e32369b7b5c8f0ff1e44265005f7c3c3a0a04b"
+source = "git+https://github.com/robknight/plonky2?rev=035c827656e00ac390cf11cb45c6df3c715b181d#035c827656e00ac390cf11cb45c6df3c715b181d"
 dependencies = [
  "anyhow",
  "itertools 0.11.0",
@@ -4231,7 +4236,7 @@ dependencies = [
 [[package]]
 name = "plonky2_maybe_rayon"
 version = "1.0.0"
-source = "git+https://github.com/0xPARC/plonky2.git?rev=60e32369b7b5c8f0ff1e44265005f7c3c3a0a04b#60e32369b7b5c8f0ff1e44265005f7c3c3a0a04b"
+source = "git+https://github.com/robknight/plonky2?rev=035c827656e00ac390cf11cb45c6df3c715b181d#035c827656e00ac390cf11cb45c6df3c715b181d"
 dependencies = [
  "rayon",
 ]
@@ -4250,12 +4255,12 @@ dependencies = [
 [[package]]
 name = "plonky2_util"
 version = "1.0.0"
-source = "git+https://github.com/0xPARC/plonky2.git?rev=60e32369b7b5c8f0ff1e44265005f7c3c3a0a04b#60e32369b7b5c8f0ff1e44265005f7c3c3a0a04b"
+source = "git+https://github.com/robknight/plonky2?rev=035c827656e00ac390cf11cb45c6df3c715b181d#035c827656e00ac390cf11cb45c6df3c715b181d"
 
 [[package]]
 name = "pod2"
 version = "0.1.0"
-source = "git+https://github.com/0xPARC/pod2?rev=331a1145a8a5679a63058953464969fb960d9955#331a1145a8a5679a63058953464969fb960d9955"
+source = "git+https://github.com/robknight/pod2?rev=b13f91f2134df2edc32b10a1ec1e373c7ea55bd7#b13f91f2134df2edc32b10a1ec1e373c7ea55bd7"
 dependencies = [
  "annotate-snippets",
  "anyhow",
@@ -4547,9 +4552,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.0"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc266eb313df6c5c09c1c7b1fbe2510961e5bcd3add930c1e31f7ed9da0feff8"
+checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
 dependencies = [
  "chacha20",
  "getrandom 0.4.2",
@@ -4891,7 +4896,7 @@ dependencies = [
  "http-body-util",
  "pastey",
  "pin-project-lite",
- "rand 0.10.0",
+ "rand 0.10.3",
  "rmcp-macros",
  "schemars 1.2.1",
  "serde",
@@ -5029,7 +5034,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5556,7 +5561,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5998,7 +6003,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
