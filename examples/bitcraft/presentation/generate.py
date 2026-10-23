@@ -164,14 +164,16 @@ ACTION_RULES = [
         f"of work first.")),
     (r"LevelUpQuarry(\d+)", lambda m: (
         "Quarry", "up",
-        "Raise a quarry's level by 1.",
-        "Spends a bucket holding exactly {} wood and a bucket holding exactly {} stone."
-        .format(*quarry_levelup(int(m[1]))))),
+        f"Raise a level {m[1]} quarry to level {int(m[1]) + 1}.",
+        "Only works on a quarry at exactly level {}. Spends a bucket holding exactly {} "
+        "wood and a bucket holding exactly {} stone."
+        .format(m[1], *quarry_levelup(int(m[1]))))),
     (r"LevelUpMiningDrill(\d+)", lambda m: (
         "MiningDrill", "up",
-        "Raise a mining drill's level by 1.",
-        "Spends buckets holding exactly {} wood, {} stone and {} iron."
-        .format(*drill_levelup(int(m[1]))))),
+        f"Raise a level {m[1]} mining drill to level {int(m[1]) + 1}.",
+        "Only works on a mining drill at exactly level {}. Spends buckets holding exactly "
+        "{} wood, {} stone and {} iron."
+        .format(m[1], *drill_levelup(int(m[1]))))),
     (r"BitsFrom(Wood|Stone|Iron)", lambda m: (
         "Bit", "plus",
         f"Turn 1 {RESOURCES[m[1]]} into {BITS_YIELD[m[1]]} "

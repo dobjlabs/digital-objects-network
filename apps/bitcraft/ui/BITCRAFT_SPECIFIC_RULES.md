@@ -139,10 +139,12 @@ the selected objects.
 ### Known constraints not yet encoded
 
 - `LevelUpQuarry1` .. `LevelUpQuarry5` and `LevelUpMiningDrill1` ..
-  `LevelUpMiningDrill5` require each input bucket's `n` to equal a fixed
-  amount per action (e.g. `LevelUpQuarry1`: wood bucket 40, stone bucket
-  20). They do **not** check the quarry's or drill's current level, so any
-  of them can level up a tool of any level, given the matching buckets.
+  `LevelUpMiningDrill5` require the quarry's or drill's `level` to equal
+  the number in the action name, and each input bucket's `n` to equal a
+  fixed amount per action (e.g. `LevelUpQuarry1`: a level 1 quarry, wood
+  bucket 40, stone bucket 20). The UI checks neither, so the context menu
+  offers all five level-ups for any quarry or drill with buckets of the
+  right kinds.
 - `UseWoodAxe`, `UseStoneAxe` and `UseIronAxe` require the axe's
   `durability` to be greater than 0.
 

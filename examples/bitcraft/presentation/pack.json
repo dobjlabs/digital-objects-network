@@ -2,7 +2,7 @@
   "format": 1,
   "plugin": "bitcraft",
   "writtenFor": {
-    "moduleHash": "8fddf7843a56a85bb8db6b55b3df3737ae67eeff37724f130cc02387bb1048a2"
+    "moduleHash": "b5c071928abf9a47dc36dc1643a37455da656f583c2d32d4146f47d84c4074fe"
   },
   "classes": {
     "Wood": {
@@ -294,53 +294,53 @@
     },
     "LevelUpQuarry1": {
       "icon": "assets/actions/LevelUpQuarry1.svg",
-      "summary": "Raise a quarry's level by 1.",
-      "description": "Spends a bucket holding exactly 40 wood and a bucket holding exactly 20 stone."
+      "summary": "Raise a level 1 quarry to level 2.",
+      "description": "Only works on a quarry at exactly level 1. Spends a bucket holding exactly 40 wood and a bucket holding exactly 20 stone."
     },
     "LevelUpMiningDrill1": {
       "icon": "assets/actions/LevelUpMiningDrill1.svg",
-      "summary": "Raise a mining drill's level by 1.",
-      "description": "Spends buckets holding exactly 20 wood, 100 stone and 10 iron."
+      "summary": "Raise a level 1 mining drill to level 2.",
+      "description": "Only works on a mining drill at exactly level 1. Spends buckets holding exactly 20 wood, 100 stone and 10 iron."
     },
     "LevelUpQuarry2": {
       "icon": "assets/actions/LevelUpQuarry2.svg",
-      "summary": "Raise a quarry's level by 1.",
-      "description": "Spends a bucket holding exactly 80 wood and a bucket holding exactly 40 stone."
+      "summary": "Raise a level 2 quarry to level 3.",
+      "description": "Only works on a quarry at exactly level 2. Spends a bucket holding exactly 80 wood and a bucket holding exactly 40 stone."
     },
     "LevelUpMiningDrill2": {
       "icon": "assets/actions/LevelUpMiningDrill2.svg",
-      "summary": "Raise a mining drill's level by 1.",
-      "description": "Spends buckets holding exactly 40 wood, 200 stone and 20 iron."
+      "summary": "Raise a level 2 mining drill to level 3.",
+      "description": "Only works on a mining drill at exactly level 2. Spends buckets holding exactly 40 wood, 200 stone and 20 iron."
     },
     "LevelUpQuarry3": {
       "icon": "assets/actions/LevelUpQuarry3.svg",
-      "summary": "Raise a quarry's level by 1.",
-      "description": "Spends a bucket holding exactly 160 wood and a bucket holding exactly 80 stone."
+      "summary": "Raise a level 3 quarry to level 4.",
+      "description": "Only works on a quarry at exactly level 3. Spends a bucket holding exactly 160 wood and a bucket holding exactly 80 stone."
     },
     "LevelUpMiningDrill3": {
       "icon": "assets/actions/LevelUpMiningDrill3.svg",
-      "summary": "Raise a mining drill's level by 1.",
-      "description": "Spends buckets holding exactly 80 wood, 400 stone and 40 iron."
+      "summary": "Raise a level 3 mining drill to level 4.",
+      "description": "Only works on a mining drill at exactly level 3. Spends buckets holding exactly 80 wood, 400 stone and 40 iron."
     },
     "LevelUpQuarry4": {
       "icon": "assets/actions/LevelUpQuarry4.svg",
-      "summary": "Raise a quarry's level by 1.",
-      "description": "Spends a bucket holding exactly 320 wood and a bucket holding exactly 160 stone."
+      "summary": "Raise a level 4 quarry to level 5.",
+      "description": "Only works on a quarry at exactly level 4. Spends a bucket holding exactly 320 wood and a bucket holding exactly 160 stone."
     },
     "LevelUpMiningDrill4": {
       "icon": "assets/actions/LevelUpMiningDrill4.svg",
-      "summary": "Raise a mining drill's level by 1.",
-      "description": "Spends buckets holding exactly 160 wood, 800 stone and 80 iron."
+      "summary": "Raise a level 4 mining drill to level 5.",
+      "description": "Only works on a mining drill at exactly level 4. Spends buckets holding exactly 160 wood, 800 stone and 80 iron."
     },
     "LevelUpQuarry5": {
       "icon": "assets/actions/LevelUpQuarry5.svg",
-      "summary": "Raise a quarry's level by 1.",
-      "description": "Spends a bucket holding exactly 640 wood and a bucket holding exactly 320 stone."
+      "summary": "Raise a level 5 quarry to level 6.",
+      "description": "Only works on a quarry at exactly level 5. Spends a bucket holding exactly 640 wood and a bucket holding exactly 320 stone."
     },
     "LevelUpMiningDrill5": {
       "icon": "assets/actions/LevelUpMiningDrill5.svg",
-      "summary": "Raise a mining drill's level by 1.",
-      "description": "Spends buckets holding exactly 320 wood, 1600 stone and 160 iron."
+      "summary": "Raise a level 5 mining drill to level 6.",
+      "description": "Only works on a mining drill at exactly level 5. Spends buckets holding exactly 320 wood, 1600 stone and 160 iron."
     },
     "BitsFromWood": {
       "icon": "assets/actions/BitsFromWood.svg",
