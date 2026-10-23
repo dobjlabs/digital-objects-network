@@ -107,6 +107,9 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 `status: queued`; proof generation and the commit run in the background
 (seconds to minutes).
 
+The `args` field is optional caller data. An action's listed argument names
+do not imply those values are required; defaults depend on the plugin.
+
 To wait for the result, poll `get_run({ run_id })` until `status` is terminal:
 
 - `succeeded` → the transaction landed; read `result` (grounding root, output files, the input files it spent)
