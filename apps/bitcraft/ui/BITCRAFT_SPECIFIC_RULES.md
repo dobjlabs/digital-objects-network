@@ -131,6 +131,8 @@ the selected objects.
 | `UseQuarry1` .. `UseQuarry6` | the selected `Quarry`'s `level` equals the number in the action name | `action.st_equal(quarry.level, N)` |
 | `UseMiningDrill1` .. `UseMiningDrill6` | the selected `MiningDrill`'s `level` equals the number in the action name | `action.st_equal(miningdrill.level, N)` |
 | `BucketOfWoodTake1`, `BucketOfStoneTake1`, `BucketOfIronTake1` | the selected bucket's `n` is at least 1, so an empty bucket offers no take | `action.st_gt_eq(woodbucket.n, 1)` (and the stone and iron buckets) |
+| `LevelUpQuarry1` .. `LevelUpQuarry5` | the selected `Quarry`'s `level` equals the number N in the action name, the wood bucket's `n` is exactly 20 x 2^N and the stone bucket's exactly 10 x 2^N (`LEVEL_UP_BUCKETS`) | `action.st_equal(quarry.level, N)`, `action.st_equal(woodbucket.n, ...)` and the stone bucket |
+| `LevelUpMiningDrill1` .. `LevelUpMiningDrill5` | the selected `MiningDrill`'s `level` equals N, and the wood, stone and iron buckets hold exactly 10, 50 and 5 x 2^N | `action.st_equal(miningdrill.level, N)` and one `st_equal` per bucket |
 
 - **Generic behavior:** offer every action whose input classes match the
   selection. A level-1 drill with 5 wood would show all six
@@ -138,13 +140,6 @@ the selected objects.
 
 ### Known constraints not yet encoded
 
-- `LevelUpQuarry1` .. `LevelUpQuarry5` and `LevelUpMiningDrill1` ..
-  `LevelUpMiningDrill5` require the quarry's or drill's `level` to equal
-  the number in the action name, and each input bucket's `n` to equal a
-  fixed amount per action (e.g. `LevelUpQuarry1`: a level 1 quarry, wood
-  bucket 40, stone bucket 20). The UI checks neither, so the context menu
-  offers all five level-ups for any quarry or drill with buckets of the
-  right kinds.
 - `UseWoodAxe`, `UseStoneAxe` and `UseIronAxe` require the axe's
   `durability` to be greater than 0.
 

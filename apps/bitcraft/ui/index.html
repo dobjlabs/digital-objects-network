@@ -985,7 +985,23 @@
       actions: /^(BucketOf(?:Wood|Stone|Iron))Take1$/,
       accepts: (inputs, match) => inputFieldAtLeast(inputs, match[1], "n", 1),
     },
+    {
+      actions: /^LevelUp(Quarry|MiningDrill)(\d+)$/,
+      accepts: (inputs, match) => inputFieldEquals(inputs, match[1], "level", match[2])
+        && Object.entries(LEVEL_UP_BUCKETS[match[1]](Number(match[2]))).every(
+          ([bucket, amount]) => inputFieldEquals(inputs, bucket, "n", String(amount))),
+    },
   ];
+
+  // The exact amount each bucket must hold to level a tool up from `level`.
+  const LEVEL_UP_BUCKETS = {
+    Quarry: (level) => ({ BucketOfWood: 20 * 2 ** level, BucketOfStone: 10 * 2 ** level }),
+    MiningDrill: (level) => ({
+      BucketOfWood: 10 * 2 ** level,
+      BucketOfStone: 50 * 2 ** level,
+      BucketOfIron: 5 * 2 ** level,
+    }),
+  };
 
   // A getting-started guide shown as the first row of the object list: its
   // file name, which is also its URL relative to this page. It is served

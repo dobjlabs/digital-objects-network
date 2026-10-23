@@ -710,3 +710,37 @@ test("a manifest description is the fallback, except the placeholder", async (co
     new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
   assert.equal(document.querySelector("#recipe-details-body .description-text"), null);
 });
+
+test("the context menu offers only the level-up the tool's level and buckets allow", async (context) => {
+  const levelUp = (level) => ({
+    action: qname(`LevelUpQuarry${level}`), predicateSource: "", mutatedObjects: [{ inputIndex: 0, outputIndex: 0 }],
+    totalInputs: ["Quarry", "BucketOfWood", "BucketOfStone"].map((name) => ({ class: qname(name) })),
+    totalOutputs: [{ class: qname("Quarry") }],
+  });
+  const item = (fileName, name, fields) => ({
+    fileName, class: qname(name), status: "live",
+    fields: { kvs: Object.entries(fields).map(([key, value]) => [key, { Int: String(value) }]) },
+  });
+  const objects = [knife(), item("quarry.dobj", "Quarry", { level: 2 }),
+    item("wood.dobj", "BucketOfWood", { n: 80 }), item("stone.dobj", "BucketOfStone", { n: 40 })];
+  const ui = await page(context, { objects, actions: [recipe(), 1, 2, 3, 4, 5].map((level) =>
+    typeof level === "number" ? levelUp(level) : level) });
+  const { document, dom } = ui;
+  const menuFor = () => {
+    const rows = ["quarry.dobj", "wood.dobj", "stone.dobj"]
+      .map((fileName) => document.querySelector(`.object-row[title="${fileName}"]`));
+    rows[0].dispatchEvent(new dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+    for (const row of rows.slice(1)) {
+      row.dispatchEvent(new dom.window.MouseEvent("mousedown", { button: 0, ctrlKey: true, bubbles: true }));
+    }
+    rows[0].dispatchEvent(new dom.window.MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    const labels = [...document.querySelectorAll(".context-menu .menu-item-label")].map((label) => label.textContent);
+    dom.window.closeContextMenu();
+    return labels;
+  };
+  assert.deepEqual(menuFor(), ["Open all", "bitcraft::LevelUpQuarry2"]);
+  ui.backend.objects[2] = item("wood.dobj", "BucketOfWood", { n: 79 });
+  await dom.window.reloadObjects();
+  await flush();
+  assert.deepEqual(menuFor(), ["Open all", "No available actions"]);
+});
