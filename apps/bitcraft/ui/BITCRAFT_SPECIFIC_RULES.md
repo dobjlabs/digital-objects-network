@@ -148,24 +148,26 @@ the selected objects.
 
 ## Cosmetic
 
-- **Page title:** "Bitcraft Inventory".
-- **Class icons:** `class-icons.json` maps each bitcraft class name to a
-  16x16 PNG in `assets/` (paths relative to this folder), or to `null` for
-  a class with no icon yet (every class currently has one). All three
-  bucket classes share `bucket.png`, and every level of `Quarry` and
-  `MiningDrill` uses the one icon for its class, since level is a field,
-  not a class. The object
-  list shows each object's icon in place of the page icon, on a 16x16
-  rounded white tile with a light shadow; the same small icon sits to the
-  left of every class name the Details pane shows (object summary lines,
-  and a Recipe Info action's inputs and outputs); and the Details pane
-  for a single
-  selected object draws it at 6x (96x96 CSS px) on the large page icon,
-  centered across it and just below its folded corner (`CLASS_ICONS_URL`
-  and `classIconPaths` in `index.html`). A class with no icon, or a
-  missing or unreadable file, keeps the plain page icon. Keep the file's
-  keys in step with the classes in `../../../examples/bitcraft/manifest.toml`. Generic behavior:
-  plain page icons only, since the API reports no icons.
+- **Page title:** "Bitcraft", which becomes "Bitcraft (Total Bit Value:
+  N)" once the inventory loads (see below).
+- **Presentation pack:** class and action icons, summaries and
+  descriptions come from the bitcraft presentation pack
+  (`../../../examples/bitcraft/presentation/`), which the app ships by
+  listing it in `PACKS` in `../scripts/sync_presentation.py`. The UI reads
+  packs through `presentation.js` and has no icon rules of its own; the
+  pack's content, and how it is generated, are described in that folder's
+  `README.md`. Where they show:
+  - class icons on a 16x16 rounded white tile in the object list and beside
+    every class name, and at 6x (96x96 CSS px) on the large page icon in a
+    single object's Details pane, centered across it and just below its
+    folded corner;
+  - action icons at 16x16 in the context menu and jobs list, 32x32 in the
+    Recipe Info list, and 128x128 in Recipe Info's and a job's Details pane;
+  - a "Description" section (summary and description) in Recipe Info's
+    Details pane and, for the object's class, in a single object's Details
+    pane.
+- **Generic behavior:** no pack, so plain page icons, no action icons, and
+  only the manifest's descriptions.
 
 ## Window title, Inventory Summary and status bar
 
@@ -242,11 +244,3 @@ decimal place.
   of editing it (see `CLAUDE.md`).
 - **Generic behavior:** no guide row; the list shows only objects.
 
-## Action icons
-
-Each action gets a 32x32 app-style graphic, chosen by its category (tool
-interaction, material creation, raw resource gathering or rekey), drawn at
-16x16 in the context menu, at 32x32 in the Recipe Info list, and at 4x in
-the Recipe Info Details pane and in the Details pane for a selected job. The
-rules, and how to add to them, are in `ACTION_ICONS.md`; the data is
-`action-icons.json`. Generic behavior: no action graphics.

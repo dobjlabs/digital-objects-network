@@ -43,12 +43,7 @@ fn bundle_ui() {
             for path in files.into_iter().filter(|path| {
                 !matches!(
                     path.file_name().and_then(|name| name.to_str()),
-                    Some(
-                        "AGENTS.md"
-                            | "CLAUDE.md"
-                            | "ACTION_ICONS.md"
-                            | "BITCRAFT_SPECIFIC_RULES.md"
-                    )
+                    Some("AGENTS.md" | "CLAUDE.md" | "BITCRAFT_SPECIFIC_RULES.md")
                 )
             }) {
                 let name = path

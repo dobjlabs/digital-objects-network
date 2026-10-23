@@ -457,22 +457,13 @@
     margin: -2px 5px 0 0;
   }
   .action-icon {
-    position: relative;
+    display: block;
     flex: none;
   }
-  .action-icon > img {
-    position: absolute;
-    image-rendering: pixelated;
-  }
-  .action-icon-tile {
-    position: absolute;
-    background: var(--bg);
-  }
-  .action-icon > svg {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
+  .description-summary { font-weight: 500; }
+  .description-text {
+    margin-top: 4px;
+    color: var(--muted);
   }
   .icon-tile img {
     display: block;
@@ -804,29 +795,6 @@
   </svg>
 </template>
 
-<!-- Action icon badges, drawn on the 32x32 action icon grid in its
-     top-right corner, with a white outline so they read over any art. -->
-<template id="badge-plus">
-  <svg viewBox="0 0 32 32" shape-rendering="crispEdges" aria-hidden="true">
-    <path d="M24 0h5v3h3v5h-3v3h-5v-3h-3v-5h3z" fill="#fff"/>
-    <path d="M25 1h3v3h3v3h-3v3h-3v-3h-3v-3h3z" fill="#16a34a"/>
-  </svg>
-</template>
-
-<template id="badge-up">
-  <svg viewBox="0 0 32 32" aria-hidden="true">
-    <path d="M22.5 8.5l4-4 4 4" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M22.5 8.5l4-4 4 4" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-  </svg>
-</template>
-
-<template id="badge-down">
-  <svg viewBox="0 0 32 32" aria-hidden="true">
-    <path d="M22.5 4.5l4 4 4-4" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M22.5 4.5l4 4 4-4" fill="none" stroke="#dc2626" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-  </svg>
-</template>
-
 <template id="doc-icon">
   <svg width="16" height="16" viewBox="0 0 32 32" aria-hidden="true">
     <defs>
@@ -852,6 +820,7 @@
   </svg>
 </template>
 
+<script src="presentation.js"></script>
 <script>
   const DOBJD_URL = new URL(
     document.querySelector('meta[name="dobjd-api-url"]')?.content || "http://127.0.0.1:7717",
@@ -1018,16 +987,6 @@
     },
   ];
 
-  // Maps each class name to its icon's path relative to this page, or to
-  // null for a class with no icon.
-  const CLASS_ICONS_URL = "class-icons.json";
-  let classIconPaths = {};
-
-  // Ordered rules for each action's 32x32 graphic; the first rule whose
-  // `actions` pattern matches the action name applies.
-  const ACTION_ICONS_URL = "action-icons.json";
-  let actionIconRules = [];
-
   // A getting-started guide shown as the first row of the object list: its
   // file name, which is also its URL relative to this page. It is served
   // next to this page, not read from the objects folder.
@@ -1074,11 +1033,6 @@
   const objectsDirHeader = document.getElementById("objects-dir");
   const objectList = document.getElementById("object-list");
   const fileIconTemplate = document.getElementById("file-icon");
-  const actionBadgeTemplates = {
-    plus: document.getElementById("badge-plus"),
-    up: document.getElementById("badge-up"),
-    down: document.getElementById("badge-down"),
-  };
   const largeFileIconTemplate = document.getElementById("large-file-icon");
   const detailsBody = document.getElementById("details-body");
   const runList = document.getElementById("run-list");
@@ -1223,97 +1177,66 @@
     return cell;
   }
 
-  // A class's art on a rounded tile, or the plain page icon for a class
-  // without art.
-  function smallClassIcon(className) {
-    const classIconPath = classIconPaths[className];
-    if (!classIconPath) {
+  // A class's icon on a rounded tile, or the plain page icon for a class
+  // whose presentation pack names none.
+  function smallClassIcon(qualifiedName) {
+    const iconUrl = Presentation.classInfo(qualifiedName).icon;
+    if (!iconUrl) {
       return fileIconTemplate.content.cloneNode(true).querySelector("svg");
     }
     const tile = document.createElement("span");
     tile.className = "icon-tile";
     const classIcon = document.createElement("img");
-    classIcon.src = classIconPath;
+    classIcon.src = iconUrl;
     classIcon.alt = "";
     tile.append(classIcon);
     return tile;
   }
 
-  // What the first matching rule draws for an action, with `$1`-style
-  // references in its class names filled from the pattern's match; null
-  // when no rule matches.
-  function actionIconSpec(actionName) {
-    for (const rule of actionIconRules) {
-      const match = new RegExp(rule.actions).exec(actionName);
-      if (match === null) {
-        continue;
-      }
-      const fill = (template) =>
-        template?.replace(/\$(\d)/g, (_, group) => match[Number(group)] ?? "") ?? null;
-      return {
-        icon: fill(rule.icon),
-        image: rule.image ?? null,
-        badge: rule.badge ?? null,
-        cornerIcon: fill(rule.cornerIcon),
-      };
-    }
-    return null;
-  }
-
-  // The action's graphic, laid out on a 32x32 grid and drawn `scale` CSS px
-  // per grid unit: an app-style rounded tile with the art centered on it.
-  // Null when no rule matches or it names neither an image nor a class
-  // with art.
-  function actionIcon(actionName, scale) {
-    const spec = actionIconSpec(actionName);
-    const iconPath = spec && (spec.image ?? classIconPaths[spec.icon]);
-    if (!iconPath) {
+  // The action's icon from its presentation pack, a finished image drawn
+  // `size` CSS px square, or null when the pack names none.
+  function actionIcon(qualifiedName, size) {
+    const iconUrl = Presentation.actionInfo(qualifiedName).icon;
+    if (!iconUrl) {
       return null;
     }
-    const icon = document.createElement("div");
+    const icon = document.createElement("img");
     icon.className = "action-icon";
-    icon.style.width = `${32 * scale}px`;
-    icon.style.height = `${32 * scale}px`;
-    // The tile spans grid units 2-30, with macOS's ~22% corner radius.
-    const tile = document.createElement("div");
-    tile.className = "action-icon-tile";
-    tile.style.left = `${2 * scale}px`;
-    tile.style.top = `${2 * scale}px`;
-    tile.style.width = `${28 * scale}px`;
-    tile.style.height = `${28 * scale}px`;
-    tile.style.borderRadius = `${6.25 * scale}px`;
-    tile.style.boxShadow = [
-      `inset 0 0 0 ${0.25 * scale}px rgba(0, 0, 0, 0.08)`,
-      `0 ${0.5 * scale}px ${scale}px rgba(0, 0, 0, 0.3)`,
-    ].join(", ");
-    icon.append(tile);
-    const layer = (path, gridX, gridY, gridSize) => {
-      const image = document.createElement("img");
-      image.src = path;
-      image.alt = "";
-      image.style.left = `${gridX * scale}px`;
-      image.style.top = `${gridY * scale}px`;
-      image.style.width = `${gridSize * scale}px`;
-      image.style.height = `${gridSize * scale}px`;
-      return image;
-    };
-    icon.append(layer(iconPath, 8, 8, 16));
-    const cornerPath = spec.cornerIcon && classIconPaths[spec.cornerIcon];
-    if (cornerPath) {
-      icon.append(layer(cornerPath, 20, 20, 8));
-    }
-    const badgeTemplate = actionBadgeTemplates[spec.badge];
-    if (badgeTemplate) {
-      icon.append(badgeTemplate.content.cloneNode(true).querySelector("svg"));
-    }
+    icon.src = iconUrl;
+    icon.alt = "";
+    icon.width = size;
+    icon.height = size;
     return icon;
+  }
+
+  // The "Description" section for a class or action: the pack's summary and
+  // description, falling back to the manifest's description. Empty when
+  // neither says anything; a manifest description of "-" is a placeholder.
+  function descriptionSection(info, manifestDescription) {
+    const description = info.description
+      ?? (manifestDescription && manifestDescription !== "-" ? manifestDescription : null);
+    if (info.summary === null && description === null) {
+      return [];
+    }
+    const body = document.createElement("div");
+    body.className = "subsection-list";
+    for (const [className, text] of [["description-summary", info.summary],
+      ["description-text", description]]) {
+      if (text !== null) {
+        const paragraph = document.createElement("div");
+        paragraph.className = className;
+        paragraph.textContent = text;
+        body.append(paragraph);
+      }
+    }
+    return [subsection("Description"), body];
   }
 
   // A class's qualified name with its small icon to the left.
   function classLabel(qualifiedName) {
     const label = document.createElement("span");
     label.className = "class-label";
-    label.append(smallClassIcon(qualifiedName.name), qualifiedClassName(qualifiedName));
+    label.append(smallClassIcon(qualifiedName), qualifiedClassName(qualifiedName));
     return label;
   }
 
@@ -1453,7 +1376,7 @@
       entries.push({
         label: qualifiedClassName(action.action),
         labelClass: "action-name",
-        icon: actionIcon(action.action.name, 0.5),
+        icon: actionIcon(action.action, 16),
         isDisabled: () => runs.some(isRunInProgress),
         onSelect: () => startRun(action, fileNames),
       });
@@ -1817,7 +1740,7 @@
 
       const iconSlot = document.createElement("span");
       iconSlot.className = "run-icon-slot";
-      const icon = actionIcon(run.action.action.name, 0.5);
+      const icon = actionIcon(run.action.action, 16);
       if (icon) {
         iconSlot.append(icon);
       }
@@ -1910,15 +1833,15 @@
 
   // The Details pane's icon for an action: its graphic at 4x, or the blank
   // page when it has none.
-  function largeActionIcon(actionName) {
+  function largeActionIcon(qualifiedName) {
     const icon = document.createElement("div");
     icon.className = "details-icon";
-    icon.append(actionIcon(actionName, 4) ?? largeFileIconTemplate.content.cloneNode(true));
+    icon.append(actionIcon(qualifiedName, 128) ?? largeFileIconTemplate.content.cloneNode(true));
     return icon;
   }
 
   function renderActionInfo(action, container) {
-    const icon = largeActionIcon(action.action.name);
+    const icon = largeActionIcon(action.action);
 
     const title = document.createElement("div");
     title.className = "details-title action-name";
@@ -1963,7 +1886,8 @@
     outputs.className = "subsection-list";
     outputs.append(classLines(newOutputs));
 
-    container.append(icon, title, meta, hashTable);
+    container.append(icon, title, meta, hashTable,
+      ...descriptionSection(Presentation.actionInfo(action.action), action.description));
     if (action.totalInputs.length > 0) {
       container.append(subsection("Inputs"), inputs);
     }
@@ -2067,7 +1991,7 @@
     document.body.classList.add("secondary-window");
     document.title = "Bitcraft Inventory Summary";
     summaryView.hidden = false;
-    classIconPaths = await loadUiDataFile(CLASS_ICONS_URL, {});
+    await Presentation.load();
     await refreshSummary();
     const events = new EventSource(`${DOBJD_URL}/events`);
     let eventsOpened = false;
@@ -2134,7 +2058,7 @@
     header.className = "summary-header";
     const iconTile = document.createElement("div");
     iconTile.className = "summary-header-icon";
-    const iconPath = classIconPaths[SUMMARY_ICON_CLASS];
+    const iconPath = Presentation.classInfo({ pluginName: PLUGIN_NAME, name: SUMMARY_ICON_CLASS }).icon;
     if (iconPath) {
       const icon = document.createElement("img");
       icon.src = iconPath;
@@ -2203,13 +2127,7 @@
     document.getElementById("recipebook-view").hidden = false;
     renderRecipeDetails();
     try {
-      const [actions, iconPaths, actionIcons] = await Promise.all([
-        fetchJson("/actions"),
-        loadUiDataFile(CLASS_ICONS_URL, {}),
-        loadUiDataFile(ACTION_ICONS_URL, { rules: [] }),
-      ]);
-      classIconPaths = iconPaths;
-      actionIconRules = actionIcons.rules;
+      const [actions] = await Promise.all([fetchJson("/actions"), Presentation.load()]);
       showRecipes(actions.filter((action) => action.action.pluginName === PLUGIN_NAME));
     } catch (error) {
       const message = document.createElement("li");
@@ -2261,7 +2179,7 @@
 
       const iconSlot = document.createElement("span");
       iconSlot.className = "recipe-icon-slot";
-      const icon = actionIcon(action.action.name, 1);
+      const icon = actionIcon(action.action, 32);
       if (icon) {
         iconSlot.append(icon);
       }
@@ -2376,7 +2294,7 @@
   }
 
   function renderRunDetails(run) {
-    const icon = largeActionIcon(run.action.action.name);
+    const icon = largeActionIcon(run.action.action);
 
     const title = document.createElement("div");
     title.className = "details-title";
@@ -2486,7 +2404,7 @@
     const page = document.createElement("div");
     page.className = "large-page-icon";
     page.append(largeFileIconTemplate.content.cloneNode(true));
-    const classIconPath = classIconPaths[object.class.name];
+    const classIconPath = Presentation.classInfo(object.class).icon;
     if (classIconPath) {
       const classIcon = document.createElement("img");
       classIcon.className = "large-class-icon";
@@ -2530,7 +2448,9 @@
       }
     }
 
-    detailsBody.append(icon, title, meta, identityTable, propertiesTitle, propertiesTable);
+    const classDescription = descriptionSection(Presentation.classInfo(object.class), null);
+    detailsBody.append(icon, title, meta, identityTable, ...classDescription, propertiesTitle,
+      propertiesTable);
   }
 
   // An error with `noResponse` set got no HTTP response from dobjd at all.
@@ -2588,7 +2508,7 @@
       appendFileRow(WELCOME_FILE, docIconTemplate.content.cloneNode(true));
     }
     for (const object of objects) {
-      const row = appendFileRow(object.fileName, smallClassIcon(object.class.name));
+      const row = appendFileRow(object.fileName, smallClassIcon(object.class));
       const state = shownState(object);
       row.classList.toggle("unknown", state === "unknown");
       row.classList.toggle("pending", state === "pending");
@@ -2830,19 +2750,16 @@
     showStartup("Opening Bitcraft...", "Getting your inventory ready.");
     showMessage("Loading...", false);
     try {
-      const [objectsDir, objects, actions, iconPaths, actionIcons, welcome] = await Promise.all([
+      const [objectsDir, objects, actions, welcome] = await Promise.all([
         fetchJson("/objects/dir"),
         fetchJson("/objects/unspent"),
         fetchJson("/actions"),
-        loadUiDataFile(CLASS_ICONS_URL, {}),
-        loadUiDataFile(ACTION_ICONS_URL, { rules: [] }),
         loadUiTextFile(WELCOME_FILE),
+        Presentation.load(),
       ]);
       setStartupProgress(1);
       welcomeText = welcome;
       welcomeFileSize = welcome === null ? null : new TextEncoder().encode(welcome).length;
-      classIconPaths = iconPaths;
-      actionIconRules = actionIcons.rules;
       pluginActions = actions.filter((action) => action.action.pluginName === PLUGIN_NAME);
       objectsDirPath = objectsDir.path;
       objectsDirHeader.textContent = objectsDir.path;
@@ -2918,21 +2835,6 @@
     status.textContent = feedback;
     status.hidden = false;
   });
-
-  // Reads a JSON file served next to this page, not by dobjd, or returns
-  // `fallback` if it cannot be read.
-  async function loadUiDataFile(url, fallback) {
-    try {
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      return await response.json();
-    } catch (error) {
-      console.warn(`Could not load ${url}:`, error);
-      return fallback;
-    }
-  }
 
   // Reads a text file served next to this page, or returns null if it
   // cannot be read.

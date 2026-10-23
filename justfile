@@ -75,6 +75,12 @@ bitcraft-shell:
 bitcraft-prepare:
     python3 apps/bitcraft/scripts/prepare.py
 
+# Regenerate bitcraft's presentation pack (icons, summaries, descriptions) and
+# copy it into the Bitcraft UI.
+bitcraft-presentation:
+    python3 examples/bitcraft/presentation/generate.py
+    python3 apps/bitcraft/scripts/sync_presentation.py
+
 bitcraft-dev: bitcraft-prepare
     cd apps/bitcraft && npx --yes @tauri-apps/cli@2.12.2 dev --config src-tauri/tauri.bundle.conf.json
 
