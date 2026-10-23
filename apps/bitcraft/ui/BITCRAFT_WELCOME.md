@@ -16,4 +16,4 @@ You can learn more about the different kinds of items you can produce by clickin
 
 You are trying to produce as many `Bit`s as possible. `Bit`s are made from `Wood`, `Stone`, and `Iron`. You can increase your rate of production of these base resources by crafting tools like axes, quarries, and mining drills, or by more cleverly utilizing and orchestrating compute.
 
-Good luck!
+Happy crafting!
