@@ -11,8 +11,8 @@ mod config;
 mod container_db;
 mod don_state;
 mod node;
+mod state_log_db;
 mod state_machine;
-mod sync_db;
 mod sync_loop;
 
 use api::run_api_server;
@@ -20,8 +20,8 @@ use config::load_config;
 use container_db::ContainerDb;
 use node::Node;
 use payload::proof::ProofParser;
+use state_log_db::StateLogDb;
 use state_machine::StateMachine;
-use sync_db::SyncDb;
 use sync_loop::run_sync_forever;
 
 fn new_info(config: &config::AppConfig, proof_parser: &ProofParser) -> api::Info {
@@ -41,18 +41,19 @@ async fn main() -> Result<()> {
 
     let cfg = load_config()?;
 
-    let container_db = ContainerDb::connect(&cfg.container_db_path)?;
-    let api_container_db = container_db.clone();
-    let sync_db = Arc::new(SyncDb::connect(&cfg.sync_metadata_db_url, cfg.init_start_slot).await?);
+    let containers = ContainerDb::connect(&cfg.container_db_path)?;
+    let api_containers = containers.clone();
+    let state_log =
+        Arc::new(StateLogDb::connect(&cfg.state_log_db_url, cfg.init_start_slot).await?);
     let proof_parser = ProofParser::new()?;
     let info = Arc::new(new_info(&cfg, &proof_parser));
-    let state_machine = Arc::new(StateMachine::new(container_db, Arc::new(proof_parser)));
-    let node = Arc::new(Node::new(cfg, Arc::clone(&state_machine), Arc::clone(&sync_db)).await?);
+    let state_machine = Arc::new(StateMachine::new(containers, Arc::new(proof_parser)));
+    let node = Arc::new(Node::new(cfg, Arc::clone(&state_machine), Arc::clone(&state_log)).await?);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let server_task = tokio::spawn(run_api_server(
-        Arc::clone(&sync_db),
-        api_container_db,
+        Arc::clone(&state_log),
+        api_containers,
         info,
         node.config.http_bind,
         shutdown_rx.clone(),

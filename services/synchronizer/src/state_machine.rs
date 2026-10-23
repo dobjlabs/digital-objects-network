@@ -50,22 +50,22 @@ pub struct DerivedSlot {
 pub struct StateMachine {
     /// RocksDB store of the Merkle containers, used to open the created, nullifier, and
     /// state root containers during derivation.
-    container_db: ContainerDb,
+    containers: ContainerDb,
     /// Blob parser/verifier used to decode TxFinalized payloads from blob bytes.
     proof_parser: Arc<dyn BlobParser>,
 }
 
 impl StateMachine {
-    pub fn new(container_db: ContainerDb, proof_parser: Arc<dyn BlobParser>) -> Self {
+    pub fn new(containers: ContainerDb, proof_parser: Arc<dyn BlobParser>) -> Self {
         Self {
-            container_db,
+            containers,
             proof_parser,
         }
     }
 
     /// Sync DB to disk
     pub fn sync(&self) -> Result<()> {
-        self.container_db.sync()
+        self.containers.sync()
     }
 
     /// Parse and verify each blob as a `TxFinalized` payload, returning the
@@ -248,10 +248,10 @@ impl StateMachine {
         let mut working = WorkingState {
             created_count: base_state.map_or(0, |state| state.metadata.created_count),
             nullifier_count: base_state.map_or(0, |state| state.metadata.nullifier_count),
-            created: self.container_db.open_created(base_roots.created)?,
-            nullifiers: self.container_db.open_nullifiers(base_roots.nullifiers)?,
+            created: self.containers.open_created(base_roots.created)?,
+            nullifiers: self.containers.open_nullifiers(base_roots.nullifiers)?,
             next_state_history: self
-                .container_db
+                .containers
                 .open_next_state_history(base_roots.next_state_history)?,
             recent_state_roots: recent_state_roots.into_iter().collect(),
             created_added: HashMap::new(),
@@ -329,9 +329,9 @@ mod tests {
 
     fn make_sm() -> (StateMachine, ContainerDb, TempDir) {
         let dir = TempDir::new().unwrap();
-        let container_db = ContainerDb::connect(dir.path().to_str().unwrap()).unwrap();
-        let sm = StateMachine::new(container_db.clone(), Arc::new(MockBlobParser));
-        (sm, container_db, dir)
+        let containers = ContainerDb::connect(dir.path().to_str().unwrap()).unwrap();
+        let sm = StateMachine::new(containers.clone(), Arc::new(MockBlobParser));
+        (sm, containers, dir)
     }
 
     fn unique_hash(n: i64) -> Hash {
@@ -400,7 +400,7 @@ mod tests {
 
     #[test]
     fn test_empty_slot_produces_new_state() {
-        let (sm, _container_db, _dir) = make_sm();
+        let (sm, _containers, _dir) = make_sm();
         let state = derive(&sm, None, [], 1, block_meta(7), &[], &HashMap::new()).state;
         assert_eq!(state.metadata.block.number, 7);
         assert_eq!(state.metadata.state_root_count, 1);
@@ -408,7 +408,7 @@ mod tests {
 
     #[test]
     fn test_accepts_valid_blob_and_updates_counts() {
-        let (sm, container_db, _dir) = make_sm();
+        let (sm, containers, _dir) = make_sm();
         let state0 = seed_state_root0(&sm);
         let state_root0 = state0.metadata.state_root;
 
@@ -426,10 +426,10 @@ mod tests {
             &HashMap::new(),
         );
         let state1 = derived.state;
-        let created_present = container_db
+        let created_present = containers
             .created_exists_for(&state1.roots, &[created_obj], &derived.created_added)
             .unwrap();
-        let nullifier_present = container_db
+        let nullifier_present = containers
             .nullifier_exists_batch(&state1.roots, &[nullifier])
             .unwrap();
 
@@ -443,7 +443,7 @@ mod tests {
     #[test]
     fn records_intermediate_states_alongside_their_nullifiers() {
         use pod2::middleware::{containers::Dictionary, StrKey};
-        let (sm, container_db, _dir) = make_sm();
+        let (sm, containers, _dir) = make_sm();
         let state0 = seed_state_root0(&sm);
         let state_root0 = state0.metadata.state_root;
         let intermediate = Dictionary::new(HashMap::from([
@@ -469,13 +469,13 @@ mod tests {
         assert_eq!(derived.state.metadata.created_count, 2);
         assert_eq!(derived.state.metadata.nullifier_count, 1);
         assert_eq!(
-            container_db
+            containers
                 .created_exists_for(&derived.state.roots, &created, &derived.created_added)
                 .unwrap(),
             vec![true, true]
         );
         assert_eq!(
-            container_db
+            containers
                 .nullifier_exists_batch(&derived.state.roots, &[nullifier])
                 .unwrap(),
             vec![true]
@@ -506,7 +506,7 @@ mod tests {
 
     #[test]
     fn test_rejects_unknown_grounding_state_root() {
-        let (sm, _container_db, _dir) = make_sm();
+        let (sm, _containers, _dir) = make_sm();
         let state0 = seed_state_root0(&sm);
 
         let tx_final = unique_hash(21);
@@ -526,7 +526,7 @@ mod tests {
 
     #[test]
     fn test_membership_is_scoped_to_state_roots() {
-        let (sm, container_db, _dir) = make_sm();
+        let (sm, containers, _dir) = make_sm();
         let state0 = seed_state_root0(&sm);
         let state_root0 = state0.metadata.state_root;
 
@@ -546,10 +546,10 @@ mod tests {
 
         // The same index cross-checks against each state's root: present under
         // the new state, absent under the old.
-        let old_membership = container_db
+        let old_membership = containers
             .created_exists_for(&state0.roots, &[created_obj], &indices)
             .unwrap();
-        let new_membership = container_db
+        let new_membership = containers
             .created_exists_for(&state1.roots, &[created_obj], &indices)
             .unwrap();
 
@@ -559,7 +559,7 @@ mod tests {
 
     #[test]
     fn test_rejects_duplicate_created_object() {
-        let (sm, _container_db, _dir) = make_sm();
+        let (sm, _containers, _dir) = make_sm();
         let state0 = seed_state_root0(&sm);
         let state_root0 = state0.metadata.state_root;
 
@@ -596,7 +596,7 @@ mod tests {
 
     #[test]
     fn test_rejects_duplicate_created_object_within_slot() {
-        let (sm, _container_db, _dir) = make_sm();
+        let (sm, _containers, _dir) = make_sm();
         let state0 = seed_state_root0(&sm);
         let state_root0 = state0.metadata.state_root;
 
@@ -620,7 +620,7 @@ mod tests {
 
     #[test]
     fn test_phantom_prior_index_does_not_reject_creation() {
-        let (sm, _container_db, _dir) = make_sm();
+        let (sm, _containers, _dir) = make_sm();
         let state0 = seed_state_root0(&sm);
         let state_root0 = state0.metadata.state_root;
 

@@ -335,14 +335,14 @@ mod tests {
 
     fn open_test_db() -> (ContainerDb, TempDir) {
         let dir = TempDir::new().expect("tempdir");
-        let container_db = ContainerDb::connect(dir.path().to_str().unwrap()).expect("connect");
-        (container_db, dir)
+        let containers = ContainerDb::connect(dir.path().to_str().unwrap()).expect("connect");
+        (containers, dir)
     }
 
     #[test]
     fn test_created_membership_via_index() {
-        let (container_db, _dir) = open_test_db();
-        let mut created = container_db.open_created(EMPTY_HASH).unwrap();
+        let (containers, _dir) = open_test_db();
+        let mut created = containers.open_created(EMPTY_HASH).unwrap();
         let obj_commitment = test_hash(9);
         created.insert(0, Value::from(obj_commitment)).unwrap();
 
@@ -353,12 +353,12 @@ mod tests {
         let indices = HashMap::from([(obj_commitment, 0i64)]);
 
         assert_eq!(
-            container_db
+            containers
                 .created_exists_for(&roots, &[obj_commitment], &indices)
                 .unwrap(),
             vec![true]
         );
-        let witnesses = container_db
+        let witnesses = containers
             .prove_created_for(&roots, &[obj_commitment], &indices)
             .unwrap();
         let witness = witnesses.into_iter().next().unwrap();
@@ -368,14 +368,14 @@ mod tests {
         // does not actually contain resolves to absent too.
         let absent = test_hash(7);
         assert_eq!(
-            container_db
+            containers
                 .created_exists_for(&roots, &[absent], &HashMap::new())
                 .unwrap(),
             vec![false]
         );
         let empty_roots = StateRoots::empty();
         assert_eq!(
-            container_db
+            containers
                 .created_exists_for(&empty_roots, &[obj_commitment], &indices)
                 .unwrap(),
             vec![false]

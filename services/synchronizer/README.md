@@ -22,10 +22,11 @@ Service that tracks Digital Object blob transactions on Ethereum, derives the Di
 
 The synchronizer splits state into two layers:
 
-- RocksDB stores the content-addressed POD2 Merkle backing store
+- RocksDB (`ContainerDb`) stores the content-addressed POD2 Merkle backing store
   - persistent Merkle nodes
   - persistent POD2 values
-- Postgres stores the control plane
+- Postgres (`StateLogDb`) stores the state log: how the DON state advances with each update to
+  the bulletin board the synchronizer follows (currently blob space, one update per slot)
   - slot metadata
   - the `DonState` derived at each slot with an execution block
   - the created index: object commitment -> position in the created array
@@ -80,9 +81,7 @@ The synchronizer reopens those containers from the roots stored in `StateRoots`.
 
 Important: RocksDB is not the source of truth. It is an append-only backing store for Merkle data. Derivation may materialize nodes that are never committed; those orphaned nodes are harmless and are ignored unless a future `DonState` points at them.
 
-### Postgres (`SYNC_METADATA_DB_URL`) — committed states and sync metadata
-
-Postgres stores the synchronization state:
+### Postgres (`STATE_LOG_DB_URL`) — the state log
 
 - `slots`
   - one row per slot from `INIT_START_SLOT` on (checked at startup); column prefixes say where
@@ -230,7 +229,7 @@ Hashes in request and response bodies are pod2 `Hash` values, serialized as lowe
 ## Optional env vars
 
 - `CONTAINER_DB_PATH` (default: `data/synchronizer-db`)
-- `SYNC_METADATA_DB_URL` (default: `postgres://postgres@localhost:5432/synchronizer`)
+- `STATE_LOG_DB_URL` (default: `postgres://postgres@localhost:5432/synchronizer`)
 - `HTTP_BIND` (default: `127.0.0.1:3000`)
 - `RPC_RETRIES` (default: `6`) — how many times to ask again for a beacon block, execution block or archived blobs that a lagging node does not serve yet. Failed requests (rate limits, gateway errors, broken connections) are retried separately by the clients, with exponential backoff.
 - `RPC_RETRY_MS` (default: `1000`) — delay in ms between those requests.

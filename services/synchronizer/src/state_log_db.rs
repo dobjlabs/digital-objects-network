@@ -22,11 +22,11 @@ pub struct HeadSnapshot {
 }
 
 #[derive(Clone)]
-pub struct SyncDb {
+pub struct StateLogDb {
     pool: PgPool,
 }
 
-impl SyncDb {
+impl StateLogDb {
     /// Connect to the synchronizer's Postgres metadata database.
     ///
     /// The database must already exist — provisioning is an explicit operator
@@ -40,7 +40,7 @@ impl SyncDb {
             .max_connections(5)
             .connect(database_url)
             .await
-            .with_context(|| "Failed to connect to sync metadata Postgres")?;
+            .with_context(|| "Failed to connect to the state log Postgres")?;
         let store = Self { pool };
         store.bootstrap().await?;
         if let Some(first_slot) = store.first_committed_slot().await? {
@@ -455,7 +455,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let ctr = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let db_name = format!("syncdb_test_{}_{}_{}", pid, nanos, ctr);
+        let db_name = format!("state_log_db_test_{}_{}_{}", pid, nanos, ctr);
         let admin_url = std::env::var("TEST_PG_ADMIN_URL")
             .unwrap_or_else(|_| "postgres://postgres:postgres@127.0.0.1:5432/postgres".into());
         let base = admin_url.trim_end_matches("/postgres");
@@ -475,11 +475,11 @@ mod tests {
         Ok(())
     }
 
-    async fn fresh_sync_db() -> Result<(SyncDb, String, String)> {
+    async fn fresh_state_log() -> Result<(StateLogDb, String, String)> {
         let (db_name, db_url, admin_url) = test_urls();
         create_db(&db_name, &admin_url).await?;
-        let sync_db = SyncDb::connect(&db_url, 1).await?;
-        Ok((sync_db, db_name, admin_url))
+        let state_log = StateLogDb::connect(&db_url, 1).await?;
+        Ok((state_log, db_name, admin_url))
     }
 
     async fn drop_db(db_name: &str, admin_url: &str) -> Result<()> {
@@ -501,10 +501,10 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local postgres"]
     async fn test_empty_database_has_no_head() -> Result<()> {
-        let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
+        let (state_log, db_name, admin_url) = fresh_state_log().await?;
 
-        assert_eq!(sync_db.last_processed_slot().await?, None);
-        assert!(sync_db.head_snapshot().await?.is_none());
+        assert_eq!(state_log.last_processed_slot().await?, None);
+        assert!(state_log.head_snapshot().await?.is_none());
 
         drop_db(&db_name, &admin_url).await?;
         Ok(())
@@ -515,11 +515,11 @@ mod tests {
     async fn test_connect_rejects_changed_init_start_slot() -> Result<()> {
         let (db_name, db_url, admin_url) = test_urls();
         create_db(&db_name, &admin_url).await?;
-        let sync_db = SyncDb::connect(&db_url, 5).await?;
-        sync_db.commit_slot(5, None, None).await?;
+        let state_log = StateLogDb::connect(&db_url, 5).await?;
+        state_log.commit_slot(5, None, None).await?;
 
-        assert!(SyncDb::connect(&db_url, 5).await.is_ok());
-        assert!(SyncDb::connect(&db_url, 4).await.is_err());
+        assert!(StateLogDb::connect(&db_url, 5).await.is_ok());
+        assert!(StateLogDb::connect(&db_url, 4).await.is_err());
 
         drop_db(&db_name, &admin_url).await?;
         Ok(())
@@ -528,12 +528,17 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local postgres"]
     async fn test_commit_slot_persists_state_and_latest_slot() -> Result<()> {
-        let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
+        let (state_log, db_name, admin_url) = fresh_state_log().await?;
         let state = unique_state(7, 100);
 
-        sync_db.commit_slot(10, None, Some(&derived(state))).await?;
+        state_log
+            .commit_slot(10, None, Some(&derived(state)))
+            .await?;
 
-        let snapshot = sync_db.head_snapshot().await?.expect("a slot is committed");
+        let snapshot = state_log
+            .head_snapshot()
+            .await?
+            .expect("a slot is committed");
         assert_eq!(snapshot.state, state);
         assert_eq!(snapshot.last_processed_slot, 10);
 
@@ -544,16 +549,21 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local postgres"]
     async fn test_head_state_comes_from_last_slot_with_execution_block() -> Result<()> {
-        let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
+        let (state_log, db_name, admin_url) = fresh_state_log().await?;
         let state = unique_state(7, 100);
-        sync_db.commit_slot(10, None, Some(&derived(state))).await?;
+        state_log
+            .commit_slot(10, None, Some(&derived(state)))
+            .await?;
         // Later slots without an execution block derive no state.
-        sync_db
+        state_log
             .commit_slot(11, Some(B256::repeat_byte(11)), None)
             .await?;
-        sync_db.commit_slot(12, None, None).await?;
+        state_log.commit_slot(12, None, None).await?;
 
-        let snapshot = sync_db.head_snapshot().await?.expect("a slot is committed");
+        let snapshot = state_log
+            .head_snapshot()
+            .await?
+            .expect("a slot is committed");
         assert_eq!(snapshot.state, state);
         assert_eq!(snapshot.last_processed_slot, 12);
 
@@ -564,15 +574,15 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local postgres"]
     async fn test_commit_slot_duplicate_slot_fails() -> Result<()> {
-        let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
+        let (state_log, db_name, admin_url) = fresh_state_log().await?;
         let state1 = unique_state(7, 100);
         let state2 = unique_state(8, 200);
 
-        sync_db
+        state_log
             .commit_slot(10, None, Some(&derived(state1)))
             .await?;
 
-        let err = sync_db
+        let err = state_log
             .commit_slot(10, None, Some(&derived(state2)))
             .await
             .unwrap_err();
@@ -589,14 +599,14 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local postgres"]
     async fn test_recent_state_roots_query() -> Result<()> {
-        let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
+        let (state_log, db_name, admin_url) = fresh_state_log().await?;
         let h1 = unique_state(5, 10);
-        sync_db.commit_slot(1, None, Some(&derived(h1))).await?;
+        state_log.commit_slot(1, None, Some(&derived(h1))).await?;
 
         let h2 = unique_state(9, 20);
-        sync_db.commit_slot(2, None, Some(&derived(h2))).await?;
+        state_log.commit_slot(2, None, Some(&derived(h2))).await?;
 
-        let recent = sync_db.recent_state_roots(6).await?;
+        let recent = state_log.recent_state_roots(6).await?;
         assert_eq!(recent, vec![(h2.metadata.state_root, 9)]);
 
         drop_db(&db_name, &admin_url).await?;
@@ -606,16 +616,19 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local postgres"]
     async fn test_rollback_rewinds_latest_slot_and_state() -> Result<()> {
-        let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
+        let (state_log, db_name, admin_url) = fresh_state_log().await?;
         let h1 = unique_state(1, 10);
-        sync_db.commit_slot(1, None, Some(&derived(h1))).await?;
+        state_log.commit_slot(1, None, Some(&derived(h1))).await?;
 
         let h2 = unique_state(2, 20);
-        sync_db.commit_slot(2, None, Some(&derived(h2))).await?;
+        state_log.commit_slot(2, None, Some(&derived(h2))).await?;
 
-        sync_db.rollback_to_slot(1).await?;
+        state_log.rollback_to_slot(1).await?;
 
-        let snapshot = sync_db.head_snapshot().await?.expect("a slot is committed");
+        let snapshot = state_log
+            .head_snapshot()
+            .await?
+            .expect("a slot is committed");
         assert_eq!(snapshot.state, h1);
         assert_eq!(snapshot.last_processed_slot, 1);
 
@@ -626,12 +639,12 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires local postgres"]
     async fn test_created_index_commit_and_rollback() -> Result<()> {
-        let (sync_db, db_name, admin_url) = fresh_sync_db().await?;
+        let (state_log, db_name, admin_url) = fresh_state_log().await?;
         let a = unique_hash(1);
         let b = unique_hash(2);
 
         let h1 = unique_state(1, 10);
-        sync_db
+        state_log
             .commit_slot(
                 1,
                 None,
@@ -642,7 +655,7 @@ mod tests {
             )
             .await?;
         let h2 = unique_state(2, 20);
-        sync_db
+        state_log
             .commit_slot(
                 2,
                 None,
@@ -653,19 +666,19 @@ mod tests {
             )
             .await?;
 
-        let indices = sync_db.created_indices(&[a, b]).await?;
+        let indices = state_log.created_indices(&[a, b]).await?;
         assert_eq!(indices.get(&a), Some(&1));
         assert_eq!(indices.get(&b), Some(&2));
 
         // Rolling back to slot 1 prunes slot 2's index row in the same
         // transaction as the slot delete.
-        sync_db.rollback_to_slot(1).await?;
-        let indices = sync_db.created_indices(&[a, b]).await?;
+        state_log.rollback_to_slot(1).await?;
+        let indices = state_log.created_indices(&[a, b]).await?;
         assert_eq!(indices.get(&a), Some(&1));
         assert_eq!(indices.get(&b), None);
 
         // The atomic read returns the same index against the head state.
-        let (snapshot, indices) = sync_db.snapshot_with_created_indices(&[a, b]).await?;
+        let (snapshot, indices) = state_log.snapshot_with_created_indices(&[a, b]).await?;
         assert_eq!(
             snapshot.expect("a slot is committed").last_processed_slot,
             1

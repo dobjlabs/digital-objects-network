@@ -26,18 +26,18 @@ use tracing::{debug, info};
 
 use crate::config::AppConfig;
 use crate::don_state::{DonState, ExecutionBlock};
+use crate::state_log_db::StateLogDb;
 use crate::state_machine::{DerivedSlot, StateMachine, MAX_STATE_ROOT_AGE_BLOCKS};
-use crate::sync_db::SyncDb;
 
 /// Runtime integration layer that connects network inputs (beacon/execution),
-/// pure state derivation (`StateMachine`), and sync metadata (`SyncDb`).
+/// pure state derivation (`StateMachine`), and the state log (`StateLogDb`).
 pub struct Node {
     pub beacon_cli: BeaconClient,
     pub archiver_cli: BeaconClient,
     pub rpc_cli: RootProvider,
     pub config: AppConfig,
     pub state_machine: Arc<StateMachine>,
-    pub sync_db: Arc<SyncDb>,
+    pub state_log: Arc<StateLogDb>,
 }
 
 /// Everything fetched from the network to derive one present slot.
@@ -81,7 +81,7 @@ impl Node {
     pub async fn new(
         cfg: AppConfig,
         state_machine: Arc<StateMachine>,
-        sync_db: Arc<SyncDb>,
+        state_log: Arc<StateLogDb>,
     ) -> Result<Self> {
         let http_cli = reqwest::Client::builder()
             .timeout(Duration::from_secs(8))
@@ -106,7 +106,7 @@ impl Node {
             rpc_cli,
             config: cfg,
             state_machine,
-            sync_db,
+            state_log,
         })
     }
 
@@ -412,7 +412,7 @@ impl Node {
             .iter()
             .flat_map(|(_, payload)| payload.created.iter().copied())
             .collect();
-        let prior_indices = self.sync_db.created_indices(&candidates).await?;
+        let prior_indices = self.state_log.created_indices(&candidates).await?;
         self.state_machine.derive_slot_state(
             base_state,
             recent_state_roots,
@@ -437,7 +437,7 @@ impl Node {
                 derived: None,
             });
         };
-        let base_state = self.sync_db.head_state().await?;
+        let base_state = self.state_log.head_state().await?;
 
         debug!(
             slot = slot_ctx.slot,
@@ -463,7 +463,7 @@ impl Node {
                 .number
                 .saturating_sub(MAX_STATE_ROOT_AGE_BLOCKS as u32)
         });
-        let recent_state_roots = self.sync_db.recent_state_roots(min_block_number).await?;
+        let recent_state_roots = self.state_log.recent_state_roots(min_block_number).await?;
 
         let derived = self
             .derive_slot(
@@ -489,7 +489,7 @@ impl Node {
         // disk even after a system crash.  The state is committed to Postgres next and its roots
         // must not outlive the merkle tree nodes in a crash.
         self.state_machine.sync()?;
-        self.sync_db
+        self.state_log
             .commit_slot(
                 processed.slot,
                 processed.block_root,

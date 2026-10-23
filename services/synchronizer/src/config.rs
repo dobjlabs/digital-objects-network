@@ -6,7 +6,7 @@ use eth_clients::common::AvailabilityPolling;
 use tracing::warn;
 
 const DEFAULT_CONTAINER_DB_PATH: &str = "data/synchronizer-db";
-const DEFAULT_SYNC_METADATA_DB_URL: &str = "postgres://postgres@localhost:5432/synchronizer";
+const DEFAULT_STATE_LOG_DB_URL: &str = "postgres://postgres@localhost:5432/synchronizer";
 const DEFAULT_HTTP_BIND: &str = "127.0.0.1:3000";
 
 /// Known RPC rate limit. Used to derive safe defaults for batch size and sync delay.
@@ -30,7 +30,7 @@ const fn default_sync_delay_ms() -> u64 {
 #[derive(Debug)]
 pub struct AppConfig {
     pub container_db_path: String,
-    pub sync_metadata_db_url: String,
+    pub state_log_db_url: String,
     pub http_bind: SocketAddr,
     pub sync_delay: Duration,
     pub availability_polling: AvailabilityPolling,
@@ -47,8 +47,8 @@ pub fn load_config() -> Result<AppConfig> {
 
     let container_db_path =
         dotenvy::var("CONTAINER_DB_PATH").unwrap_or_else(|_| DEFAULT_CONTAINER_DB_PATH.to_string());
-    let sync_metadata_db_url = dotenvy::var("SYNC_METADATA_DB_URL")
-        .unwrap_or_else(|_| DEFAULT_SYNC_METADATA_DB_URL.to_string());
+    let state_log_db_url =
+        dotenvy::var("STATE_LOG_DB_URL").unwrap_or_else(|_| DEFAULT_STATE_LOG_DB_URL.to_string());
     let http_bind = dotenvy::var("HTTP_BIND").unwrap_or_else(|_| DEFAULT_HTTP_BIND.to_string());
     let http_bind: SocketAddr = http_bind.parse()?;
 
@@ -111,7 +111,7 @@ pub fn load_config() -> Result<AppConfig> {
 
     Ok(AppConfig {
         container_db_path,
-        sync_metadata_db_url,
+        state_log_db_url,
         http_bind,
         sync_delay: Duration::from_millis(sync_delay_ms),
         availability_polling,

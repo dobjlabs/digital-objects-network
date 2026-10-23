@@ -22,7 +22,7 @@ use wire_types::HealthResponse;
 
 use crate::{
     container_db::ContainerDb,
-    sync_db::{HeadSnapshot, SyncDb},
+    state_log_db::{HeadSnapshot, StateLogDb},
 };
 
 const MAX_HASH_QUERY_ITEMS: usize = 256;
@@ -30,9 +30,9 @@ const MAX_HASH_QUERY_ITEMS: usize = 256;
 #[derive(Clone)]
 struct AppState {
     /// RocksDB store of the Merkle containers, read for membership checks and Merkle proofs.
-    container_db: ContainerDb,
+    containers: ContainerDb,
     /// Postgres-backed committed-state and sync-progress store.
-    sync_db: Arc<SyncDb>,
+    state_log: Arc<StateLogDb>,
     info: Arc<Info>,
 }
 
@@ -44,8 +44,8 @@ struct Membership {
 }
 
 pub async fn run_api_server(
-    sync_db: Arc<SyncDb>,
-    container_db: ContainerDb,
+    state_log: Arc<StateLogDb>,
+    containers: ContainerDb,
     info: Arc<Info>,
     bind_addr: SocketAddr,
     mut shutdown_rx: watch::Receiver<bool>,
@@ -67,8 +67,8 @@ pub async fn run_api_server(
         .route("/v1/txlib/grounding-witness", post(post_grounding_witness))
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(AppState {
-            container_db,
-            sync_db,
+            containers,
+            state_log,
             info,
         });
 
@@ -180,13 +180,13 @@ async fn post_grounding_witness(
     ensure_hash_query_limit("objectCommitments", body.object_commitments.len())?;
     let object_commitments = body.object_commitments;
     let (snapshot, indices) = app_state
-        .sync_db
+        .state_log
         .snapshot_with_created_indices(&object_commitments)
         .await
         .map_err(internal_error)?;
     let state = snapshot.ok_or_else(not_initialized)?.state;
     let witnesses = app_state
-        .container_db
+        .containers
         .prove_created_for(&state.roots, &object_commitments, &indices)
         .map_err(internal_error)?;
     let state_header = state.state_header();
@@ -222,17 +222,17 @@ async fn load_membership(
 ) -> Result<Membership, (StatusCode, String)> {
     ensure_membership_query_limit(object_commitments.len(), nullifiers.len())?;
     let (snapshot, indices) = app_state
-        .sync_db
+        .state_log
         .snapshot_with_created_indices(object_commitments)
         .await
         .map_err(internal_error)?;
     let head = snapshot.ok_or_else(not_initialized)?;
-    let container_db = &app_state.container_db;
+    let containers = &app_state.containers;
     Ok(Membership {
-        created_present: container_db
+        created_present: containers
             .created_exists_for(&head.state.roots, object_commitments, &indices)
             .map_err(internal_error)?,
-        nullifier_present: container_db
+        nullifier_present: containers
             .nullifier_exists_batch(&head.state.roots, nullifiers)
             .map_err(internal_error)?,
         head,
@@ -241,7 +241,7 @@ async fn load_membership(
 
 async fn load_head_snapshot(app_state: &AppState) -> Result<HeadSnapshot, (StatusCode, String)> {
     app_state
-        .sync_db
+        .state_log
         .head_snapshot()
         .await
         .map_err(internal_error)?
