@@ -78,7 +78,6 @@ pub fn db_bytes_to_hash(bytes: &[u8]) -> Result<Hash> {
     let limbs: [[u8; 8]; 4] = bytes
         .as_chunks::<8>()
         .0
-        .to_vec()
         .try_into()
         .map_err(|_| anyhow!("invalid hash byte length"))?;
 

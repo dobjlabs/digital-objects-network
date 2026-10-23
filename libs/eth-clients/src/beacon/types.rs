@@ -384,7 +384,7 @@ pub enum BlockIdResolutionError {
     FailedBlockIdResolution {
         block_id: BlockId,
         #[source]
-        error: ClientError,
+        error: Box<ClientError>,
     },
 }
 
@@ -400,7 +400,7 @@ impl BlockId {
                 .await
                 .map_err(|err| BlockIdResolutionError::FailedBlockIdResolution {
                     block_id: self.clone(),
-                    error: err,
+                    error: Box::new(err),
                 })? {
                 Some(header) => Ok(header.slot),
                 None => Err(BlockIdResolutionError::BlockNotFound(self.clone())),
