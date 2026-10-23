@@ -37,6 +37,10 @@
 //! An complete example of usage can be found at the test `test_vdf_pod` (bottom
 //! of this file).
 
+// With the `gpu` feature, circuit data holds GPU buffer handles, and proving that it is `Sync`
+// (the caches require it) walks deeper through wgpu's types than the default limit of 128.
+#![recursion_limit = "256"]
+
 use anyhow::{Result, anyhow};
 use hex::FromHex;
 use plonky2::{

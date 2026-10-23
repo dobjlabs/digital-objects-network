@@ -27,6 +27,10 @@
 //!   let lt_eq_u256_pod = LtEqU256Pod::new(&params, vd_set.clone(), candidate_hash, max_value).unwrap();
 //! ```
 
+// With the `gpu` feature, circuit data holds GPU buffer handles, and proving that it is `Sync`
+// (the caches require it) walks deeper through wgpu's types than the default limit of 128.
+#![recursion_limit = "256"]
+
 use anyhow::Result;
 use hex::FromHex;
 use plonky2::{
