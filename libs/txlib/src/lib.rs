@@ -307,10 +307,16 @@ pub const STABLE_IDENTIFIER_FIELD: &str = "stable_identifier";
 /// outside of `TxBuilder::insert` (e.g. tests, builders that pre-compute
 /// the finalized object) should go through this helper to stay consistent.
 pub fn with_stable_identifier(initial: &Dictionary) -> Dictionary {
+    // Make a deep copy of the original dictionary into new so that new's db doesn't have the
+    // preimage of stable_identifier, otherwise getting the "stable_identifier" would return a
+    // dictionary instead of an untyped value, which could be consufing for the user.
     let stable_identifier = Value::from(initial.commitment());
-    let mut new = initial.clone();
-    new.insert(&StrKey::from(STABLE_IDENTIFIER_FIELD), &stable_identifier)
-        .unwrap();
+    let mut new =
+        Dictionary::new([(StrKey::from(STABLE_IDENTIFIER_FIELD), stable_identifier)].into());
+    for entry in initial.iter() {
+        let (key, value) = entry.unwrap();
+        new.insert(&StrKey::from(key), &value).unwrap();
+    }
     new
 }
 

@@ -204,7 +204,7 @@ pub(crate) fn literal_podlang(value: &Value) -> String {
 impl<'a> fmt::Display for LiteralFmt<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = self.0;
-        if value.is_raw() {
+        if value.is_untyped() {
             return write!(f, "{value}");
         }
         let Some(container) = value.as_container() else {
@@ -754,7 +754,7 @@ pub(crate) fn fmt(loader: &Loader, w: &mut dyn fmt::Write) -> fmt::Result {
 
     // TODO: Support importing records via `use module`, so that we can import this record from
     // `tx`
-    writeln!(w, "{}", &*RECORD_STATE_HEADER_PODLANG)?;
+    writeln!(w, "{}", *RECORD_STATE_HEADER_PODLANG)?;
     fmt_record_decls(loader, w)?;
     writeln!(w, "\n// Actions\n")?;
     for action in &loader.actions {

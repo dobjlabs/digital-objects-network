@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bitcraft Inventory</title>
+<title>Bitcraft</title>
 <style>
   :root {
     --bg: #ffffff;
@@ -27,7 +27,10 @@
     --menu-highlight: #0a64d8;
     --menu-disabled: #a8a8a8;
     --menu-divider: rgba(0, 0, 0, 0.12);
-    --tab-track: #e3e3e3;
+    --toolbar-icon: #5f5f5f;
+    --toolbar-hover: rgba(0, 0, 0, 0.07);
+    --toolbar-pressed: rgba(0, 0, 0, 0.16);
+    --toolbar-selected: rgba(0, 0, 0, 0.12);
     --status-connected: #16a34a;
     --status-disconnected: #dc2626;
     --status-unknown: #a8a8a8;
@@ -54,6 +57,126 @@
     flex-direction: column;
   }
   #inventory-app[hidden], #startup-screen[hidden] { display: none; }
+  /* Windows opened from the top bar show only their own view. */
+  body.secondary-window #startup-screen,
+  body.secondary-window #inventory-app,
+  body.secondary-window #status-bar { display: none; }
+  /* The Inventory Summary window, laid out like Finder's Get Info. */
+  #summary-view {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 14px 16px 20px;
+  }
+  #summary-view[hidden] { display: none; }
+  #settings-view {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 18px 20px;
+  }
+  #settings-view[hidden] { display: none; }
+  .settings-title {
+    margin: 0 0 12px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .settings-fields {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    align-items: center;
+    gap: 8px 10px;
+  }
+  .settings-fields label { color: var(--muted); }
+  .settings-fields input {
+    min-width: 0;
+    padding: 4px 7px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--pane-header-bg);
+    color: var(--text);
+    font: inherit;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+  }
+  .summary-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .summary-header-icon {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    border-radius: 10px;
+    background: var(--bg);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25), inset 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+  }
+  .summary-header-icon img {
+    width: 32px;
+    height: 32px;
+    image-rendering: pixelated;
+  }
+  .summary-heading {
+    flex: 1;
+    min-width: 0;
+  }
+  .summary-title-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 16px;
+  }
+  .summary-title { font-weight: 700; }
+  .summary-total {
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .summary-subtitle {
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .summary-section {
+    margin-top: 14px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+  }
+  .summary-section > summary {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-weight: 600;
+    list-style: none;
+    cursor: default;
+    user-select: none;
+  }
+  .summary-section > summary::-webkit-details-marker { display: none; }
+  .summary-section > summary::before {
+    content: "";
+    width: 5px;
+    height: 5px;
+    margin-left: 2px;
+    border-right: 1.5px solid var(--muted);
+    border-bottom: 1.5px solid var(--muted);
+    transform: rotate(-45deg);
+  }
+  .summary-section[open] > summary::before { transform: rotate(45deg); }
+  .summary-fields {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    align-items: center;
+    gap: 3px 8px;
+    margin: 6px 0 0 14px;
+  }
+  .summary-fields dt {
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .summary-fields dd { margin: 0; }
   #startup-screen {
     display: grid;
     flex: 1;
@@ -112,18 +235,6 @@
   }
   .status-label { color: var(--muted); }
   .status-item { white-space: nowrap; }
-  /* A one-line count under the object list, like Finder's item count. */
-  .list-footer {
-    flex: none;
-    padding: 3px 10px;
-    border-top: 1px solid var(--border);
-    background: var(--pane-header-bg);
-    color: var(--muted);
-    font-size: 12px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
   .status-dot {
     display: inline-block;
     width: 8px;
@@ -135,37 +246,44 @@
   }
   .status-dot.connected { background: var(--status-connected); }
   .status-dot.disconnected { background: var(--status-disconnected); }
-  #tab-bar {
+  #top-bar {
     flex: none;
     display: flex;
-    justify-content: center;
-    padding: 6px 10px;
+    gap: 4px;
+    padding: 5px 8px;
     background: var(--pane-header-bg);
     border-bottom: 1px solid var(--border);
   }
-  .tab-track {
-    display: inline-flex;
-    padding: 2px;
-    border-radius: 7px;
-    background: var(--tab-track);
-  }
-  .tab {
-    padding: 2px 18px;
+  .toolbar-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 28px;
+    padding: 0;
     border: 0;
-    border-radius: 5px;
+    border-radius: 6px;
     background: transparent;
-    color: var(--text);
-    font: inherit;
-    font-size: 12px;
-    font-weight: 500;
+    color: var(--toolbar-icon);
     cursor: default;
   }
-  .tab[aria-selected="true"] {
-    background: var(--bg);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  .toolbar-button:hover { background: var(--toolbar-hover); }
+  .toolbar-button:active { background: var(--toolbar-pressed); }
+  .toolbar-divider {
+    align-self: center;
+    width: 1px;
+    height: 18px;
+    margin: 0 4px;
+    background: var(--border);
   }
-  /* Each tab's view; both stay in the page so their state survives
-     switching tabs. */
+  /* The files view is always the main window's content, so its icon stays
+     selected and does not react to the pointer. */
+  .toolbar-button.selected,
+  .toolbar-button.selected:hover,
+  .toolbar-button.selected:active {
+    background: var(--toolbar-selected);
+    color: var(--text);
+  }
   .view {
     flex: 1;
     min-height: 0;
@@ -591,18 +709,54 @@
     </div>
   </section>
   <div id="inventory-app" hidden inert>
-  <nav id="tab-bar">
-    <div class="tab-track" role="tablist">
-      <button type="button" class="tab" role="tab" id="objects-tab" aria-controls="objects-view">Objects</button>
-      <button type="button" class="tab" role="tab" id="recipebook-tab" aria-controls="recipebook-view">Recipe Info</button>
-    </div>
+  <nav id="top-bar" aria-label="Bitcraft">
+    <span class="toolbar-button selected" role="img" aria-label="Files" title="Files">
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+        <path d="M2.5 5.5a1.5 1.5 0 0 1 1.5-1.5h3.2l1.6 1.8h5.2a1.5 1.5 0 0 1 1.5 1.5v6.2a1.5 1.5 0 0 1-1.5 1.5H4a1.5 1.5 0 0 1-1.5-1.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+      </svg>
+    </span>
+    <button type="button" id="summary-button" class="toolbar-button" title="Open Inventory Summary" aria-label="Open Inventory Summary">
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+        <g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
+          <rect x="3" y="9.5" width="3" height="5.5" rx="0.6"/>
+          <rect x="7.5" y="6" width="3" height="9" rx="0.6"/>
+          <rect x="12" y="3" width="3" height="12" rx="0.6"/>
+        </g>
+      </svg>
+    </button>
+    <button type="button" id="reference-button" class="toolbar-button" title="Open Recipe Info" aria-label="Open Recipe Info">
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+        <path d="M9 5.2C7.6 4.1 5.5 3.6 2.5 3.8v10c3-.2 5.1.3 6.5 1.4 1.4-1.1 3.5-1.6 6.5-1.4v-10c-3-.2-5.1.3-6.5 1.4zM9 5.2v10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+      </svg>
+    </button>
+    <span class="toolbar-divider" role="separator"></span>
+    <button type="button" id="about-button" class="toolbar-button" title="About Bitcraft" aria-label="About Bitcraft">
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+        <circle cx="9" cy="9" r="6.75" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M9 8.2v4.3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <circle cx="9" cy="5.6" r="1" fill="currentColor"/>
+      </svg>
+    </button>
+    <button type="button" id="discord-button" class="toolbar-button" title="Discord" aria-label="Discord">
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+        <path d="M5.4 4.3c1-.4 1.9-.7 2.8-.8l.4.8a9.6 9.6 0 0 1 .8 0l.4-.8c.9.1 1.8.4 2.8.8 1.6 2.3 2.2 4.7 2 7.2a10 10 0 0 1-3.3 1.7l-.7-1.2-.1-.1A9.5 9.5 0 0 1 9 12.3a9.5 9.5 0 0 1-1.5-.4l-.1.1-.7 1.2a10 10 0 0 1-3.3-1.7c-.2-2.5.4-4.9 2-7.2z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+        <circle cx="7.1" cy="8.9" r="1" fill="currentColor"/>
+        <circle cx="10.9" cy="8.9" r="1" fill="currentColor"/>
+      </svg>
+    </button>
+    <span class="toolbar-divider" role="separator"></span>
+    <button type="button" id="settings-button" class="toolbar-button" title="Open Settings" aria-label="Open Settings">
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+        <path d="M14.22 7.60 L16.09 7.75 L16.09 10.25 L14.22 10.40 L13.68 11.70 L14.90 13.13 L13.13 14.90 L11.70 13.68 L10.40 14.22 L10.25 16.09 L7.75 16.09 L7.60 14.22 L6.30 13.68 L4.87 14.90 L3.10 13.13 L4.32 11.70 L3.78 10.40 L1.91 10.25 L1.91 7.75 L3.78 7.60 L4.32 6.30 L3.10 4.87 L4.87 3.10 L6.30 4.32 L7.60 3.78 L7.75 1.91 L10.25 1.91 L10.40 3.78 L11.70 4.32 L13.13 3.10 L14.90 4.87 L13.68 6.30Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+        <circle cx="9" cy="9" r="2.3" fill="none" stroke="currentColor" stroke-width="1.3"/>
+      </svg>
+    </button>
   </nav>
-  <div id="objects-view" class="view" role="tabpanel" aria-labelledby="objects-tab">
+  <div id="objects-view" class="view">
     <div id="left-column">
       <section id="objects-pane" class="pane">
         <div id="objects-dir" class="pane-header">&nbsp;</div>
         <ul id="object-list"></ul>
-        <div id="objects-footer" class="list-footer">&nbsp;</div>
       </section>
       <section id="execute-pane" class="pane">
         <div class="pane-header">Active and completed jobs</div>
@@ -614,7 +768,8 @@
       <div id="details-body"></div>
     </section>
   </div>
-  <div id="recipebook-view" class="view" role="tabpanel" aria-labelledby="recipebook-tab" hidden>
+  </div>
+  <div id="recipebook-view" class="view" hidden>
     <section id="recipe-pane" class="pane">
       <div class="pane-header">Recipe Info</div>
       <ul id="recipe-list"></ul>
@@ -624,6 +779,15 @@
       <div id="recipe-details-body"></div>
     </section>
   </div>
+  <div id="summary-view" hidden></div>
+  <div id="settings-view" hidden>
+    <h1 class="settings-title">Connections</h1>
+    <div class="settings-fields">
+      <label for="settings-synchronizer">Synchronizer address</label>
+      <input id="settings-synchronizer" type="text" readonly spellcheck="false">
+      <label for="settings-relayer">Relayer address</label>
+      <input id="settings-relayer" type="text" readonly spellcheck="false">
+    </div>
   </div>
   <footer id="status-bar">
     <span class="status-item"><span class="status-label">Bitcraft version:</span> <span id="bitcraft-version"></span></span>
@@ -898,6 +1062,13 @@
     MiningDrill: [135, 420, 975, 2070, 4245, 8580],
   };
 
+  // The class whose art heads the Inventory Summary window, which totals the
+  // inventory in bits.
+  const SUMMARY_ICON_CLASS = "Bit";
+
+  // The game's website, opened in the player's browser from the top bar.
+  const BITCRAFT_SITE_URL = "https://bitcraft.digiobjects.net/";
+
   // ---- End of bitcraft-specific rules.
 
   const objectsDirHeader = document.getElementById("objects-dir");
@@ -913,26 +1084,32 @@
   const runList = document.getElementById("run-list");
   const docIconTemplate = document.getElementById("doc-icon");
 
-  // The address names the open tab and the recipebook's selected action, so
+  // `?page=recipebook` loads this page as the Recipe Info window, opened from
+  // the main window's top bar. Its address tracks the selected action, so
   // `?page=recipebook&action=bitcraft::GatherWood` links to that action.
-  // Read once here: the address is rewritten as the page's state changes.
   const PAGE_PARAM = "page";
   const RECIPEBOOK_PAGE = "recipebook";
   const RECIPE_ACTION_PARAM = "action";
+  const REFERENCE_WINDOW_NAME = "bitcraft-recipe-info";
+  // `?page=summary` loads this page as the Inventory Summary window.
+  const SUMMARY_PAGE = "summary";
+  const SUMMARY_WINDOW_NAME = "bitcraft-inventory-summary";
+  const SUMMARY_REFRESH_MS = 10000;
   const initialParams = new URLSearchParams(location.search);
-  const views = {
-    objects: {
-      tab: document.getElementById("objects-tab"),
-      view: document.getElementById("objects-view"),
-      title: "Bitcraft Inventory",
-    },
-    recipebook: {
-      tab: document.getElementById("recipebook-tab"),
-      view: document.getElementById("recipebook-view"),
-      title: "Bitcraft Recipe Info",
-    },
-  };
-  let currentViewName = "objects";
+  const isReferenceWindow = initialParams.get(PAGE_PARAM) === RECIPEBOOK_PAGE;
+  const isSummaryWindow = initialParams.get(PAGE_PARAM) === SUMMARY_PAGE;
+  // `?page=settings` loads this page as the Settings window.
+  const SETTINGS_PAGE = "settings";
+  const SETTINGS_WINDOW_NAME = "bitcraft-settings";
+  const isSettingsWindow = initialParams.get(PAGE_PARAM) === SETTINGS_PAGE;
+  // Windows opened from the top bar, by name.
+  const openedWindows = new Map();
+  const summaryView = document.getElementById("summary-view");
+  let summaryRefreshInFlight = false;
+  let summaryRefreshQueued = false;
+  // Set while the summary polls, which it does only while some object is
+  // not yet live.
+  let summaryPoll = null;
   const recipeList = document.getElementById("recipe-list");
   const recipeDetailsBody = document.getElementById("recipe-details-body");
   let recipeActions = [];
@@ -940,10 +1117,6 @@
   const recipeRowsByName = new Map();
 
   const NOT_AVAILABLE = "n/a";
-  const objectsFooter = document.getElementById("objects-footer");
-  // Unspent objects in the objects folder, pending ones included, whatever
-  // their plugin; null until the first load.
-  let objectFileCount = null;
   const SERVICE_STATUS_INTERVAL_MS = 10000;
   const SERVICE_PROBE_TIMEOUT_MS = 3000;
   const MAX_STACKED_ICONS = 3;
@@ -1853,26 +2026,205 @@
     }
   }
 
-  function showView(viewName) {
-    currentViewName = viewName;
-    for (const [name, { tab, view }] of Object.entries(views)) {
-      tab.setAttribute("aria-selected", String(name === viewName));
-      view.hidden = name !== viewName;
+  // Opens this page as `page` in its own window. A second click focuses the
+  // window already open instead of opening another.
+  function openPageWindow(page, name, features) {
+    const opened = openedWindows.get(name);
+    if (opened && !opened.closed) {
+      opened.focus();
+      return;
     }
-    document.title = views[viewName].title;
-    closeContextMenu();
-    updateAddress();
+    const url = new URL(location.href);
+    url.search = new URLSearchParams({ [PAGE_PARAM]: page }).toString();
+    openedWindows.set(name, window.open(url, name, features));
+  }
+
+  // The Inventory Summary window reads only the inventory; it runs none of
+  // the main window's startup. Jobs announce their changes on the event
+  // stream, so it refreshes on every event and when the stream reconnects
+  // after missing some. A pending or unknown object settles only when the
+  // inventory is read, with no event, so it polls while one exists.
+  // The Settings window shows the connection addresses from dobjd's settings.
+  // They cannot be edited yet, so the fields are read-only.
+  async function loadSettingsWindow() {
+    document.body.classList.add("secondary-window");
+    document.title = "Bitcraft Settings";
+    const view = document.getElementById("settings-view");
+    view.hidden = false;
+    try {
+      const settings = await fetchJson("/settings");
+      document.getElementById("settings-synchronizer").value = settings.synchronizerApiUrl ?? "";
+      document.getElementById("settings-relayer").value = settings.relayerApiUrl ?? "";
+    } catch (error) {
+      const message = document.createElement("p");
+      message.className = "message error";
+      message.textContent = `Could not read settings: ${error.message}`;
+      view.append(message);
+    }
+  }
+
+  async function loadSummaryWindow() {
+    document.body.classList.add("secondary-window");
+    document.title = "Bitcraft Inventory Summary";
+    summaryView.hidden = false;
+    classIconPaths = await loadUiDataFile(CLASS_ICONS_URL, {});
+    await refreshSummary();
+    const events = new EventSource(`${DOBJD_URL}/events`);
+    let eventsOpened = false;
+    events.onopen = () => {
+      if (eventsOpened) refreshSummary();
+      eventsOpened = true;
+    };
+    events.onmessage = () => refreshSummary();
+    window.addEventListener("focus", () => refreshSummary());
+  }
+
+  function updateSummaryPolling(objects) {
+    const unsettled = objects.some((object) => !isLive(object));
+    if (unsettled && summaryPoll === null) {
+      summaryPoll = setInterval(refreshSummary, SUMMARY_REFRESH_MS);
+    } else if (!unsettled && summaryPoll !== null) {
+      clearInterval(summaryPoll);
+      summaryPoll = null;
+    }
+  }
+
+  async function refreshSummary() {
+    if (summaryRefreshInFlight) {
+      summaryRefreshQueued = true;
+      return;
+    }
+    summaryRefreshInFlight = true;
+    try {
+      const objects = await fetchJson("/objects/unspent");
+      renderSummary(objects);
+      updateSummaryPolling(objects);
+    } catch (error) {
+      const message = document.createElement("div");
+      message.className = "message error";
+      message.textContent = `Could not read the inventory: ${error.message}`;
+      summaryView.replaceChildren(message);
+    } finally {
+      summaryRefreshInFlight = false;
+      if (summaryRefreshQueued) {
+        summaryRefreshQueued = false;
+        refreshSummary();
+      }
+    }
+  }
+
+  // Counts only live objects. The total covers every plugin's objects; the
+  // value and the per-class counts cover this plugin's.
+  function renderSummary(objects) {
+    const liveObjects = objects.filter(isLive);
+    const pluginObjects = liveObjects.filter((object) => object.class.pluginName === PLUGIN_NAME);
+    const totalValue = pluginObjects.reduce((sum, object) => sum + totalBitValue(object), 0);
+    const classes = new Map();
+    for (const object of pluginObjects) {
+      const className = qualifiedClassName(object.class);
+      const entry = classes.get(className) ?? { qualifiedName: object.class, count: 0 };
+      entry.count++;
+      classes.set(className, entry);
+    }
+    const count = (number, noun) => `${number.toLocaleString()} ${noun}${number === 1 ? "" : "s"}`;
+    const wasOpen = new Map([...summaryView.querySelectorAll("details[data-section]")]
+      .map((section) => [section.dataset.section, section.open]));
+
+    const header = document.createElement("div");
+    header.className = "summary-header";
+    const iconTile = document.createElement("div");
+    iconTile.className = "summary-header-icon";
+    const iconPath = classIconPaths[SUMMARY_ICON_CLASS];
+    if (iconPath) {
+      const icon = document.createElement("img");
+      icon.src = iconPath;
+      icon.alt = "";
+      iconTile.append(icon);
+    }
+    const heading = document.createElement("div");
+    heading.className = "summary-heading";
+    const titleRow = document.createElement("div");
+    titleRow.className = "summary-title-row";
+    const title = document.createElement("span");
+    title.className = "summary-title";
+    title.textContent = "Inventory";
+    const total = document.createElement("span");
+    total.className = "summary-total";
+    total.textContent = count(totalValue, "bit");
+    titleRow.append(title, total);
+    const subtitle = document.createElement("div");
+    subtitle.className = "summary-subtitle";
+    subtitle.textContent = `${count(liveObjects.length, "live object")} in total`;
+    heading.append(titleRow, subtitle);
+    header.append(iconTile, heading);
+
+    const section = (key, titleText, rows) => {
+      const details = document.createElement("details");
+      details.className = "summary-section";
+      details.dataset.section = key;
+      details.open = wasOpen.get(key) ?? true;
+      const summary = document.createElement("summary");
+      summary.textContent = titleText;
+      const fields = document.createElement("dl");
+      fields.className = "summary-fields";
+      for (const [label, value] of rows) {
+        const term = document.createElement("dt");
+        term.append(...label);
+        const definition = document.createElement("dd");
+        definition.textContent = value;
+        fields.append(term, definition);
+      }
+      details.append(summary, fields);
+      return details;
+    };
+    const general = section("general", "General:", [
+      [["Total Bit Value:"], formatBitValue(totalValue)],
+      [["Total objects:"], liveObjects.length.toLocaleString()],
+    ]);
+    const classNames = [...classes.keys()].sort((left, right) => left.localeCompare(right));
+    const byClass = section("classes", "Live objects:", classNames.map((className) => {
+      const { qualifiedName, count: classCount } = classes.get(className);
+      return [[classLabel(qualifiedName), ":"], classCount.toLocaleString()];
+    }));
+    if (classNames.length === 0) {
+      const none = document.createElement("p");
+      none.className = "summary-subtitle";
+      none.textContent = "No live objects yet.";
+      byClass.append(none);
+    }
+    summaryView.replaceChildren(header, general, byClass);
+  }
+
+  // The Recipe Info window loads only the actions; it runs none of the main
+  // window's startup.
+  async function loadReferenceWindow() {
+    document.body.classList.add("secondary-window", "reference-window");
+    document.title = "Bitcraft reference";
+    document.getElementById("recipebook-view").hidden = false;
+    renderRecipeDetails();
+    try {
+      const [actions, iconPaths, actionIcons] = await Promise.all([
+        fetchJson("/actions"),
+        loadUiDataFile(CLASS_ICONS_URL, {}),
+        loadUiDataFile(ACTION_ICONS_URL, { rules: [] }),
+      ]);
+      classIconPaths = iconPaths;
+      actionIconRules = actionIcons.rules;
+      showRecipes(actions.filter((action) => action.action.pluginName === PLUGIN_NAME));
+    } catch (error) {
+      const message = document.createElement("li");
+      message.className = "message error";
+      message.textContent = `Could not load recipes: ${error.message}`;
+      recipeList.replaceChildren(message);
+    }
   }
 
   function updateAddress() {
     const url = new URL(location.href);
-    url.searchParams.delete(PAGE_PARAM);
-    url.searchParams.delete(RECIPE_ACTION_PARAM);
-    if (currentViewName === "recipebook") {
-      url.searchParams.set(PAGE_PARAM, RECIPEBOOK_PAGE);
-      if (selectedRecipeName !== null) {
-        url.searchParams.set(RECIPE_ACTION_PARAM, selectedRecipeName);
-      }
+    if (selectedRecipeName === null) {
+      url.searchParams.delete(RECIPE_ACTION_PARAM);
+    } else {
+      url.searchParams.set(RECIPE_ACTION_PARAM, selectedRecipeName);
     }
     history.replaceState(null, "", url);
   }
@@ -1880,9 +2232,6 @@
   function showRecipes(actions) {
     recipeActions = actions;
     renderRecipeList();
-    if (initialParams.get(PAGE_PARAM) !== RECIPEBOOK_PAGE) {
-      return;
-    }
     const linkedName = initialParams.get(RECIPE_ACTION_PARAM);
     const linkedRow = recipeRowsByName.get(linkedName);
     if (linkedRow !== undefined) {
@@ -2499,7 +2848,6 @@
       objectsDirHeader.textContent = objectsDir.path;
       objectsDirHeader.title = objectsDir.path;
       showObjects(objects);
-      showRecipes(pluginActions);
       if (!await restoreRuns()) throw new Error("Could not check active jobs. Please try again.");
       await ensureStartupPocketknife();
     } catch (error) {
@@ -2658,13 +3006,10 @@
     return (TOTAL_BIT_VALUES[className] ?? 0) + contentValue * Number(fieldValue(object, "n") ?? 0);
   }
 
-  function updateObjectsFooter() {
+  // The desktop app shows this title in the main window's title bar.
+  function updateWindowTitle() {
     const totalValue = liveListedObjects().reduce((sum, object) => sum + totalBitValue(object), 0);
-    // The guide is listed as a file alongside the objects.
-    const fileCount = objectFileCount + (welcomeText === null ? 0 : 1);
-    const noun = fileCount === 1 ? "file" : "files";
-    objectsFooter.textContent =
-      `${fileCount} ${noun} \u00b7 Total Bit Value: ${formatBitValue(totalValue)}`;
+    document.title = `Bitcraft (Total Bit Value: ${formatBitValue(totalValue)})`;
   }
 
   // Replaces the object list, keeping the selection of any objects that are
@@ -2672,7 +3017,6 @@
   // the page or its shown state changed; nothing flashes on the first load,
   // or for changes made while the setup screen covers the list.
   function showObjects(objects) {
-    objectFileCount = objects.length;
     const heldObjects = objects
       .filter((object) => object.class.pluginName === PLUGIN_NAME)
       .sort((left, right) => left.fileName.localeCompare(right.fileName));
@@ -2692,7 +3036,7 @@
     for (const object of heldObjects) {
       objectsByFileName.set(object.fileName, object);
     }
-    updateObjectsFooter();
+    updateWindowTitle();
     for (const fileName of [...selectedFileNames]) {
       if (!isListedFile(fileName)) {
         selectedFileNames.delete(fileName);
@@ -2775,18 +3119,27 @@
     }
   });
 
-  for (const [name, { tab }] of Object.entries(views)) {
-    tab.addEventListener("click", () => showView(name));
+  if (isReferenceWindow) {
+    loadReferenceWindow();
+  } else if (isSummaryWindow) {
+    loadSummaryWindow();
+  } else if (isSettingsWindow) {
+    loadSettingsWindow();
+  } else {
+    document.getElementById("reference-button").addEventListener("click",
+      () => openPageWindow(RECIPEBOOK_PAGE, REFERENCE_WINDOW_NAME, "popup,width=1000,height=720"));
+    document.getElementById("summary-button").addEventListener("click",
+      () => openPageWindow(SUMMARY_PAGE, SUMMARY_WINDOW_NAME, "popup,width=420,height=560"));
+    document.getElementById("about-button").addEventListener("click",
+      () => window.open(BITCRAFT_SITE_URL, "_blank", "noopener"));
+    document.getElementById("settings-button").addEventListener("click",
+      () => openPageWindow(SETTINGS_PAGE, SETTINGS_WINDOW_NAME, "popup,width=480,height=200"));
+    document.getElementById("bitcraft-version").textContent = BITCRAFT_VERSION;
+    refreshServiceStatus();
+    setInterval(refreshServiceStatus, SERVICE_STATUS_INTERVAL_MS);
+    renderDetails();
+    load();
   }
-
-  document.getElementById("bitcraft-version").textContent = BITCRAFT_VERSION;
-  refreshServiceStatus();
-  setInterval(refreshServiceStatus, SERVICE_STATUS_INTERVAL_MS);
-
-  showView(initialParams.get(PAGE_PARAM) === RECIPEBOOK_PAGE ? "recipebook" : "objects");
-  renderDetails();
-  renderRecipeDetails();
-  load();
 </script>
 </body>
 </html>

@@ -6,12 +6,40 @@ For the desktop app, run `just bitcraft-dev` from the repository root. It prepar
 
 For standalone browser development, serve this directory with `python3 -m http.server 4170 --bind 127.0.0.1 --directory apps/bitcraft/ui` and open `http://127.0.0.1:4170`. Without the daemon-injected API origin, the page connects to the standalone Digital Objects daemon at `http://127.0.0.1:7717` (MCP uses `7718` when enabled). See [the desktop README](../README.md) for build and bundle commands.
 
-The page has two tabs, Objects (the inventory) and Recipe Info. Both views
-stay in the page and are only hidden when inactive, so each keeps its
-selection, scroll position and expanded sections across tab switches. The
-address tracks the open tab and the Recipe Info tab's selected action, so
+The main window always shows the inventory (the files view). Its top bar
+has three groups of icons, separated by thin dividers. The game views: a
+folder, permanently selected, for the files view; a bar chart that opens
+the Inventory Summary; and an open book that opens Recipe Info. The outside
+links: an info icon that opens the Bitcraft website in the player's
+browser, and a Discord icon that does nothing yet. Last, a gear that opens
+Settings. Recipe Info, the Inventory Summary and
+Settings each open their window once, and a later click focuses it. These
+windows load this same page in a mode of their own and run none of the
+main window's startup.
+
+Settings (`?page=settings`) shows the synchronizer and relayer addresses
+from dobjd's `GET /settings` in read-only fields; they cannot be edited yet.
+
+In the desktop app, the host builds every window the page opens. Links to
+the daemon open as app windows; links to a site listed in the host's
+`EXTERNAL_LINK_HOSTS` (in `src-tauri/src/main.rs`) open in the player's
+browser instead; anything else is blocked. A new external link from the
+page needs its host added there.
+
+The Inventory Summary (`?page=summary`) is laid out like Finder's Get Info
+window: the inventory's Total Bit Value beside an icon, then "General" (the
+value and the live object total) and "Live objects" (a count per class)
+sections, which can be collapsed. It refreshes on every job event from
+dobjd's `/events` stream, when that stream reconnects, and on window focus.
+It polls every 10 seconds only while some object is pending or unknown,
+since those settle when the inventory is read, without an event.
+
+Recipe Info is loaded as
+`?page=recipebook`: it shows only the action list and details, and runs none
+of the main window's startup (no inventory, jobs, status bar or starter
+pocketknife). Its address tracks the selected action, so
 `?page=recipebook&action=bitcraft::GatherWood` (the parameter keeps its
-older name) opens the Recipe Info tab with that action selected and shown.
+older name) opens Recipe Info with that action selected and shown.
 
 Startup keeps the inventory hidden until the player has a live pocketknife.
 Automatic setup jobs stay out of Jobs; manual jobs stay visible. Failures

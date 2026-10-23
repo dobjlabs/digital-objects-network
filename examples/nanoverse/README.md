@@ -14,14 +14,14 @@ just pexe build examples/nanoverse                       # compile and pack
 
 | Feature | Where | What it replaces |
 | --- | --- | --- |
-| `st_equal` | `require_version`, and every action | `st_sum(x, 0, y)`. In microverse's compiled batch 26,666 of 29,617 `Sum` statements have a zero operand and are equality checks: 21,318 against a constant, 4,648 between two fields, 700 pinning a copy. `Sum` also type checks as an integer, so it cannot make the same claim about a `Raw` or a container. |
+| `st_equal` | `require_version`, and every action | `st_sum(x, 0, y)`. In microverse's compiled batch 26,666 of 29,617 `Sum` statements have a zero operand and are equality checks: 21,318 against a constant, 4,648 between two fields, 700 pinning a copy. `Sum` also type checks as an integer, so it cannot make the same claim about a `Untyped` or a container. |
 | `st_gt_eq`, `st_lt_eq` | `DetectSignal`, `UseCoordinate`, `ExtractResource`, `ExtractCoordinate` | `Gt(x, -1)` for `x >= 0`, 960 of microverse's 2,373 `Gt` statements. |
 | Anchored field ref as a value | `ClaimSector`, `DetectSignal`, `ScanBody` | `unsafe { obj.f - 0 }` plus a `Sum` to pin the copy, which costs one statement and one private wildcard per field carried. A ref resolves against the object version live where it is used, so a read taken before a later `update()` already sees the pre-update value: freezing it into a copy first is unnecessary. |
 | `+` and `*` on vars inside `unsafe` | `UpgradeShip`, `MoveShipX`, `MergeResources`, `ExtractResource` | `unsafe { x - (0 - 1) }`. |
 | Reading `stable_identifier` off an anchored ref | `SurveySector*`, `DetectSignal`, `ScanBody` | `random()` + `var_assign` + `update("stable_identifier", ...)`, which microverse does at 22 sites across 40 action predicates. `var_assign` only sets a value at execution time and emits nothing, so on a mutated object the band or the provenance field ends up gating a wildcard the prover picks freely. |
 | One `set()` after the inputs are declared | `ScanBody` | A placeholder in every field the output cannot fill yet, then an update per field to overwrite it. |
 | Container literal plus `array_get` | `UpgradeShip`, `MoveShipX`, `DetectSignal`, `ScanBody`, `ExtractResource`, `RevealCoordinate` | One action per row. 2,017 of microverse's 2,070 actions are one-line rows of literals over 43 helpers. A table read is one `ArrayContains` and one private wildcard whatever the table's size. |
-| `Raw` bounds as table or literal values | `SurveySector*`, and `top_limb_u256` in a row | Per-band helper variants (`*_ungated`, `*_lower`, `*_upper`, `*_range`). `top_limb_u256` returns a literal, so a band can live in a row alongside the rest of it. |
+| `Untyped` bounds as table or literal values | `SurveySector*`, and `top_limb_u256` in a row | Per-band helper variants (`*_ungated`, `*_lower`, `*_upper`, `*_range`). `top_limb_u256` returns a literal, so a band can live in a row alongside the rest of it. |
 | `intro_vdf` with a var count | `UpgradeShip`, `ScanBody` | A separate predicate per difficulty. |
 | Nested container in a row, stored as a field | `ScanBody` (`body.kinds` is a `Set`) | Nothing in microverse: it has no containers at all. |
 | `st_set_contains` against an object field | `ExtractResource` | An action per allowed value. |
@@ -56,7 +56,7 @@ An action takes no scalar arguments: `Executor::action` receives objects and not
 `pexe inspect plan` mints synthetic inputs from a class signature derived out of the compiled batch. Eleven of the sixteen actions do not plan, for two reasons, both of which microverse hits as well (`MovePositiveX`, `ClaimSector`, `SurveySector_01_Sparse` and `RevealWarpCoordinate001` all fail there for the same reasons). Every failure is a reported error; none of them panic.
 
 - **One mint per field cannot satisfy every precondition.** `SurveySector*` needs `profile == 0` and the minter picks from the profiles a survey writes; `UseCoordinate` and `WarpToCoordinate` need `revealed == 1`. Inherent to synthetic minting.
-- **A field only learns a value from a literal in the batch.** Fields written from a table row, from another object's field, or from a witness mint as a random `Raw`, so an action that then does arithmetic on one, indexes a table with one, or reads a container field fails at execution: `DetectSignal`, `ScanBody`, `ExtractResource`, `ExtractCoordinate`, `RevealCoordinate`, `RefineResource`, `MergeResources`. `inspect classes` shows which fields the analyzer resolved.
+- **A field only learns a value from a literal in the batch.** Fields written from a table row, from another object's field, or from a witness mint as a random `Untyped`, so an action that then does arithmetic on one, indexes a table with one, or reads a container field fails at execution: `DetectSignal`, `ScanBody`, `ExtractResource`, `ExtractCoordinate`, `RevealCoordinate`, `RefineResource`, `MergeResources`. `inspect classes` shows which fields the analyzer resolved.
 
 `BuildShip`, `UpgradeShip`, `MoveShipX`, `ClaimSector` and `ScrapResource` plan as they are. `MoveShipX` survives its cooldown because the synthetic header carries `block_timestamp = 1` while `ready_at` mints from the literal `BuildShip` writes.
 
@@ -100,7 +100,7 @@ record ScrapResourceIO = (in_source)
 record MergeResourcesIO = (in_destination, in_source, out_destination)
 ```
 
-The actions. Every pattern in the table above is visible here: `Equal` where microverse would write `Sum(x, 0, y)`, `GtEq` where it would write `Gt(x, -1)`, whole tables embedded as one `ArrayContains` or `DictContains` argument, `Raw(0x...)` bounds, `row.field` and `ship0.x` as anchored refs standing where a copied wildcard would otherwise go, and `Vdf(row.vdf, ...)` taking its iteration count out of a row.
+The actions. Every pattern in the table above is visible here: `Equal` where microverse would write `Sum(x, 0, y)`, `GtEq` where it would write `Gt(x, -1)`, whole tables embedded as one `ArrayContains` or `DictContains` argument, `Untyped(0x...)` bounds, `row.field` and `ship0.x` as anchored refs standing where a copied wildcard would otherwise go, and `Vdf(row.vdf, ...)` taking its iteration count out of a row.
 
 ```
 BuildShip(io BuildShipIO, state_header StateHeader, chain0, chain, private: work, initials BuildShipInitials) = AND(
@@ -155,7 +155,7 @@ ClaimSector(io ClaimSectorIO, state_header StateHeader, chain0, chain, private: 
 
 SurveySectorSparse(io SurveySectorSparseIO, state_header StateHeader, chain0, chain, private: sector0, sector1, sector2, _rand0) = AND(
   ArrayContains(io, SurveySectorSparseIO::in_sector, sector0)
-  LtEqU256(sector0.stable_identifier, Raw(0x5555555555555555000000000000000000000000000000000000000000000000))
+  LtEqU256(sector0.stable_identifier, Untyped(0x5555555555555555000000000000000000000000000000000000000000000000))
   Equal(sector0.v, 1)
   Equal(sector0.profile, 0)
   DictUpdate(sector0, "profile", 1, sector1)
@@ -166,7 +166,7 @@ SurveySectorSparse(io SurveySectorSparseIO, state_header StateHeader, chain0, ch
 
 SurveySectorRich(io SurveySectorRichIO, state_header StateHeader, chain0, chain, private: sector0, sector1, sector2, _rand0) = AND(
   ArrayContains(io, SurveySectorRichIO::in_sector, sector0)
-  LtEqU256(Raw(0x5555555555555556000000000000000000000000000000000000000000000000), sector0.stable_identifier)
+  LtEqU256(Untyped(0x5555555555555556000000000000000000000000000000000000000000000000), sector0.stable_identifier)
   Equal(sector0.v, 1)
   Equal(sector0.profile, 0)
   DictUpdate(sector0, "profile", 2, sector1)

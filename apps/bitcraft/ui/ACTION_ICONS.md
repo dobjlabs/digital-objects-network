@@ -13,8 +13,8 @@ places:
 
 - the objects' context menu, at half size (16x16), left of each action
   name;
-- the Recipe Info tab's action list, at 32x32, left of the action name;
-- the Recipe Info tab's Details pane, at 4x, replacing the blank page;
+- the Recipe Info window's action list, at 32x32, left of the action name;
+- the Recipe Info window's Details pane, at 4x, replacing the blank page;
 - the Details pane when a job is selected, at 4x, for the job's action.
 
 ## Categories

@@ -756,7 +756,13 @@ impl Driver {
             }
         };
 
-        // Sync confirmed the tx — update output files to Live.
+        for consumed in &resolved_inputs {
+            let record = ObjectRecord {
+                status: ObjectStatus::Nullified,
+                ..consumed.record.clone()
+            };
+            write_object_file(&self.paths, &record, &consumed.file_name)?;
+        }
         update_output_files(
             &self.paths,
             &saved.output_files,

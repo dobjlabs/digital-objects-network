@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
@@ -93,6 +93,21 @@ fn is_daemon_url(url: &tauri::Url) -> bool {
     url.scheme() == "http"
         && url.host_str() == Some("127.0.0.1")
         && url.port() == Some(runtime::HTTP_PORT)
+}
+
+/// Sites the game page may open in the user's browser.
+const EXTERNAL_LINK_HOSTS: &[&str] = &["bitcraft.digiobjects.net"];
+
+fn is_external_link(url: &tauri::Url) -> bool {
+    url.scheme() == "https"
+        && url.port().is_none()
+        && url
+            .host_str()
+            .is_some_and(|host| EXTERNAL_LINK_HOSTS.contains(&host))
+}
+
+fn show_page_title(window: tauri::WebviewWindow, title: String) {
+    let _ = window.set_title(&title);
 }
 
 fn allow_navigation(url: &tauri::Url) -> bool {
@@ -193,7 +208,9 @@ fn main() -> Result<()> {
         .manage(desktop)
         .on_menu_event(|app, event| run_menu_action(app, event.id().as_ref()))
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event
+            // Other windows, such as Recipe Info, close normally.
+            if window.label() == "main"
+                && let WindowEvent::CloseRequested { api, .. } = event
                 && window.state::<Desktop>().tray_available.load(Ordering::Relaxed)
             {
                 api.prevent_close();
@@ -201,16 +218,39 @@ fn main() -> Result<()> {
             }
         })
         .setup(move |app| {
+            let new_window_app = app.handle().clone();
+            let next_window_number = AtomicUsize::new(1);
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("Bitcraft")
+                .on_document_title_changed(show_page_title)
                 .inner_size(1100.0, 760.0)
                 .min_inner_size(720.0, 480.0)
                 .on_navigation(allow_navigation)
-                .on_new_window(|url, _| {
-                    if is_daemon_url(&url) {
-                        tauri::webview::NewWindowResponse::Allow
-                    } else {
-                        tauri::webview::NewWindowResponse::Deny
+                // Built here rather than by the webview's default, so a window the
+                // page opens keeps the same navigation limits and shows its page's
+                // title.
+                .on_new_window(move |url, features| {
+                    if is_external_link(&url) {
+                        if let Err(error) = tauri_plugin_opener::open_url(url.as_str(), None::<&str>) {
+                            eprintln!("Could not open {url} in the browser: {error}");
+                        }
+                        return tauri::webview::NewWindowResponse::Deny;
+                    }
+                    if !is_daemon_url(&url) {
+                        return tauri::webview::NewWindowResponse::Deny;
+                    }
+                    let label = format!("page-{}", next_window_number.fetch_add(1, Ordering::Relaxed));
+                    match WebviewWindowBuilder::new(&new_window_app, label, WebviewUrl::External(url))
+                        .window_features(features)
+                        .on_navigation(allow_navigation)
+                        .on_document_title_changed(show_page_title)
+                        .build()
+                    {
+                        Ok(window) => tauri::webview::NewWindowResponse::Create { window },
+                        Err(error) => {
+                            eprintln!("Could not open a window: {error}");
+                            tauri::webview::NewWindowResponse::Deny
+                        }
                     }
                 })
                 .on_page_load(|window, event| {
@@ -317,5 +357,24 @@ mod tests {
         assert!(!is_daemon_url(
             &"tauri://localhost/index.html".parse().unwrap()
         ));
+    }
+
+    #[test]
+    fn only_listed_sites_open_in_the_browser() {
+        for url in [
+            "https://bitcraft.digiobjects.net/",
+            "https://bitcraft.digiobjects.net/guide?x=1",
+        ] {
+            assert!(is_external_link(&url.parse().unwrap()), "{url}");
+        }
+        for url in [
+            "http://bitcraft.digiobjects.net/",
+            "https://bitcraft.digiobjects.net:8443/",
+            "https://bitcraft.digiobjects.net.example.com/",
+            "https://example.com/",
+            "file:///etc/passwd",
+        ] {
+            assert!(!is_external_link(&url.parse().unwrap()), "{url}");
+        }
     }
 }

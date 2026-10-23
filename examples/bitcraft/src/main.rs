@@ -38,7 +38,7 @@ struct Action {
     rekey: bool,
     pow: usize,
     vdf: usize,
-    tag: Tag,
+    tags: Vec<Tag>,
 }
 
 #[derive(Debug, Default)]
@@ -94,7 +94,7 @@ fn main() -> Result<(), io::Error> {
             rekey: true,
             out_resources: vec![(1, out)],
             pow,
-            tag: PadForSplit,
+            tags: vec![PadForSplit],
             ..Default::default()
         });
     }
@@ -117,7 +117,7 @@ fn main() -> Result<(), io::Error> {
                 in_resources: vec![(n, *resource)],
                 mut_bucket: Some(*resource),
                 rekey: true,
-                tag: AddToBucket(n),
+                tags: vec![AddToBucket(n)],
                 ..Default::default()
             });
         }
@@ -127,7 +127,7 @@ fn main() -> Result<(), io::Error> {
             out_resources: vec![(1, *resource)],
             mut_bucket: Some(*resource),
             rekey: true,
-            tag: TakeFromBucket(1),
+            tags: vec![TakeFromBucket(1)],
             ..Default::default()
         });
     }
@@ -144,7 +144,7 @@ fn main() -> Result<(), io::Error> {
         name: format!("CraftWoodAxe"),
         in_resources: vec![(1, Wood), (2, Stick)],
         out_tool: Some(WoodAxe),
-        tag: SetDurability,
+        tags: vec![SetDurability],
         ..Default::default()
     });
     actions.push(Action {
@@ -152,7 +152,7 @@ fn main() -> Result<(), io::Error> {
         in_tool: Some(WoodAxe),
         in_resources: vec![(1, Stone)],
         out_tool: Some(StoneAxe),
-        tag: InheritDurability,
+        tags: vec![InheritDurability],
         ..Default::default()
     });
     actions.push(Action {
@@ -160,7 +160,7 @@ fn main() -> Result<(), io::Error> {
         in_tool: Some(StoneAxe),
         in_resources: vec![(1, Iron)],
         out_tool: Some(IronAxe),
-        tag: InheritDurability,
+        tags: vec![InheritDurability],
         ..Default::default()
     });
 
@@ -171,7 +171,7 @@ fn main() -> Result<(), io::Error> {
             mut_tool: Some(axe_type),
             out_resources: vec![(n, Wood)],
             pow: 10,
-            tag: DecDurability,
+            tags: vec![DecDurability],
             ..Default::default()
         });
     }
@@ -184,7 +184,7 @@ fn main() -> Result<(), io::Error> {
             rekey: true,
             out_resources: vec![(lvl + 1, Stone)],
             pow: 20,
-            tag: ReqLevel(lvl),
+            tags: vec![ReqLevel(lvl)],
             ..Default::default()
         });
         actions.push(Action {
@@ -194,7 +194,7 @@ fn main() -> Result<(), io::Error> {
             in_resources: vec![(5, Wood)],
             out_resources: vec![(lvl + 1, Iron)],
             pow: 40,
-            tag: ReqLevel(lvl),
+            tags: vec![ReqLevel(lvl)],
             ..Default::default()
         });
     }
@@ -204,14 +204,14 @@ fn main() -> Result<(), io::Error> {
         name: format!("BuildQuarry"),
         in_resources: vec![(20, Wood), (10, Stone)],
         out_tool: Some(Quarry),
-        tag: SetLevel,
+        tags: vec![SetLevel],
         ..Default::default()
     });
     actions.push(Action {
         name: format!("BuildMiningDrill"),
         in_resources: vec![(10, Wood), (50, Stone), (5, Iron)],
         out_tool: Some(MiningDrill),
-        tag: SetLevel,
+        tags: vec![SetLevel],
         ..Default::default()
     });
     // Factory level-up
@@ -220,7 +220,7 @@ fn main() -> Result<(), io::Error> {
             name: format!("LevelUpQuarry{lvl}"),
             in_buckets: vec![(20 * 2usize.pow(lvl), Wood), (10 * 2usize.pow(lvl), Stone)],
             mut_tool: Some(Quarry),
-            tag: IncLevel,
+            tags: vec![ReqLevel(lvl as usize), IncLevel],
             ..Default::default()
         });
         actions.push(Action {
@@ -231,7 +231,7 @@ fn main() -> Result<(), io::Error> {
                 (5 * 2usize.pow(lvl), Iron),
             ],
             mut_tool: Some(MiningDrill),
-            tag: IncLevel,
+            tags: vec![ReqLevel(lvl as usize), IncLevel],
             ..Default::default()
         });
     }
@@ -273,20 +273,22 @@ fn main() -> Result<(), io::Error> {
         if let Some(out_tool) = action.out_tool {
             let name = format!("{out_tool}").to_lowercase();
             writeln!(o, "  var {name} = action.output(\"{out_tool}\");")?;
-            match action.tag {
-                SetDurability => {
-                    writeln!(o, r#"  {name}.set([["durability", 100]]);"#)?;
+            for tag in &action.tags {
+                match tag {
+                    SetDurability => {
+                        writeln!(o, r#"  {name}.set([["durability", 100]]);"#)?;
+                    }
+                    SetLevel => {
+                        writeln!(o, r#"  {name}.set([["level", 1]]);"#)?;
+                    }
+                    InheritDurability => {
+                        writeln!(
+                            o,
+                            r#"  {name}.set([["durability", {last_in_tool}.durability]]);"#
+                        )?;
+                    }
+                    _ => {}
                 }
-                SetLevel => {
-                    writeln!(o, r#"  {name}.set([["level", 1]]);"#)?;
-                }
-                InheritDurability => {
-                    writeln!(
-                        o,
-                        r#"  {name}.set([["durability", {last_in_tool}.durability]]);"#
-                    )?;
-                }
-                _ => {}
             }
         }
         if let Some(mut_tool) = action.mut_tool {
@@ -301,31 +303,33 @@ fn main() -> Result<(), io::Error> {
                 )?;
             }
 
-            match action.tag {
-                DecDurability => {
-                    writeln!(
-                        o,
-                        r#"  action.st_gt({name}.durability, 0);
+            for tag in &action.tags {
+                match tag {
+                    DecDurability => {
+                        writeln!(
+                            o,
+                            r#"  action.st_gt({name}.durability, 0);
   var durability = unsafe {{ {name}.durability - 1 }};
   action.st_sum(durability, 1, {name}.durability);
   {name}.update("durability", durability);"#
-                    )?;
-                }
-                IncLevel => {
-                    writeln!(
-                        o,
-                        r#"  var level = unsafe {{ {name}.level + 1 }};
+                        )?;
+                    }
+                    IncLevel => {
+                        writeln!(
+                            o,
+                            r#"  var level = unsafe {{ {name}.level + 1 }};
   action.st_sum(1, {name}.level, level);
   {name}.update("level", level);"#
-                    )?;
+                        )?;
+                    }
+                    ReqLevel(lvl) => {
+                        writeln!(o, r#"  action.st_equal({name}.level, {lvl});"#)?;
+                    }
+                    PadForSplit => {
+                        writeln!(o, r#"  action.st_equal(1, 1);"#)?;
+                    }
+                    _ => {}
                 }
-                ReqLevel(lvl) => {
-                    writeln!(o, r#"  action.st_equal({name}.level, {lvl});"#)?;
-                }
-                PadForSplit => {
-                    writeln!(o, r#"  action.st_equal(1, 1);"#)?;
-                }
-                _ => {}
             }
         }
 
@@ -373,25 +377,27 @@ fn main() -> Result<(), io::Error> {
                 )?;
             }
 
-            match action.tag {
-                AddToBucket(d) => {
-                    writeln!(
-                        o,
-                        r#"  var n = unsafe {{ {name}.n + {d} }};
+            for tag in &action.tags {
+                match tag {
+                    AddToBucket(d) => {
+                        writeln!(
+                            o,
+                            r#"  var n = unsafe {{ {name}.n + {d} }};
   action.st_sum({name}.n, {d}, n);
   {name}.update("n", n);"#
-                    )?;
-                }
-                TakeFromBucket(d) => {
-                    writeln!(
-                        o,
-                        r#"  action.st_gt_eq({name}.n, {d});
+                        )?;
+                    }
+                    TakeFromBucket(d) => {
+                        writeln!(
+                            o,
+                            r#"  action.st_gt_eq({name}.n, {d});
   var n = unsafe {{ {name}.n - {d} }};
   action.st_sum(n, {d}, {name}.n);
   {name}.update("n", n);"#
-                    )?;
+                        )?;
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
 

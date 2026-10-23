@@ -1519,12 +1519,8 @@ fn record_value(arg: &StatementTmplArg, vdf_producers: &HashSet<Wildcard>, info:
                 info.from_witness = true;
             }
         }
-        StatementTmplArg::Wildcard(wc) => {
-            if vdf_producers.contains(wc) {
-                info.from_vdf = true;
-            } else {
-                info.from_witness = true;
-            }
+        StatementTmplArg::Wildcard(wc) if vdf_producers.contains(wc) => {
+            info.from_vdf = true;
         }
         _ => {
             info.from_witness = true;
