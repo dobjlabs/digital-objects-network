@@ -204,7 +204,7 @@ pub(crate) fn literal_podlang(value: &Value) -> String {
 impl<'a> fmt::Display for LiteralFmt<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = self.0;
-        if value.is_raw() {
+        if value.is_untyped() {
             return write!(f, "{value}");
         }
         let Some(container) = value.as_container() else {

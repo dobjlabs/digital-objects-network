@@ -887,7 +887,7 @@ impl ActionHandle {
                     Type::Int
                 } else if value.as_str().is_some() {
                     Type::Str
-                } else if !value.is_raw() && value.as_dictionary().is_some() {
+                } else if !value.is_untyped() && value.as_dictionary().is_some() {
                     Type::Dict
                 } else {
                     Type::Raw
