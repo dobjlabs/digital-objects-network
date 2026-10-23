@@ -42,3 +42,9 @@ An object is `live` once its creating action is confirmed on-chain, `pending`
 while the proof is settling, and `nullified` once it has been consumed. You can
 only use live objects as inputs: run an action, wait for it to confirm, and then
 the outputs become live while the inputs become nullified.
+
+## Action arguments
+
+An action's `args` list names caller-supplied values the script can read.
+Defaults depend on the plugin. Send values in `run_action.args`, using
+POD2 JSON values, or omit them to use the plugin's defaults.
