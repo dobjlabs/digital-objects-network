@@ -3,7 +3,11 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { JSDOM, VirtualConsole } from "jsdom";
 
-const html = await readFile(new URL("../ui/index.html", import.meta.url), "utf8");
+// jsdom does not fetch scripts here, so the page's presentation loader is
+// inlined.
+const presentationScript = await readFile(new URL("../ui/presentation.js", import.meta.url), "utf8");
+const html = (await readFile(new URL("../ui/index.html", import.meta.url), "utf8"))
+  .replace('<script src="presentation.js"></script>', () => `<script>${presentationScript}</script>`);
 const qname = (name, pluginName = "bitcraft") => ({ pluginName, name });
 const recipe = (name = "CraftPocketknife") => ({
   action: qname(name), totalInputs: [], totalOutputs: [{ class: qname("Pocketknife") }],
@@ -53,11 +57,17 @@ async function page(context, options = {}) {
       };
       window.fetch = async (url, init = {}) => {
         const respond = (value, status = 200) => ({ ok: status < 400, status, json: async () => copy(value) });
-        if (url === "class-icons.json") return respond({});
-        if (url === "action-icons.json") return respond({ rules: [] });
         if (url === "BITCRAFT_WELCOME.md") return { ok: true, text: async () => "# Welcome" };
         const parsed = new URL(url);
         assert.equal(parsed.origin, "http://127.0.0.1:7727");
+        // Presentation packs are files served beside the page; by default
+        // there are none.
+        if (parsed.pathname.startsWith("/bitcraft/presentation/")) {
+          const file = backend.presentation?.[parsed.pathname.slice("/bitcraft/presentation/".length)];
+          if (file === undefined) return respond({}, 404);
+          if (typeof file === "string") return { ok: true, status: 200, json: async () => JSON.parse(file) };
+          return respond(file);
+        }
         if (parsed.pathname === "/objects/dir") return respond({ path: "/Users/player/.bitcraft/objects" });
         if (parsed.pathname === "/objects/unspent") {
           backend.inventoryReads++;
@@ -626,4 +636,111 @@ test("the main window's title carries the Total Bit Value of live objects", asyn
   await ui.dom.window.reloadObjects();
   await flush();
   assert.equal(ui.document.title, "Bitcraft (Total Bit Value: 3)");
+});
+
+const bitcraftPack = {
+  index: { packs: ["bitcraft/pack.json"] },
+  "bitcraft/pack.json": {
+    format: 1,
+    plugin: "bitcraft",
+    classes: {
+      Pocketknife: { icon: "assets/classes/pocketknife.png", summary: "Your first tool.", description: "Lasts forever." },
+    },
+    actions: {
+      CraftPocketknife: { icon: "assets/actions/CraftPocketknife.svg", summary: "Make a knife.", description: "From nothing." },
+    },
+  },
+};
+const presentationFiles = (pack) => ({ "index.json": pack.index, "bitcraft/pack.json": pack["bitcraft/pack.json"] });
+
+test("presentation packs give classes and actions their icons and text", async (context) => {
+  const ui = await page(context, { objects: [knife()], presentation: presentationFiles(bitcraftPack) });
+  const { document } = ui;
+  const rowIcon = document.querySelector('.object-row[title="pocketknife.dobj"] .icon-tile img');
+  assert.equal(rowIcon.src, "http://127.0.0.1:7727/bitcraft/presentation/bitcraft/assets/classes/pocketknife.png");
+  document.querySelector('.object-row[title="pocketknife.dobj"]').dispatchEvent(
+    new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  const details = document.querySelector("#details-body");
+  assert.equal(details.querySelector(".description-summary").textContent, "Your first tool.");
+  assert.equal(details.querySelector(".description-text").textContent, "Lasts forever.");
+  assert.equal(details.querySelector(".large-class-icon").src, rowIcon.src);
+});
+
+test("Recipe Info shows each action's pack icon and text", async (context) => {
+  const ui = await page(context, {
+    url: "http://127.0.0.1:7727/bitcraft/?page=recipebook&action=bitcraft::CraftPocketknife",
+    presentation: presentationFiles(bitcraftPack),
+  });
+  const { document } = ui;
+  assert.equal(document.querySelector(".recipe-row img.action-icon").src,
+    "http://127.0.0.1:7727/bitcraft/presentation/bitcraft/assets/actions/CraftPocketknife.svg");
+  const details = document.querySelector("#recipe-details-body");
+  assert.equal(details.querySelector("img.action-icon").width, 128);
+  assert.equal(details.querySelector(".description-summary").textContent, "Make a knife.");
+  assert.equal(details.querySelector(".description-text").textContent, "From nothing.");
+});
+
+for (const [label, files] of [
+  ["no index", {}],
+  ["an index naming a missing pack", { "index.json": { packs: ["bitcraft/pack.json"] } }],
+  ["a malformed pack", { "index.json": { packs: ["bitcraft/pack.json"] }, "bitcraft/pack.json": "{ not json" }],
+  ["a pack with malformed entries", { "index.json": { packs: [7, "bitcraft/pack.json"] },
+    "bitcraft/pack.json": { plugin: "bitcraft", classes: { Pocketknife: { icon: 5, summary: [] } }, actions: null } }],
+]) {
+  test(`${label} leaves plain icons and no descriptions`, async (context) => {
+    const ui = await page(context, { objects: [knife()], presentation: files });
+    const { document } = ui;
+    assert.equal(ui.app.hidden, false);
+    const row = document.querySelector('.object-row[title="pocketknife.dobj"]');
+    assert.equal(row.querySelector(".icon-tile"), null);
+    assert.notEqual(row.querySelector("svg"), null);
+    row.dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+    assert.equal(document.querySelector("#details-body .description-summary"), null);
+  });
+}
+
+test("a manifest description is the fallback, except the placeholder", async (context) => {
+  const ui = await page(context, {
+    url: "http://127.0.0.1:7727/bitcraft/?page=recipebook&action=bitcraft::GatherWood",
+    actions: [{ ...recipe(), description: "-" }, { ...recipe("GatherWood"), description: "Gather some wood." }],
+  });
+  const { document } = ui;
+  assert.equal(document.querySelector("#recipe-details-body .description-text").textContent, "Gather some wood.");
+  document.querySelectorAll(".recipe-row")[0].dispatchEvent(
+    new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  assert.equal(document.querySelector("#recipe-details-body .description-text"), null);
+});
+
+test("the context menu offers only the level-up the tool's level and buckets allow", async (context) => {
+  const levelUp = (level) => ({
+    action: qname(`LevelUpQuarry${level}`), predicateSource: "", mutatedObjects: [{ inputIndex: 0, outputIndex: 0 }],
+    totalInputs: ["Quarry", "BucketOfWood", "BucketOfStone"].map((name) => ({ class: qname(name) })),
+    totalOutputs: [{ class: qname("Quarry") }],
+  });
+  const item = (fileName, name, fields) => ({
+    fileName, class: qname(name), status: "live",
+    fields: { kvs: Object.entries(fields).map(([key, value]) => [key, { Int: String(value) }]) },
+  });
+  const objects = [knife(), item("quarry.dobj", "Quarry", { level: 2 }),
+    item("wood.dobj", "BucketOfWood", { n: 80 }), item("stone.dobj", "BucketOfStone", { n: 40 })];
+  const ui = await page(context, { objects, actions: [recipe(), 1, 2, 3, 4, 5].map((level) =>
+    typeof level === "number" ? levelUp(level) : level) });
+  const { document, dom } = ui;
+  const menuFor = () => {
+    const rows = ["quarry.dobj", "wood.dobj", "stone.dobj"]
+      .map((fileName) => document.querySelector(`.object-row[title="${fileName}"]`));
+    rows[0].dispatchEvent(new dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+    for (const row of rows.slice(1)) {
+      row.dispatchEvent(new dom.window.MouseEvent("mousedown", { button: 0, ctrlKey: true, bubbles: true }));
+    }
+    rows[0].dispatchEvent(new dom.window.MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    const labels = [...document.querySelectorAll(".context-menu .menu-item-label")].map((label) => label.textContent);
+    dom.window.closeContextMenu();
+    return labels;
+  };
+  assert.deepEqual(menuFor(), ["Open all", "bitcraft::LevelUpQuarry2"]);
+  ui.backend.objects[2] = item("wood.dobj", "BucketOfWood", { n: 79 });
+  await dom.window.reloadObjects();
+  await flush();
+  assert.deepEqual(menuFor(), ["Open all", "No available actions"]);
 });

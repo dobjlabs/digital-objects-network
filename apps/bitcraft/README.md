@@ -22,7 +22,12 @@ just bitcraft-dev-local
 
 # Build an unsigned development installer containing the prepared runtime.
 just bitcraft-bundle
+
+# Regenerate the bitcraft presentation pack and copy it into the UI.
+just bitcraft-presentation
 ```
+
+Icons, summaries and descriptions for classes and actions come from presentation packs, which only the app reads; see [PRESENTATION_PACKS.md](PRESENTATION_PACKS.md). Preparation copies them into `ui/presentation/`.
 
 `just bitcraft-dev-local` uses `<checkout>/.dev/bitcraft-local` as its home, overriding `BITCRAFT_HOME`. On first use it creates `settings.json` with synchronizer `http://127.0.0.1:3000`, relayer `http://127.0.0.1:3200`, and MCP disabled. Later launches preserve existing settings, objects, and actions. This directory is ignored by Git. The local backend stack must already be running; for example, run `just dev-local` in another terminal. Its standalone daemon uses port `7717`; Bitcraft continues to use `7727` (MCP `7728` when enabled).
 
@@ -41,7 +46,7 @@ Quit Bitcraft and stop the local backend stack before running `just reset`. Rese
 
 `scripts/prepare.py` builds the exact binaries, checks the plugin manifest with `pexe build --check`, and stages them under `src-tauri/binaries` and `src-tauri/runtime`. It verifies that the daemon embeds this checkout's UI before staging it. If the compiled UI is stale, it cleans and rebuilds only the daemon package; preparation fails if the rebuilt UI still differs. It generates `src-tauri/tauri.bundle.conf.json`; those outputs are ignored by Git. Run it with `--version VERSION` for a release and `--target TRIPLE` for cross-compilation. The plugin builder runs on the native host even for a cross-compiled package.
 
-The daemon bundles runtime Markdown files alongside other UI assets. Only the named contributor docs `AGENTS.md`, `CLAUDE.md`, `ACTION_ICONS.md`, and `BITCRAFT_SPECIFIC_RULES.md` are excluded.
+The daemon bundles runtime Markdown files alongside other UI assets. Only the named contributor docs `AGENTS.md`, `CLAUDE.md`, and `BITCRAFT_SPECIFIC_RULES.md` are excluded.
 
 The startup screen covers cryptography preparation, starter pocketknife
 creation, and network confirmation. Inventory opens once a live pocketknife

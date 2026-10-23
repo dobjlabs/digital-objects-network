@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 
 APP = Path(__file__).resolve().parents[1]
@@ -59,6 +60,8 @@ def main():
     )
     target = args.target or host
     suffix = ".exe" if "windows" in target else ""
+    # The daemon embeds the UI folder, so its presentation packs go in first.
+    run(sys.executable, str(APP / "scripts" / "sync_presentation.py"))
     build_runtime(target)
     metadata = json.loads(subprocess.check_output(
         ["cargo", "metadata", "--format-version", "1", "--no-deps"], cwd=REPO, text=True))

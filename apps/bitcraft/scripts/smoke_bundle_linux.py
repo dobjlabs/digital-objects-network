@@ -108,7 +108,10 @@ def main():
             html = get(base).decode()
             assert '<base href="/bitcraft/">' in html
             assert 'name="dobjd-api-url" content="/"' in html
-            assert json.loads(get(base + "class-icons.json"))
+            index = json.loads(get(base + "presentation/index.json"))
+            assert "bitcraft/pack.json" in index["packs"]
+            pack = json.loads(get(base + "presentation/bitcraft/pack.json"))
+            assert get(base + "presentation/bitcraft/" + pack["actions"]["GatherWood"]["icon"])
             for command in ["objects", "actions"]:
                 output = run_tool([str(binaries / "bitcraft-dobj"), "--home", str(home), command],
                                   directory, environment)
