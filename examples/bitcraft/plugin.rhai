@@ -791,6 +791,7 @@ fn BuildMiningDrill(action) {
 
 fn LevelUpQuarry1(action) {
   var quarry = action.mutate("Quarry");
+  action.st_equal(quarry.level, 1);
   var level = unsafe { quarry.level + 1 };
   action.st_sum(1, quarry.level, level);
   quarry.update("level", level);
@@ -802,6 +803,7 @@ fn LevelUpQuarry1(action) {
 
 fn LevelUpMiningDrill1(action) {
   var miningdrill = action.mutate("MiningDrill");
+  action.st_equal(miningdrill.level, 1);
   var level = unsafe { miningdrill.level + 1 };
   action.st_sum(1, miningdrill.level, level);
   miningdrill.update("level", level);
@@ -815,6 +817,7 @@ fn LevelUpMiningDrill1(action) {
 
 fn LevelUpQuarry2(action) {
   var quarry = action.mutate("Quarry");
+  action.st_equal(quarry.level, 2);
   var level = unsafe { quarry.level + 1 };
   action.st_sum(1, quarry.level, level);
   quarry.update("level", level);
@@ -826,6 +829,7 @@ fn LevelUpQuarry2(action) {
 
 fn LevelUpMiningDrill2(action) {
   var miningdrill = action.mutate("MiningDrill");
+  action.st_equal(miningdrill.level, 2);
   var level = unsafe { miningdrill.level + 1 };
   action.st_sum(1, miningdrill.level, level);
   miningdrill.update("level", level);
@@ -839,6 +843,7 @@ fn LevelUpMiningDrill2(action) {
 
 fn LevelUpQuarry3(action) {
   var quarry = action.mutate("Quarry");
+  action.st_equal(quarry.level, 3);
   var level = unsafe { quarry.level + 1 };
   action.st_sum(1, quarry.level, level);
   quarry.update("level", level);
@@ -850,6 +855,7 @@ fn LevelUpQuarry3(action) {
 
 fn LevelUpMiningDrill3(action) {
   var miningdrill = action.mutate("MiningDrill");
+  action.st_equal(miningdrill.level, 3);
   var level = unsafe { miningdrill.level + 1 };
   action.st_sum(1, miningdrill.level, level);
   miningdrill.update("level", level);
@@ -863,6 +869,7 @@ fn LevelUpMiningDrill3(action) {
 
 fn LevelUpQuarry4(action) {
   var quarry = action.mutate("Quarry");
+  action.st_equal(quarry.level, 4);
   var level = unsafe { quarry.level + 1 };
   action.st_sum(1, quarry.level, level);
   quarry.update("level", level);
@@ -874,6 +881,7 @@ fn LevelUpQuarry4(action) {
 
 fn LevelUpMiningDrill4(action) {
   var miningdrill = action.mutate("MiningDrill");
+  action.st_equal(miningdrill.level, 4);
   var level = unsafe { miningdrill.level + 1 };
   action.st_sum(1, miningdrill.level, level);
   miningdrill.update("level", level);
@@ -887,6 +895,7 @@ fn LevelUpMiningDrill4(action) {
 
 fn LevelUpQuarry5(action) {
   var quarry = action.mutate("Quarry");
+  action.st_equal(quarry.level, 5);
   var level = unsafe { quarry.level + 1 };
   action.st_sum(1, quarry.level, level);
   quarry.update("level", level);
@@ -898,6 +907,7 @@ fn LevelUpQuarry5(action) {
 
 fn LevelUpMiningDrill5(action) {
   var miningdrill = action.mutate("MiningDrill");
+  action.st_equal(miningdrill.level, 5);
   var level = unsafe { miningdrill.level + 1 };
   action.st_sum(1, miningdrill.level, level);
   miningdrill.update("level", level);
