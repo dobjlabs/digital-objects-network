@@ -24,7 +24,7 @@ resolver = "2"
 exclude = ["apps/bitcraft/src-tauri"]
 
 [workspace.dependencies]
-pod2 = { git = "https://github.com/0xPARC/pod2", rev = "2ca220c0e0fa974e5d96bb376f0eafd166d260ca", default-features = false, features = [
+pod2 = { git = "https://github.com/0xPARC/pod2", rev = "331a1145a8a5679a63058953464969fb960d9955", default-features = false, features = [
     "backend_plonky2",
     "disk_cache",
     "zk",
@@ -68,8 +68,8 @@ thiserror = "2.0.18"
 wire-types = { path = "libs/wire-types" }
 
 # Uncomment to use a local pod2 dependency
-#[patch."https://github.com/0xPARC/pod2"]
-#pod2 = { path = "../pod2" }
+# [patch."https://github.com/0xPARC/pod2"]
+# pod2 = { path = "../pod2" }
 
 # Uncomment in order to enable debug information in the release builds.  This allows getting panic backtraces with a performance similar to regular release.
 # [profile.release]
