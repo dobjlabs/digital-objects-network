@@ -15,8 +15,7 @@ use dobj_mcp::ops::DobjOps;
 use dobj_mcp::types as mcp;
 use tokio::task::JoinHandle;
 
-use crate::events::EventTx;
-use crate::runs::RunRegistry;
+use crate::state::Services;
 
 /// How long a stop waits for graceful shutdown (in-flight responses
 /// flushing, sessions closing) before the serve task is aborted outright.
@@ -29,9 +28,7 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 ///
 /// [`apply`]: McpRuntime::apply
 pub struct McpRuntime {
-    driver: Arc<::driver::Driver>,
-    events: EventTx,
-    runs: RunRegistry,
+    services: Services,
     addr: String,
     dobj_port: u16,
     running: tokio::sync::Mutex<Option<RunningServer>>,
@@ -44,17 +41,9 @@ struct RunningServer {
 }
 
 impl McpRuntime {
-    pub fn new(
-        driver: Arc<::driver::Driver>,
-        events: EventTx,
-        runs: RunRegistry,
-        addr: String,
-        dobj_port: u16,
-    ) -> Self {
+    pub fn new(services: Services, addr: String, dobj_port: u16) -> Self {
         Self {
-            driver,
-            events,
-            runs,
+            services,
             addr,
             dobj_port,
             running: tokio::sync::Mutex::new(None),
@@ -97,12 +86,7 @@ impl McpRuntime {
                     .await
                     .with_context(|| format!("binding MCP listener on {}", self.addr))?,
             };
-            let ops = DobjdOps::new(
-                self.driver.clone(),
-                self.events.clone(),
-                self.runs.clone(),
-                self.clone(),
-            );
+            let ops = DobjdOps::new(self.services.clone(), self.clone());
             let cancel = CancellationToken::new();
             let config = dobj_mcp::McpConfig {
                 cancellation_token: cancel.clone(),
@@ -143,25 +127,20 @@ impl McpRuntime {
 }
 
 pub struct DobjdOps {
-    driver: Arc<::driver::Driver>,
-    events: EventTx,
-    runs: RunRegistry,
+    services: Services,
     mcp_runtime: Arc<McpRuntime>,
 }
 
 impl DobjdOps {
-    pub fn new(
-        driver: Arc<::driver::Driver>,
-        events: EventTx,
-        runs: RunRegistry,
-        mcp_runtime: Arc<McpRuntime>,
-    ) -> Self {
+    pub fn new(services: Services, mcp_runtime: Arc<McpRuntime>) -> Self {
         Self {
-            driver,
-            events,
-            runs,
+            services,
             mcp_runtime,
         }
+    }
+
+    fn driver(&self) -> &::driver::Driver {
+        &self.services.driver
     }
 }
 
@@ -169,36 +148,31 @@ impl DobjOps for DobjdOps {
     fn list_objects(&self) -> anyhow::Result<Vec<mcp::ObjectSummary>> {
         // The driver folds each object's class metadata (emoji, description)
         // into the summary, so clients need no `/classes` round-trip.
-        let mut objects = self.driver.sync_objects(None)?;
-        self.runs.fill_held_by_run_ids(&mut objects);
-        Ok(objects)
+        self.services.settler.sync_objects(None)
     }
 
     fn list_actions(&self) -> anyhow::Result<Vec<mcp::ActionSummary>> {
-        self.driver.list_actions(None)
+        self.driver().list_actions(None)
     }
 
     fn list_classes(&self) -> anyhow::Result<Vec<mcp::ClassSummary>> {
-        self.driver.list_classes()
+        self.driver().list_classes()
     }
 
     fn get_state_root(&self) -> anyhow::Result<String> {
-        Ok(payload::encode_hash_hex(&self.driver.get_state_root()?))
+        Ok(payload::encode_hash_hex(&self.driver().get_state_root()?))
     }
 
     fn inspect_object(&self, file_name: &str) -> anyhow::Result<mcp::ObjectSummary> {
-        let mut summary = self.driver.read_object(std::path::Path::new(file_name))?;
-        self.runs
-            .fill_held_by_run_ids(std::slice::from_mut(&mut summary));
-        Ok(summary)
+        self.services.object_summary(file_name)
     }
 
     fn inspect_class(&self, class: &mcp::QualifiedName) -> anyhow::Result<mcp::ClassSummary> {
-        self.driver.get_class(class)
+        self.driver().get_class(class)
     }
 
     fn inspect_action(&self, action: &mcp::QualifiedName) -> anyhow::Result<mcp::ActionSummary> {
-        self.driver.get_action(action)
+        self.driver().get_action(action)
     }
 
     fn run_action(&self, input: mcp::RunActionInput) -> anyhow::Result<mcp::RunAccepted> {
@@ -213,32 +187,26 @@ impl DobjOps for DobjdOps {
 
         // The run shares the same registry as the HTTP routes, so the GUI and
         // an agent can both follow the daemon-assigned run id.
-        crate::runs::spawn_run(
-            &self.runs,
-            self.driver.clone(),
-            self.events.clone(),
-            input.action,
-            input_objects,
-            input.args,
-        )
+        crate::runs::spawn_run(&self.services, input.action, input_objects, input.args)
     }
 
     fn get_run(&self, run_id: &str) -> anyhow::Result<mcp::RunState> {
-        self.runs
+        self.services
+            .runs
             .get(run_id)
             .map(|entry| entry.snapshot())
             .ok_or_else(|| anyhow::anyhow!("unknown run: {run_id}"))
     }
 
     fn list_runs(&self, active_only: bool) -> anyhow::Result<Vec<mcp::RunState>> {
-        Ok(self.runs.list(active_only))
+        Ok(self.services.runs.list(active_only))
     }
 
     fn check_feasibility(
         &self,
         action: &mcp::QualifiedName,
     ) -> anyhow::Result<mcp::FeasibilityReport> {
-        self.driver.check_action(action)
+        self.driver().check_action(action)
     }
 
     fn import_object_file(&self, path: &str) -> anyhow::Result<mcp::ObjectSummary> {
@@ -248,11 +216,15 @@ impl DobjOps for DobjdOps {
         // has filesystem access, and import only ingests (never discloses).
         let contents = std::fs::read_to_string(path)
             .map_err(|err| anyhow::anyhow!("could not read .dobj file at {path}: {err}"))?;
-        self.driver.import_object(&contents)
+        let summary = self.driver().import_object(&contents)?;
+        self.services
+            .events
+            .publish(crate::events::Event::Object(summary.clone()));
+        Ok(summary)
     }
 
     fn read_settings(&self) -> anyhow::Result<mcp::DriverSettings> {
-        self.driver.load_settings()
+        self.driver().load_settings()
     }
 
     fn write_settings(
@@ -262,9 +234,9 @@ impl DobjOps for DobjdOps {
         // Merge onto current so an omitted field keeps its value; in
         // particular, a patch without `mcpEnabled` must not stop the server
         // the calling agent is connected through.
-        let mut merged = self.driver.load_settings()?;
+        let mut merged = self.driver().load_settings()?;
         patch.apply_to(&mut merged);
-        let saved = self.driver.save_settings(&merged)?;
+        let saved = self.driver().save_settings(&merged)?;
         // Reconcile asynchronously: this is a sync trait method, and an agent
         // disabling MCP over MCP needs this response to flush before the
         // graceful shutdown tears the transport down.
@@ -280,7 +252,7 @@ impl DobjOps for DobjdOps {
 
     fn get_objects_dir(&self) -> anyhow::Result<String> {
         Ok(self
-            .driver
+            .driver()
             .paths()
             .objects_dir
             .to_string_lossy()
@@ -288,6 +260,6 @@ impl DobjOps for DobjdOps {
     }
 
     fn generated_podlang(&self) -> Option<String> {
-        self.driver.generated_podlang()
+        self.driver().generated_podlang()
     }
 }

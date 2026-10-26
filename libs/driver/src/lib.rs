@@ -23,10 +23,11 @@ pub use crate::error::DriverError;
 pub use crate::holds::Holds;
 pub use crate::object_record::{FileStatus, ObjectRecord, parse_object_record_file};
 pub use crate::pexe_catalog::PexeCatalog;
-pub use crate::pipeline::{ProvedOutput, ProvedTransaction, SettleOutcome};
+pub use crate::pipeline::{ProvedOutput, ProvedTransaction, SettleOutcome, SyncedObjects};
 pub use crate::types::{
     ActionQuery, DriverPaths, ExecuteActionInput, ExecuteActionResult, ExecutionReporter,
     ExecutionStepContext, NoopExecutionReporter, ObjectQuery,
 };
 pub use crate::warm::warm_proving_circuits;
 pub use pexe::MAX_PEXE_BYTES;
+pub use pod2::middleware::Hash;

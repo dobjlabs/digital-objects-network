@@ -10,29 +10,21 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use crate::state::AppState;
 
-/// SSE endpoint streaming server events to the frontend.
-///
-/// Uses a broadcast subscription per connection. If the subscriber lags
-/// behind the channel buffer we just skip the dropped events — `EventSource`
-/// auto-reconnects, and on reconnect the client refetches state via the
-/// regular REST routes.
+/// Stream events with the sequence number in both SSE `id` and JSON `seq`.
+/// Missing sequence numbers indicate dropped events; reload state through REST.
 pub async fn stream(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
-    let rx = state.events.subscribe();
+    let rx = state.services.events.subscribe();
     let stream = BroadcastStream::new(rx).filter_map(|item| async move {
         match item {
-            // `Event` is a closed enum of structs whose fields are all
-            // primitives (`String`, `Option`, `Vec<String>`, enums with
-            // derived `Serialize`) — serialization can't fail here, so a
-            // failure means a future variant violated that invariant and
-            // we want to know loudly.
-            Ok(event) => {
-                let json =
-                    serde_json::to_string(&event).expect("Event must always serialize to JSON");
-                Some(Ok(SseEvent::default().data(json)))
+            Ok(envelope) => {
+                let json = serde_json::to_string(&envelope)
+                    .expect("Envelope must always serialize to JSON");
+                Some(Ok(SseEvent::default()
+                    .id(envelope.seq.to_string())
+                    .data(json)))
             }
-            // Lagged subscriber — silently drop, browser will keep reading.
             Err(_) => None,
         }
     });

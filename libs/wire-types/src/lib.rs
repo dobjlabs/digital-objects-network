@@ -394,6 +394,71 @@ pub struct RunState {
     pub progress: Vec<RunActionProgress>,
 }
 
+/// Proof job lifecycle. `Done` and `Failed` are terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum ProofJobStatus {
+    Queued,
+    Proving,
+    Recording,
+    /// Transaction recorded; `tx_final` identifies it.
+    Done,
+    /// Proof generation or recording failed; see `error`.
+    Failed,
+}
+
+impl ProofJobStatus {
+    pub fn is_terminal(self) -> bool {
+        matches!(self, ProofJobStatus::Done | ProofJobStatus::Failed)
+    }
+}
+
+/// `POST /proofs` response and `GET /proofs/{jobId}` body.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ProofJobState {
+    pub job_id: String,
+    pub action: QualifiedName,
+    pub input_object_paths: Vec<String>,
+    pub status: ProofJobStatus,
+    /// The latest progress message.
+    #[serde(default)]
+    pub message: Option<String>,
+    /// Set once the job is `done`.
+    #[serde(default)]
+    pub tx_final: Option<String>,
+    /// Set once the job is `failed`.
+    #[serde(default)]
+    pub error: Option<String>,
+    pub created_at_ms: u64,
+    #[serde(default)]
+    pub started_at_ms: Option<u64>,
+    #[serde(default)]
+    pub finished_at_ms: Option<u64>,
+}
+
+/// Recorded transactions to submit to the relayer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitRequest {
+    pub tx_finals: Vec<String>,
+}
+
+/// Optional wait for proof completion or transaction landing/expiry.
+/// At timeout, return the current state.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct WaitQuery {
+    #[serde(default)]
+    pub wait: bool,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
 // ===========================================================================
 // Execution progress
 // ===========================================================================
