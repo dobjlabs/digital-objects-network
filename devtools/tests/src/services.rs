@@ -171,8 +171,8 @@ impl Services {
                         let landed_after = timer.elapsed();
                         tx.landed_after = Some(landed_after);
                         println!(
-                            "relayer job {} landed after {landed_after:.2?} (slot {})",
-                            tx.job_id, membership.slot
+                            "relayer job {} landed after {landed_after:.2?} (block {})",
+                            tx.job_id, membership.block_number
                         );
                     }
                 }

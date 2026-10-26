@@ -62,8 +62,10 @@ pub struct ObjectContainsEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Batch created-object-membership response.
 pub struct ObjectContainsResponse {
-    /// Slot of the head state the results are answered against.
-    pub slot: u32,
+    /// Execution block number committed inside the head state the results are answered against.
+    pub block_number: i64,
+    /// Execution block hash committed inside the head state the results are answered against.
+    pub block_hash: B256,
     /// Head state root the results are answered against.
     pub state_root: Hash,
     /// Per-commitment membership results.
@@ -89,8 +91,10 @@ pub struct NullifierContainsEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Batch nullifier-membership response.
 pub struct NullifierContainsResponse {
-    /// Slot of the head state the results are answered against.
-    pub slot: u32,
+    /// Execution block number committed inside the head state the results are answered against.
+    pub block_number: i64,
+    /// Execution block hash committed inside the head state the results are answered against.
+    pub block_hash: B256,
     /// Head state root the results are answered against.
     pub state_root: Hash,
     /// Per-hash membership results.
@@ -109,8 +113,10 @@ pub struct MembershipRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Combined batch membership response anchored to one state head.
 pub struct MembershipResponse {
-    /// Slot of the head state the results are answered against.
-    pub slot: u32,
+    /// Execution block number committed inside the head state the results are answered against.
+    pub block_number: i64,
+    /// Execution block hash committed inside the head state the results are answered against.
+    pub block_hash: B256,
     /// Head state root the results are answered against.
     pub state_root: Hash,
     /// Per-object created-set membership results.

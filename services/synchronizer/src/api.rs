@@ -196,7 +196,8 @@ async fn post_state_object_contains(
 ) -> Result<Json<ObjectContainsResponse>, (StatusCode, String)> {
     let membership = load_membership(&app_state, &body.object_commitments, &[]).await?;
     Ok(Json(ObjectContainsResponse {
-        slot: membership.head.slot,
+        block_number: membership.head.state.metadata.block.number as i64,
+        block_hash: membership.head.state.metadata.block.hash,
         state_root: membership.head.state.metadata.state_root,
         results: object_contains_entries(&body.object_commitments, membership.created_present),
     }))
@@ -208,7 +209,8 @@ async fn post_state_nullifier_contains(
 ) -> Result<Json<NullifierContainsResponse>, (StatusCode, String)> {
     let membership = load_membership(&app_state, &[], &body.nullifiers).await?;
     Ok(Json(NullifierContainsResponse {
-        slot: membership.head.slot,
+        block_number: membership.head.state.metadata.block.number as i64,
+        block_hash: membership.head.state.metadata.block.hash,
         state_root: membership.head.state.metadata.state_root,
         results: nullifier_contains_entries(&body.nullifiers, membership.nullifier_present),
     }))
@@ -221,7 +223,8 @@ async fn post_state_membership(
     let membership =
         load_membership(&app_state, &body.object_commitments, &body.nullifiers).await?;
     Ok(Json(MembershipResponse {
-        slot: membership.head.slot,
+        block_number: membership.head.state.metadata.block.number as i64,
+        block_hash: membership.head.state.metadata.block.hash,
         state_root: membership.head.state.metadata.state_root,
         created_results: object_contains_entries(
             &body.object_commitments,
