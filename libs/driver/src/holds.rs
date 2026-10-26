@@ -7,28 +7,16 @@ use std::sync::{Arc, Mutex};
 
 use crate::error::DriverError;
 
-#[derive(Debug, Clone)]
-pub(crate) struct HoldOwner {
-    hold_id: u64,
-    pub(crate) label: String,
-}
-
+/// Input filenames mapped to proof owner labels.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct HoldTable {
-    inner: Arc<Mutex<HoldTableInner>>,
-}
-
-#[derive(Debug, Default)]
-struct HoldTableInner {
-    next_hold_id: u64,
-    owners: HashMap<String, HoldOwner>,
+    owners: Arc<Mutex<HashMap<String, String>>>,
 }
 
 /// Releases a proof's input holds when dropped.
 #[derive(Debug)]
 pub struct Holds {
     table: HoldTable,
-    hold_id: u64,
     files: Vec<String>,
 }
 
@@ -40,10 +28,10 @@ impl Holds {
 
 impl Drop for Holds {
     fn drop(&mut self) {
-        let mut inner = self.table.inner.lock().expect("hold table poisoned");
-        inner
-            .owners
-            .retain(|_, owner| owner.hold_id != self.hold_id);
+        let mut owners = self.table.owners.lock().expect("hold table poisoned");
+        for file in &self.files {
+            owners.remove(file);
+        }
     }
 }
 
@@ -56,12 +44,11 @@ impl HoldTable {
         label: &str,
         locked: &HashSet<String>,
     ) -> Result<Holds, DriverError> {
-        let mut inner = self.inner.lock().expect("hold table poisoned");
+        let mut owners = self.owners.lock().expect("hold table poisoned");
         for file in files {
-            if let Some(owner) = inner.owners.get(file) {
+            if let Some(owner) = owners.get(file) {
                 return Err(DriverError::Conflict(format!(
-                    "input {file} is held by {}",
-                    owner.label
+                    "input {file} is held by {owner}"
                 )));
             }
             if locked.contains(file) {
@@ -70,33 +57,17 @@ impl HoldTable {
                 )));
             }
         }
-        let hold_id = inner.next_hold_id;
-        inner.next_hold_id += 1;
         for file in files {
-            inner.owners.insert(
-                file.clone(),
-                HoldOwner {
-                    hold_id,
-                    label: label.to_string(),
-                },
-            );
+            owners.insert(file.clone(), label.to_string());
         }
         Ok(Holds {
             table: self.clone(),
-            hold_id,
             files: files.to_vec(),
         })
     }
 
-    /// Basename to the label of the proof holding it.
     pub(crate) fn labels(&self) -> HashMap<String, String> {
-        self.inner
-            .lock()
-            .expect("hold table poisoned")
-            .owners
-            .iter()
-            .map(|(file, owner)| (file.clone(), owner.label.clone()))
-            .collect()
+        self.owners.lock().expect("hold table poisoned").clone()
     }
 }
 

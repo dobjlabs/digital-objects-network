@@ -131,6 +131,16 @@ module transactions {
     relayerFailed: false,
   }
 
+  // Acceptance stores a payload at the relayer without yet claiming that it
+  // was broadcast or that it landed. The same job is reused after a retry.
+  pure def relayerJobFor(record: Record): RelayerJob = {
+    inputs: record.inputs,
+    outputs: record.outputs,
+    grounding: record.grounding,
+    broadcast: false,
+    failed: false,
+  }
+
   // Give file statuses an order so we can detect local knowledge moving back.
   pure def rank(status: ObjectStatus): int = match status {
     | Unknown => 0
@@ -279,13 +289,7 @@ module transactions {
           not(relayer.keys().contains(id)),
           chain.head - node.records.get(id).grounding <= maxAge,
           node' = { ...node, holds: Map(), jobs: Map() },
-          relayer' = relayer.put(id, {
-            inputs: node.records.get(id).inputs,
-            outputs: node.records.get(id).outputs,
-            grounding: node.records.get(id).grounding,
-            broadcast: false,
-            failed: false,
-          }),
+          relayer' = relayer.put(id, relayerJobFor(node.records.get(id))),
           strays' = strays,
         }
       | _ => all {
@@ -336,13 +340,8 @@ module transactions {
     node' = { ...node,
       records: node.records.set(tx, { ...node.records.get(tx), state: Submitted }),
     },
-    relayer' = if (relayer.keys().contains(tx)) relayer else relayer.put(tx, {
-      inputs: node.records.get(tx).inputs,
-      outputs: node.records.get(tx).outputs,
-      grounding: node.records.get(tx).grounding,
-      broadcast: false,
-      failed: false,
-    }),
+    relayer' = if (relayer.keys().contains(tx)) relayer
+      else relayer.put(tx, relayerJobFor(node.records.get(tx))),
     chain' = chain,
     unchangedGhosts,
     previousObjects' = node.objects,

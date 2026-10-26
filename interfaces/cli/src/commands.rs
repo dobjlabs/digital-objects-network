@@ -326,7 +326,7 @@ pub async fn prove(
             if let Some(message) = &job.message
                 && !json
             {
-                eprintln!("[{:?}] {message}", job.status);
+                eprintln!("[{}] {message}", job.status);
             }
         }
     }
@@ -344,7 +344,7 @@ pub async fn prove(
 fn print_proof_job(job: &ProofJobState) {
     println!("{:<10} {}", "job id:", job.job_id);
     println!("{:<10} {}", "action:", job.action);
-    println!("{:<10} {:?}", "status:", job.status);
+    println!("{:<10} {}", "status:", job.status);
     if let Some(tx_final) = &job.tx_final {
         println!("{:<10} {}", "txFinal:", tx_final);
     }
@@ -371,7 +371,7 @@ pub async fn proofs(client: &DobjdClient, active: bool, json: bool) -> Result<()
     for job in &jobs {
         println!(
             "[{:<9}] {} {} {}",
-            format!("{:?}", job.status).to_lowercase(),
+            job.status,
             job.job_id,
             job.action,
             job.tx_final.as_deref().map(short_hex).unwrap_or_default()
@@ -411,7 +411,7 @@ pub async fn transactions(client: &DobjdClient, json: bool) -> Result<()> {
     for record in &records {
         println!(
             "[{:<9}] {} {} block {}{}",
-            format!("{:?}", record.state).to_lowercase(),
+            record.state,
             record.tx_final,
             record.action,
             record.grounding_block,
@@ -448,7 +448,7 @@ pub async fn inspect_transaction(
 fn print_transaction(record: &TransactionRecord) {
     println!("{:<16} {}", "txFinal:", record.tx_final);
     println!("{:<16} {}", "action:", record.action);
-    println!("{:<16} {:?}", "state:", record.state);
+    println!("{:<16} {}", "state:", record.state);
     println!("{:<16} {}", "grounding block:", record.grounding_block);
     println!("{:<16} {}", "grounding root:", record.grounding_root);
     if let Some(job) = &record.relayer_job_id {

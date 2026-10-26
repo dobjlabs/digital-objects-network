@@ -196,18 +196,7 @@ impl DobjOps for DobjdOps {
     }
 
     fn run_action(&self, input: mcp::RunActionInput) -> anyhow::Result<mcp::RunAccepted> {
-        // Pass strings through verbatim — the driver extracts basenames via
-        // `Path::file_name`, so an absolute path or a bare basename resolve to
-        // the same managed file.
-        let input_objects: Vec<String> = input
-            .input_object_paths
-            .iter()
-            .map(|path| path.trim().to_string())
-            .collect();
-
-        // The run shares the same registry as the HTTP routes, so the GUI and
-        // an agent can both follow the daemon-assigned run id.
-        crate::runs::spawn_run(&self.services, input.action, input_objects, input.args)
+        crate::runs::spawn_run(&self.services, input)
     }
 
     fn get_run(&self, run_id: &str) -> anyhow::Result<mcp::RunState> {
@@ -223,52 +212,35 @@ impl DobjOps for DobjdOps {
     }
 
     fn start_proof(&self, input: mcp::RunActionInput) -> anyhow::Result<mcp::ProofJobState> {
-        let input_objects: Vec<String> = input
-            .input_object_paths
-            .iter()
-            .map(|path| path.trim().to_string())
-            .collect();
-        Ok(crate::jobs::spawn_proof(
-            &self.services,
-            input.action,
-            input_objects,
-            input.args,
-        ))
+        Ok(crate::jobs::spawn_proof(&self.services, input))
     }
 
     fn get_proof(&self, job_id: &str, wait_ms: Option<u64>) -> anyhow::Result<mcp::ProofJobState> {
-        let entry = self
-            .services
-            .jobs
-            .get(job_id)
-            .ok_or_else(|| anyhow::anyhow!("unknown job: {job_id}"))?;
-        block_on(crate::routes::wait::wait_until(
-            &self.services.events,
-            mcp_wait_query(wait_ms),
-            || Ok(entry.snapshot()),
-            |job| job.status.is_terminal(),
-            |event| match event {
-                crate::events::Event::ProofJob(job) if job.job_id == job_id => Some(job.clone()),
-                _ => None,
-            },
-        ))
+        block_on(
+            self.services
+                .wait_for_proof(job_id, mcp_wait_query(wait_ms)),
+        )
     }
 
     fn list_proofs(&self, active_only: bool) -> anyhow::Result<Vec<mcp::ProofJobState>> {
-        Ok(self.services.jobs.list(active_only))
+        Ok(self
+            .services
+            .jobs
+            .entries(active_only)
+            .iter()
+            .map(|entry| entry.snapshot())
+            .collect())
     }
 
     fn submit_transactions(
         &self,
         tx_finals: Vec<String>,
     ) -> anyhow::Result<Vec<mcp::TransactionRecord>> {
-        let mut records = Vec::with_capacity(tx_finals.len());
-        for hex in &tx_finals {
-            let record = self.driver().submit(&parse_tx_final(hex)?)?;
-            self.services.announce_transaction(&record);
-            records.push(record);
-        }
-        Ok(records)
+        let tx_finals = tx_finals
+            .iter()
+            .map(|hex| parse_tx_final(hex))
+            .collect::<Result<Vec<_>>>()?;
+        self.services.submit_transactions(&tx_finals)
     }
 
     fn list_transactions(&self) -> anyhow::Result<Vec<mcp::TransactionRecord>> {
@@ -281,23 +253,14 @@ impl DobjOps for DobjdOps {
         wait_ms: Option<u64>,
     ) -> anyhow::Result<mcp::TransactionRecord> {
         let hash = parse_tx_final(tx_final)?;
-        let key = payload::encode_hash_hex(&hash);
-        block_on(crate::routes::wait::wait_until(
-            &self.services.events,
-            mcp_wait_query(wait_ms),
-            || self.driver().get_transaction(&hash),
-            |record| record.state.is_terminal(),
-            |event| match event {
-                crate::events::Event::Transaction(record) if record.tx_final == key => {
-                    Some(record.clone())
-                }
-                _ => None,
-            },
-        ))
+        block_on(
+            self.services
+                .wait_for_transaction(&hash, mcp_wait_query(wait_ms)),
+        )
     }
 
     fn delete_transaction(&self, tx_final: &str) -> anyhow::Result<mcp::TransactionRecord> {
-        crate::routes::delete_transaction(&self.services, &parse_tx_final(tx_final)?)
+        self.services.delete_transaction(&parse_tx_final(tx_final)?)
     }
 
     fn check_feasibility(

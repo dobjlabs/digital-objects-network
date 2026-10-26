@@ -3,19 +3,11 @@ use axum::{
     Json,
     extract::{Path, Query, State},
 };
-use driver::{DriverError, Hash};
 use wire_types::transactions::TransactionRecord;
 use wire_types::{SubmitRequest, WaitQuery};
 
 use crate::error::ApiResult;
-use crate::events::Event;
-use crate::routes::wait::wait_until;
-use crate::state::{AppState, Services};
-
-fn parse_tx_final(hex: &str) -> Result<Hash, DriverError> {
-    payload::decode_hash_hex(hex)
-        .map_err(|err| DriverError::InvalidInput(format!("txFinal {hex}: {err}")))
-}
+use crate::state::{AppState, parse_tx_final};
 
 /// `POST /submissions`: submit records in order, stopping on the first error.
 /// Return updated records when all submissions succeed.
@@ -29,17 +21,9 @@ pub async fn submit(
         .map(|hex| parse_tx_final(hex))
         .collect::<Result<Vec<_>, _>>()?;
     let services = state.services.clone();
-    let records = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<TransactionRecord>> {
-        let mut records = Vec::with_capacity(tx_finals.len());
-        for tx_final in &tx_finals {
-            let record = services.driver.submit(tx_final)?;
-            services.announce_transaction(&record);
-            records.push(record);
-        }
-        Ok(records)
-    })
-    .await
-    .map_err(|err| anyhow!("submit task panicked: {err}"))??;
+    let records = tokio::task::spawn_blocking(move || services.submit_transactions(&tx_finals))
+        .await
+        .map_err(|err| anyhow!("submit task panicked: {err}"))??;
     Ok(Json(records))
 }
 
@@ -60,20 +44,9 @@ pub async fn get(
     Query(query): Query<WaitQuery>,
 ) -> ApiResult<Json<TransactionRecord>> {
     let hash = parse_tx_final(&tx_final)?;
-    let driver = state.services.driver.clone();
-    let key = payload::encode_hash_hex(&hash);
-    let record = wait_until(
-        &state.services.events,
-        query,
-        move || driver.get_transaction(&hash),
-        |record| record.state.is_terminal(),
-        |event| match event {
-            Event::Transaction(record) if record.tx_final == key => Some(record.clone()),
-            _ => None,
-        },
-    )
-    .await?;
-    Ok(Json(record))
+    Ok(Json(
+        state.services.wait_for_transaction(&hash, query).await?,
+    ))
 }
 
 /// `DELETE /transactions/{txFinal}`: remove the record and unknown outputs.
@@ -84,28 +57,8 @@ pub async fn delete(
 ) -> ApiResult<Json<TransactionRecord>> {
     let hash = parse_tx_final(&tx_final)?;
     let services = state.services.clone();
-    let record = tokio::task::spawn_blocking(move || delete_transaction(&services, &hash))
+    let record = tokio::task::spawn_blocking(move || services.delete_transaction(&hash))
         .await
         .map_err(|err| anyhow!("delete task panicked: {err}"))??;
     Ok(Json(record))
-}
-
-/// Deletes the record and announces what went with it. Blocking.
-pub fn delete_transaction(
-    services: &Services,
-    tx_final: &Hash,
-) -> anyhow::Result<TransactionRecord> {
-    let record = services.driver.delete_transaction(tx_final)?;
-    services.events.publish(Event::TransactionDeleted {
-        tx_final: record.tx_final.clone(),
-    });
-    for file_name in &record.output_files {
-        if !services.driver.paths().objects_dir.join(file_name).exists() {
-            services.events.publish(Event::ObjectRemoved {
-                file_name: file_name.clone(),
-            });
-        }
-    }
-    services.publish_objects(&record.input_files);
-    Ok(record)
 }

@@ -21,8 +21,6 @@ mod state;
 mod transactions;
 pub mod wait;
 
-pub use transactions::delete_transaction;
-
 /// Build the axum router.
 ///
 /// The default UI is mounted at /ui/. API routes

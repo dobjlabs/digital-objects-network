@@ -29,19 +29,7 @@ pub async fn run_action(
     State(state): State<AppState>,
     Json(req): Json<RunActionRequest>,
 ) -> ApiResult<(StatusCode, Json<RunAccepted>)> {
-    let input = req.input;
-
-    // Pass strings through verbatim — the driver extracts basenames via
-    // `Path::file_name`, so an absolute path or a bare basename resolve to the
-    // same managed file.
-    let input_objects: Vec<String> = input
-        .input_object_paths
-        .iter()
-        .map(|path| path.trim().to_string())
-        .collect();
-
-    let accepted =
-        crate::runs::spawn_run(&state.services, input.action, input_objects, input.args)?;
+    let accepted = crate::runs::spawn_run(&state.services, req.input)?;
     Ok((StatusCode::ACCEPTED, Json(accepted)))
 }
 

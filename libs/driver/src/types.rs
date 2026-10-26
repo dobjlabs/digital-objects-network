@@ -5,7 +5,6 @@
 use std::path::PathBuf;
 
 use pod2::middleware::Hash;
-use serde::{Deserialize, Serialize};
 use wire_types::{ActionArgValues, ExecutionPhase, ObjectStatus, QualifiedName};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,18 +43,6 @@ pub struct ExecuteActionInput {
     pub args: ActionArgValues,
 }
 
-/// What `execute` returns once the transaction is recorded and submitted.
-/// Landing is reported by settlement, not here.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ExecuteActionResult {
-    pub tx_final: Hash,
-    pub old_root: Hash,
-    pub output_files: Vec<String>,
-    pub input_files: Vec<String>,
-    pub relayer_job_id: String,
-}
-
 /// Optional context passed alongside execution progress steps.
 #[derive(Debug, Clone, Default)]
 pub struct ExecutionStepContext {
@@ -71,7 +58,7 @@ pub struct ExecutionStepContext {
 
 pub trait ExecutionReporter {
     fn on_step(&self, _phase: ExecutionPhase, _message: &str, _ctx: &ExecutionStepContext) {}
-    fn on_done(&self, _phase: ExecutionPhase, _result: Option<&ExecuteActionResult>) {}
+    fn on_done(&self, _phase: ExecutionPhase) {}
 }
 
 #[derive(Debug, Default, Clone, Copy)]

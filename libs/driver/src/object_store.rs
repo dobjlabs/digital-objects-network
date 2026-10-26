@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use hex::ToHex;
 use pod2::middleware::{Hash, StrKey, containers::Dictionary};
 use std::{collections::HashMap, fs, path::Path};
-use wire_types::{ObjectStatus, QualifiedName};
+use wire_types::{ObjectStatus, ObjectSummary, QualifiedName};
 
 use crate::object_record::ObjectRecord;
 use crate::paths::DOBJ_EXTENSION;
@@ -184,24 +184,18 @@ pub(crate) fn load_object_files(paths: &DriverPaths) -> Result<Vec<ObjectFileEnt
     Ok(objects)
 }
 
-/// `status` is the object's derived status, which may say `pending` where
-/// the file says `unknown`.
-pub(crate) fn matches_query(
-    entry: &ObjectFileEntry,
-    status: ObjectStatus,
-    query: &ObjectQuery,
-) -> bool {
+pub(crate) fn matches_query(summary: &ObjectSummary, query: &ObjectQuery) -> bool {
     if let Some(class) = &query.class
-        && &entry.record.class != class
+        && &summary.class != class
     {
         return false;
     }
     if let Some(wanted) = query.status
-        && wanted != status
+        && wanted != summary.status
     {
         return false;
     }
-    !(query.exclude_nullified && entry.record.is_nullified())
+    !(query.exclude_nullified && summary.status == ObjectStatus::Nullified)
 }
 
 #[cfg(test)]

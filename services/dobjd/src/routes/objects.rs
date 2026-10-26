@@ -122,22 +122,10 @@ async fn synced_objects(
     query: Option<ObjectQuery>,
 ) -> ApiResult<Json<Vec<ObjectSummary>>> {
     let services = state.services.clone();
-    let objects = tokio::task::spawn_blocking(move || {
-        services
-            .settler
-            .sync_objects(query.as_ref())
-            .unwrap_or_else(|err| {
-                tracing::warn!("sync_objects failed, falling back to local: {err:#}");
-                let mut objects = services
-                    .driver
-                    .list_objects(query.as_ref())
-                    .unwrap_or_default();
-                services.fill_held_by(&mut objects);
-                objects
-            })
-    })
-    .await
-    .map_err(|err| anyhow::anyhow!("load_objects task panicked: {err}"))?;
+    let objects =
+        tokio::task::spawn_blocking(move || services.settler.sync_objects(query.as_ref()))
+            .await
+            .map_err(|err| anyhow::anyhow!("load_objects task panicked: {err}"))??;
 
     Ok(Json(objects))
 }

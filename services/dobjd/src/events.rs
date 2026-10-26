@@ -59,12 +59,10 @@ impl EventHub {
         }
     }
 
-    /// Numbers and broadcasts the event; returns its sequence number. A
-    /// send with no subscribers is not an error.
-    pub fn publish(&self, event: Event) -> u64 {
+    /// Publish an event even if no clients are subscribed.
+    pub fn publish(&self, event: Event) {
         let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
         let _ = self.tx.send(Envelope { seq, event });
-        seq
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Envelope> {

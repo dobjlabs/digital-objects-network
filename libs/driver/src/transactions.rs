@@ -124,28 +124,20 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
     use wire_types::QualifiedName;
-    use wire_types::transactions::TransactionState;
 
     fn record(tx_final: Hash, recorded_at_ms: u64) -> TransactionRecord {
-        TransactionRecord {
-            tx_final: encode_hash_hex(&tx_final),
-            action: QualifiedName::new("plugin", "Action"),
-            input_files: vec!["in.dobj".to_string()],
-            output_files: vec!["out.dobj".to_string()],
-            grounding_root: encode_hash_hex(&Hash::default()),
-            grounding_block: 1,
-            nullifiers: vec![],
-            created: vec![],
-            state: TransactionState::Recorded,
-            relayer_job_id: None,
-            tx_hash: None,
-            relayer_failure: None,
-            reason: None,
+        TransactionRecord::recorded(
+            encode_hash_hex(&tx_final),
+            QualifiedName::new("plugin", "Action"),
+            "test".to_string(),
+            vec!["in.dobj".to_string()],
+            vec!["out.dobj".to_string()],
+            encode_hash_hex(&Hash::default()),
+            1,
+            vec![],
+            vec![],
             recorded_at_ms,
-            submit_attempted_at_ms: None,
-            submitted_at_ms: None,
-            settled_at_ms: None,
-        }
+        )
     }
 
     #[test]
