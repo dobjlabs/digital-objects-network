@@ -253,12 +253,10 @@ create-db NAME:
 # `just relayer`.
 ensure-db: (create-db "synchronizer") (create-db "relayer")
 
-# Point the synchronizer + archiver at the current chain head on a *fresh* start.
-# Both require INIT_START_SLOT but use it only when their store is empty (they
-# resume from on-disk progress otherwise), so we rewrite a service's .env to the
-# current beacon head when its db is absent, or when INIT_START_SLOT is unset (the
-# var is required, so a resumed service still needs *some* value). Runs as part of
-# `just dev`; a no-op once each db exists and the var is set.
+# Set INIT_START_SLOT in the synchronizer + archiver .env to a recent genesis slot
+# (utils/genesis-slot.sh) when the service's store is absent or the var is unset.
+# Both use it only on an empty store and resume from stored progress otherwise.
+# Runs as part of `just dev`; a no-op once each store exists and the var is set.
 ensure-start-slot:
     #!/usr/bin/env bash
     set -uo pipefail
@@ -279,33 +277,6 @@ ensure-start-slot:
         mv "$tmp" "$file"
     }
 
-    # The synchronizer derives its genesis state at INIT_START_SLOT, which must be finalized
-    # and have an execution payload that became canonical with it. Walk back from the finalized
-    # slot to the first such slot, using the synchronizer's rule: up to Fulu a block's embedded
-    # payload is canonical; from Gloas the parent's bid payload is, when this block's bid builds
-    # on it.
-    genesis_slot() {  # <beacon_url> -> slot number
-        local beacon="${1%/}" slot block parent_root built_on parent_payload
-        slot="$(curl -fsSL "${beacon}/eth/v1/beacon/headers/finalized" | jq -r '.data.header.message.slot')" || return 1
-        for _ in $(seq 64); do
-            [[ "$slot" =~ ^[0-9]+$ ]] && [ "$slot" -ge 1 ] || return 1
-            if block="$(curl -fsSL "${beacon}/eth/v2/beacon/blocks/${slot}" 2>/dev/null)"; then
-                if [ "$(jq -r '.data.message.body.execution_payload != null' <<<"$block")" = true ]; then
-                    echo "$slot"; return 0
-                fi
-                parent_root="$(jq -r '.data.message.parent_root' <<<"$block")"
-                built_on="$(jq -r '.data.message.body.signed_execution_payload_bid.message.parent_block_hash' <<<"$block")"
-                parent_payload="$(curl -fsSL "${beacon}/eth/v2/beacon/blocks/${parent_root}" \
-                    | jq -r '.data.message.body.signed_execution_payload_bid.message.block_hash // empty')" || return 1
-                if [ -n "$parent_payload" ] && [ "$parent_payload" = "$built_on" ]; then
-                    echo "$slot"; return 0
-                fi
-            fi
-            slot=$((slot - 1))
-        done
-        return 1
-    }
-
     ensure_slot() {  # <label> <env_file> <fresh:true|false>
         local label="$1" env="$2" fresh="$3" cur beacon slot
         if [ ! -f "$env" ]; then echo "$label: $env missing; skipping"; return 0; fi
@@ -315,7 +286,7 @@ ensure-start-slot:
         fi
         beacon="$(read_env "$env" BEACON_URL)"
         if [ -z "$beacon" ]; then echo "$label: no BEACON_URL in $env; leaving INIT_START_SLOT as-is"; return 0; fi
-        slot="$(genesis_slot "$beacon" 2>/dev/null || true)"
+        slot="$(utils/genesis-slot.sh "$beacon" 2>/dev/null || true)"
         if [[ "$slot" =~ ^[0-9]+$ ]]; then
             set_env "$env" INIT_START_SLOT "$slot"
             echo "$label: INIT_START_SLOT -> $slot (finalized, with a canonical payload)"

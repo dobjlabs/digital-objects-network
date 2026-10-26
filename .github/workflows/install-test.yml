@@ -315,32 +315,27 @@ jobs:
           }
 
       # =====================================================================
-      # Resolve a recent Sepolia slot so the synchronizer doesn't waste
-      # CI minutes catching up from genesis. 5 slots back ≈ 60s buffer
-      # so we're guaranteed the relayer's submission lands AFTER our
-      # start slot.
+      # Resolve the synchronizer's genesis slot: the latest finalized Sepolia
+      # slot with a canonical execution payload, which the synchronizer
+      # requires of INIT_START_SLOT. Being recent, it spares catching up from
+      # far back, and it precedes the relayer's submission. The archiver
+      # starts there too. Only the script is checked out: everything else
+      # in this job comes from the release.
       # =====================================================================
 
-      - name: Resolve recent Sepolia head slot (Unix)
-        if: runner.os != 'Windows'
+      - name: Check out genesis-slot script
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: utils/genesis-slot.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Resolve Sepolia genesis slot
         shell: bash
         run: |
           set -euo pipefail
-          HEAD=$(curl -fsSL "$BEACON_URL/eth/v1/beacon/headers/head" \
-            | python3 -c "import sys, json; print(json.load(sys.stdin)['data']['header']['message']['slot'])")
-          START=$((HEAD - 5))
-          echo "synchronizer start slot: $START (head $HEAD)"
+          START=$(utils/genesis-slot.sh "$BEACON_URL")
+          echo "synchronizer start slot: $START"
           echo "INIT_START_SLOT=$START" >> "$GITHUB_ENV"
-
-      - name: Resolve recent Sepolia head slot (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $head = (Invoke-RestMethod -Uri "$env:BEACON_URL/eth/v1/beacon/headers/head").data.header.message.slot
-          $start = [int]$head - 5
-          Write-Host "synchronizer start slot: $start (head $head)"
-          # -Encoding ascii avoids any BOM that would break the GITHUB_ENV parser.
-          "INIT_START_SLOT=$start" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
 
       # =====================================================================
       # Start the local stack. Both binaries read config from process env

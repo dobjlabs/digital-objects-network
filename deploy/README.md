@@ -96,7 +96,7 @@ Set via `.env` (compose) or `-e` flags (`docker run`). Image defaults:
 | `RPC_URL`              | all                    | yes          | Execution-layer RPC                                                             |
 | `BEACON_URL`           | synchronizer, archiver | yes          | Beacon API with blob sidecars                                                   |
 | `TO_ADDRESS`           | all                    | yes          | L1 target address; must match across services (archiver reads `FILTER_ADDRESS`) |
-| `INIT_START_SLOT`      | synchronizer, archiver | yes          | Beacon slot both services start from on first run                               |
+| `INIT_START_SLOT`      | synchronizer, archiver | yes          | First-run slot; finalized with an execution block (`utils/genesis-slot.sh`)     |
 | `PRIVATE_KEY`          | relayer                | relayer only | Hot wallet that signs/pays for blob txs                                         |
 | `ARCHIVER_URL`         | synchronizer           | no           | Blobs older than beacon retention; unset, falls back to `BEACON_URL`            |
 | `STATE_LOG_DB_URL` | synchronizer           | no           | Defaults to the bundled Postgres; set to point at an external one               |
