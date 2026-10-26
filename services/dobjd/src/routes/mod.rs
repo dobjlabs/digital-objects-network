@@ -19,7 +19,9 @@ mod proofs;
 mod settings;
 mod state;
 mod transactions;
-mod wait;
+pub mod wait;
+
+pub use transactions::delete_transaction;
 
 /// Build the axum router.
 ///

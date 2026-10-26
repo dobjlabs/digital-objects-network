@@ -5,6 +5,7 @@
 import type {
   ActionPayload,
   AppSettingsPayload,
+  ObjectRemovedEvent,
   ObjectSummaryPayload,
   RunAccepted,
   RunActionInput,
@@ -16,6 +17,7 @@ export type {
   ActionArgValues,
   ActionPayload,
   AppSettingsPayload,
+  ObjectRemovedEvent,
   ObjectSummaryPayload,
   QualifiedNamePayload,
   RunAccepted,
@@ -173,10 +175,18 @@ type Handler<T> = (payload: T) => void;
 
 let sharedEventSource: EventSource | null = null;
 const httpHandlers = new Map<string, Set<Handler<unknown>>>();
+const reopenHandlers = new Set<() => void>();
+let streamOpenedBefore = false;
 
 function ensureEventSource() {
   if (sharedEventSource) return;
   sharedEventSource = new EventSource(`${HTTP_BASE}/events`);
+  sharedEventSource.onopen = () => {
+    if (streamOpenedBefore) {
+      for (const handler of reopenHandlers) handler();
+    }
+    streamOpenedBefore = true;
+  };
   sharedEventSource.onmessage = (e) => {
     let parsed: { type?: string } & Record<string, unknown>;
     try {
@@ -218,6 +228,34 @@ export function listenRunActionProgress(
   handler: (event: RunActionProgress) => void,
 ): Promise<UnlistenFn> {
   return subscribeHttp<RunActionProgress>("run-action-progress", handler);
+}
+
+/** Subscribe to object summaries and file removals. */
+export async function listenObjectEvents(handlers: {
+  object: (object: ObjectSummaryPayload) => void;
+  removed: (event: ObjectRemovedEvent) => void;
+}): Promise<UnlistenFn> {
+  const unlistenObject = await subscribeHttp<ObjectSummaryPayload>(
+    "object",
+    handlers.object,
+  );
+  const unlistenRemoved = await subscribeHttp<ObjectRemovedEvent>(
+    "object-removed",
+    handlers.removed,
+  );
+  return () => {
+    unlistenObject();
+    unlistenRemoved();
+  };
+}
+
+/** Fires on reconnection so subscribers can reload missed state. */
+export function listenEventStreamReopen(handler: () => void): Promise<UnlistenFn> {
+  ensureEventSource();
+  reopenHandlers.add(handler);
+  return Promise.resolve(() => {
+    reopenHandlers.delete(handler);
+  });
 }
 
 function isTerminalRunProgress(event: RunActionProgress): boolean {

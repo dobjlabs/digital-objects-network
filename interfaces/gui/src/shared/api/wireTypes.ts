@@ -113,6 +113,12 @@ export interface ObjectRecordPayload {
   tx: unknown;
 }
 
+/** Names a file removed by expiry, transaction deletion, or discard. */
+export interface ObjectRemovedEvent {
+  seq?: number;
+  fileName: string;
+}
+
 export interface RunActionProgress {
   runId: string;
   phase: ProofPhase;

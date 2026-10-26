@@ -33,18 +33,21 @@ object could have reached its current state. Use `list_classes` and
 
 **Actions.** Actions are state transitions that consume input objects,
 generate a ZK proof, and produce output objects. Each action takes
-seconds to minutes of CPU time for proof generation. **Multiple actions
-can run concurrently** — go ahead and call `run_action` in parallel if
-the user has work to batch. Use `list_actions` to see what's available
-and what each action requires.
+seconds to minutes of CPU time for proof generation. Start several runs
+at once if the user has work to batch: the daemon queues them behind its
+proof slots and follows each to the chain. For finer control, `start_proof`
+proves without submitting and `submit_transactions` posts when you choose.
+Use `list_actions` to see what's available and what each action requires.
 
 **Nullifiers and liveness.** When an action consumes an object, it
 publishes a nullifier (a hash derived from the object's key). This
 prevents double-spending. An object is "live" if its nullifier has not
 been published. Dead objects remain in objects for reference but
-cannot be used as inputs. While a run is in progress, each object it was
-given as an input reports that run's id in `heldByRunId`; the field clears
-once the run succeeds or fails.
+cannot be used as inputs. While a run or proof job is in progress, each
+object it was given as an input reports that id in `heldByRunId`; a run
+keeps it until its transaction lands or expires. An input of a recorded
+or submitted transaction stays `live` on disk but is refused as an input
+until the chain decides; `list_transactions` shows which.
 
 **State root.** A state root is a hash of all published
 transactions and nullifiers at a given Ethereum block. Actions must be
@@ -69,12 +72,26 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 
 ### Mutation
 
-- `run_action({ action: { pluginName, name }, inputObjectPaths })` — start an action; returns a
-  `runId` immediately (the proof + commit run in the background). See
+- `run_action({ action: { pluginName, name }, inputObjectPaths })` — start an action end to end; returns a
+  `runId` immediately (prove, record, submit and follow to the chain run in the background). See
   "running actions" below.
 - `get_run({ run_id })` — poll a run's status, result/error, and progress log.
 - `list_runs({ active_only? })` — the runs the daemon still holds, oldest
   first; use it to find a run whose `runId` you no longer have.
+
+### Stages
+
+- `start_proof({ action, inputObjectPaths, args? })` — prove and record a
+  transaction without submitting it; returns a `jobId` immediately.
+- `get_proof({ job_id, wait_ms? })` — the job's state; `done` carries `txFinal`.
+- `list_proofs({ active_only? })` — the proof jobs the daemon still holds.
+- `submit_transactions({ txFinals })` — post recorded transactions to the relayer.
+- `list_transactions()` — every transaction record on disk: `recorded`,
+  `submitted`, `landed` or `expired`. Survives a daemon restart.
+- `get_transaction({ tx_final, wait_ms? })` — one record; with `wait_ms`,
+  held until it lands or expires (capped by the daemon; call again while open).
+- `delete_transaction({ tx_final })` — abandon a recorded transaction that
+  was never offered to the relayer.
 
 ### Configuration
 
@@ -97,13 +114,20 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 
 To wait for the result, poll `get_run({ run_id })` until `status` is terminal:
 
-- `succeeded` → read `result` (old/new state root, output and nullified files)
-- `failed` → read `error`
+- `succeeded` → the transaction landed; read `result` (grounding root, output files, the input files it spent)
+- `failed` → read `error` (a proof or input error, or the transaction expired without landing)
 
 The returned state also carries the ordered `progress` log, so you can show
 the user which step a run is on while it's still `generateProof` or
-`committing`. Multiple runs proceed concurrently — start several and poll each
-`runId` independently.
+`committing` (which covers recording, submitting and waiting for the chain).
+Start several runs and poll each `runId` independently; the daemon proves
+them one at a time by default and follows each to the chain.
+
+To separate proving from submitting, use `start_proof`, then `get_proof` with
+`wait_ms` until it is `done`, then `submit_transactions` with its `txFinal`
+when ready, and `get_transaction` with `wait_ms` until it is `landed` or
+`expired`. Proof jobs are not queued behind the run slot, so start only as
+many as the machine should prove at once.
 
 Pass `inputObjectPaths` explicitly (one per the action's required input
 classes, in order); resolve them from `list_objects` / `check_feasibility`

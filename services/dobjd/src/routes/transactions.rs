@@ -84,13 +84,17 @@ pub async fn delete(
 ) -> ApiResult<Json<TransactionRecord>> {
     let hash = parse_tx_final(&tx_final)?;
     let services = state.services.clone();
-    let record = tokio::task::spawn_blocking(move || delete_blocking(&services, &hash))
+    let record = tokio::task::spawn_blocking(move || delete_transaction(&services, &hash))
         .await
         .map_err(|err| anyhow!("delete task panicked: {err}"))??;
     Ok(Json(record))
 }
 
-fn delete_blocking(services: &Services, tx_final: &Hash) -> anyhow::Result<TransactionRecord> {
+/// Deletes the record and announces what went with it. Blocking.
+pub fn delete_transaction(
+    services: &Services,
+    tx_final: &Hash,
+) -> anyhow::Result<TransactionRecord> {
     let record = services.driver.delete_transaction(tx_final)?;
     services.events.publish(Event::TransactionDeleted {
         tx_final: record.tx_final.clone(),

@@ -10,11 +10,13 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+pub use wire_types::transactions::{TransactionRecord, TransactionState};
 pub use wire_types::{
     ActionSummary, CheckActionCandidate as FeasibilityInput,
     CheckActionReport as FeasibilityReport, ClassRef, ClassSummary, DriverSettings,
-    DriverSettingsPatch, ObjectStatus, ObjectSummary, ObjectsDirInfo, QualifiedName, RunAccepted,
-    RunActionInput, RunActionResult as RunActionInner, RunState, RunStatus,
+    DriverSettingsPatch, ObjectStatus, ObjectSummary, ObjectsDirInfo, ProofJobState,
+    ProofJobStatus, QualifiedName, RunAccepted, RunActionInput, RunActionResult as RunActionInner,
+    RunState, RunStatus, SubmitRequest,
 };
 
 // -- List response wrappers (MCP outputSchema requires root type "object") --
@@ -38,6 +40,20 @@ pub struct ActionList {
 pub struct RunList {
     /// Runs the daemon still holds, oldest first.
     pub runs: Vec<RunState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProofJobList {
+    /// Retained proof jobs, oldest first.
+    pub jobs: Vec<ProofJobState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionList {
+    /// Transaction records on disk, oldest first.
+    pub transactions: Vec<TransactionRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

@@ -104,6 +104,9 @@ export interface AppState {
   actions: Action[];
   proof: ProofState;
   hydrateData: () => Promise<void>;
+  /** Update or insert an object by filename, keeping the list sorted. */
+  applyObjectUpdate: (object: ObjectSummary) => void;
+  removeObject: (fileName: string) => void;
   importObject: (dobj: string) => Promise<void>;
   selectObject: (contentHash: string) => void;
   selectAction: (action: QualifiedNamePayload) => void;
@@ -168,12 +171,30 @@ export const useStore = create<AppState>((set, get) => ({
     ]);
     set((prev) => ({ ...prev, objects, actions }));
   },
+  applyObjectUpdate: (object) =>
+    set((prev) => {
+      const index = prev.objects.findIndex(
+        (existing) => existing.fileName === object.fileName,
+      );
+      if (index !== -1) {
+        const objects = prev.objects.slice();
+        objects[index] = object;
+        return { ...prev, objects };
+      }
+      const objects = [...prev.objects, object].sort((a, b) =>
+        a.fileName.localeCompare(b.fileName),
+      );
+      return { ...prev, objects };
+    }),
+  removeObject: (fileName) =>
+    set((prev) => ({
+      ...prev,
+      objects: prev.objects.filter((object) => object.fileName !== fileName),
+    })),
   importObject: async (dobj) => {
-    // The driver validates + files the object; refetch so the new row shows
-    // up with its class emoji/description folded in (import returns the bare
-    // summary). Errors propagate to the caller to surface in the UI.
-    await importObjectApi(dobj);
-    await get().hydrateData();
+    // Show the imported object before its event arrives.
+    const imported = await importObjectApi(dobj);
+    get().applyObjectUpdate(imported);
   },
   selectObject: (contentHash) =>
     set((prev) => {

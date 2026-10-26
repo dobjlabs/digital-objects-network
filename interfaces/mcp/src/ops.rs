@@ -19,6 +19,24 @@ pub trait DobjOps: Send + Sync + 'static {
     /// Every run the host still holds, oldest first. `active_only` keeps
     /// just the runs that have not succeeded or failed.
     fn list_runs(&self, active_only: bool) -> anyhow::Result<Vec<RunState>>;
+    /// Start proving and recording; returns before completion.
+    /// Follow the job with `get_proof`.
+    fn start_proof(&self, input: RunActionInput) -> anyhow::Result<ProofJobState>;
+    /// Read a job's state, optionally waiting up to `wait_ms` for completion.
+    fn get_proof(&self, job_id: &str, wait_ms: Option<u64>) -> anyhow::Result<ProofJobState>;
+    fn list_proofs(&self, active_only: bool) -> anyhow::Result<Vec<ProofJobState>>;
+    /// Post recorded transactions to the relayer; returns their records.
+    fn submit_transactions(&self, tx_finals: Vec<String>)
+    -> anyhow::Result<Vec<TransactionRecord>>;
+    fn list_transactions(&self) -> anyhow::Result<Vec<TransactionRecord>>;
+    /// Read a transaction record, optionally waiting up to `wait_ms` for landing or expiry.
+    fn get_transaction(
+        &self,
+        tx_final: &str,
+        wait_ms: Option<u64>,
+    ) -> anyhow::Result<TransactionRecord>;
+    /// Delete a recorded transaction if submission has never been attempted.
+    fn delete_transaction(&self, tx_final: &str) -> anyhow::Result<TransactionRecord>;
     fn check_feasibility(&self, action: &QualifiedName) -> anyhow::Result<FeasibilityReport>;
 
     /// Import an external `.dobj` object — one not produced by this driver —

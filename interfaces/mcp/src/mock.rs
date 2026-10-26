@@ -6,6 +6,8 @@ use crate::ops::DobjOps;
 use crate::types::{RunActionInner, *};
 
 const PLUGIN: &str = "craft-basics";
+/// Unsubmitted transaction returned by the mock.
+const MOCK_TX_FINAL: &str = "0x00000000000000000000000000000000000000000000000000000000000000aa";
 
 fn qname(name: &str) -> QualifiedName {
     QualifiedName {
@@ -205,6 +207,104 @@ impl DobjOps for MockDobjOps {
             return Ok(Vec::new());
         }
         Ok(vec![self.get_run("run-1")?])
+    }
+
+    fn start_proof(&self, input: RunActionInput) -> anyhow::Result<ProofJobState> {
+        if !self.actions.iter().any(|a| a.action == input.action) {
+            bail!(
+                "unknown action: {}::{}",
+                input.action.plugin_name,
+                input.action.name
+            );
+        }
+        Ok(ProofJobState {
+            job_id: "00000000-0000-4000-8000-000000000001".to_string(),
+            action: input.action,
+            input_object_paths: input.input_object_paths,
+            status: ProofJobStatus::Queued,
+            message: None,
+            tx_final: None,
+            error: None,
+            created_at_ms: 0,
+            started_at_ms: None,
+            finished_at_ms: None,
+        })
+    }
+
+    fn get_proof(&self, job_id: &str, _wait_ms: Option<u64>) -> anyhow::Result<ProofJobState> {
+        Ok(ProofJobState {
+            job_id: job_id.to_string(),
+            action: qname("CraftWood"),
+            input_object_paths: vec!["craft-basics__log_0xmock.dobj".to_string()],
+            status: ProofJobStatus::Done,
+            message: Some("Transaction recorded".to_string()),
+            tx_final: Some(MOCK_TX_FINAL.to_string()),
+            error: None,
+            created_at_ms: 0,
+            started_at_ms: Some(0),
+            finished_at_ms: Some(0),
+        })
+    }
+
+    fn list_proofs(&self, active_only: bool) -> anyhow::Result<Vec<ProofJobState>> {
+        if active_only {
+            return Ok(Vec::new());
+        }
+        Ok(vec![self.get_proof("job-1", None)?])
+    }
+
+    fn submit_transactions(
+        &self,
+        tx_finals: Vec<String>,
+    ) -> anyhow::Result<Vec<TransactionRecord>> {
+        tx_finals
+            .iter()
+            .map(|tx_final| {
+                let mut record = self.get_transaction(tx_final, None)?;
+                record.state = TransactionState::Submitted;
+                record.relayer_job_id = Some("relayer-job-1".to_string());
+                record.submit_attempted_at_ms = Some(0);
+                record.submitted_at_ms = Some(0);
+                Ok(record)
+            })
+            .collect()
+    }
+
+    fn list_transactions(&self) -> anyhow::Result<Vec<TransactionRecord>> {
+        Ok(vec![self.get_transaction(MOCK_TX_FINAL, None)?])
+    }
+
+    fn get_transaction(
+        &self,
+        tx_final: &str,
+        _wait_ms: Option<u64>,
+    ) -> anyhow::Result<TransactionRecord> {
+        if tx_final != MOCK_TX_FINAL {
+            bail!("transaction not found: {tx_final}");
+        }
+        Ok(TransactionRecord {
+            tx_final: tx_final.to_string(),
+            action: qname("CraftWood"),
+            input_files: vec!["craft-basics__log_0xmock.dobj".to_string()],
+            output_files: vec!["craft-basics__wood_0xnew.dobj".to_string()],
+            grounding_root: "0xmockoldroot".to_string(),
+            grounding_block: 100,
+            nullifiers: vec![],
+            created: vec![],
+            state: TransactionState::Recorded,
+            relayer_job_id: None,
+            tx_hash: None,
+            relayer_failure: None,
+            reason: None,
+            recorded_at_ms: 0,
+            submit_attempted_at_ms: None,
+            submitted_at_ms: None,
+            settled_at_ms: None,
+        })
+    }
+
+    fn delete_transaction(&self, tx_final: &str) -> anyhow::Result<TransactionRecord> {
+        self.get_transaction(tx_final, None)
     }
 
     fn check_feasibility(&self, action: &QualifiedName) -> anyhow::Result<FeasibilityReport> {

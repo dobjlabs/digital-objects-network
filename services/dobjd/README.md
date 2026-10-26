@@ -60,7 +60,14 @@ All routes return JSON unless noted; errors come back as
 | `GET`  | `/actions/runs/{run_id}/events` | per-run SSE: replays buffered progress then tails live       |
 | `GET`  | `/actions/{id}`                 | `get_action`                                                 |
 | `GET`  | `/actions/{id}/feasibility`     | `check_action`                                               |
-| `GET`  | `/events`                       | global broadcast hub stream (SSE)                            |
+| `POST` | `/proofs`                       | starts a proof job (`prove` then `record`), returns `202` with its state; body as `/actions/run`'s `input` |
+| `GET`  | `/proofs`                       | retained proof jobs, oldest first (`?status=active`: unfinished) |
+| `GET`  | `/proofs/{job_id}`              | job state; `?wait=true&timeoutMs=` holds until it is done or failed |
+| `POST` | `/submissions`                  | `submit` each of `{ "txFinals": [...] }`, returns their records |
+| `GET`  | `/transactions`                 | `list_transactions`: every record on disk, oldest first      |
+| `GET`  | `/transactions/{tx_final}`      | `get_transaction`; `?wait=true&timeoutMs=` holds until landed or expired |
+| `DELETE` | `/transactions/{tx_final}`    | `delete_transaction`: abandon a recorded transaction never offered to the relayer |
+| `GET`  | `/events`                       | every state change (SSE), numbered by `seq`                  |
 
 ### Discarding objects is unsafe
 
@@ -69,8 +76,10 @@ straight into `~/.dobj/objects/.discarded/`, whatever its status (`live`,
 `pending`, or `unknown`) and even while a run holds it, and returns the
 object's summary from before the move. Spent (`nullified`) objects are left
 alone and come back as `404`. It is an escape hatch for clients that have decided an object is
-stale, such as a pending output whose commit failed, not an object-state
-transition.
+stale, such as an `unknown` output left by a crash before its transaction
+was recorded, not an object-state transition. An output of a recorded
+transaction needs no discarding: `DELETE /transactions/{tx_final}` removes
+it with the record, and settlement removes it when the transaction expires.
 
 None of the guarantees dobjd otherwise keeps about object state are promised
 for it:
@@ -83,15 +92,47 @@ for it:
 
 A missing or spent object is a `404`.
 
+### Transactions
+
+An action goes through four stages, each its own driver call: `prove` (hold
+the inputs, fetch the grounding witness, prove, shrink), `record` (write the
+outputs as `unknown`, the payload and the record under
+`~/.dobj/transactions/<txFinal>/`), `submit` (post the payload to the relayer)
+and `settle` (read the synchronizer's membership for every open record and
+decide). The record is the durable state: `recorded` (proved, not yet posted),
+`submitted` (the relayer holds a job; `relayerJobId`, and `txHash` once
+broadcast), then `landed` (outputs `live`, inputs `nullified`) or `expired`
+(the synchronizer head is more than `MAX_STATE_ROOT_AGE_BLOCKS` past the
+grounding block, so it can never land; the output files are removed and the
+inputs are free again). A relayer job that fails is an annotation
+(`relayerFailure`) on a `submitted` record, not an end: a failed job may still
+have been broadcast, and only the chain decides.
+
+dobjd owns no scheduling policy. A client that wants two proofs in flight and
+submissions batched runs `POST /proofs` and `POST /submissions` itself; the
+built-in run is one composition of the same stages. Settlement runs in the
+daemon: a task makes one pass whenever a record is written and every
+`SETTLE_INTERVAL` while any record is open, and `GET /objects` runs the same
+pass extended to every object file before listing. An object listing shows an
+`unknown` output of a `submitted` transaction as `pending`, with the
+transaction's `txHash`; the file itself carries only what the chain said.
+
+A `recorded` transaction can be deleted until a submission is attempted; after
+that the relayer may hold the payload, so the record stays until the chain
+lands or outruns it. Records survive a daemon restart; proof jobs, runs and
+input holds do not, and nothing on disk depends on them.
+
 ### Runs are non-blocking
 
 `POST /actions/run` registers the run, kicks off a background worker, and
-returns a `runId` immediately; the proof + commit pipeline runs on the worker.
-HTTP and MCP share an execution gate: one action runs at a time, while later
-requests are rejected (HTTP `409 Conflict`, or an MCP tool error) without
-creating a run. The gate covers the entire pipeline, including the
-existing wait for synchronizer confirmation, and releases when execution
-returns success, an error (including a timeout), or panics.
+returns a `runId` immediately. The worker waits for a proof permit
+(`DOBJD_MAX_PROOFS`, default `1`: later runs queue as `queued` rather than
+being refused), proves and records under the run's id, submits, then follows
+the transaction's record until the chain decides: `succeeded` with the result
+once it lands, `failed` with the reason if it expires. The objects a run was
+given stay marked with its id (`heldByRunId`) until then. A relayer refusal
+is reported in the progress log and leaves the transaction `recorded`; the
+run keeps following it.
 The worker records the run's status, ordered progress log, and terminal
 result/error in an in-memory registry. Follow a run either way:
 
@@ -103,19 +144,39 @@ result/error in an in-memory registry. Follow a run either way:
   until the run is terminal.
 
 Each accepted `POST` mints a fresh `runId`; clients don't choose it. Terminal
-runs are retained for a short TTL then reaped; runs are in-memory only (on-chain state
-and local `.dobj` files reconcile via sync regardless). The global `/events`
-stream carries every run's progress (`type: run-action-progress`) for firehose
-subscribers.
+runs and proof jobs are retained for a short TTL then reaped; both are
+in-memory only, and the transaction records they produced are on disk.
+
+### Events
+
+`GET /events` is one stream of every state change, each event numbered by
+`seq` (also the SSE `id`), so a client that sees a gap knows to re-read:
+
+- `run-action-progress`: a run's progress log entry.
+- `proof-job`: a proof job's state, on every change.
+- `transaction`: a transaction record, on every change (recorded, submitted,
+  tx hash known, relayer failure, landed, expired).
+- `transaction-deleted`: `{ txFinal }`.
+- `object`: an object's summary, whenever its status, tx hash or holder
+  changes (a hold taken or released, a record written, a settlement pass).
+- `object-removed`: `{ fileName }`, an output of an expired or deleted
+  transaction, or a discarded object.
+
+A client can keep its object list current from `object` and `object-removed`
+alone, re-listing only when its stream reconnects.
 
 ## MCP integration
 
 The `mcp` module ([`src/mcp.rs`](src/mcp.rs)) is the glue between this crate
 and [`mcp/`](../../interfaces/mcp). `DobjdOps` implements `DobjOps` against the same
-`Arc<Driver>` and run registry the HTTP routes use, so `run_action` starts a
+`Arc<Driver>`, registries and event hub the HTTP routes use, so `run_action` starts a
 run (returning a `runId`) and `get_run` polls it — an MCP-driven action is the
 same run object the browser UI / `dobj` CLI can follow, and its
-progress fans out over the shared SSE hub in real time.
+progress fans out over the shared SSE hub in real time. The stage tools
+(`start_proof`, `get_proof`, `submit_transactions`, `get_transaction`, ...)
+mirror `/proofs`, `/submissions` and `/transactions`; their `wait_ms` is
+capped below MCP clients' tool-call limits, so a held call answers with the
+current state and the agent calls again.
 
 ## Hardware requirements
 
