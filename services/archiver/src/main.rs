@@ -110,31 +110,16 @@ async fn follow_chain(
                 continue;
             }
         };
-        if let Some(prev) = &prev_beacon_block_header {
-            if beacon_block_header.parent_root != prev.root {
-                info!(
-                    "reorg: slot {} ({}) has different parent than us",
-                    beacon_block_header.slot, beacon_block_header.root
-                );
-                // `slot` has not been stored yet.  We delete the parent and retry
-                // from there
-                loop {
-                    slot -= 1;
-                    let deleted = node.store.delete_block_data(&node.store.slot_dir(slot))?;
-                    prev_beacon_block_header = node.store.last_header()?;
-                    // Make sure we either deleted a parent slot or our store is empty.  This
-                    // handles the case of reorgs with slots that have no blocks
-                    if deleted || prev_beacon_block_header.is_none() {
-                        break;
-                    }
-                }
-                slot = prev_beacon_block_header
-                    .as_ref()
-                    .map(|h| h.slot + 1)
-                    .unwrap_or(node.config.init_start_slot);
-                *last_header.write().await = prev_beacon_block_header.clone();
-                continue;
-            }
+        if let Some(rewind) = rewind_on_parent_change(
+            node,
+            slot,
+            &beacon_block_header,
+            prev_beacon_block_header.as_ref(),
+        )? {
+            slot = rewind.next_slot;
+            prev_beacon_block_header = rewind.previous;
+            *last_header.write().await = prev_beacon_block_header.clone();
+            continue;
         }
 
         prev_block = Some(
@@ -155,4 +140,41 @@ async fn get_head_header(node: &Node) -> Result<BlockHeader> {
         || async { Ok(node.beacon_cli.get_block_header(BlockId::Head).await?) },
     )
     .await
+}
+
+struct Rewind {
+    next_slot: u32,
+    previous: Option<BlockHeader>,
+}
+
+fn rewind_on_parent_change(
+    node: &Node,
+    mut slot: u32,
+    incoming: &BlockHeader,
+    previous: Option<&BlockHeader>,
+) -> Result<Option<Rewind>> {
+    if previous.is_none_or(|previous| incoming.parent_root == previous.root) {
+        return Ok(None);
+    }
+    info!(
+        "reorg: slot {} ({}) has different parent than us",
+        incoming.slot, incoming.root
+    );
+    // Rewind through empty slots until a parent block is removed or the store is empty.
+    let previous = loop {
+        slot -= 1;
+        let deleted = node.store.delete_block_data(&node.store.slot_dir(slot))?;
+        let previous = node.store.last_header()?;
+        if deleted || previous.is_none() {
+            break previous;
+        }
+    };
+    let next_slot = previous
+        .as_ref()
+        .map(|header| header.slot + 1)
+        .unwrap_or(node.config.init_start_slot);
+    Ok(Some(Rewind {
+        next_slot,
+        previous,
+    }))
 }

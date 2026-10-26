@@ -26,3 +26,7 @@ payload = { path = "../../libs/payload" }
 eth-clients = { path = "../../libs/eth-clients" }
 wire-types = { workspace = true }
 itertools = { workspace = true }
+
+[dev-dependencies]
+quint-connect = { workspace = true }
+tempfile = "3"

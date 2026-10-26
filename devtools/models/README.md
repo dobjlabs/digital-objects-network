@@ -7,7 +7,7 @@ One Quint installation supplies the service specifications. Quint Connect adapte
 | [Synchronizer ancestry](../../services/synchronizer/model/README.md) | Fetching, skipped slots, forks, rollback and replay | Real fetch clients, derivation, RocksDB and Postgres; mocked proof parser |
 | [Synchronizer publication and reads](../../services/synchronizer/model/PUBLICATION.md) | Interrupted writes, rollback and concurrent snapshots | Paused production writes and reads, SQL transactions and persisted Merkle state |
 | [Relayer delivery](../../services/relayer/model/README.md) | Retry scheduling, durable broadcasts, replacements, receipts and recovery | Real worker and Postgres; independent gateway ledger and test clock |
-| [Archiver acquisition](../../services/archiver/model/README.md) | Parent payload ownership, partial publication, forks and recovery | Specification |
+| [Archiver acquisition](../../services/archiver/model/README.md) | Parent payload ownership, partial publication, forks and recovery | Real HTTP clients, blob selection and filesystem operations |
 
 ## Run
 

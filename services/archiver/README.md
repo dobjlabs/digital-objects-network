@@ -2,6 +2,8 @@
 
 A service that archives blobs filtered by destination address.
 
+The [Quint model and Rust Connect tests](model/README.md) exercise payload acquisition, publication, reorg cleanup, and recovery.
+
 The node connects to an Ethereum and Beacon RPC nodes to follow beacon blocks and downloads the blobs that were sent via transactions if they match the configured destination address.  At the same time the node offers an http API to serve the stored blobs.
 
 ## API endpoints

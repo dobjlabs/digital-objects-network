@@ -32,6 +32,9 @@ use tracing::{debug, info};
 
 use crate::config::Config;
 
+#[cfg(test)]
+mod model_tests;
+
 fn blob_file_name(index: usize, vh: &B256) -> String {
     format!("blob-{:02}_{}.bin", index, vh)
 }
@@ -85,9 +88,19 @@ fn root_dir_from(base: &Path, root: &B256) -> PathBuf {
 #[derive(Clone)]
 pub struct Store {
     pub blobs_path: String,
+    #[cfg(test)]
+    model_gate: std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<model_tests::Gate>>>>,
 }
 
 impl Store {
+    #[cfg(test)]
+    async fn pause_model(&self, event: model_tests::Event) {
+        let gate = self.model_gate.lock().unwrap().clone();
+        if let Some(gate) = gate {
+            gate.pause(event).await;
+        }
+    }
+
     /// Returns true if a slot path was deleted
     pub(crate) fn delete_block_data(&self, slot_path: &Path) -> Result<bool> {
         match fs::symlink_metadata(slot_path) {
@@ -250,6 +263,12 @@ impl Store {
             file_tmp.write_all(blob.inner())?;
             file_tmp.sync_data()?;
             rename(blob_path_tmp, blob_path)?;
+            #[cfg(test)]
+            self.pause_model(model_tests::Event::BlobStored {
+                root: beacon_block_header.root,
+                index: *index as u32,
+            })
+            .await;
         }
         Ok(())
     }
@@ -267,6 +286,8 @@ impl Node {
     pub async fn new(config: Config) -> Result<Self> {
         let store = Store {
             blobs_path: config.blobs_path.clone(),
+            #[cfg(test)]
+            model_gate: std::sync::Arc::new(std::sync::Mutex::new(None)),
         };
         let http_cli = reqwest::Client::builder()
             .timeout(Duration::from_secs(8))
@@ -310,6 +331,8 @@ impl Node {
         // block root
         let root_dir = self.store.root_dir(&beacon_block_header.root);
         create_dir_all(&root_dir)?;
+        #[cfg(test)]
+        self.store.pause_model(model_tests::Event::Linked).await;
 
         // We store the header as a tmp file, and only rename after successfully processing the
         // beacon block.  This way seeing the `header.json` without the `.tmp` guarantees that the
@@ -320,11 +343,19 @@ impl Node {
         let mut file_tmp = File::create(&header_path_tmp)?;
         file_tmp.write_all(&header_json)?;
         file_tmp.sync_data()?;
+        #[cfg(test)]
+        self.store
+            .pause_model(model_tests::Event::HeaderPrepared)
+            .await;
 
         let beacon_block = self
             .process_beacon_block_blobs(beacon_block_header, prev_block)
             .await?;
 
+        #[cfg(test)]
+        self.store
+            .pause_model(model_tests::Event::PayloadReady)
+            .await;
         // Make sure all the blob file operations are synced to disk before renaming the header
         // because the service assumes that if `header.json` exists, then all slot processing has
         // persisted and is in the disk.
@@ -332,6 +363,8 @@ impl Node {
         let mut header_path = root_dir.clone();
         header_path.push("header.json");
         rename(header_path_tmp, header_path)?;
+        #[cfg(test)]
+        self.store.pause_model(model_tests::Event::Published).await;
         Ok(beacon_block)
     }
 
