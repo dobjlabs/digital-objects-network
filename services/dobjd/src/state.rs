@@ -1,17 +1,20 @@
+//! Services shared by HTTP, MCP, and background workers.
+
 use std::path::Path;
 use std::sync::Arc;
 
-use driver::Driver;
-use wire_types::ObjectSummary;
+use anyhow::Result;
+use driver::{Driver, DriverError, Hash};
 use wire_types::transactions::TransactionRecord;
+use wire_types::{ObjectSummary, ProofJobState, WaitQuery};
 
 use crate::events::{Event, EventHub};
 use crate::jobs::JobRegistry;
 use crate::mcp::McpRuntime;
+use crate::routes::wait::wait_until;
 use crate::runs::RunRegistry;
 use crate::settle::Settler;
 
-/// What the HTTP routes, the MCP server and the background workers share.
 #[derive(Clone)]
 pub struct Services {
     pub driver: Arc<Driver>,
@@ -33,18 +36,14 @@ impl AppState {
     }
 }
 
-impl Services {
-    /// Basename to the id of the run or proof job holding it as an input:
-    /// the driver's hold table while a proof is in progress, then the run
-    /// registry while a run follows its transaction to the chain.
-    pub fn fill_held_by(&self, objects: &mut [ObjectSummary]) {
-        crate::runs::fill_held_by(&self.driver, &self.runs, objects);
-    }
+pub fn parse_tx_final(hex: &str) -> Result<Hash, DriverError> {
+    payload::decode_hash_hex(hex)
+        .map_err(|err| DriverError::InvalidInput(format!("txFinal {hex}: {err}")))
+}
 
-    pub fn object_summary(&self, file_name: &str) -> anyhow::Result<ObjectSummary> {
-        let mut summary = self.driver.read_object(Path::new(file_name))?;
-        self.fill_held_by(std::slice::from_mut(&mut summary));
-        Ok(summary)
+impl Services {
+    pub fn object_summary(&self, file_name: &str) -> Result<ObjectSummary> {
+        self.driver.read_object(Path::new(file_name))
     }
 
     pub fn publish_objects(&self, file_names: &[String]) {
@@ -63,5 +62,77 @@ impl Services {
         self.publish_objects(&record.output_files);
         self.publish_objects(&record.input_files);
         self.settler.wake();
+    }
+
+    /// Submit transactions in order; stop at the first error without rolling
+    /// back earlier submissions. Blocks on network requests.
+    pub fn submit_transactions(&self, tx_finals: &[Hash]) -> Result<Vec<TransactionRecord>> {
+        let mut records = Vec::with_capacity(tx_finals.len());
+        for tx_final in tx_finals {
+            let record = self.driver.submit(tx_final)?;
+            self.announce_transaction(&record);
+            records.push(record);
+        }
+        Ok(records)
+    }
+
+    pub fn delete_transaction(&self, tx_final: &Hash) -> Result<TransactionRecord> {
+        let deleted = self.driver.delete_transaction(tx_final)?;
+        self.events.publish(Event::TransactionDeleted {
+            tx_final: deleted.record.tx_final.clone(),
+        });
+        for file_name in deleted.removed_files {
+            self.events.publish(Event::ObjectRemoved { file_name });
+        }
+        self.publish_objects(&deleted.record.input_files);
+        Ok(deleted.record)
+    }
+
+    /// Read a job's state, optionally waiting for completion or timeout.
+    pub async fn wait_for_proof(&self, job_id: &str, query: WaitQuery) -> Result<ProofJobState> {
+        let entry = self
+            .jobs
+            .get(job_id)
+            .ok_or_else(|| anyhow::anyhow!("unknown job: {job_id}"))?;
+        wait_until(
+            &self.events,
+            query,
+            || Ok(entry.snapshot()),
+            |job| job.status.is_terminal(),
+            |event| match event {
+                Event::ProofJob(job) if job.job_id == job_id => Ok(Some(job.clone())),
+                _ => Ok(None),
+            },
+        )
+        .await
+    }
+
+    /// Read a transaction, optionally waiting for landing, expiry, or timeout.
+    /// Fail if the transaction is deleted while waiting.
+    pub async fn wait_for_transaction(
+        &self,
+        tx_final: &Hash,
+        query: WaitQuery,
+    ) -> Result<TransactionRecord> {
+        let key = payload::encode_hash_hex(tx_final);
+        wait_until(
+            &self.events,
+            query,
+            || self.driver.get_transaction(tx_final),
+            |record| record.state.is_terminal(),
+            |event| transaction_event(&key, event),
+        )
+        .await
+    }
+}
+
+/// Match transaction updates; fail when the awaited transaction is deleted.
+pub fn transaction_event(tx_final: &str, event: &Event) -> Result<Option<TransactionRecord>> {
+    match event {
+        Event::Transaction(record) if record.tx_final == tx_final => Ok(Some(record.clone())),
+        Event::TransactionDeleted { tx_final: deleted } if deleted == tx_final => {
+            anyhow::bail!("transaction {tx_final} was deleted")
+        }
+        _ => Ok(None),
     }
 }

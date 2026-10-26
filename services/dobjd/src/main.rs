@@ -9,6 +9,7 @@ mod events;
 mod jobs;
 mod mcp;
 mod parent_lifetime;
+mod registry;
 mod routes;
 mod runs;
 mod settle;
@@ -58,12 +59,12 @@ async fn run() -> Result<()> {
     let web_access = web_access::WebAccess::new(port);
     let events = events::EventHub::new();
     let runs = RunRegistry::new(max_concurrent_proofs_from_env()?);
-    let settler = Arc::new(Settler::new(driver.clone(), events.clone(), runs.clone()));
+    let settler = Arc::new(Settler::new(driver.clone(), events.clone()));
     let services = Services {
         driver: driver.clone(),
         events,
         runs: runs.clone(),
-        jobs: JobRegistry::new(),
+        jobs: JobRegistry::default(),
         settler: settler.clone(),
     };
 
@@ -109,11 +110,11 @@ async fn run() -> Result<()> {
 
     let reaper = services.clone();
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(runs::REAP_INTERVAL);
+        let mut ticker = tokio::time::interval(registry::REAP_INTERVAL);
         loop {
             ticker.tick().await;
-            reaper.runs.reap();
-            reaper.jobs.reap();
+            reaper.runs.entries.reap(registry::RETENTION);
+            reaper.jobs.reap(registry::RETENTION);
         }
     });
 

@@ -12,6 +12,7 @@ use crate::{
     don_state::{state_header, DonState, ExecutionBlock, StateMetadata, StateRoots},
 };
 
+use txlib::grounding_aged_out;
 pub use txlib::MAX_STATE_ROOT_AGE_BLOCKS;
 
 /// The base state's containers and counts, mutated while deriving one slot.
@@ -137,7 +138,7 @@ impl StateMachine {
             return Ok(());
         };
         let age = i64::from(block_number) - state_root_block;
-        if age > MAX_STATE_ROOT_AGE_BLOCKS {
+        if grounding_aged_out(i64::from(block_number), state_root_block) {
             warn!(
                 slot,
                 block_number, state_root_block, age, "Blob proof state_root is too old; rejecting"

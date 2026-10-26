@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{Result, anyhow};
+use payload::decode_hash_hex;
 use payload::test_state::TestState;
-use payload::{decode_hash_hex, encode_hash_hex};
 use pod2::middleware::Hash;
 use sdk::SpendableObjects;
 use tempfile::tempdir;
@@ -174,10 +174,10 @@ impl Fixture {
             .read_object(std::path::Path::new(file_name))
             .unwrap()
     }
+}
 
-    fn tx_final(record: &TransactionRecord) -> Hash {
-        decode_hash_hex(&record.tx_final).unwrap()
-    }
+fn tx_final_of(record: &TransactionRecord) -> Hash {
+    crate::transactions::record_tx_final(record).unwrap()
 }
 
 #[test]
@@ -466,19 +466,20 @@ fn execute_records_and_submits_and_settle_lands() {
 
         let result = fx.driver.execute(fx.input(action_name)).unwrap();
         assert_eq!(result.input_files, vec![fx.input_file.clone()]);
-        assert_eq!(result.relayer_job_id, "job-1");
+        assert_eq!(result.owner, "execute");
         assert_eq!(fx.relayer.lock().unwrap().submitted, vec![vec![1, 2, 3]]);
 
-        let record = fx.driver.get_transaction(&result.tx_final).unwrap();
+        let record = fx.driver.get_transaction(&tx_final_of(&result)).unwrap();
+        assert_eq!(record, result);
         assert_eq!(record.state, TransactionState::Submitted);
         assert_eq!(record.relayer_job_id.as_deref(), Some("job-1"));
-        assert_eq!(record.output_files, result.output_files);
-        assert_eq!(record.grounding_root, encode_hash_hex(&result.old_root));
         assert!(record.submit_attempted_at_ms.is_some());
 
-        // Nothing has landed: the input is still live on disk but offered to
-        // no action, and the outputs await the relayer.
         assert_eq!(fx.stored(&fx.input_file).status, FileStatus::Live);
+        assert_eq!(
+            fx.summary(&fx.input_file).held_by_run_id.as_deref(),
+            Some("execute")
+        );
         let report = fx.driver.check_action(&action).unwrap();
         assert!(
             report
@@ -520,6 +521,7 @@ fn execute_records_and_submits_and_settle_lands() {
         assert!(!fx.paths.objects_dir.join(&fx.input_file).exists());
         let consumed = fx.stored(&fx.input_file);
         assert_eq!(consumed.status, FileStatus::Nullified);
+        assert_eq!(fx.summary(&fx.input_file).held_by_run_id, None);
         for file_name in &result.output_files {
             assert_eq!(fx.stored(file_name).status, FileStatus::Live);
             let summary = fx.summary(file_name);
@@ -562,7 +564,7 @@ fn execute_keeps_the_record_when_the_relayer_refuses() {
     // A failed request may have reached the relayer; keep the input locked.
     let err = fx
         .driver
-        .delete_transaction(&Fixture::tx_final(record))
+        .delete_transaction(&tx_final_of(record))
         .unwrap_err();
     assert!(err.to_string().contains("may still land"), "{err}");
     let err = fx
@@ -572,10 +574,10 @@ fn execute_keeps_the_record_when_the_relayer_refuses() {
     assert!(err.to_string().contains("awaiting the chain"), "{err}");
 
     fx.relayer.lock().unwrap().fail_submit = false;
-    let submitted = fx.driver.submit(&Fixture::tx_final(record)).unwrap();
+    let submitted = fx.driver.submit(&tx_final_of(record)).unwrap();
     assert_eq!(submitted.state, TransactionState::Submitted);
     assert_eq!(submitted.relayer_job_id.as_deref(), Some("job-1"));
-    fx.driver.submit(&Fixture::tx_final(record)).unwrap();
+    fx.driver.submit(&tx_final_of(record)).unwrap();
     assert_eq!(fx.relayer.lock().unwrap().submitted.len(), 1);
 }
 
@@ -587,8 +589,8 @@ fn prove_holds_its_inputs_until_recorded() {
         .prove(fx.input("CraftWood"), "run-1", &NoopExecutionReporter)
         .unwrap();
     assert_eq!(
-        fx.driver.held_inputs(),
-        HashMap::from([(fx.input_file.clone(), "run-1".to_string())])
+        fx.summary(&fx.input_file).held_by_run_id.as_deref(),
+        Some("run-1")
     );
     assert!(
         !fx.driver
@@ -605,22 +607,26 @@ fn prove_holds_its_inputs_until_recorded() {
     assert_eq!(load_object_files(&fx.paths).unwrap().len(), 1);
 
     drop(first);
-    assert!(fx.driver.held_inputs().is_empty());
+    assert_eq!(fx.summary(&fx.input_file).held_by_run_id, None);
     let second = fx
         .driver
         .prove(fx.input("CraftWood"), "run-2", &NoopExecutionReporter)
         .unwrap();
     let record = fx.driver.record(second).unwrap();
-    assert!(fx.driver.held_inputs().is_empty());
     assert_eq!(record.state, TransactionState::Recorded);
+    assert_eq!(record.owner, "run-2");
     assert_eq!(record.input_files, vec![fx.input_file.clone()]);
+    assert_eq!(
+        fx.summary(&fx.input_file).held_by_run_id.as_deref(),
+        Some("run-2")
+    );
     for file_name in &record.output_files {
         let stored = fx.stored(file_name);
         assert_eq!(stored.status, FileStatus::Unknown);
-        assert_eq!(stored.tx_final, Fixture::tx_final(&record));
+        assert_eq!(stored.tx_final, tx_final_of(&record));
     }
     assert_eq!(
-        crate::transactions::read_payload(&fx.paths, &Fixture::tx_final(&record)).unwrap(),
+        crate::transactions::read_payload(&fx.paths, &tx_final_of(&record)).unwrap(),
         vec![1, 2, 3]
     );
 }
@@ -647,7 +653,7 @@ fn record_refuses_an_output_file_that_exists() {
         err.to_string().contains("output file already exists"),
         "{err}"
     );
-    assert!(fx.driver.held_inputs().is_empty());
+    assert_eq!(fx.summary(&fx.input_file).held_by_run_id, None);
     assert!(fx.driver.list_transactions().unwrap().is_empty());
     assert_eq!(
         std::fs::read_dir(&fx.paths.transactions_dir)
@@ -666,10 +672,11 @@ fn delete_removes_a_recorded_transaction() {
         .prove(fx.input("CraftWood"), "run-1", &NoopExecutionReporter)
         .unwrap();
     let record = fx.driver.record(proved).unwrap();
-    let tx_final = Fixture::tx_final(&record);
+    let tx_final = tx_final_of(&record);
 
     let deleted = fx.driver.delete_transaction(&tx_final).unwrap();
-    assert_eq!(deleted, record);
+    assert_eq!(deleted.record, record);
+    assert_eq!(deleted.removed_files, record.output_files);
     assert!(fx.driver.list_transactions().unwrap().is_empty());
     assert!(!fx.paths.transactions_dir.join(&record.tx_final).exists());
     for file_name in &record.output_files {
@@ -695,7 +702,10 @@ fn delete_removes_a_recorded_transaction() {
 fn delete_refuses_a_submitted_transaction() {
     let fx = fixture("log_1.dobj");
     let result = fx.driver.execute(fx.input("CraftWood")).unwrap();
-    let err = fx.driver.delete_transaction(&result.tx_final).unwrap_err();
+    let err = fx
+        .driver
+        .delete_transaction(&tx_final_of(&result))
+        .unwrap_err();
     assert!(err.to_string().contains("is submitted"), "{err}");
     assert_eq!(fx.driver.list_transactions().unwrap().len(), 1);
 }
@@ -704,7 +714,7 @@ fn delete_refuses_a_submitted_transaction() {
 fn settle_expires_an_aged_grounding_and_frees_its_inputs() {
     let fx = fixture("log_1.dobj");
     let result = fx.driver.execute(fx.input("CraftWood")).unwrap();
-    let record = fx.driver.get_transaction(&result.tx_final).unwrap();
+    let record = fx.driver.get_transaction(&tx_final_of(&result)).unwrap();
 
     fx.advance_head_to(record.grounding_block + MAX_STATE_ROOT_AGE_BLOCKS);
     let outcome = fx.driver.settle().unwrap();
@@ -738,7 +748,10 @@ fn settle_expires_an_aged_grounding_and_frees_its_inputs() {
     let outcome = fx.driver.settle().unwrap();
     assert!(outcome.records.is_empty());
     assert_eq!(
-        fx.driver.get_transaction(&result.tx_final).unwrap().state,
+        fx.driver
+            .get_transaction(&tx_final_of(&result))
+            .unwrap()
+            .state,
         TransactionState::Expired
     );
 
@@ -759,20 +772,15 @@ fn submit_refuses_an_aged_grounding() {
     let record = fx.driver.record(proved).unwrap();
     fx.advance_head_to(record.grounding_block + MAX_STATE_ROOT_AGE_BLOCKS + 1);
 
-    let err = fx.driver.submit(&Fixture::tx_final(&record)).unwrap_err();
+    let err = fx.driver.submit(&tx_final_of(&record)).unwrap_err();
     assert!(
         err.to_string().contains("behind the synchronizer head"),
         "{err}"
     );
     assert!(fx.relayer.lock().unwrap().submitted.is_empty());
-    let unchanged = fx
-        .driver
-        .get_transaction(&Fixture::tx_final(&record))
-        .unwrap();
+    let unchanged = fx.driver.get_transaction(&tx_final_of(&record)).unwrap();
     assert_eq!(unchanged, record);
-    fx.driver
-        .delete_transaction(&Fixture::tx_final(&record))
-        .unwrap();
+    fx.driver.delete_transaction(&tx_final_of(&record)).unwrap();
 }
 
 #[test]
@@ -813,7 +821,10 @@ fn settle_with_an_unreachable_synchronizer_changes_nothing() {
     let err = fx.driver.settle().unwrap_err();
     assert!(err.to_string().contains("unreachable"), "{err}");
     assert_eq!(
-        fx.driver.get_transaction(&result.tx_final).unwrap().state,
+        fx.driver
+            .get_transaction(&tx_final_of(&result))
+            .unwrap()
+            .state,
         TransactionState::Submitted
     );
 }
@@ -866,7 +877,7 @@ fn test_execute_rejects_class_hash_mismatch_with_matching_class_id() {
         msg.contains("class hash mismatch"),
         "expected hash-mismatch error, got: {msg}"
     );
-    assert!(fx.driver.held_inputs().is_empty());
+    assert_eq!(fx.summary(&fx.input_file).held_by_run_id, None);
 }
 
 /// Serialized Log, producing transaction hash, and nullifier for import tests.

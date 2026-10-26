@@ -412,6 +412,22 @@ impl ProofJobStatus {
     pub fn is_terminal(self) -> bool {
         matches!(self, ProofJobStatus::Done | ProofJobStatus::Failed)
     }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ProofJobStatus::Queued => "queued",
+            ProofJobStatus::Proving => "proving",
+            ProofJobStatus::Recording => "recording",
+            ProofJobStatus::Done => "done",
+            ProofJobStatus::Failed => "failed",
+        }
+    }
+}
+
+impl fmt::Display for ProofJobStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.pad(self.as_str())
+    }
 }
 
 /// `POST /proofs` response and `GET /proofs/{jobId}` body.

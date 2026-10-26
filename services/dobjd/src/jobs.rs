@@ -1,21 +1,18 @@
 //! In-memory proof jobs and the shared prove-and-record operation.
 //! Completed transaction records persist independently of the job registry.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
-use driver::{ExecuteActionInput, ExecutionReporter, ExecutionStepContext};
+use driver::{ExecuteActionInput, ExecutionReporter, ExecutionStepContext, now_ms};
 use wire_types::transactions::TransactionRecord;
-use wire_types::{ActionArgValues, ExecutionPhase, ProofJobState, ProofJobStatus, QualifiedName};
+use wire_types::{ExecutionPhase, ProofJobState, ProofJobStatus, RunActionInput};
 
 use crate::events::Event;
-use crate::runs::now_ms;
+use crate::registry::{Registry, Retained};
 use crate::state::Services;
 
-/// How long a finished job is retained for polling before reaping.
-pub const JOB_RETENTION: Duration = Duration::from_secs(600);
+pub type JobRegistry = Registry<JobEntry>;
 
 struct JobInner {
     status: ProofJobStatus,
@@ -28,45 +25,30 @@ struct JobInner {
 }
 
 pub struct JobEntry {
+    input: RunActionInput,
     job_id: String,
-    action: QualifiedName,
-    input_object_paths: Vec<String>,
     created_at_ms: u64,
     sequence: u64,
     inner: Mutex<JobInner>,
 }
 
-impl JobEntry {
-    fn new(
-        job_id: String,
-        action: QualifiedName,
-        input_object_paths: Vec<String>,
-        sequence: u64,
-    ) -> Self {
-        Self {
-            job_id,
-            action,
-            input_object_paths,
-            created_at_ms: now_ms(),
-            sequence,
-            inner: Mutex::new(JobInner {
-                status: ProofJobStatus::Queued,
-                message: None,
-                tx_final: None,
-                error: None,
-                started_at_ms: None,
-                finished_at_ms: None,
-                finished_at: None,
-            }),
-        }
+impl Retained for JobEntry {
+    fn sequence(&self) -> u64 {
+        self.sequence
     }
 
+    fn finished_at(&self) -> Option<Instant> {
+        self.inner.lock().unwrap().finished_at
+    }
+}
+
+impl JobEntry {
     pub fn snapshot(&self) -> ProofJobState {
         let inner = self.inner.lock().unwrap();
         ProofJobState {
             job_id: self.job_id.clone(),
-            action: self.action.clone(),
-            input_object_paths: self.input_object_paths.clone(),
+            action: self.input.action.clone(),
+            input_object_paths: self.input.input_object_paths.clone(),
             status: inner.status,
             message: inner.message.clone(),
             tx_final: inner.tx_final.clone(),
@@ -110,87 +92,11 @@ impl JobEntry {
         inner.finished_at_ms = Some(at_ms);
         inner.finished_at = Some(Instant::now());
     }
-
-    fn is_finished(&self) -> bool {
-        self.inner.lock().unwrap().finished_at.is_some()
-    }
-
-    fn expired(&self, ttl: Duration) -> bool {
-        self.inner
-            .lock()
-            .unwrap()
-            .finished_at
-            .is_some_and(|at| at.elapsed() >= ttl)
-    }
-}
-
-#[derive(Clone, Default)]
-pub struct JobRegistry {
-    jobs: Arc<RwLock<HashMap<String, Arc<JobEntry>>>>,
-    next_sequence: Arc<AtomicU64>,
-}
-
-impl JobRegistry {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    fn start(
-        &self,
-        job_id: String,
-        action: QualifiedName,
-        input_object_paths: Vec<String>,
-    ) -> Arc<JobEntry> {
-        let sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
-        let entry = Arc::new(JobEntry::new(
-            job_id.clone(),
-            action,
-            input_object_paths,
-            sequence,
-        ));
-        self.jobs.write().unwrap().insert(job_id, entry.clone());
-        entry
-    }
-
-    pub fn get(&self, job_id: &str) -> Option<Arc<JobEntry>> {
-        self.jobs.read().unwrap().get(job_id).cloned()
-    }
-
-    /// Every retained job, oldest first. `active_only` keeps the unfinished.
-    pub fn list(&self, active_only: bool) -> Vec<ProofJobState> {
-        let mut entries: Vec<Arc<JobEntry>> = self
-            .jobs
-            .read()
-            .unwrap()
-            .values()
-            .filter(|entry| !(active_only && entry.is_finished()))
-            .cloned()
-            .collect();
-        entries.sort_by_key(|entry| entry.sequence);
-        entries.iter().map(|entry| entry.snapshot()).collect()
-    }
-
-    /// Drop finished jobs older than [`JOB_RETENTION`].
-    pub fn reap(&self) {
-        self.jobs
-            .write()
-            .unwrap()
-            .retain(|_, entry| !entry.expired(JOB_RETENTION));
-    }
 }
 
 struct JobReporter {
     services: Services,
     entry: Arc<JobEntry>,
-}
-
-impl JobReporter {
-    fn progress(&self, status: ProofJobStatus, message: &str) {
-        self.entry.progress(status, message);
-        self.services
-            .events
-            .publish(Event::ProofJob(self.entry.snapshot()));
-    }
 }
 
 impl ExecutionReporter for JobReporter {
@@ -199,29 +105,35 @@ impl ExecutionReporter for JobReporter {
             ExecutionPhase::GenerateProof => ProofJobStatus::Proving,
             ExecutionPhase::Commit => ProofJobStatus::Recording,
         };
-        self.progress(status, message);
+        self.entry.progress(status, message);
+        self.services
+            .events
+            .publish(Event::ProofJob(self.entry.snapshot()));
     }
 }
 
 /// Start a proof job and return before completion.
-pub fn spawn_proof(
-    services: &Services,
-    action: QualifiedName,
-    input_objects: Vec<String>,
-    args: ActionArgValues,
-) -> ProofJobState {
+pub fn spawn_proof(services: &Services, input: RunActionInput) -> ProofJobState {
+    let input = trimmed(input);
     let job_id = uuid::Uuid::new_v4().to_string();
-    let entry = services
-        .jobs
-        .start(job_id.clone(), action.clone(), input_objects.clone());
+    let entry = services.jobs.start(job_id.clone(), |sequence| JobEntry {
+        input: input.clone(),
+        job_id,
+        created_at_ms: now_ms(),
+        sequence,
+        inner: Mutex::new(JobInner {
+            status: ProofJobStatus::Queued,
+            message: None,
+            tx_final: None,
+            error: None,
+            started_at_ms: None,
+            finished_at_ms: None,
+            finished_at: None,
+        }),
+    });
     let accepted = entry.snapshot();
     services.events.publish(Event::ProofJob(accepted.clone()));
 
-    let input = ExecuteActionInput {
-        action,
-        input_objects,
-        args,
-    };
     let reporter = Arc::new(JobReporter {
         services: services.clone(),
         entry,
@@ -229,7 +141,12 @@ pub fn spawn_proof(
     tokio::spawn(async move {
         let worker = reporter.clone();
         let joined = tokio::task::spawn_blocking(move || {
-            prove_and_record(&worker.services, input, &worker.entry.job_id, &*worker)
+            prove_and_record(
+                &worker.services,
+                execute_input(&worker.entry.input),
+                &worker.entry.job_id,
+                &*worker,
+            )
         })
         .await;
         let outcome = match &joined {
@@ -249,6 +166,22 @@ pub fn spawn_proof(
     accepted
 }
 
+/// Trim whitespace without changing the paths supplied by the caller.
+pub(crate) fn trimmed(mut input: RunActionInput) -> RunActionInput {
+    for path in &mut input.input_object_paths {
+        *path = path.trim().to_string();
+    }
+    input
+}
+
+pub(crate) fn execute_input(input: &RunActionInput) -> ExecuteActionInput {
+    ExecuteActionInput {
+        action: input.action.clone(),
+        input_objects: input.input_object_paths.clone(),
+        args: input.args.clone(),
+    }
+}
+
 /// Prove and record, publishing transaction and object changes.
 pub(crate) fn prove_and_record<R: ExecutionReporter>(
     services: &Services,
@@ -257,7 +190,7 @@ pub(crate) fn prove_and_record<R: ExecutionReporter>(
     reporter: &R,
 ) -> anyhow::Result<TransactionRecord> {
     let proved = services.driver.prove(input, owner, reporter)?;
-    let input_files = proved.input_files.clone();
+    let input_files = proved.input_files().to_vec();
     services.publish_objects(&input_files);
     let recorded = services.driver.record(proved);
     match recorded {

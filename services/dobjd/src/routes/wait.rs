@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
+use tokio::time::Instant;
 use wire_types::WaitQuery;
 
 use crate::events::{Event, EventHub};
@@ -9,10 +10,7 @@ use crate::events::{Event, EventHub};
 pub const MAX_WAIT: Duration = Duration::from_secs(120);
 pub const DEFAULT_WAIT: Duration = Duration::from_secs(30);
 
-/// Answers `read()` at once unless `query.wait` is set; then returns the
-/// first state for which `is_done` holds, taken from `read()` or from a
-/// matching event, or the current state at the timeout. Subscribes before
-/// reading, so a change between the two is not missed.
+/// Read immediately or wait for completion, bounded by the query timeout.
 pub async fn wait_until<T, Read, Done, Match>(
     events: &EventHub,
     query: WaitQuery,
@@ -23,7 +21,7 @@ pub async fn wait_until<T, Read, Done, Match>(
 where
     Read: Fn() -> Result<T>,
     Done: Fn(&T) -> bool,
-    Match: Fn(&Event) -> Option<T>,
+    Match: Fn(&Event) -> Result<Option<T>>,
 {
     if !query.wait {
         return read();
@@ -33,23 +31,51 @@ where
         .map(Duration::from_millis)
         .unwrap_or(DEFAULT_WAIT)
         .min(MAX_WAIT);
+    follow(
+        events,
+        Some(Instant::now() + timeout),
+        read,
+        is_done,
+        from_event,
+    )
+    .await
+}
+
+/// Subscribe before reading to avoid missing a concurrent change.
+/// Re-read after lag or at the deadline; propagate matching event errors.
+pub async fn follow<T, Read, Done, Match>(
+    events: &EventHub,
+    deadline: Option<Instant>,
+    read: Read,
+    is_done: Done,
+    from_event: Match,
+) -> Result<T>
+where
+    Read: Fn() -> Result<T>,
+    Done: Fn(&T) -> bool,
+    Match: Fn(&Event) -> Result<Option<T>>,
+{
     let mut rx = events.subscribe();
     let mut current = read()?;
-    let deadline = tokio::time::Instant::now() + timeout;
     while !is_done(&current) {
-        match tokio::time::timeout_at(deadline, rx.recv()).await {
-            Ok(Ok(envelope)) => {
-                if let Some(state) = from_event(&envelope.event) {
+        let received = match deadline {
+            Some(deadline) => match tokio::time::timeout_at(deadline, rx.recv()).await {
+                Ok(received) => received,
+                Err(_elapsed) => return read(),
+            },
+            None => rx.recv().await,
+        };
+        match received {
+            Ok(envelope) => {
+                if let Some(state) = from_event(&envelope.event)? {
                     current = state;
                 }
             }
-            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                 current = read()?;
             }
-            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
-            Err(_elapsed) => {
-                current = read()?;
-                break;
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                anyhow::bail!("event hub closed");
             }
         }
     }
@@ -80,8 +106,11 @@ mod tests {
             }
         };
         let matched = |event: &Event| match event {
-            Event::ObjectRemoved { file_name } if file_name == "wanted" => Some(1u32),
-            _ => None,
+            Event::ObjectRemoved { file_name } if file_name == "wanted" => Ok(Some(1u32)),
+            Event::ObjectRemoved { file_name } if file_name == "poison" => {
+                anyhow::bail!("gone")
+            }
+            _ => Ok(None),
         };
 
         let value = wait_until(&hub, WaitQuery::default(), &read, |v| *v == 1, matched)
@@ -126,5 +155,13 @@ mod tests {
         .unwrap();
         assert_eq!(timed_out, 0);
         assert_eq!(reads.load(Ordering::Relaxed), 4);
+
+        let failing = {
+            let hub = hub.clone();
+            tokio::spawn(async move { follow(&hub, None, || Ok(0u32), |v| *v == 1, matched).await })
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        hub.publish(removed("poison"));
+        assert!(failing.await.unwrap().is_err());
     }
 }

@@ -5,9 +5,7 @@ use axum::{
 };
 use wire_types::{ProofJobState, RunActionInput, RunListFilter, RunListQuery, WaitQuery};
 
-use crate::error::{ApiError, ApiResult};
-use crate::events::Event;
-use crate::routes::wait::wait_until;
+use crate::error::ApiResult;
 use crate::state::AppState;
 
 /// `POST /proofs`: start a proof job. Follow completion through
@@ -16,12 +14,7 @@ pub async fn start(
     State(state): State<AppState>,
     Json(input): Json<RunActionInput>,
 ) -> (StatusCode, Json<ProofJobState>) {
-    let input_objects: Vec<String> = input
-        .input_object_paths
-        .iter()
-        .map(|path| path.trim().to_string())
-        .collect();
-    let job = crate::jobs::spawn_proof(&state.services, input.action, input_objects, input.args);
+    let job = crate::jobs::spawn_proof(&state.services, input);
     (StatusCode::ACCEPTED, Json(job))
 }
 
@@ -32,7 +25,15 @@ pub async fn list(
     Query(query): Query<RunListQuery>,
 ) -> Json<Vec<ProofJobState>> {
     let active_only = query.status == Some(RunListFilter::Active);
-    Json(state.services.jobs.list(active_only))
+    Json(
+        state
+            .services
+            .jobs
+            .entries(active_only)
+            .iter()
+            .map(|entry| entry.snapshot())
+            .collect(),
+    )
 }
 
 /// `GET /proofs/{jobId}`: return the job state, optionally waiting for
@@ -42,20 +43,11 @@ pub async fn get(
     Path(job_id): Path<String>,
     Query(query): Query<WaitQuery>,
 ) -> ApiResult<Json<ProofJobState>> {
-    let entry =
-        state.services.jobs.get(&job_id).ok_or_else(|| {
-            ApiError::new(StatusCode::NOT_FOUND, format!("unknown job: {job_id}"))
-        })?;
-    let job = wait_until(
-        &state.services.events,
-        query,
-        || Ok(entry.snapshot()),
-        |job| job.status.is_terminal(),
-        |event| match event {
-            Event::ProofJob(job) if job.job_id == job_id => Some(job.clone()),
-            _ => None,
-        },
-    )
-    .await?;
-    Ok(Json(job))
+    if state.services.jobs.get(&job_id).is_none() {
+        return Err(crate::error::ApiError::new(
+            StatusCode::NOT_FOUND,
+            format!("unknown job: {job_id}"),
+        ));
+    }
+    Ok(Json(state.services.wait_for_proof(&job_id, query).await?))
 }

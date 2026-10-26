@@ -2,6 +2,8 @@
 //! Hex hashes allow the same record format on disk and over the wire without
 //! enabling chain dependencies.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "schemars")]
@@ -28,6 +30,21 @@ impl TransactionState {
     pub fn is_terminal(self) -> bool {
         matches!(self, TransactionState::Landed | TransactionState::Expired)
     }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TransactionState::Recorded => "recorded",
+            TransactionState::Submitted => "submitted",
+            TransactionState::Landed => "landed",
+            TransactionState::Expired => "expired",
+        }
+    }
+}
+
+impl fmt::Display for TransactionState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.pad(self.as_str())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,6 +54,8 @@ pub struct TransactionRecord {
     /// Finalized transaction commitment, used as the record's key.
     pub tx_final: String,
     pub action: QualifiedName,
+    /// Proof owner label, reported as the input holder while the record is open.
+    pub owner: String,
     /// Basenames of the object files this transaction spends.
     pub input_files: Vec<String>,
     /// Basenames of the object files this transaction creates.
@@ -75,6 +94,42 @@ pub struct TransactionRecord {
 }
 
 impl TransactionRecord {
+    /// Initialize a recorded transaction with no submission or settlement data.
+    #[allow(clippy::too_many_arguments)]
+    pub fn recorded(
+        tx_final: String,
+        action: QualifiedName,
+        owner: String,
+        input_files: Vec<String>,
+        output_files: Vec<String>,
+        grounding_root: String,
+        grounding_block: i64,
+        nullifiers: Vec<String>,
+        created: Vec<String>,
+        recorded_at_ms: u64,
+    ) -> Self {
+        Self {
+            tx_final,
+            action,
+            owner,
+            input_files,
+            output_files,
+            grounding_root,
+            grounding_block,
+            nullifiers,
+            created,
+            state: TransactionState::Recorded,
+            relayer_job_id: None,
+            tx_hash: None,
+            relayer_failure: None,
+            reason: None,
+            recorded_at_ms,
+            submit_attempted_at_ms: None,
+            submitted_at_ms: None,
+            settled_at_ms: None,
+        }
+    }
+
     pub fn is_open(&self) -> bool {
         !self.state.is_terminal()
     }

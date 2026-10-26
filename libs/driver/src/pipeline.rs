@@ -8,29 +8,25 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, anyhow};
 use payload::encode_hash_hex;
 use pod2::middleware::{Hash, containers::Dictionary};
-use txlib::{MAX_STATE_ROOT_AGE_BLOCKS, object_nullifier_hash};
+use txlib::{grounding_aged_out, object_nullifier_hash};
 use wire_types::relayer::JobStatus;
 use wire_types::transactions::{TransactionRecord, TransactionState};
-use wire_types::{ExecutionPhase, ObjectStatus, ObjectSummary, QualifiedName};
+use wire_types::{ExecutionPhase, ObjectSummary, QualifiedName};
 
 use crate::driver::Driver;
 use crate::error::DriverError;
 use crate::execute::{decode_action_args, resolve_inputs, validate_execute_request};
 use crate::holds::Holds;
 use crate::object_record::{FileStatus, ObjectRecord};
-use crate::object_store::{
-    ObjectFileEntry, load_object_files, matches_query, object_file_name, write_object_file,
-};
+use crate::object_store::{load_object_files, matches_query, object_file_name, write_object_file};
 use crate::transactions::{
     decode_hashes, load_records, locked_inputs, read_record, record_tx_final, remove_transaction,
     write_payload, write_record,
 };
-use crate::types::{
-    ExecuteActionInput, ExecuteActionResult, ExecutionReporter, ExecutionStepContext,
-    NoopExecutionReporter, ObjectQuery,
-};
+use crate::types::{ExecuteActionInput, ExecutionReporter, ExecutionStepContext, ObjectQuery};
 
-fn now_ms() -> u64 {
+/// Unix time in milliseconds; returns zero for times before the epoch.
+pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as u64)
@@ -50,18 +46,21 @@ pub struct ProvedOutput {
 pub struct ProvedTransaction {
     pub tx_final: Hash,
     pub action: QualifiedName,
+    pub owner: String,
     pub grounding_root: Hash,
     pub grounding_block: i64,
-    pub input_files: Vec<String>,
     pub outputs: Vec<ProvedOutput>,
     pub nullifiers: Vec<Hash>,
     pub created: Vec<Hash>,
     pub payload_bytes: Vec<u8>,
-    /// Kept for its release on drop.
-    _holds: Holds,
+    holds: Holds,
 }
 
 impl ProvedTransaction {
+    pub fn input_files(&self) -> &[String] {
+        self.holds.files()
+    }
+
     pub fn output_files(&self) -> Result<Vec<String>> {
         self.outputs
             .iter()
@@ -70,13 +69,14 @@ impl ProvedTransaction {
     }
 }
 
-/// What one settlement pass changed.
+/// Changed records and objects, removed files, and the remaining open count.
 #[derive(Debug, Clone, Default)]
 pub struct SettleOutcome {
     pub records: Vec<TransactionRecord>,
     pub objects: Vec<ObjectSummary>,
     /// Output files of expired transactions, removed by this pass.
     pub removed_files: Vec<String>,
+    pub open_records: usize,
 }
 
 /// Settlement changes and the resulting object listing.
@@ -84,6 +84,13 @@ pub struct SettleOutcome {
 pub struct SyncedObjects {
     pub outcome: SettleOutcome,
     pub objects: Vec<ObjectSummary>,
+}
+
+/// Deleted record and the output files removed with it.
+#[derive(Debug, Clone)]
+pub struct DeletedTransaction {
+    pub record: TransactionRecord,
+    pub removed_files: Vec<String>,
 }
 
 impl Driver {
@@ -149,7 +156,7 @@ impl Driver {
                 spendable_outputs.objs.len()
             ));
         }
-        reporter.on_done(ExecutionPhase::GenerateProof, None);
+        reporter.on_done(ExecutionPhase::GenerateProof);
 
         let shrink_ctx = ExecutionStepContext {
             old_root: Some(grounding_root),
@@ -174,14 +181,14 @@ impl Driver {
         Ok(ProvedTransaction {
             tx_final: spendable_outputs.tx.dict().commitment(),
             action: input.action,
+            owner: owner.to_string(),
             grounding_root,
             grounding_block,
-            input_files: holds.files().to_vec(),
             outputs,
             nullifiers: spendable_outputs.tx.nullifier_hashes()?,
             created: spendable_outputs.tx.created_commitments()?,
             payload_bytes,
-            _holds: holds,
+            holds,
         })
     }
 
@@ -193,7 +200,7 @@ impl Driver {
         let output_files = proved.output_files()?;
         let entries = load_object_files(&self.paths)?;
         let locked = locked_inputs(&load_records(&self.paths)?);
-        for input in &proved.input_files {
+        for input in proved.input_files() {
             if locked.contains(input) {
                 return Err(DriverError::Conflict(format!(
                     "input {input} is spent by a transaction awaiting the chain"
@@ -231,40 +238,32 @@ impl Driver {
             write_object_file(&self.paths, &record, file_name)?;
         }
         write_payload(&self.paths, &proved.tx_final, &proved.payload_bytes)?;
-        let record = TransactionRecord {
-            tx_final: encode_hash_hex(&proved.tx_final),
-            action: proved.action.clone(),
-            input_files: proved.input_files.clone(),
+        let record = TransactionRecord::recorded(
+            encode_hash_hex(&proved.tx_final),
+            proved.action.clone(),
+            proved.owner.clone(),
+            proved.input_files().to_vec(),
             output_files,
-            grounding_root: encode_hash_hex(&proved.grounding_root),
-            grounding_block: proved.grounding_block,
-            nullifiers: proved.nullifiers.iter().map(encode_hash_hex).collect(),
-            created: proved.created.iter().map(encode_hash_hex).collect(),
-            state: TransactionState::Recorded,
-            relayer_job_id: None,
-            tx_hash: None,
-            relayer_failure: None,
-            reason: None,
-            recorded_at_ms: now_ms(),
-            submit_attempted_at_ms: None,
-            submitted_at_ms: None,
-            settled_at_ms: None,
-        };
+            encode_hash_hex(&proved.grounding_root),
+            proved.grounding_block,
+            proved.nullifiers.iter().map(encode_hash_hex).collect(),
+            proved.created.iter().map(encode_hash_hex).collect(),
+            now_ms(),
+        );
         write_record(&self.paths, &record)?;
         Ok(record)
     }
 
     /// Delete a `recorded` transaction and its unknown outputs. Refuse once
     /// submission was attempted: the relayer may have accepted the payload.
-    pub fn delete_transaction(&self, tx_final: &Hash) -> Result<TransactionRecord> {
+    pub fn delete_transaction(&self, tx_final: &Hash) -> Result<DeletedTransaction> {
         let _store = self.store_lock.lock().expect("store lock poisoned");
         let record = read_record(&self.paths, tx_final)?
             .ok_or_else(|| DriverError::TransactionNotFound(encode_hash_hex(tx_final)))?;
         if record.state != TransactionState::Recorded {
             return Err(DriverError::Conflict(format!(
                 "transaction {} is {}, only recorded transactions can be deleted",
-                record.tx_final,
-                state_name(record.state)
+                record.tx_final, record.state
             ))
             .into());
         }
@@ -275,9 +274,12 @@ impl Driver {
             ))
             .into());
         }
-        self.remove_unknown_outputs(&record, tx_final)?;
+        let removed_files = self.remove_unknown_outputs(&record)?;
         remove_transaction(&self.paths, tx_final)?;
-        Ok(record)
+        Ok(DeletedTransaction {
+            record,
+            removed_files,
+        })
     }
 
     /// Submit a recorded payload and persist the relayer job ID.
@@ -291,9 +293,8 @@ impl Driver {
             TransactionState::Submitted => return Ok(record),
             state => {
                 return Err(DriverError::Conflict(format!(
-                    "transaction {} is {}",
-                    record.tx_final,
-                    state_name(state)
+                    "transaction {} is {state}",
+                    record.tx_final
                 ))
                 .into());
             }
@@ -302,24 +303,27 @@ impl Driver {
             .deps
             .synchronizer
             .fetch_head(&settings.synchronizer_api_url)?;
-        if aged_out(head.block_number, record.grounding_block) {
+        if grounding_aged_out(head.block_number, record.grounding_block) {
             return Err(DriverError::Conflict(format!(
-                "transaction {} is grounded at block {}, more than {MAX_STATE_ROOT_AGE_BLOCKS} blocks behind the synchronizer head {}",
-                record.tx_final, record.grounding_block, head.block_number
+                "transaction {} is grounded at block {}, more than {} blocks behind the synchronizer head {}",
+                record.tx_final,
+                record.grounding_block,
+                txlib::MAX_STATE_ROOT_AGE_BLOCKS,
+                head.block_number
             ))
             .into());
         }
 
         let payload_bytes = crate::transactions::read_payload(&self.paths, tx_final)?;
-        let attempted = self.update_record(tx_final, |record| {
+        let (record, attempted) = self.update_record(tx_final, |record| {
             if record.state != TransactionState::Recorded {
                 return Ok(false);
             }
             record.submit_attempted_at_ms.get_or_insert_with(now_ms);
             Ok(true)
         })?;
-        if !attempted.1 {
-            return Ok(attempted.0);
+        if !attempted {
+            return Ok(record);
         }
 
         let response = self.deps.relayer.submit_proof(
@@ -350,41 +354,29 @@ impl Driver {
 
     /// Reconcile open transactions and all object files; return the object listing.
     pub fn sync_objects(&self, query: Option<&ObjectQuery>) -> Result<SyncedObjects> {
-        let (outcome, summaries) = self.settle_with(true)?;
+        let (outcome, objects) = self.settle_with(true)?;
         Ok(SyncedObjects {
             outcome,
-            objects: summaries
+            objects: objects
                 .into_iter()
-                .filter(|(entry, summary)| {
-                    query.is_none_or(|query| matches_query(entry, summary.status, query))
-                })
-                .map(|(_, summary)| summary)
+                .filter(|summary| query.is_none_or(|query| matches_query(summary, query)))
                 .collect(),
         })
     }
 
-    fn settle_with(
-        &self,
-        all_objects: bool,
-    ) -> Result<(SettleOutcome, Vec<(ObjectFileEntry, ObjectSummary)>)> {
+    /// With `all_objects`, query and summarize every object; otherwise,
+    /// summarize only files changed by settlement.
+    fn settle_with(&self, all_objects: bool) -> Result<(SettleOutcome, Vec<ObjectSummary>)> {
         let settings = self.load_settings()?;
-        let (records, entries) = {
-            let _store = self.store_lock.lock().expect("store lock poisoned");
-            (load_records(&self.paths)?, load_object_files(&self.paths)?)
-        };
-        let open_records = records
-            .iter()
-            .filter(|record| record.is_open())
-            .collect::<Vec<_>>();
-
+        let records = load_records(&self.paths)?;
         let mut commitments = HashSet::new();
         let mut nullifiers = HashSet::new();
-        for record in &open_records {
+        for record in records.iter().filter(|record| record.is_open()) {
             commitments.extend(decode_hashes(&record.created)?);
             nullifiers.extend(decode_hashes(&record.nullifiers)?);
         }
         if all_objects {
-            for entry in &entries {
+            for entry in load_object_files(&self.paths)? {
                 commitments.insert(entry.record.obj.commitment());
                 if let Ok(nullifier) = object_nullifier_hash(&entry.record.obj) {
                     nullifiers.insert(nullifier);
@@ -392,8 +384,16 @@ impl Driver {
             }
         }
         if commitments.is_empty() && nullifiers.is_empty() {
-            let summaries = self.summaries(&entries, &records);
-            return Ok((SettleOutcome::default(), summaries));
+            let outcome = SettleOutcome {
+                open_records: records.iter().filter(|record| record.is_open()).count(),
+                ..SettleOutcome::default()
+            };
+            let listing = if all_objects {
+                self.summaries(&load_object_files(&self.paths)?, &records)
+            } else {
+                Vec::new()
+            };
+            return Ok((outcome, listing));
         }
 
         let membership = self.deps.synchronizer.fetch_membership_with_nullifiers(
@@ -402,7 +402,7 @@ impl Driver {
             &nullifiers.into_iter().collect::<Vec<_>>(),
         )?;
         let mut relayer_jobs = HashMap::new();
-        for record in &open_records {
+        for record in &records {
             let Some(job_id) = record
                 .relayer_job_id
                 .as_deref()
@@ -451,14 +451,16 @@ impl Driver {
             if landed {
                 record.state = TransactionState::Landed;
                 record.settled_at_ms = Some(settled_at_ms);
-            } else if aged_out(membership.block_number, record.grounding_block) {
+            } else if grounding_aged_out(membership.block_number, record.grounding_block) {
                 record.state = TransactionState::Expired;
                 record.reason = Some(format!(
-                    "grounding block {} is more than {MAX_STATE_ROOT_AGE_BLOCKS} blocks behind the synchronizer head {}",
-                    record.grounding_block, membership.block_number
+                    "grounding block {} is more than {} blocks behind the synchronizer head {}",
+                    record.grounding_block,
+                    txlib::MAX_STATE_ROOT_AGE_BLOCKS,
+                    membership.block_number
                 ));
                 record.settled_at_ms = Some(settled_at_ms);
-                let removed = self.remove_unknown_outputs(record, &record_tx_final(record)?)?;
+                let removed = self.remove_unknown_outputs(record)?;
                 outcome.removed_files.extend(removed);
             }
             if *record != before {
@@ -466,6 +468,7 @@ impl Driver {
                 outcome.records.push(record.clone());
             }
         }
+        outcome.open_records = records.iter().filter(|record| record.is_open()).count();
 
         let mut entries = load_object_files(&self.paths)?;
         let mut changed_files = HashSet::new();
@@ -492,18 +495,18 @@ impl Driver {
                 changed_files.extend(record.input_files.iter().cloned());
             }
         }
-        let summaries = self.summaries(&entries, &records);
-        outcome.objects = summaries
+        let changed = entries
             .iter()
-            .filter(|(entry, _)| changed_files.contains(&entry.file_name))
-            .map(|(_, summary)| summary.clone())
-            .collect();
-        Ok((outcome, summaries))
-    }
-
-    /// Basename to the label of the proof holding it as an input.
-    pub fn held_inputs(&self) -> HashMap<String, String> {
-        self.holds.labels()
+            .filter(|entry| changed_files.contains(&entry.file_name))
+            .cloned()
+            .collect::<Vec<_>>();
+        outcome.objects = self.summaries(&changed, &records);
+        let listing = if all_objects {
+            self.summaries(&entries, &records)
+        } else {
+            Vec::new()
+        };
+        Ok((outcome, listing))
     }
 
     pub fn list_transactions(&self) -> Result<Vec<TransactionRecord>> {
@@ -515,56 +518,11 @@ impl Driver {
             .ok_or_else(|| DriverError::TransactionNotFound(encode_hash_hex(tx_final)).into())
     }
 
-    pub fn execute(&self, input: ExecuteActionInput) -> Result<ExecuteActionResult> {
-        self.execute_with_reporter(input, &NoopExecutionReporter)
-    }
-
-    /// `prove`, `record` and `submit` in one call. Landing is reported by
-    /// settlement.
-    pub fn execute_with_reporter<R: ExecutionReporter>(
-        &self,
-        input: ExecuteActionInput,
-        reporter: &R,
-    ) -> Result<ExecuteActionResult> {
-        let owner = format!("execute:{}", input.action);
-        let proved = self.prove(input, &owner, reporter)?;
-        let old_root = proved.grounding_root;
-        let mut ctx = ExecutionStepContext {
-            old_root: Some(old_root),
-            output_files: Vec::new(),
-            output_status: None,
-        };
-        reporter.on_step(ExecutionPhase::Commit, "Creating files", &ctx);
+    /// Prove, record, and submit under owner `execute`, without waiting for landing.
+    pub fn execute(&self, input: ExecuteActionInput) -> Result<TransactionRecord> {
+        let proved = self.prove(input, "execute", &crate::types::NoopExecutionReporter)?;
         let record = self.record(proved)?;
-        ctx.output_files = record.output_files.clone();
-        ctx.output_status = Some(ObjectStatus::Unknown);
-        reporter.on_step(
-            ExecutionPhase::Commit,
-            "Output object files created with status unknown",
-            &ctx,
-        );
-        reporter.on_step(ExecutionPhase::Commit, "Submitting proof to relayer", &ctx);
-        let tx_final = record_tx_final(&record)?;
-        let submitted = self.submit(&tx_final)?;
-        let relayer_job_id = submitted
-            .relayer_job_id
-            .clone()
-            .ok_or_else(|| anyhow!("submitted record {} has no job id", submitted.tx_final))?;
-        ctx.output_status = Some(ObjectStatus::Pending);
-        reporter.on_step(
-            ExecutionPhase::Commit,
-            &format!("Relayer accepted job {relayer_job_id}; landing is reported by settlement"),
-            &ctx,
-        );
-        let result = ExecuteActionResult {
-            tx_final,
-            old_root,
-            output_files: record.output_files,
-            input_files: record.input_files,
-            relayer_job_id,
-        };
-        reporter.on_done(ExecutionPhase::Commit, Some(&result));
-        Ok(result)
+        self.submit(&record_tx_final(&record)?)
     }
 
     /// Apply `change` to a fresh record under the store lock; persist only
@@ -585,18 +543,15 @@ impl Driver {
     }
 
     /// Remove unknown outputs still owned by this record. Caller holds the store lock.
-    fn remove_unknown_outputs(
-        &self,
-        record: &TransactionRecord,
-        tx_final: &Hash,
-    ) -> Result<Vec<String>> {
+    fn remove_unknown_outputs(&self, record: &TransactionRecord) -> Result<Vec<String>> {
+        let tx_final = record_tx_final(record)?;
         let mut removed = Vec::new();
         for file_name in &record.output_files {
             let path = self.paths.objects_dir.join(file_name);
             let Ok(stored) = crate::object_record::parse_object_record_file(&path) else {
                 continue;
             };
-            if stored.status == FileStatus::Unknown && stored.tx_final == *tx_final {
+            if stored.status == FileStatus::Unknown && stored.tx_final == tx_final {
                 fs::remove_file(&path)
                     .with_context(|| format!("failed to remove output {file_name}"))?;
                 removed.push(file_name.clone());
@@ -606,15 +561,35 @@ impl Driver {
     }
 }
 
-pub(crate) fn aged_out(head_block: i64, grounding_block: i64) -> bool {
-    head_block - grounding_block > MAX_STATE_ROOT_AGE_BLOCKS
+pub(crate) struct RecordIndex<'a> {
+    pub(crate) by_tx_final: HashMap<Hash, &'a TransactionRecord>,
+    /// Input filenames mapped to the owner of the open transaction spending them.
+    pub(crate) locked_by: HashMap<&'a str, &'a str>,
 }
 
-fn state_name(state: TransactionState) -> &'static str {
-    match state {
-        TransactionState::Recorded => "recorded",
-        TransactionState::Submitted => "submitted",
-        TransactionState::Landed => "landed",
-        TransactionState::Expired => "expired",
+impl<'a> RecordIndex<'a> {
+    pub(crate) fn new(records: &'a [TransactionRecord]) -> Self {
+        let by_tx_final = records
+            .iter()
+            .filter_map(|record| {
+                record_tx_final(record)
+                    .ok()
+                    .map(|tx_final| (tx_final, record))
+            })
+            .collect();
+        let locked_by = records
+            .iter()
+            .filter(|record| record.is_open())
+            .flat_map(|record| {
+                record
+                    .input_files
+                    .iter()
+                    .map(move |file| (file.as_str(), record.owner.as_str()))
+            })
+            .collect();
+        Self {
+            by_tx_final,
+            locked_by,
+        }
     }
 }

@@ -285,6 +285,7 @@ impl DobjOps for MockDobjOps {
         Ok(TransactionRecord {
             tx_final: tx_final.to_string(),
             action: qname("CraftWood"),
+            owner: "mock-proof".to_string(),
             input_files: vec!["craft-basics__log_0xmock.dobj".to_string()],
             output_files: vec!["craft-basics__wood_0xnew.dobj".to_string()],
             grounding_root: "0xmockoldroot".to_string(),

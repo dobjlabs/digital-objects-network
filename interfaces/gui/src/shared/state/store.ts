@@ -433,9 +433,6 @@ export const useStore = create<AppState>((set, get) => ({
         };
       });
 
-      const hydrateData = useStore.getState().hydrateData;
-      await hydrateData();
-
       await new Promise((resolve) => setTimeout(resolve, postDoneHoldMs));
       get().resetProofPanel(runId);
     } catch (error) {

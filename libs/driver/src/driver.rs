@@ -23,8 +23,9 @@ use crate::object_store::{
     write_object_file,
 };
 use crate::pexe_catalog::PexeCatalog;
+use crate::pipeline::RecordIndex;
 use crate::settings::{default_settings, read_settings, write_settings};
-use crate::transactions::{load_records, record_tx_final};
+use crate::transactions::load_records;
 use crate::types::{ActionQuery, DriverPaths, ObjectQuery};
 use wire_types::{
     ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverSettings,
@@ -205,10 +206,7 @@ impl Driver {
         Ok(self
             .summaries(&entries, &records)
             .into_iter()
-            .filter(|(entry, summary)| {
-                query.is_none_or(|query| matches_query(entry, summary.status, query))
-            })
-            .map(|(_, summary)| summary)
+            .filter(|summary| query.is_none_or(|query| matches_query(summary, query)))
             .collect())
     }
 
@@ -226,10 +224,7 @@ impl Driver {
             return Err(DriverError::ObjectFileNotFound(file_name).into());
         }
         let record = parse_object_record_file(&resolved)?;
-        Ok(self.object_summary(
-            &ObjectFileEntry { file_name, record },
-            &records_by_tx_final(&load_records(&self.paths)?),
-        ))
+        self.summary_of(ObjectFileEntry { file_name, record })
     }
 
     /// The object file's contents exactly as stored on disk, resolved the
@@ -259,10 +254,7 @@ impl Driver {
             return Err(DriverError::ObjectFileNotFound(file_name).into());
         }
         let record = parse_object_record_file(&source)?;
-        let summary = self.object_summary(
-            &ObjectFileEntry { file_name, record },
-            &records_by_tx_final(&load_records(&self.paths)?),
-        );
+        let summary = self.summary_of(ObjectFileEntry { file_name, record })?;
         fs::create_dir_all(&self.paths.discarded_objects_dir).with_context(|| {
             format!(
                 "failed to create discarded directory {}",
@@ -526,42 +518,53 @@ impl Driver {
         //    based on status, so a freshly-imported Unknown/Live lands live.
         write_object_file(&self.paths, &record, &file_name)?;
 
-        Ok(self.object_summary(
-            &ObjectFileEntry { file_name, record },
-            &records_by_tx_final(&load_records(&self.paths)?),
-        ))
+        self.summary_of(ObjectFileEntry { file_name, record })
     }
 
     pub fn generated_podlang(&self) -> Option<String> {
         self.catalog().generated_podlang()
     }
 
+    fn summary_of(&self, entry: ObjectFileEntry) -> Result<ObjectSummary> {
+        let records = load_records(&self.paths)?;
+        Ok(self
+            .summaries(std::slice::from_ref(&entry), &records)
+            .remove(0))
+    }
+
     pub(crate) fn summaries(
         &self,
         entries: &[ObjectFileEntry],
         records: &[TransactionRecord],
-    ) -> Vec<(ObjectFileEntry, ObjectSummary)> {
-        let by_tx_final = records_by_tx_final(records);
+    ) -> Vec<ObjectSummary> {
+        let index = RecordIndex::new(records);
+        let held = self.holds.labels();
         entries
             .iter()
-            .map(|entry| (entry.clone(), self.object_summary(entry, &by_tx_final)))
+            .map(|entry| self.object_summary(entry, &index, &held))
             .collect()
     }
 
-    /// The file's status, read together with the record of the transaction
-    /// that wrote it: an `unknown` output of a submitted transaction is
-    /// `pending`, and the tx hash is the record's.
+    /// Derives pending status and tx hash from the producing transaction.
+    /// Reports the proof holding the file or the open transaction spending it.
     fn object_summary(
         &self,
         entry: &ObjectFileEntry,
-        records: &HashMap<Hash, &TransactionRecord>,
+        index: &RecordIndex<'_>,
+        held: &HashMap<String, String>,
     ) -> ObjectSummary {
         let class_info = self.catalog().get_class(&entry.record.class);
-        let record = records.get(&entry.record.tx_final);
+        let record = index.by_tx_final.get(&entry.record.tx_final);
         let status = match (entry.record.status, record.map(|record| record.state)) {
             (FileStatus::Unknown, Some(TransactionState::Submitted)) => ObjectStatus::Pending,
             (status, _) => status.into(),
         };
+        let held_by_run_id = held.get(&entry.file_name).cloned().or_else(|| {
+            index
+                .locked_by
+                .get(entry.file_name.as_str())
+                .map(|owner| owner.to_string())
+        });
         ObjectSummary {
             content_hash: encode_hash_hex(&entry.record.content_hash),
             file_name: entry.file_name.clone(),
@@ -581,7 +584,7 @@ impl Driver {
             tx_hash: record.and_then(|record| record.tx_hash.clone()),
             description: class_info.as_ref().map(|c| c.description.clone()),
             fields: entry.record.fields_map(),
-            held_by_run_id: None,
+            held_by_run_id,
         }
     }
 
@@ -610,15 +613,4 @@ pub(crate) fn extract_basename(path: &Path) -> Result<String> {
             DriverError::InvalidInput(format!("missing file name in path: {}", path.display()))
                 .into()
         })
-}
-
-fn records_by_tx_final(records: &[TransactionRecord]) -> HashMap<Hash, &TransactionRecord> {
-    records
-        .iter()
-        .filter_map(|record| {
-            record_tx_final(record)
-                .ok()
-                .map(|tx_final| (tx_final, record))
-        })
-        .collect()
 }
