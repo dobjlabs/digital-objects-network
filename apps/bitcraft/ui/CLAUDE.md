@@ -44,8 +44,10 @@ older name) opens Recipe Info with that action selected and shown.
 Startup keeps the inventory hidden until the player has a live pocketknife.
 Automatic setup jobs stay out of Jobs; manual jobs stay visible. Failures
 offer retry and never open the inventory. See `BITCRAFT_SPECIFIC_RULES.md`.
-The simple progress bar and status layout also appears in the desktop `shell/`.
-Keep both splash screens visually consistent, including the bottom status
+The startup screen is laid out like the details pane (document icon, 16px
+heading, muted text, progress bar in the blue accent), and the same layout
+appears in the desktop `shell/`, whose `style.css` copies this page's values
+as literals. Keep both splash screens visually consistent, including the bottom status
 bar, which both show. On this page the bar is live: it reads the service
 addresses from dobjd's settings and probes each service. The desktop shell's
 "Preparing cryptography..." screen runs before dobjd is ready, so it cannot
@@ -55,6 +57,9 @@ each status, and a hardcoded version that must match `BITCRAFT_VERSION`
 here. The progress bar counts completed milestones: cryptography ready, pocketknife proof generated, and network
 confirmation. The step counter and heading describe the current work rather
 than the last completed milestone. Errors preserve the bar's completed progress.
+Each step stays up at least one second (`STARTUP_STEP_MIN_MS`) even when its
+work finishes sooner. The tests' page harness ends these holds at the next
+turn of the event loop; pass `holdSteps` to keep them until `elapse()`.
 
 Run browser behavior checks with `pnpm --dir apps/bitcraft/tests install --frozen-lockfile`
 and `pnpm --dir apps/bitcraft/tests test` from the repository root. The tests

@@ -4,36 +4,40 @@ body {
   display: flex;
   flex-direction: column;
   font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  background: #fafafa;
+  background: #ffffff;
   color: #1f1f1f;
   user-select: none;
   -webkit-user-select: none;
 }
+/* Matches the game page's startup screen, which takes these values from its
+   theme variables. */
 .screen {
   display: grid;
   flex: 1;
   place-items: center;
   padding: 32px;
 }
-main { width: min(100%, 380px); }
-.brand { margin: 0 0 32px; font-size: 16px; font-weight: 600; }
-#status { margin: 20px 0 10px; font-size: 24px; font-weight: 600; line-height: 1.25; white-space: pre-wrap; overflow-wrap: anywhere; }
-.description { color: #6b6b6b; font-size: 14px; line-height: 1.6; }
+main { width: min(100%, 360px); text-align: center; }
+.icon { width: 96px; height: 120px; margin: 0 auto 16px; }
+.icon svg { display: block; }
+#status { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.3; white-space: pre-wrap; overflow-wrap: anywhere; }
+.description { margin: 4px 0 0; color: #6b6b6b; line-height: 1.5; }
 .startup-progress {
   display: block;
   width: 100%;
   height: 6px;
+  margin-top: 16px;
   appearance: none;
   border: 0;
   border-radius: 3px;
   overflow: hidden;
-  background: #dedede;
-  color: #6d28d9;
+  background: #e2e2e2;
+  color: #0a64d8;
 }
-.startup-progress::-webkit-progress-bar { background: #dedede; }
-.startup-progress::-webkit-progress-value { background: #6d28d9; }
-.startup-progress::-moz-progress-bar { background: #6d28d9; }
-#startup-progress-label { margin: 10px 0 0; color: #6b6b6b; font-size: 12px; }
+.startup-progress::-webkit-progress-bar { background: #e2e2e2; }
+.startup-progress::-webkit-progress-value { background: #0a64d8; }
+.startup-progress::-moz-progress-bar { background: #0a64d8; }
+#startup-progress-label { margin: 6px 0 0; color: #6b6b6b; font-size: 12px; }
 .status-bar {
   flex: none;
   display: flex;

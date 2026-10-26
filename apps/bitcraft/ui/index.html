@@ -34,6 +34,9 @@
     --status-connected: #16a34a;
     --status-disconnected: #dc2626;
     --status-unknown: #a8a8a8;
+    --progress-track: #e2e2e2;
+    --progress-fill: #0a64d8;
+    --button-border: #c4c4c4;
     /* Blank strip kept below the last row of a full list, so a click on
        empty space to clear the selection always has a target. */
     --list-trailing-space: 48px;
@@ -177,52 +180,87 @@
     white-space: nowrap;
   }
   .summary-fields dd { margin: 0; }
+  /* Laid out like the details pane: a document icon over a title and muted
+     text. The desktop shell's preparation screen copies these values. */
   #startup-screen {
     display: grid;
     flex: 1;
     place-items: center;
     padding: 32px;
-    background: #fafafa;
+    background: var(--bg);
   }
-  .startup-content { width: min(100%, 380px); }
-  .startup-brand { margin: 0 0 32px; font-size: 16px; font-weight: 600; }
-  #startup-status { margin: 20px 0 10px; font-size: 24px; font-weight: 600; line-height: 1.25; }
-  #startup-description { color: var(--muted); font-size: 14px; line-height: 1.6; }
+  .startup-content { width: min(100%, 360px); text-align: center; }
+  .startup-icon {
+    position: relative;
+    width: 96px;
+    height: 120px;
+    margin: 0 auto 16px;
+  }
+  .startup-icon svg { display: block; }
+  /* The 16px art at 4x, centered across the page below its folded corner. */
+  .startup-icon img {
+    position: absolute;
+    left: 16px;
+    top: 34px;
+    width: 64px;
+    height: 64px;
+    image-rendering: pixelated;
+  }
+  .startup-icon img[hidden] { display: none; }
+  #startup-status { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.3; }
+  #startup-description { margin: 4px 0 0; color: var(--muted); line-height: 1.5; }
+  .startup-progress {
+    display: block;
+    width: 100%;
+    height: 6px;
+    margin-top: 16px;
+    appearance: none;
+    border: 0;
+    border-radius: 3px;
+    overflow: hidden;
+    background: var(--progress-track);
+    color: var(--progress-fill);
+  }
+  .startup-progress::-webkit-progress-bar { background: var(--progress-track); }
+  .startup-progress::-webkit-progress-value { background: var(--progress-fill); }
+  .startup-progress::-moz-progress-bar { background: var(--progress-fill); }
+  #startup-progress-label { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
   #startup-error {
+    margin: 16px 0 0;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--pane-header-bg);
     color: var(--error);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    text-align: left;
     overflow-wrap: anywhere;
     white-space: pre-wrap;
     user-select: text;
     -webkit-user-select: text;
   }
-  #startup-copy-status { color: var(--muted); }
-  .startup-progress {
-    display: block;
-    width: 100%;
-    height: 6px;
-    appearance: none;
-    border: 0;
-    border-radius: 3px;
-    overflow: hidden;
-    background: #dedede;
-    color: #6d28d9;
-  }
-  .startup-progress::-webkit-progress-bar { background: #dedede; }
-  .startup-progress::-webkit-progress-value { background: #6d28d9; }
-  .startup-progress::-moz-progress-bar { background: #6d28d9; }
-  #startup-progress-label { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
-  #startup-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+  #startup-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 12px; }
   #startup-actions[hidden] { display: none; }
   #startup-actions button {
-    padding: 8px 14px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
+    min-width: 88px;
+    padding: 3px 12px;
+    border: 1px solid var(--button-border);
+    border-radius: 5px;
     background: var(--bg);
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.06);
     color: var(--text);
     font: inherit;
-    cursor: pointer;
+    cursor: default;
   }
-  #startup-actions #startup-retry { background: #6d28d9; border-color: #6d28d9; color: white; }
+  #startup-actions button:active { background: var(--row-hover); }
+  #startup-actions #startup-retry {
+    border-color: var(--progress-fill);
+    background: var(--progress-fill);
+    color: white;
+  }
+  #startup-actions #startup-retry:active { filter: brightness(0.9); }
+  #startup-copy-status { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
   #status-bar {
     flex: none;
     display: flex;
@@ -684,13 +722,24 @@
 <body>
   <section id="startup-screen" aria-labelledby="startup-status">
     <div class="startup-content">
-      <p class="startup-brand">Bitcraft</p>
-      <progress id="startup-progress" class="startup-progress" max="3" value="0" aria-label="Startup progress" aria-describedby="startup-progress-label startup-status"></progress>
-      <p id="startup-progress-label">Step 1 of 3</p>
+      <div class="startup-icon" aria-hidden="true">
+        <svg width="96" height="120" viewBox="0 0 128 160">
+          <defs>
+            <filter id="startup-icon-shadow" x="-10%" y="-10%" width="120%" height="120%">
+              <feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-color="#000" flood-opacity="0.18"/>
+            </filter>
+          </defs>
+          <path d="M6 4h80l36 36v114H6z" fill="#fff" stroke="#d0d0d0" filter="url(#startup-icon-shadow)"/>
+          <path d="M86 4v28a8 8 0 0 0 8 8h28" fill="#f2f2f2" stroke="#d0d0d0"/>
+        </svg>
+        <img id="startup-class-icon" alt="" hidden>
+      </div>
       <div role="status" aria-live="polite" aria-atomic="true">
         <h1 id="startup-status">Opening Bitcraft...</h1>
         <p id="startup-description">Getting your inventory ready.</p>
       </div>
+      <progress id="startup-progress" class="startup-progress" max="3" value="0" aria-label="Startup progress" aria-describedby="startup-progress-label startup-status"></progress>
+      <p id="startup-progress-label">Step 1 of 3</p>
       <p id="startup-error" role="alert" hidden></p>
       <div id="startup-actions" hidden>
         <button type="button" id="startup-retry">Try again</button>
@@ -841,6 +890,10 @@
     return className.pluginName === PLUGIN_NAME && className.name === "Pocketknife";
   }
 
+  function pocketknifeIcon() {
+    return Presentation.classInfo({ pluginName: PLUGIN_NAME, name: "Pocketknife" }).icon;
+  }
+
   function rememberStartupRun(runId) {
     try {
       sessionStorage.setItem(STARTUP_RUN_STORAGE_KEY, runId);
@@ -887,9 +940,9 @@
       return;
     }
     if (run?.state?.status === "committing" || run?.state?.status === "succeeded") {
-      showStartup("Waiting for confirmation...", "Your pocketknife is being confirmed by the network. This can take a little while.");
+      showStartup("Waiting for confirmation...", "Your pocketknife is being confirmed by the network. This can take a little while.", pocketknifeIcon());
     } else {
-      showStartup("Creating your first pocketknife...", "Bitcraft is making a cryptographic proof for your starter tool. You will be ready to gather resources soon.");
+      showStartup("Creating your first pocketknife...", "Bitcraft is making a cryptographic proof for your starter tool. You will be ready to gather resources soon.", pocketknifeIcon());
     }
   }
 
@@ -2788,9 +2841,115 @@
     }
   }
 
+  // Each step of the startup screen stays up at least this long, so a step
+  // that finishes quickly is still seen.
+  const STARTUP_STEP_MIN_MS = 1000;
+  // Milestones completed, as of the latest startup check.
+  let startupCompleted = 0;
+  // The latest screen asked for at each milestone count, from the one on
+  // display onwards. A finished screen reveals the inventory.
+  const startupScreens = new Map();
+  let requestedStartupScreen = null;
+  let shownStartupScreen = null;
+  // Set while the screen on display has not yet been up for the minimum.
+  let startupHoldTimer = null;
+
   function setStartupProgress(completed) {
-    const progress = document.getElementById("startup-progress");
-    progress.value = completed;
+    startupCompleted = completed;
+  }
+
+  function showStartup(title, description, icon = null) {
+    requestStartupScreen({ completed: startupCompleted, title, description, icon, error: null });
+  }
+
+  function showStartupError(message) {
+    requestStartupScreen({
+      completed: startupCompleted,
+      title: "Bitcraft could not finish setup",
+      description: "Your inventory opens once you have a starter pocketknife. Try again to continue.",
+      icon: null,
+      error: message,
+    });
+  }
+
+  function finishStartup() {
+    requestStartupScreen({ completed: startupCompleted, finished: true });
+  }
+
+  function isStartupUnfinished() {
+    return requestedStartupScreen !== null && !requestedStartupScreen.finished;
+  }
+
+  // A screen for the step on display replaces it at once, and one for an
+  // earlier step (a retry) is shown at once too. A later step waits until
+  // the step on display has been up for the minimum, and the screen then
+  // moves one requested step at a time.
+  function requestStartupScreen(screen) {
+    requestedStartupScreen = screen;
+    for (const completed of startupScreens.keys()) {
+      if (completed > screen.completed) startupScreens.delete(completed);
+    }
+    startupScreens.set(screen.completed, screen);
+    const shownCompleted = shownStartupScreen?.completed ?? -1;
+    if (screen.completed === shownCompleted) {
+      renderStartupScreen(screen);
+      return;
+    }
+    if (screen.completed < shownCompleted) {
+      clearTimeout(startupHoldTimer);
+      startupHoldTimer = null;
+      shownStartupScreen = null;
+    }
+    if (startupHoldTimer === null) advanceStartupScreen();
+  }
+
+  function advanceStartupScreen() {
+    startupHoldTimer = null;
+    const shownCompleted = shownStartupScreen?.completed ?? -1;
+    const later = [...startupScreens.keys()].filter((completed) => completed > shownCompleted);
+    if (later.length === 0) return;
+    const next = Math.min(...later);
+    for (const completed of startupScreens.keys()) {
+      if (completed < next) startupScreens.delete(completed);
+    }
+    const screen = startupScreens.get(next);
+    renderStartupScreen(screen);
+    if (!screen.finished) startupHoldTimer = setTimeout(advanceStartupScreen, STARTUP_STEP_MIN_MS);
+  }
+
+  function renderStartupScreen(screen) {
+    shownStartupScreen = screen;
+    const startupScreen = document.getElementById("startup-screen");
+    const app = document.getElementById("inventory-app");
+    document.getElementById("startup-progress").value = screen.completed;
+    if (screen.finished) {
+      startupScreen.hidden = true;
+      app.hidden = false;
+      app.inert = false;
+      fitObjectNames();
+      return;
+    }
+    startupScreen.hidden = false;
+    app.hidden = true;
+    app.inert = true;
+    const status = document.getElementById("startup-status");
+    const detail = document.getElementById("startup-description");
+    const copyStatus = document.getElementById("startup-copy-status");
+    if (status.textContent !== screen.title) {
+      status.textContent = screen.title;
+      copyStatus.hidden = true;
+    }
+    if (detail.textContent !== screen.description) detail.textContent = screen.description;
+    const icon = document.getElementById("startup-class-icon");
+    if (screen.icon && icon.getAttribute("src") !== screen.icon) icon.src = screen.icon;
+    icon.hidden = !screen.icon;
+    const error = document.getElementById("startup-error");
+    if (screen.error !== null && error.textContent !== screen.error) {
+      error.textContent = screen.error;
+      copyStatus.hidden = true;
+    }
+    error.hidden = screen.error === null;
+    document.getElementById("startup-actions").hidden = screen.error === null;
     updateStartupProgressLabel();
   }
 
@@ -2799,40 +2958,6 @@
     const label = `Step ${Math.min(progress.value + 1, progress.max)} of ${progress.max}`;
     progress.setAttribute("aria-valuetext", `${label}: ${document.getElementById("startup-status").textContent}`);
     document.getElementById("startup-progress-label").textContent = label;
-  }
-
-  function showStartup(title, description) {
-    document.getElementById("startup-screen").hidden = false;
-    document.getElementById("inventory-app").hidden = true;
-    document.getElementById("inventory-app").inert = true;
-    const status = document.getElementById("startup-status");
-    const detail = document.getElementById("startup-description");
-    if (status.textContent !== title) {
-      status.textContent = title;
-      document.getElementById("startup-copy-status").hidden = true;
-    }
-    if (detail.textContent !== description) detail.textContent = description;
-    updateStartupProgressLabel();
-    document.getElementById("startup-error").hidden = true;
-    document.getElementById("startup-actions").hidden = true;
-  }
-
-  function showStartupError(message) {
-    showStartup("Bitcraft could not finish setup", "Your inventory opens once you have a starter pocketknife. Try again to continue.");
-    const error = document.getElementById("startup-error");
-    if (error.textContent !== message) {
-      error.textContent = message;
-      document.getElementById("startup-copy-status").hidden = true;
-    }
-    error.hidden = false;
-    document.getElementById("startup-actions").hidden = false;
-  }
-
-  function finishStartup() {
-    document.getElementById("startup-screen").hidden = true;
-    document.getElementById("inventory-app").hidden = false;
-    document.getElementById("inventory-app").inert = false;
-    fitObjectNames();
   }
 
   document.getElementById("startup-retry").addEventListener("click", load);
@@ -2878,7 +3003,7 @@
       showObjects(await fetchJson("/objects/unspent"));
     } catch (error) {
       console.warn("Could not reload objects:", error);
-      if (!document.getElementById("startup-screen").hidden) {
+      if (isStartupUnfinished()) {
         showStartupError(`Could not refresh inventory: ${error.message}`);
       }
     } finally {
