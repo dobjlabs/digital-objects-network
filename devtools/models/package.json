@@ -10,8 +10,12 @@
     "test:relayer": "quint test ../../services/relayer/model/delivery.qnt --seed=20261025",
     "simulate:relayer": "quint run ../../services/relayer/model/delivery.qnt --invariant=safety --max-samples=3000 --max-steps=45 --seed=20261025 --verbosity=1",
     "check:relayer": "pnpm run typecheck:relayer && pnpm run test:relayer && pnpm run simulate:relayer",
-    "check": "pnpm run check:synchronizer && pnpm run check:relayer",
-    "integration": "QUINT_SEED=\"${QUINT_SEED:-20261025}\" PATH=\"$PWD/node_modules/.bin:$PATH\" cargo test -p synchronizer -p relayer --release --locked -- --include-ignored --test-threads=1"
+    "typecheck:archiver": "quint typecheck ../../services/archiver/model/acquisition.qnt",
+    "test:archiver": "quint test ../../services/archiver/model/acquisition.qnt --seed=20261025",
+    "simulate:archiver": "quint run ../../services/archiver/model/acquisition.qnt --invariant=safety --max-samples=3000 --max-steps=45 --seed=20261025 --verbosity=1",
+    "check:archiver": "pnpm run typecheck:archiver && pnpm run test:archiver && pnpm run simulate:archiver",
+    "check": "pnpm run check:synchronizer && pnpm run check:relayer && pnpm run check:archiver",
+    "integration": "QUINT_SEED=\"${QUINT_SEED:-20261025}\" PATH=\"$PWD/node_modules/.bin:$PATH\" cargo test -p synchronizer -p relayer -p archiver --release --locked -- --include-ignored --test-threads=1"
   },
   "devDependencies": {
     "@informalsystems/quint": "0.33.0"

@@ -7,6 +7,7 @@ One Quint installation supplies the service specifications. Quint Connect adapte
 | [Synchronizer ancestry](../../services/synchronizer/model/README.md) | Fetching, skipped slots, forks, rollback and replay | Real fetch clients, derivation, RocksDB and Postgres; mocked proof parser |
 | [Synchronizer publication and reads](../../services/synchronizer/model/PUBLICATION.md) | Interrupted writes, rollback and concurrent snapshots | Paused production writes and reads, SQL transactions and persisted Merkle state |
 | [Relayer delivery](../../services/relayer/model/README.md) | Retry scheduling, durable broadcasts, replacements, receipts and recovery | Real worker and Postgres; independent gateway ledger and test clock |
+| [Archiver acquisition](../../services/archiver/model/README.md) | Parent payload ownership, partial publication, forks and recovery | Specification |
 
 ## Run
 
@@ -26,7 +27,7 @@ export TEST_PG_ADMIN_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres
 pnpm --dir devtools/models integration
 ```
 
-This runs the synchronizer, relayer suites, including ignored Connect and database tests. Tests own uniquely named databases, temporary stores and fake servers. Relayer tests also accept `TEST_RELAYER_DB_ADMIN`, which takes precedence. `QUINT_SEED` selects generated traces; `QUINT_VERBOSE=1` shows replay actions and differences.
+This runs the three service suites, including ignored Connect and database tests. Tests own uniquely named databases, temporary stores and fake servers. Relayer tests also accept `TEST_RELAYER_DB_ADMIN`, which takes precedence. `QUINT_SEED` selects generated traces; `QUINT_VERBOSE=1` shows replay actions and differences.
 
 The [Rust CI job](../../.github/workflows/rust_tests.yml) runs ignored binary tests with the same workspace features and release profile as its ordinary tests, reusing that build. Cargo runs each binary from its package directory so Connect resolves specification paths. Library-only ignored tests remain excluded.
 
