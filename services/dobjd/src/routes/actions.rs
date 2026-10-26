@@ -22,11 +22,9 @@ use wire_types::{
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
-/// `POST /actions/run` — accept an action and return immediately with a run
-/// handle. The proof + commit pipeline runs on a background worker; follow it
-/// via `GET /actions/runs/{run_id}` (poll) or `/events` (SSE). Input/feasibility
-/// errors are not reported here: they surface as the run's terminal `failed`
-/// state, observable through either follow path.
+/// `POST /actions/run`: accept an action and return a run handle immediately.
+/// Input errors appear in the run's terminal state. Follow progress through
+/// `GET /actions/runs/{run_id}` or its `/events` stream.
 pub async fn run_action(
     State(state): State<AppState>,
     Json(req): Json<RunActionRequest>,
@@ -42,14 +40,8 @@ pub async fn run_action(
         .map(|path| path.trim().to_string())
         .collect();
 
-    let accepted = crate::runs::spawn_run(
-        &state.runs,
-        state.driver.clone(),
-        state.events.clone(),
-        input.action,
-        input_objects,
-        input.args,
-    )?;
+    let accepted =
+        crate::runs::spawn_run(&state.services, input.action, input_objects, input.args)?;
     Ok((StatusCode::ACCEPTED, Json(accepted)))
 }
 
@@ -61,7 +53,7 @@ pub async fn list_runs(
     Query(query): Query<RunListQuery>,
 ) -> Json<Vec<RunState>> {
     let active_only = query.status == Some(RunListFilter::Active);
-    Json(state.runs.list(active_only))
+    Json(state.services.runs.list(active_only))
 }
 
 /// `GET /actions/runs/{run_id}` — current state of a run: status, the result
@@ -71,10 +63,10 @@ pub async fn get_run(
     State(state): State<AppState>,
     Path(run_id): Path<String>,
 ) -> ApiResult<Json<RunState>> {
-    let entry = state
-        .runs
-        .get(&run_id)
-        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, format!("unknown run: {run_id}")))?;
+    let entry =
+        state.services.runs.get(&run_id).ok_or_else(|| {
+            ApiError::new(StatusCode::NOT_FOUND, format!("unknown run: {run_id}"))
+        })?;
     Ok(Json(entry.snapshot()))
 }
 
@@ -87,7 +79,7 @@ pub async fn run_events(
     Path(run_id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(entry) = state.runs.get(&run_id) else {
+    let Some(entry) = state.services.runs.get(&run_id) else {
         return (StatusCode::NOT_FOUND, format!("unknown run: {run_id}")).into_response();
     };
 
@@ -142,7 +134,7 @@ pub async fn run_events(
 /// the swap commits and a bad archive is removed, so a failed install leaves
 /// the running catalog untouched. Returns the installed plugin name.
 pub async fn install_plugin(State(state): State<AppState>, body: Bytes) -> ApiResult<Json<String>> {
-    let driver = state.driver.clone();
+    let driver = state.services.driver.clone();
     let name = tokio::task::spawn_blocking(move || driver.install_plugin(&body))
         .await
         .map_err(|err| anyhow!("install_plugin task panicked: {err}"))??;
@@ -162,7 +154,7 @@ fn resume_start_index(headers: &HeaderMap) -> usize {
 /// declare. Pure local state; no synchronizer round-trip. Use this
 /// instead of `/objects` when you only need the action list.
 pub async fn list_actions(State(state): State<AppState>) -> ApiResult<Json<Vec<ActionSummary>>> {
-    let driver = state.driver.clone();
+    let driver = state.services.driver.clone();
     let actions = tokio::task::spawn_blocking(move || driver.list_actions(None))
         .await
         .map_err(|err| anyhow!("list_actions task panicked: {err}"))??;
@@ -175,7 +167,7 @@ pub async fn inspect_action(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<ActionSummary>> {
-    let driver = state.driver.clone();
+    let driver = state.services.driver.clone();
     let qname = QualifiedName::parse(&id).map_err(|err| anyhow!("{err}"))?;
     let action = tokio::task::spawn_blocking(move || driver.get_action(&qname))
         .await
@@ -191,7 +183,7 @@ pub async fn check_feasibility(
     State(state): State<AppState>,
     Path(action_id): Path<String>,
 ) -> ApiResult<Json<CheckActionReport>> {
-    let driver = state.driver.clone();
+    let driver = state.services.driver.clone();
     let qname = QualifiedName::parse(&action_id).map_err(|err| anyhow!("{err}"))?;
     let report = tokio::task::spawn_blocking(move || driver.check_action(&qname))
         .await

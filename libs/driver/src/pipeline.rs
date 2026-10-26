@@ -75,6 +75,15 @@ impl ProvedTransaction {
 pub struct SettleOutcome {
     pub records: Vec<TransactionRecord>,
     pub objects: Vec<ObjectSummary>,
+    /// Output files of expired transactions, removed by this pass.
+    pub removed_files: Vec<String>,
+}
+
+/// Settlement changes and the resulting object listing.
+#[derive(Debug, Clone, Default)]
+pub struct SyncedObjects {
+    pub outcome: SettleOutcome,
+    pub objects: Vec<ObjectSummary>,
 }
 
 impl Driver {
@@ -340,15 +349,18 @@ impl Driver {
     }
 
     /// Reconcile open transactions and all object files; return the object listing.
-    pub fn sync_objects(&self, query: Option<&ObjectQuery>) -> Result<Vec<ObjectSummary>> {
-        let (_, summaries) = self.settle_with(true)?;
-        Ok(summaries
-            .into_iter()
-            .filter(|(entry, summary)| {
-                query.is_none_or(|query| matches_query(entry, summary.status, query))
-            })
-            .map(|(_, summary)| summary)
-            .collect())
+    pub fn sync_objects(&self, query: Option<&ObjectQuery>) -> Result<SyncedObjects> {
+        let (outcome, summaries) = self.settle_with(true)?;
+        Ok(SyncedObjects {
+            outcome,
+            objects: summaries
+                .into_iter()
+                .filter(|(entry, summary)| {
+                    query.is_none_or(|query| matches_query(entry, summary.status, query))
+                })
+                .map(|(_, summary)| summary)
+                .collect(),
+        })
     }
 
     fn settle_with(
@@ -446,7 +458,8 @@ impl Driver {
                     record.grounding_block, membership.block_number
                 ));
                 record.settled_at_ms = Some(settled_at_ms);
-                self.remove_unknown_outputs(record, &record_tx_final(record)?)?;
+                let removed = self.remove_unknown_outputs(record, &record_tx_final(record)?)?;
+                outcome.removed_files.extend(removed);
             }
             if *record != before {
                 write_record(&self.paths, record)?;
@@ -571,9 +584,13 @@ impl Driver {
         Ok((record, changed))
     }
 
-    /// Removes the record's output files that are still `unknown` and
-    /// carry its txFinal. Caller holds the store lock.
-    fn remove_unknown_outputs(&self, record: &TransactionRecord, tx_final: &Hash) -> Result<()> {
+    /// Remove unknown outputs still owned by this record. Caller holds the store lock.
+    fn remove_unknown_outputs(
+        &self,
+        record: &TransactionRecord,
+        tx_final: &Hash,
+    ) -> Result<Vec<String>> {
+        let mut removed = Vec::new();
         for file_name in &record.output_files {
             let path = self.paths.objects_dir.join(file_name);
             let Ok(stored) = crate::object_record::parse_object_record_file(&path) else {
@@ -582,9 +599,10 @@ impl Driver {
             if stored.status == FileStatus::Unknown && stored.tx_final == *tx_final {
                 fs::remove_file(&path)
                     .with_context(|| format!("failed to remove output {file_name}"))?;
+                removed.push(file_name.clone());
             }
         }
-        Ok(())
+        Ok(removed)
     }
 }
 

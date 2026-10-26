@@ -1,34 +1,75 @@
+//! Sequenced state-change events for `GET /events`.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use serde::Serialize;
 use tokio::sync::broadcast;
-use wire_types::RunActionProgress;
+use wire_types::transactions::TransactionRecord;
+use wire_types::{ObjectSummary, ProofJobState, RunActionProgress};
 
-/// A server-sent event broadcast over `/events`.
-///
-/// Frontend consumers switch on `type` to dispatch to the appropriate
-/// handler. New variants are added as the corresponding routes are
-/// ported.
-///
-/// `#[serde(tag = "type")]` produces internally-tagged JSON: a newtype
-/// variant wrapping a struct flattens that struct's fields alongside the
-/// discriminator, so `Event::RunActionProgress(progress)` serializes as
-/// `{"type": "run-action-progress", "runId": ..., "phase": ..., ...}` —
-/// matching the progress payload plus a discriminator.
+/// Events use a flat JSON object with a `type` discriminator and payload fields.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum Event {
-    /// Progress update for an in-flight `run_action` invocation.
     RunActionProgress(RunActionProgress),
+    ProofJob(ProofJobState),
+    Transaction(TransactionRecord),
+    #[serde(rename_all = "camelCase")]
+    TransactionDeleted {
+        tx_final: String,
+    },
+    Object(ObjectSummary),
+    /// A file removed by expiry, transaction deletion, or discard.
+    #[serde(rename_all = "camelCase")]
+    ObjectRemoved {
+        file_name: String,
+    },
 }
 
-/// Channel capacity for the broadcast hub. Slow subscribers get lagged events
-/// dropped (they reconnect via EventSource auto-retry).
-pub const CHANNEL_CAPACITY: usize = 256;
+/// Event payload with its stream sequence number, serialized as one flat object.
+#[derive(Debug, Clone, Serialize)]
+pub struct Envelope {
+    pub seq: u64,
+    #[serde(flatten)]
+    pub event: Event,
+}
 
-pub type EventTx = broadcast::Sender<Event>;
-pub type EventRx = broadcast::Receiver<Event>;
+/// Maximum buffered events per subscriber. Lagging subscribers lose older events.
+pub const CHANNEL_CAPACITY: usize = 1024;
 
-pub fn channel() -> (EventTx, EventRx) {
-    broadcast::channel(CHANNEL_CAPACITY)
+#[derive(Clone)]
+pub struct EventHub {
+    next_seq: Arc<AtomicU64>,
+    tx: broadcast::Sender<Envelope>,
+}
+
+impl Default for EventHub {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EventHub {
+    pub fn new() -> Self {
+        let (tx, _) = broadcast::channel(CHANNEL_CAPACITY);
+        Self {
+            next_seq: Arc::new(AtomicU64::new(1)),
+            tx,
+        }
+    }
+
+    /// Numbers and broadcasts the event; returns its sequence number. A
+    /// send with no subscribers is not an error.
+    pub fn publish(&self, event: Event) -> u64 {
+        let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
+        let _ = self.tx.send(Envelope { seq, event });
+        seq
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<Envelope> {
+        self.tx.subscribe()
+    }
 }
 
 #[cfg(test)]
@@ -37,12 +78,10 @@ mod tests {
     use wire_types::{ExecutionPhase, ProofProgressStatus};
 
     #[test]
-    fn run_action_progress_serializes_flat_with_discriminator() {
-        // Frontend + CLI consumers depend on the discriminator-plus-flat-
-        // fields shape. Newtype variants in an internally-tagged enum
-        // should produce exactly that — guard with an explicit test so a
-        // future refactor doesn't silently break the wire format.
-        let event = Event::RunActionProgress(RunActionProgress {
+    fn events_serialize_flat_with_discriminator_and_sequence() {
+        let hub = EventHub::new();
+        let mut rx = hub.subscribe();
+        hub.publish(Event::RunActionProgress(RunActionProgress {
             run_id: "r1".to_string(),
             phase: ExecutionPhase::GenerateProof,
             status: ProofProgressStatus::Running,
@@ -52,18 +91,23 @@ mod tests {
             output_status: None,
             input_files: None,
             at_ms: 0,
+        }));
+        hub.publish(Event::ObjectRemoved {
+            file_name: "gone.dobj".to_string(),
         });
-        let json = serde_json::to_value(&event).unwrap();
-        assert_eq!(
-            json["type"], "run-action-progress",
-            "discriminator key/value"
-        );
-        assert_eq!(json["runId"], "r1");
-        assert_eq!(json["phase"], "generateProof");
-        assert_eq!(json["status"], "running");
+        let first = serde_json::to_value(rx.try_recv().unwrap()).unwrap();
+        assert_eq!(first["seq"], 1);
+        assert_eq!(first["type"], "run-action-progress");
+        assert_eq!(first["runId"], "r1");
+        assert_eq!(first["phase"], "generateProof");
+        assert_eq!(first["status"], "running");
         assert!(
-            json.get("oldRoot").is_some(),
+            first.get("oldRoot").is_some(),
             "Option<None> serializes to null"
         );
+        let second = serde_json::to_value(rx.try_recv().unwrap()).unwrap();
+        assert_eq!(second["seq"], 2);
+        assert_eq!(second["type"], "object-removed");
+        assert_eq!(second["fileName"], "gone.dobj");
     }
 }

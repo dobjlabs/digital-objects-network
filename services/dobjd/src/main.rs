@@ -6,16 +6,20 @@ use tracing_subscriber::{EnvFilter, prelude::*};
 
 mod error;
 mod events;
+mod jobs;
 mod mcp;
 mod parent_lifetime;
 mod routes;
 mod runs;
+mod settle;
 mod state;
 mod ui;
 mod web_access;
 
+use jobs::JobRegistry;
 use runs::RunRegistry;
-use state::AppState;
+use settle::Settler;
+use state::{AppState, Services};
 
 const DEFAULT_HTTP_PORT: u16 = 7717;
 
@@ -52,23 +56,24 @@ async fn run() -> Result<()> {
 
     let driver = Arc::new(Driver::open_default()?);
     let web_access = web_access::WebAccess::new(port);
-    let (event_tx, _initial_rx) = events::channel();
-    let runs = RunRegistry::new();
+    let events = events::EventHub::new();
+    let runs = RunRegistry::new(max_concurrent_proofs_from_env()?);
+    let settler = Arc::new(Settler::new(driver.clone(), events.clone(), runs.clone()));
+    let services = Services {
+        driver: driver.clone(),
+        events,
+        runs: runs.clone(),
+        jobs: JobRegistry::new(),
+        settler: settler.clone(),
+    };
 
     let mcp_runtime = Arc::new(mcp::McpRuntime::new(
-        driver.clone(),
-        event_tx.clone(),
-        runs.clone(),
+        services.clone(),
         format!("127.0.0.1:{mcp_port}"),
         port,
     ));
 
-    let state = AppState::new(
-        driver.clone(),
-        event_tx.clone(),
-        runs.clone(),
-        mcp_runtime.clone(),
-    );
+    let state = AppState::new(services.clone(), mcp_runtime.clone());
     let app = routes::router(state, web_access);
 
     // Bind both ports up-front (HTTP here, MCP via `prebind`) so startup
@@ -102,16 +107,18 @@ async fn run() -> Result<()> {
     // disabled). Deferred to here so an MCP action can't land mid-warm-up.
     mcp_runtime.apply(mcp_enabled).await?;
 
-    // Reap terminal runs whose retention window has elapsed, bounding the
-    // in-memory registry. Runs that are still in flight are never reaped.
-    let reaper_runs = runs.clone();
+    let reaper = services.clone();
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(runs::REAP_INTERVAL);
         loop {
             ticker.tick().await;
-            reaper_runs.reap();
+            reaper.runs.reap();
+            reaper.jobs.reap();
         }
     });
+
+    // Resume settlement for persisted transactions after a restart.
+    tokio::spawn(settler.run_loop());
 
     tracing::info!("listening on http://{addr}");
     tracing::info!("browser UI: http://{addr}{}", ui::home_path());
@@ -126,6 +133,19 @@ fn http_port_from_env() -> Result<u16> {
             .with_context(|| format!("invalid DOBJD_PORT={value:?}")),
         Err(std::env::VarError::NotPresent) => Ok(DEFAULT_HTTP_PORT),
         Err(err) => Err(anyhow!("invalid DOBJD_PORT env: {err}")),
+    }
+}
+
+/// Read the run proof limit from `DOBJD_MAX_PROOFS`; default to one.
+fn max_concurrent_proofs_from_env() -> Result<usize> {
+    match std::env::var("DOBJD_MAX_PROOFS") {
+        Ok(value) => value
+            .parse::<usize>()
+            .ok()
+            .filter(|count| *count >= 1)
+            .with_context(|| format!("invalid DOBJD_MAX_PROOFS={value:?}, expected a count >= 1")),
+        Err(std::env::VarError::NotPresent) => Ok(runs::DEFAULT_MAX_CONCURRENT_PROOFS),
+        Err(err) => Err(anyhow!("invalid DOBJD_MAX_PROOFS env: {err}")),
     }
 }
 

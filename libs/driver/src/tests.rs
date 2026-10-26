@@ -938,12 +938,12 @@ fn sync_objects_follows_the_chain_forward_only() {
     assert_eq!(summary.status, ObjectStatus::Unknown);
 
     chain.lock().unwrap().created.insert(commitment);
-    let synced = driver.sync_objects(None).unwrap();
+    let synced = driver.sync_objects(None).unwrap().objects;
     assert_eq!(synced.len(), 1);
     assert_eq!(synced[0].status, ObjectStatus::Live);
 
     chain.lock().unwrap().nullifiers.insert(nullifier);
-    let synced = driver.sync_objects(None).unwrap();
+    let synced = driver.sync_objects(None).unwrap().objects;
     assert_eq!(synced[0].status, ObjectStatus::Nullified);
     assert!(
         driver
@@ -954,14 +954,20 @@ fn sync_objects_follows_the_chain_forward_only() {
     );
 
     chain.lock().unwrap().nullifiers.clear();
-    let synced = driver.sync_objects(None).unwrap();
+    let synced = driver.sync_objects(None).unwrap().objects;
     assert_eq!(synced[0].status, ObjectStatus::Nullified);
 
     let query = ObjectQuery {
         exclude_nullified: true,
         ..ObjectQuery::default()
     };
-    assert!(driver.sync_objects(Some(&query)).unwrap().is_empty());
+    assert!(
+        driver
+            .sync_objects(Some(&query))
+            .unwrap()
+            .objects
+            .is_empty()
+    );
 }
 
 #[test]

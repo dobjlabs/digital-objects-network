@@ -15,8 +15,11 @@ mod classes;
 mod events;
 mod health;
 mod objects;
+mod proofs;
 mod settings;
 mod state;
+mod transactions;
+mod wait;
 
 /// Build the axum router.
 ///
@@ -62,6 +65,14 @@ pub fn router(app_state: AppState, access: WebAccess) -> Router {
         .route("/actions/runs/{run_id}", get(actions::get_run))
         .route("/actions/{id}", get(actions::inspect_action))
         .route("/actions/{id}/feasibility", get(actions::check_feasibility))
+        .route("/proofs", post(proofs::start).get(proofs::list))
+        .route("/proofs/{job_id}", get(proofs::get))
+        .route("/submissions", post(transactions::submit))
+        .route("/transactions", get(transactions::list))
+        .route(
+            "/transactions/{tx_final}",
+            get(transactions::get).delete(transactions::delete),
+        )
         .with_state(app_state)
         .merge(crate::ui::router())
         .layer(access.cors())
