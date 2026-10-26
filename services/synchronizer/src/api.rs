@@ -135,18 +135,15 @@ async fn get_state_by_el(
     let block = parse_execution_block_id(&block_id)?;
     let slot_state = app_state
         .state_log
-        .state_at_block(block)
+        .state_at_el_block(block)
         .await
         .map_err(internal_error)?;
     match slot_state {
         Some(slot_state) => Ok(Json(state_head_response(slot_state))),
-        None => {
-            load_head_snapshot(&app_state).await?;
-            Err((
-                StatusCode::NOT_FOUND,
-                format!("no state derived at execution block {block_id}"),
-            ))
-        }
+        None => Err((
+            StatusCode::NOT_FOUND,
+            format!("no state derived at execution block {block_id}"),
+        )),
     }
 }
 

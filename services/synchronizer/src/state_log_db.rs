@@ -193,7 +193,7 @@ impl StateLogDb {
 
     /// Return the state derived at a committed execution block, or `None` when no committed
     /// slot holds that block.
-    pub async fn state_at_block(&self, block: ExecutionBlockId) -> Result<Option<SlotState>> {
+    pub async fn state_at_el_block(&self, block: ExecutionBlockId) -> Result<Option<SlotState>> {
         let row = match block {
             ExecutionBlockId::Number(number) => {
                 let Ok(number) = i32::try_from(number) else {
