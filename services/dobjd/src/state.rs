@@ -51,15 +51,10 @@ impl Services {
         if file_names.is_empty() {
             return;
         }
-        match self.driver.read_objects(file_names) {
+        match self.driver.read_available_objects(file_names) {
             Ok(summaries) => {
-                for (file_name, summary) in file_names.iter().zip(summaries) {
-                    match summary {
-                        Ok(summary) => {
-                            self.events.publish(Event::Object(summary));
-                        }
-                        Err(err) => tracing::debug!("no summary for {file_name}: {err:#}"),
-                    }
+                for summary in summaries {
+                    self.events.publish(Event::Object(summary));
                 }
             }
             Err(err) => tracing::debug!("could not read object summaries: {err:#}"),

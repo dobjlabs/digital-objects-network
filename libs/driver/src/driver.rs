@@ -221,21 +221,21 @@ impl Driver {
         self.summary_of(self.read_object_entry(path)?)
     }
 
-    /// Reads each requested file using one snapshot of transaction records,
-    /// holds and class metadata. Individual missing or invalid files retain
-    /// their own errors so callers can still use the other summaries.
-    pub fn read_objects(&self, paths: &[impl AsRef<Path>]) -> Result<Vec<Result<ObjectSummary>>> {
+    /// Read summaries with shared transaction, hold, and catalog snapshots.
+    /// Log and skip unreadable files; propagate transaction-directory errors.
+    pub fn read_available_objects(&self, paths: &[impl AsRef<Path>]) -> Result<Vec<ObjectSummary>> {
         let records = load_records(&self.paths)?;
-        let index = RecordIndex::new(&records);
-        let held = self.holds.labels();
-        let catalog = self.catalog();
-        Ok(paths
+        let entries = paths
             .iter()
-            .map(|path| {
+            .filter_map(|path| {
                 self.read_object_entry(path.as_ref())
-                    .map(|entry| self.object_summary(&entry, &index, &held, catalog.as_ref()))
+                    .inspect_err(|err| {
+                        log::debug!("no summary for {}: {err:#}", path.as_ref().display())
+                    })
+                    .ok()
             })
-            .collect())
+            .collect::<Vec<_>>();
+        Ok(self.summaries(&entries, &records))
     }
 
     fn read_object_entry(&self, path: &Path) -> Result<ObjectFileEntry> {
