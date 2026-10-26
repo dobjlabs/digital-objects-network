@@ -32,3 +32,4 @@ target
 /apps/bitcraft/src-tauri/tauri.bundle.conf.json
 /apps/bitcraft/src-tauri/gen/schemas/
 /apps/bitcraft/scripts/__pycache__
+/apps/bitcraft/ui/presentation/

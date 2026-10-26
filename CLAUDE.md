@@ -57,7 +57,8 @@ Use `just` (recipes in `justfile`):
 | `just dobjd`             | Runs the headless HTTP daemon. Default port `7717` (override via `DOBJD_PORT`).                                                                                                                                                                                                               |
 | `just build-dobjd`      | Builds the default browser UI and embeds it into a release daemon (`bundled-ui` feature). |
 | `just bitcraft-shell` | Runs the Tauri shell without starting the managed daemon or creating game state. |
-| `just bitcraft-prepare` | Builds the matched Bitcraft daemon, tools, launchers, and plugin, then generates Tauri bundle configuration. |
+| `just bitcraft-prepare` | Builds the matched Bitcraft daemon, tools, launchers, and plugin, then generates Tauri bundle configuration. Copies the presentation packs into the UI first. |
+| `just bitcraft-presentation` | Regenerates bitcraft's presentation pack (icons, summaries, descriptions; `examples/bitcraft/presentation/`) and copies it into the Bitcraft UI. App-only: dobjd and the `.pexe` never read it. See `apps/bitcraft/PRESENTATION_PACKS.md`. |
 | `just bitcraft-dev` | Prepares the Bitcraft runtime and launches Tauri; its managed daemon serves the game at `http://127.0.0.1:7727/bitcraft/` (MCP uses `7728` when enabled). |
 | `just bitcraft-dev-local` | Prepares Bitcraft and launches it with a separate `.dev/bitcraft-local` home. Seeds local synchronizer `:3000` and relayer `:3200` settings on first use; requires an already-running backend stack. |
 | `just bitcraft-bundle` | Prepares the runtime and builds an unsigned development bundle. See `apps/bitcraft/README.md` for packaging prerequisites. |
