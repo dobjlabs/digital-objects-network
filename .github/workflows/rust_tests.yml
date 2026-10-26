@@ -28,7 +28,6 @@ jobs:
           --health-retries 10
     env:
       TEST_PG_ADMIN_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
-      TEST_RELAYER_DB_ADMIN: postgres://postgres:postgres@127.0.0.1:5432/postgres
       QUINT_SEED: "20261025"
     runs-on: ubuntu-latest
     steps:

@@ -2,6 +2,8 @@
 
 Service that accepts Digital Objects Network proof payloads over HTTP and relays them to Ethereum as EIP-4844 blob transactions.
 
+The [Quint model and Rust Connect tests](model/README.md) exercise delivery, retries, replacements, and recovery.
+
 ## What it does
 
 1. Accepts proof payload submissions (`POST /api/v1/proofs`).
@@ -63,7 +65,7 @@ Indexes:
 - `RETRY_INITIAL_SECS` (default: `4`)
 - `RETRY_MAX_SECS` (default: `300`)
 - `RECEIPT_POLL_SECS` (default: `6`)
-- `RECEIPT_TIMEOUT_SECS` (optional timeout for submitted tx receipts)
+- `RECEIPT_TIMEOUT_SECS` (timeout for submitted tx receipts; unset by default)
 - `WORKER_IDLE_SLEEP_MS` (default: `1000`)
 - `MAX_FEE_PER_BLOB_GAS` (optional override)
 - `FEE_BUMP_AFTER_SECS` (seconds before first fee-bump attempt; unset = disabled)

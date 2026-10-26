@@ -11,6 +11,9 @@ use crate::{
     time_utils::now_ts,
 };
 
+#[cfg(test)]
+mod model_tests;
+
 /// Runtime knobs controlling retry/poll cadence and failure thresholds.
 #[derive(Clone, Debug)]
 pub struct WorkerConfig {
@@ -660,6 +663,7 @@ mod tests {
     fn test_urls() -> (String, String, String) {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let admin_url = std::env::var("TEST_RELAYER_DB_ADMIN")
+            .or_else(|_| std::env::var("TEST_PG_ADMIN_URL"))
             .unwrap_or_else(|_| "postgres://postgres@localhost:5432/postgres".to_string());
         let mut url = Url::parse(&admin_url).expect("valid admin url");
         let db_name = format!(
@@ -675,7 +679,7 @@ mod tests {
         (admin_url, url.to_string(), db_name)
     }
 
-    async fn drop_db(admin_url: &str, db_name: &str) -> Result<()> {
+    pub(super) async fn drop_db(admin_url: &str, db_name: &str) -> Result<()> {
         let pool = PgPoolOptions::new()
             .max_connections(1)
             .connect(admin_url)
@@ -703,7 +707,7 @@ mod tests {
         Ok(())
     }
 
-    async fn setup_db() -> Result<(Db, String, String)> {
+    pub(super) async fn setup_db() -> Result<(Db, String, String)> {
         let (admin_url, db_url, db_name) = test_urls();
         drop_db(&admin_url, &db_name).await?;
         create_db(&admin_url, &db_name).await?;

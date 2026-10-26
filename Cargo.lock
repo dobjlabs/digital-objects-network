@@ -4822,6 +4822,7 @@ dependencies = [
  "hex",
  "payload",
  "pod2",
+ "quint-connect",
  "serde",
  "serde_json",
  "sqlx",

@@ -28,3 +28,4 @@ url = { version = "2.3.1" }
 payload = { path = "../../libs/payload", features = ["test-utils"] }
 tower = "0.5"
 pod2 = { workspace = true }
+quint-connect = { workspace = true }
