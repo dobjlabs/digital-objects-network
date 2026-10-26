@@ -273,16 +273,15 @@ pub async fn run(
             println!("action:   {action}");
             println!("run id:   {run_id}");
             println!("old root: {}", result.old_root);
-            println!("new root: {}", result.new_root);
             if !result.output_files.is_empty() {
                 println!("outputs:");
                 for f in &result.output_files {
                     println!("  + {f}");
                 }
             }
-            if !result.nullified_files.is_empty() {
-                println!("nullified:");
-                for f in &result.nullified_files {
+            if !result.input_files.is_empty() {
+                println!("inputs (nullified once the transaction lands):");
+                for f in &result.input_files {
                     println!("  - {f}");
                 }
             }

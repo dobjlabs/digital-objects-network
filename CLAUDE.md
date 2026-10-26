@@ -125,12 +125,12 @@ State isolation between the two modes runs all the way through the driver: `dev-
 
 `dobjd` is the **single owner of `Arc<Driver>`** in the running system. Browser, MCP, and CLI clients all talk to it over HTTP/SSE.
 
-`Driver::execute` is the central call: validate inputs -> fetch grounding witness -> re-parse plugin script through SDK -> drive `txlib::TxBuilder` -> produce `(tx_pod, obj_pods)` -> shrink + post via relayer -> poll for confirmation -> reconcile via `sync_objects`.
+A transaction goes through the driver in stages, each one call: `prove` (hold inputs -> fetch grounding witness -> re-parse plugin script through SDK -> drive `txlib::TxBuilder` -> produce `(tx_pod, obj_pods)` -> shrink), `record` (write outputs as `unknown`, the payload and the record under `~/.dobj/transactions/<txFinal>/`), `submit` (post to the relayer) and `settle` (one membership query for every open record, then mark records `landed` or `expired` and move object files). `Driver::execute` composes the first three; nothing in the driver waits on the network.
 
 ## Key entry points
 
-- **`libs/driver/src/driver.rs`** — `Driver` struct. Methods: `open_default()`, `list_objects()`, `read_object()`, `execute()`, `check_action()`, `sync_objects()`, `get_state_root()`. Public types live in `libs/driver/src/types.rs`.
-- **`libs/driver/src/execute.rs`** — the proof-and-commit pipeline.
+- **`libs/driver/src/driver.rs`** — `Driver` struct. Methods: `open_default()`, `list_objects()`, `read_object()`, `check_action()`, `get_state_root()`, `import_object()`. Public types live in `libs/driver/src/types.rs`.
+- **`libs/driver/src/pipeline.rs`** — the transaction stages: `prove`, `record`, `submit`, `delete_transaction`, `settle`, `sync_objects` and `execute`. `libs/driver/src/transactions.rs` is the record store, `libs/driver/src/holds.rs` the in-memory input holds, and `libs/driver/model/` the Quint contract for the record's life.
 - **`libs/driver/src/pexe_catalog.rs`** — concrete `ActionCatalog` impl that loads `.pexe` archives from `~/.dobj/actions/`.
 - **`libs/sdk/src/lib.rs`** — Rhai engine setup, custom syntax for `var` and `unsafe { ... }` (search `register_custom_syntax`), host API registration (search `register_fn`). Entry: `Sdk::load_module_from_src_actions`.
 - **`libs/txlib/src/lib.rs`** — `StateHeader` (typed record), `GroundingWitness`, `Tx`, `TxBuilder`. No `Object` struct: object state is a `pod2::Dictionary` whose `stable_identifier` field is the commitment of its initial form (`with_stable_identifier`), stable across mutations.

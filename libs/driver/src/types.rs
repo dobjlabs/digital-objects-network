@@ -15,6 +15,7 @@ pub struct DriverPaths {
     pub nullified_objects_dir: PathBuf,
     pub discarded_objects_dir: PathBuf,
     pub actions_dir: PathBuf,
+    pub transactions_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -43,16 +44,16 @@ pub struct ExecuteActionInput {
     pub args: ActionArgValues,
 }
 
+/// What `execute` returns once the transaction is recorded and submitted.
+/// Landing is reported by settlement, not here.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecuteActionResult {
+    pub tx_final: Hash,
     pub old_root: Hash,
-    pub new_root: Hash,
     pub output_files: Vec<String>,
-    pub nullified_files: Vec<String>,
+    pub input_files: Vec<String>,
     pub relayer_job_id: String,
-    pub tx_hash: Option<String>,
-    pub block_number: Option<i64>,
 }
 
 /// Optional context passed alongside execution progress steps.

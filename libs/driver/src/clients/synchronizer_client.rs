@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    time::{Duration, Instant},
-};
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result, anyhow};
 use pod2::middleware::Hash;
@@ -12,23 +9,14 @@ use wire_types::synchronizer::{
     StateHeadResponse,
 };
 
-pub const SYNCHRONIZER_POLL_TIMEOUT_SECS: u64 = 120;
-pub const SYNCHRONIZER_POLL_INTERVAL_MS: u64 = 1200;
-
-/// Per-request cap on `tx_hashes.len() + nullifiers.len()` accepted by the
-/// synchronizer's `POST /v1/state/membership` endpoint. MUST stay at or
-/// below the server's `MAX_HASH_QUERY_ITEMS` (synchronizer/src/api.rs).
-/// Above that, the server returns 400 and `sync_objects` falls back to
-/// stale local listing without on-chain reconciliation.
-///
-/// We chunk client-side at this value so inventories with hundreds of
-/// objects still reconcile in a single `sync_objects` call (just spread
-/// across multiple HTTP requests).
+/// Combined commitment and nullifier limit for each membership request.
+/// Must not exceed the synchronizer's request limit.
 const HASH_BATCH_LIMIT: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SynchronizerHead {
     pub state_root: Hash,
+    pub block_number: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +24,9 @@ pub struct SynchronizerMembership {
     /// Object commitments present in the global created set.
     pub created_objects: HashSet<Hash>,
     pub on_chain_nullifiers: HashSet<Hash>,
+    /// Oldest head block used across the response's batches. Absence at
+    /// this block implies expiry only when the grounding is already too old.
+    pub block_number: i64,
 }
 
 pub trait SynchronizerClient: Send + Sync {
@@ -51,18 +42,6 @@ pub trait SynchronizerClient: Send + Sync {
         object_commitments: &[Hash],
         nullifiers: &[Hash],
     ) -> Result<SynchronizerMembership>;
-    /// Wait until a transaction has landed: every object commitment it produces
-    /// is in the created set and every nullifier it emits is in the
-    /// nullifier set. Returns the resulting head once the whole union
-    /// is present, or errors on timeout.
-    fn wait_for_tx(
-        &self,
-        sync_api_url: &str,
-        created_commitments: &[Hash],
-        nullifiers: &[Hash],
-        timeout_secs: u64,
-        poll_interval_ms: u64,
-    ) -> Result<SynchronizerHead>;
 }
 
 #[derive(Debug, Clone)]
@@ -94,6 +73,7 @@ impl SynchronizerClient for HttpSynchronizerClient {
         )?;
         Ok(SynchronizerHead {
             state_root: payload.state_root,
+            block_number: payload.block_number,
         })
     }
 
@@ -155,25 +135,12 @@ impl SynchronizerClient for HttpSynchronizerClient {
 
         let mut created_objects: HashSet<Hash> = HashSet::new();
         let mut on_chain_nullifiers: HashSet<Hash> = HashSet::new();
+        let mut block_number: Option<i64> = None;
 
-        // Empty inputs need no network call: the membership endpoint accepts a
-        // request with both lists empty, but it is a wasted round trip.
-        if object_commitments.is_empty() && nullifiers.is_empty() {
-            return Ok(SynchronizerMembership {
-                created_objects,
-                on_chain_nullifiers,
-            });
-        }
-
-        // The synchronizer rejects bodies where `object_commitments.len() +
-        // nullifiers.len() > HASH_BATCH_LIMIT` with 400. Pack each
-        // batch tightly: take as many object commitments as possible (up to
-        // the limit), then fill the remainder with nullifiers. Continue until
-        // both lists are drained. Sequential because reqwest::blocking
-        // and synchronizer responses are fast.
+        // An empty query still needs one request to read the head.
         let mut obj_cursor = 0usize;
         let mut null_cursor = 0usize;
-        while obj_cursor < object_commitments.len() || null_cursor < nullifiers.len() {
+        loop {
             let obj_take = (object_commitments.len() - obj_cursor).min(HASH_BATCH_LIMIT);
             let remaining_capacity = HASH_BATCH_LIMIT - obj_take;
             let null_take = (nullifiers.len() - null_cursor).min(remaining_capacity);
@@ -199,77 +166,23 @@ impl SynchronizerClient for HttpSynchronizerClient {
                     on_chain_nullifiers.insert(entry.nullifier);
                 }
             }
+            block_number = Some(match block_number {
+                Some(earliest) => earliest.min(payload.block_number),
+                None => payload.block_number,
+            });
 
             obj_cursor += obj_take;
             null_cursor += null_take;
+            if obj_cursor >= object_commitments.len() && null_cursor >= nullifiers.len() {
+                break;
+            }
         }
 
         Ok(SynchronizerMembership {
             created_objects,
             on_chain_nullifiers,
+            block_number: block_number.expect("at least one membership request was made"),
         })
-    }
-
-    fn wait_for_tx(
-        &self,
-        sync_api_url: &str,
-        created_commitments: &[Hash],
-        nullifiers: &[Hash],
-        timeout_secs: u64,
-        poll_interval_ms: u64,
-    ) -> Result<SynchronizerHead> {
-        let timeout = Duration::from_secs(timeout_secs);
-        let poll_interval = Duration::from_millis(poll_interval_ms);
-        let start = Instant::now();
-        loop {
-            let membership = match self.fetch_membership_with_nullifiers(
-                sync_api_url,
-                created_commitments,
-                nullifiers,
-            ) {
-                Ok(membership) => membership,
-                Err(err) if super::is_retryable_request_error(&err) => {
-                    if start.elapsed() >= timeout {
-                        return Err(anyhow!(
-                            "synchronizer did not observe the transaction within {}s; last membership query failed: {err:#}",
-                            timeout_secs
-                        ));
-                    }
-                    std::thread::sleep(poll_interval);
-                    continue;
-                }
-                Err(err) => return Err(err),
-            };
-            let landed = created_commitments
-                .iter()
-                .all(|c| membership.created_objects.contains(c))
-                && nullifiers
-                    .iter()
-                    .all(|n| membership.on_chain_nullifiers.contains(n));
-            if landed {
-                match self.fetch_head(sync_api_url) {
-                    Ok(head) => return Ok(head),
-                    Err(err) if super::is_retryable_request_error(&err) => {
-                        if start.elapsed() >= timeout {
-                            return Err(anyhow!(
-                                "synchronizer observed the transaction but did not return a head within {}s; last head query failed: {err:#}",
-                                timeout_secs
-                            ));
-                        }
-                        std::thread::sleep(poll_interval);
-                        continue;
-                    }
-                    Err(err) => return Err(err),
-                }
-            }
-            if start.elapsed() >= timeout {
-                return Err(anyhow!(
-                    "synchronizer did not observe the transaction within {}s",
-                    timeout_secs
-                ));
-            }
-            std::thread::sleep(poll_interval);
-        }
     }
 }
 

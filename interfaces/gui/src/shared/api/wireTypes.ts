@@ -76,9 +76,9 @@ export interface RunActionInput {
 export interface RunActionResult {
   runId: string;
   oldRoot: string;
-  newRoot: string;
   outputFiles: string[];
-  nullifiedFiles: string[];
+  /** The objects the transaction spends; nullified once it lands. */
+  inputFiles: string[];
 }
 
 /** `POST /actions/run` response: the run was accepted and is executing in the
@@ -119,10 +119,9 @@ export interface RunActionProgress {
   status: ProofProgressStatus;
   message: string;
   oldRoot: string | null;
-  newRoot: string | null;
   outputFiles: string[] | null;
   outputStatus: ObjectStatus | null;
-  nullifiedFiles: string[] | null;
+  inputFiles: string[] | null;
   atMs?: number;
 }
 

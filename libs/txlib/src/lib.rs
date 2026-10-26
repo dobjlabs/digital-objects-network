@@ -42,6 +42,9 @@ use pod2::{
 use pod2utils::{dict, macros::BuildContext, map, op, rand_raw_value, set, st_custom};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+/// Maximum grounding age in execution blocks, measured at inclusion.
+pub const MAX_STATE_ROOT_AGE_BLOCKS: i64 = 300;
+
 // ============================================================================
 // Data structures
 // ============================================================================

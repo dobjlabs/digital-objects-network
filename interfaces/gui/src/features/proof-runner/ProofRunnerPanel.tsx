@@ -138,7 +138,7 @@ export function ProofRunnerPanel() {
               >
                 {commitState === "pending"
                   ? "—"
-                  : (commitStep?.detail ?? proof.newRoot ?? "pending")}
+                  : (commitStep?.detail ?? "pending")}
               </span>
             </div>
           </div>
@@ -148,7 +148,7 @@ export function ProofRunnerPanel() {
   }
 
   if (proof.status === "summary") {
-    const nullified = proof.summary?.nullified ?? [];
+    const inputs = proof.summary?.inputs ?? [];
     const live = proof.summary?.live ?? [];
 
     return (
@@ -157,12 +157,12 @@ export function ProofRunnerPanel() {
         <div className="summary-stage">
           <div className="summary-title">
             <span className="stage-num summary-danger">✗</span>
-            Nullified
+            Spent once the transaction lands
           </div>
-          {nullified.length === 0 ? (
+          {inputs.length === 0 ? (
             <div className="summary-line summary-muted">none</div>
           ) : (
-            nullified.map((entry, idx) => (
+            inputs.map((entry, idx) => (
               <div
                 key={`${entry}-${idx}`}
                 className="summary-line summary-null"

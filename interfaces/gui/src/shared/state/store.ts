@@ -69,7 +69,7 @@ interface ProofStats {
 }
 
 interface ProofSummary {
-  nullified: string[];
+  inputs: string[];
   live: string[];
 }
 
@@ -85,7 +85,6 @@ interface ProofState {
   messages: string[];
   steps: ProofStep[];
   oldRoot: string | null;
-  newRoot: string | null;
   summary: ProofSummary | null;
   error: string | null;
   stats: ProofStats;
@@ -153,7 +152,6 @@ export const useStore = create<AppState>((set, get) => ({
     messages: [],
     steps: [],
     oldRoot: null,
-    newRoot: null,
     summary: null,
     error: null,
     stats: {
@@ -275,7 +273,6 @@ export const useStore = create<AppState>((set, get) => ({
 
       let nextStatus = prev.proof.status;
       let nextOldRoot = prev.proof.oldRoot;
-      let nextNewRoot = prev.proof.newRoot;
       let nextSummary = prev.proof.summary;
 
       if (event.phase === "generateProof") {
@@ -287,14 +284,13 @@ export const useStore = create<AppState>((set, get) => ({
       } else if (event.phase === "commit") {
         nextStatus = event.status === "done" ? "summary" : "committing";
         nextOldRoot = event.oldRoot ?? nextOldRoot;
-        nextNewRoot = event.newRoot ?? nextNewRoot;
         updateStep("commit", {
           status: event.status,
           detail: event.message,
         });
         if (event.status === "done") {
           nextSummary = {
-            nullified: event.nullifiedFiles ?? [],
+            inputs: event.inputFiles ?? [],
             live: event.outputFiles ?? [],
           };
         }
@@ -308,7 +304,6 @@ export const useStore = create<AppState>((set, get) => ({
           messages: [...prev.proof.messages, event.message].slice(-8),
           steps: nextSteps,
           oldRoot: nextOldRoot,
-          newRoot: nextNewRoot,
           summary: nextSummary,
           stats: prev.proof.stats,
         },
@@ -345,7 +340,6 @@ export const useStore = create<AppState>((set, get) => ({
             },
           ],
           oldRoot: null,
-          newRoot: null,
           summary: null,
           error: null,
           stats: prev.proof.stats,
@@ -366,7 +360,6 @@ export const useStore = create<AppState>((set, get) => ({
           messages: [],
           steps: [],
           oldRoot: null,
-          newRoot: null,
           summary: null,
           error: null,
         },
@@ -411,9 +404,8 @@ export const useStore = create<AppState>((set, get) => ({
             ...prev.proof,
             status: "summary",
             oldRoot: result.oldRoot,
-            newRoot: result.newRoot,
             summary: {
-              nullified: result.nullifiedFiles,
+              inputs: result.inputFiles,
               live: result.outputFiles,
             },
           },
@@ -438,7 +430,6 @@ export const useStore = create<AppState>((set, get) => ({
           messages: [],
           steps: [],
           oldRoot: null,
-          newRoot: null,
           summary: null,
           error: errorMessage,
           stats: prev.proof.stats,
