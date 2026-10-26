@@ -96,7 +96,7 @@ fn is_daemon_url(url: &tauri::Url) -> bool {
 }
 
 /// Sites the game page may open in the user's browser.
-const EXTERNAL_LINK_HOSTS: &[&str] = &["bitcraft.digiobjects.net"];
+const EXTERNAL_LINK_HOSTS: &[&str] = &["bitcraft.sh"];
 
 fn is_external_link(url: &tauri::Url) -> bool {
     url.scheme() == "https"
@@ -361,16 +361,14 @@ mod tests {
 
     #[test]
     fn only_listed_sites_open_in_the_browser() {
-        for url in [
-            "https://bitcraft.digiobjects.net/",
-            "https://bitcraft.digiobjects.net/guide?x=1",
-        ] {
+        for url in ["https://bitcraft.sh/", "https://bitcraft.sh/guide?x=1"] {
             assert!(is_external_link(&url.parse().unwrap()), "{url}");
         }
         for url in [
-            "http://bitcraft.digiobjects.net/",
-            "https://bitcraft.digiobjects.net:8443/",
-            "https://bitcraft.digiobjects.net.example.com/",
+            "http://bitcraft.sh/",
+            "https://bitcraft.sh:8443/",
+            "https://bitcraft.sh.example.com/",
+            "https://bitcraft.digiobjects.net/",
             "https://example.com/",
             "file:///etc/passwd",
         ] {
