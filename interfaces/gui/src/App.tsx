@@ -7,7 +7,8 @@ import { SettingsModal } from "./features/settings/SettingsModal";
 import {
   getStateRoot,
   getObjectsDir,
-  listenRunActionProgress,
+  listenEventStreamReopen,
+  listenObjectEvents,
 } from "./shared/api/httpClient";
 import { useStore } from "./shared/state/store";
 import "./styles/tokens.css";
@@ -35,6 +36,8 @@ function App() {
   const contextSelection = useStore((state) => state.contextSelection);
   const showNullifiedItems = useStore((state) => state.showNullifiedItems);
   const hydrateData = useStore((state) => state.hydrateData);
+  const applyObjectUpdate = useStore((state) => state.applyObjectUpdate);
+  const removeObject = useStore((state) => state.removeObject);
   const importObject = useStore((state) => state.importObject);
   const selectObject = useStore((state) => state.selectObject);
   const selectAction = useStore((state) => state.selectAction);
@@ -89,56 +92,51 @@ function App() {
     };
   }, []);
 
+  // The event stream has no replay; reload objects after reconnecting.
   useEffect(() => {
     let cancelled = false;
-    let unlisten: (() => void) | null = null;
-    let refreshTimer: number | null = null;
-    const scheduleRefresh = () => {
-      if (cancelled) return;
-      if (refreshTimer !== null) {
-        window.clearTimeout(refreshTimer);
-      }
-      refreshTimer = window.setTimeout(() => {
-        refreshTimer = null;
+    const disposers: Array<() => void> = [];
+    const keep = (subscription: Promise<() => void>, what: string) => {
+      subscription
+        .then((dispose) => {
+          if (cancelled) {
+            dispose();
+            return;
+          }
+          disposers.push(dispose);
+        })
+        .catch((error) => {
+          console.error(`Failed to subscribe to ${what}:`, error);
+        });
+    };
+    keep(
+      listenObjectEvents({
+        object: (object) => {
+          if (!cancelled) applyObjectUpdate(object);
+        },
+        removed: ({ fileName }) => {
+          if (!cancelled) removeObject(fileName);
+        },
+      }),
+      "object events",
+    );
+    keep(
+      listenEventStreamReopen(() => {
         if (cancelled) return;
         hydrateData().catch((error) => {
           if (!cancelled) {
-            console.error(
-              "Failed to refresh GUI after action progress:",
-              error,
-            );
+            console.error("Failed to refresh GUI after reconnecting:", error);
           }
         });
-      }, 120);
-    };
-
-    listenRunActionProgress((event) => {
-      if (!cancelled) {
-        if (
-          (event.outputFiles?.length ?? 0) > 0 ||
-          (event.phase === "commit" && event.status === "done")
-        ) {
-          scheduleRefresh();
-        }
-      }
-    })
-      .then((dispose) => {
-        if (cancelled) {
-          dispose();
-          return;
-        }
-        unlisten = dispose;
-      })
-      .catch((error) => {
-        console.error("Failed to subscribe to run-action progress:", error);
-      });
+      }),
+      "event stream reconnects",
+    );
 
     return () => {
       cancelled = true;
-      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
-      if (unlisten) unlisten();
+      for (const dispose of disposers) dispose();
     };
-  }, [hydrateData]);
+  }, [applyObjectUpdate, hydrateData, removeObject]);
 
   useEffect(() => {
     let cancelled = false;

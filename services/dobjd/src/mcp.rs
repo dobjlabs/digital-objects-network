@@ -21,6 +21,9 @@ use crate::state::Services;
 /// flushing, sessions closing) before the serve task is aborted outright.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
+/// Maximum wait for an MCP proof or transaction query.
+const MCP_MAX_WAIT_MS: u64 = 25_000;
+
 /// Owns the embedded MCP server's lifecycle. When enabled, the listener is
 /// bound and served; when disabled, the port is not bound at all. [`apply`]
 /// is the single reconcile point for every settings write path (HTTP PUT,
@@ -144,6 +147,23 @@ impl DobjdOps {
     }
 }
 
+fn mcp_wait_query(wait_ms: Option<u64>) -> wire_types::WaitQuery {
+    wire_types::WaitQuery {
+        wait: wait_ms.is_some_and(|ms| ms > 0),
+        timeout_ms: wait_ms.map(|ms| ms.min(MCP_MAX_WAIT_MS)),
+    }
+}
+
+/// Bridge synchronous MCP operations to async waits on the Tokio runtime.
+fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
+    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(future))
+}
+
+fn parse_tx_final(hex: &str) -> anyhow::Result<::driver::Hash> {
+    payload::decode_hash_hex(hex)
+        .map_err(|err| ::driver::DriverError::InvalidInput(format!("txFinal {hex}: {err}")).into())
+}
+
 impl DobjOps for DobjdOps {
     fn list_objects(&self) -> anyhow::Result<Vec<mcp::ObjectSummary>> {
         // The driver folds each object's class metadata (emoji, description)
@@ -200,6 +220,84 @@ impl DobjOps for DobjdOps {
 
     fn list_runs(&self, active_only: bool) -> anyhow::Result<Vec<mcp::RunState>> {
         Ok(self.services.runs.list(active_only))
+    }
+
+    fn start_proof(&self, input: mcp::RunActionInput) -> anyhow::Result<mcp::ProofJobState> {
+        let input_objects: Vec<String> = input
+            .input_object_paths
+            .iter()
+            .map(|path| path.trim().to_string())
+            .collect();
+        Ok(crate::jobs::spawn_proof(
+            &self.services,
+            input.action,
+            input_objects,
+            input.args,
+        ))
+    }
+
+    fn get_proof(&self, job_id: &str, wait_ms: Option<u64>) -> anyhow::Result<mcp::ProofJobState> {
+        let entry = self
+            .services
+            .jobs
+            .get(job_id)
+            .ok_or_else(|| anyhow::anyhow!("unknown job: {job_id}"))?;
+        block_on(crate::routes::wait::wait_until(
+            &self.services.events,
+            mcp_wait_query(wait_ms),
+            || Ok(entry.snapshot()),
+            |job| job.status.is_terminal(),
+            |event| match event {
+                crate::events::Event::ProofJob(job) if job.job_id == job_id => Some(job.clone()),
+                _ => None,
+            },
+        ))
+    }
+
+    fn list_proofs(&self, active_only: bool) -> anyhow::Result<Vec<mcp::ProofJobState>> {
+        Ok(self.services.jobs.list(active_only))
+    }
+
+    fn submit_transactions(
+        &self,
+        tx_finals: Vec<String>,
+    ) -> anyhow::Result<Vec<mcp::TransactionRecord>> {
+        let mut records = Vec::with_capacity(tx_finals.len());
+        for hex in &tx_finals {
+            let record = self.driver().submit(&parse_tx_final(hex)?)?;
+            self.services.announce_transaction(&record);
+            records.push(record);
+        }
+        Ok(records)
+    }
+
+    fn list_transactions(&self) -> anyhow::Result<Vec<mcp::TransactionRecord>> {
+        self.driver().list_transactions()
+    }
+
+    fn get_transaction(
+        &self,
+        tx_final: &str,
+        wait_ms: Option<u64>,
+    ) -> anyhow::Result<mcp::TransactionRecord> {
+        let hash = parse_tx_final(tx_final)?;
+        let key = payload::encode_hash_hex(&hash);
+        block_on(crate::routes::wait::wait_until(
+            &self.services.events,
+            mcp_wait_query(wait_ms),
+            || self.driver().get_transaction(&hash),
+            |record| record.state.is_terminal(),
+            |event| match event {
+                crate::events::Event::Transaction(record) if record.tx_final == key => {
+                    Some(record.clone())
+                }
+                _ => None,
+            },
+        ))
+    }
+
+    fn delete_transaction(&self, tx_final: &str) -> anyhow::Result<mcp::TransactionRecord> {
+        crate::routes::delete_transaction(&self.services, &parse_tx_final(tx_final)?)
     }
 
     fn check_feasibility(

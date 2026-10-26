@@ -69,6 +69,17 @@ impl DobjdClient {
         decode_json(res).await
     }
 
+    pub async fn delete_json<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        let url = self.url(path);
+        let res = self
+            .http
+            .delete(&url)
+            .send()
+            .await
+            .with_context(|| format!("DELETE {url}"))?;
+        decode_json(res).await
+    }
+
     /// POST raw bytes (e.g. a `.pexe` archive) and decode the JSON response.
     pub async fn post_bytes<T: DeserializeOwned>(&self, path: &str, bytes: Vec<u8>) -> Result<T> {
         let url = self.url(path);

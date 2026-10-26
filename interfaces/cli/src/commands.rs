@@ -9,10 +9,11 @@ use serde_json::Value;
 use tokio::time::sleep;
 
 use crate::client::DobjdClient;
+use wire_types::transactions::TransactionRecord;
 use wire_types::{
     ActionArgValues, ActionSummary, CheckActionReport, ClassRef, ClassSummary, DriverSettings,
-    ImportObjectRequest, ObjectSummary, ObjectsDirInfo, QualifiedName, RunAccepted, RunActionInput,
-    RunActionRequest, RunState, RunStatus,
+    ImportObjectRequest, ObjectSummary, ObjectsDirInfo, ProofJobState, QualifiedName, RunAccepted,
+    RunActionInput, RunActionRequest, RunState, RunStatus, SubmitRequest,
 };
 
 const MAX_CONSECUTIVE_RUN_POLL_ERRORS: usize = 5;
@@ -280,7 +281,7 @@ pub async fn run(
                 }
             }
             if !result.input_files.is_empty() {
-                println!("inputs (nullified once the transaction lands):");
+                println!("nullified:");
                 for f in &result.input_files {
                     println!("  - {f}");
                 }
@@ -293,6 +294,202 @@ pub async fn run(
         )),
         other => Err(anyhow!("run {run_id} ended in unexpected state: {other:?}")),
     }
+}
+
+/// Timeout for each daemon wait request; repeat until the state is terminal.
+const WAIT_STEP_MS: u64 = 30_000;
+
+pub async fn prove(
+    client: &DobjdClient,
+    action_id: String,
+    input_paths: Vec<String>,
+    raw_args: Vec<String>,
+    wait: bool,
+    json: bool,
+) -> Result<()> {
+    let action = parse_qualified(&action_id)?;
+    let args = parse_action_args(&raw_args)?;
+    let mut job: ProofJobState = client
+        .post_json(
+            "/proofs",
+            &RunActionInput {
+                action,
+                input_object_paths: input_paths,
+                args,
+            },
+        )
+        .await?;
+    if wait {
+        while !job.status.is_terminal() {
+            let path = format!("/proofs/{}?wait=true&timeoutMs={WAIT_STEP_MS}", job.job_id);
+            job = client.get_json(&path).await?;
+            if let Some(message) = &job.message
+                && !json
+            {
+                eprintln!("[{:?}] {message}", job.status);
+            }
+        }
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&job)?);
+        return Ok(());
+    }
+    print_proof_job(&job);
+    match (job.status, job.error) {
+        (wire_types::ProofJobStatus::Failed, Some(error)) => Err(anyhow!("proof failed: {error}")),
+        _ => Ok(()),
+    }
+}
+
+fn print_proof_job(job: &ProofJobState) {
+    println!("{:<10} {}", "job id:", job.job_id);
+    println!("{:<10} {}", "action:", job.action);
+    println!("{:<10} {:?}", "status:", job.status);
+    if let Some(tx_final) = &job.tx_final {
+        println!("{:<10} {}", "txFinal:", tx_final);
+    }
+    if let Some(error) = &job.error {
+        println!("{:<10} {}", "error:", error);
+    }
+}
+
+pub async fn proofs(client: &DobjdClient, active: bool, json: bool) -> Result<()> {
+    let path = if active {
+        "/proofs?status=active"
+    } else {
+        "/proofs"
+    };
+    let jobs: Vec<ProofJobState> = client.get_json(path).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&jobs)?);
+        return Ok(());
+    }
+    if jobs.is_empty() {
+        println!("(no proof jobs)");
+        return Ok(());
+    }
+    for job in &jobs {
+        println!(
+            "[{:<9}] {} {} {}",
+            format!("{:?}", job.status).to_lowercase(),
+            job.job_id,
+            job.action,
+            job.tx_final.as_deref().map(short_hex).unwrap_or_default()
+        );
+    }
+    Ok(())
+}
+
+pub async fn submit(client: &DobjdClient, tx_finals: Vec<String>, json: bool) -> Result<()> {
+    let records: Vec<TransactionRecord> = client
+        .post_json("/submissions", &SubmitRequest { tx_finals })
+        .await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&records)?);
+        return Ok(());
+    }
+    for record in &records {
+        println!(
+            "{} submitted as relayer job {}",
+            short_hex(&record.tx_final),
+            record.relayer_job_id.as_deref().unwrap_or("?")
+        );
+    }
+    Ok(())
+}
+
+pub async fn transactions(client: &DobjdClient, json: bool) -> Result<()> {
+    let records: Vec<TransactionRecord> = client.get_json("/transactions").await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&records)?);
+        return Ok(());
+    }
+    if records.is_empty() {
+        println!("(no transactions)");
+        return Ok(());
+    }
+    for record in &records {
+        println!(
+            "[{:<9}] {} {} block {}{}",
+            format!("{:?}", record.state).to_lowercase(),
+            record.tx_final,
+            record.action,
+            record.grounding_block,
+            record
+                .tx_hash
+                .as_deref()
+                .map(|tx| format!(" tx {}", short_hex(tx)))
+                .unwrap_or_default()
+        );
+    }
+    Ok(())
+}
+
+pub async fn inspect_transaction(
+    client: &DobjdClient,
+    tx_final: String,
+    wait: bool,
+    json: bool,
+) -> Result<()> {
+    let base = format!("/transactions/{}", urlencoding::encode(&tx_final));
+    let mut record: TransactionRecord = client.get_json(&base).await?;
+    while wait && !record.state.is_terminal() {
+        let path = format!("{base}?wait=true&timeoutMs={WAIT_STEP_MS}");
+        record = client.get_json(&path).await?;
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&record)?);
+        return Ok(());
+    }
+    print_transaction(&record);
+    Ok(())
+}
+
+fn print_transaction(record: &TransactionRecord) {
+    println!("{:<16} {}", "txFinal:", record.tx_final);
+    println!("{:<16} {}", "action:", record.action);
+    println!("{:<16} {:?}", "state:", record.state);
+    println!("{:<16} {}", "grounding block:", record.grounding_block);
+    println!("{:<16} {}", "grounding root:", record.grounding_root);
+    if let Some(job) = &record.relayer_job_id {
+        println!("{:<16} {}", "relayer job:", job);
+    }
+    if let Some(tx) = &record.tx_hash {
+        println!("{:<16} {}", "tx hash:", tx);
+    }
+    if let Some(failure) = &record.relayer_failure {
+        println!("{:<16} {}", "relayer failure:", failure);
+    }
+    if let Some(reason) = &record.reason {
+        println!("{:<16} {}", "reason:", reason);
+    }
+    if !record.input_files.is_empty() {
+        println!("inputs:");
+        for f in &record.input_files {
+            println!("  - {f}");
+        }
+    }
+    if !record.output_files.is_empty() {
+        println!("outputs:");
+        for f in &record.output_files {
+            println!("  + {f}");
+        }
+    }
+}
+
+pub async fn delete_transaction(client: &DobjdClient, tx_final: String, json: bool) -> Result<()> {
+    let path = format!("/transactions/{}", urlencoding::encode(&tx_final));
+    let record: TransactionRecord = client.delete_json(&path).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&record)?);
+        return Ok(());
+    }
+    println!(
+        "deleted {} ({} output file(s) removed)",
+        record.tx_final,
+        record.output_files.len()
+    );
+    Ok(())
 }
 
 fn parse_action_args(raw: &[String]) -> Result<ActionArgValues> {
@@ -344,11 +541,8 @@ async fn poll_run_to_terminal(client: &DobjdClient, run_id: &str, quiet: bool) -
     }
 }
 
-/// Stream every event flowing through dobjd's broadcast hub as JSON
-/// lines. Today this is `run-action-progress`.
-/// Each event prints once across all connected clients, so this is the
-/// single place to see activity from the desktop, web UI, MCP, and
-/// other CLI invocations at the same time.
+/// Print daemon events as JSON lines, including their sequence numbers.
+/// Includes activity from every connected client.
 pub async fn events(client: &DobjdClient) -> Result<()> {
     let url = format!("{}/events", client.base_url());
     let mut es = EventSource::get(&url);
