@@ -14,12 +14,34 @@ use crate::{
     state_machine::DerivedSlot,
 };
 
-/// Head state plus progress metadata loaded from Postgres.
+/// A state loaded from Postgres with the slot whose execution block it was derived at.
 #[derive(Debug, Clone, Copy)]
-pub struct HeadSnapshot {
+pub struct SlotState {
     pub state: DonState,
-    pub last_processed_slot: u32,
+    pub slot: u32,
 }
+
+/// An execution block, named by number or by hash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionBlockId {
+    Number(u32),
+    Hash(B256),
+}
+
+const SLOT_STATE_COLUMNS: &str = r#"
+    slot,
+    el_block_number,
+    el_block_timestamp,
+    el_block_hash,
+    don_created_root,
+    don_nullifiers_root,
+    don_prior_state_history_root,
+    don_next_state_history_root,
+    don_state_root,
+    don_created_count,
+    don_nullifier_count,
+    don_state_root_count
+"#;
 
 #[derive(Clone)]
 pub struct StateLogDb {
@@ -101,6 +123,11 @@ impl StateLogDb {
                 ON slots(el_block_number)
                 WHERE el_block_number IS NOT NULL
             "#,
+            r#"
+            CREATE UNIQUE INDEX IF NOT EXISTS slots_el_block_hash_uq
+                ON slots(el_block_hash)
+                WHERE el_block_hash IS NOT NULL
+            "#,
             // Reverse index from object commitment to its position in the created
             // `Array`. A materialized view of committed state: rows are inserted in
             // the same transaction that commits their slot and deleted in the same
@@ -146,49 +173,49 @@ impl StateLogDb {
         Ok(self.head_snapshot().await?.map(|snapshot| snapshot.state))
     }
 
-    /// Return the head state plus sync progress from one Postgres snapshot, or `None` before
-    /// the first slot.
-    pub async fn head_snapshot(&self) -> Result<Option<HeadSnapshot>> {
+    /// Return the head state with its slot, or `None` before the first slot with an execution
+    /// block.
+    pub async fn head_snapshot(&self) -> Result<Option<SlotState>> {
         Self::read_snapshot(&self.pool).await
     }
 
-    /// Read the head state plus progress over any executor (pool or
-    /// transaction), so a caller can pin it to the same snapshot as other reads.
-    async fn read_snapshot<'e, E: PgExecutor<'e>>(executor: E) -> Result<Option<HeadSnapshot>> {
-        let row = sqlx::query(
-            r#"
-            SELECT (SELECT MAX(slot) FROM slots) AS last_processed_slot,
-                   slot,
-                   el_block_number,
-                   el_block_timestamp,
-                   el_block_hash,
-                   don_created_root,
-                   don_nullifiers_root,
-                   don_prior_state_history_root,
-                   don_next_state_history_root,
-                   don_state_root,
-                   don_created_count,
-                   don_nullifier_count,
-                   don_state_root_count
-            FROM slots
-            WHERE el_block_number IS NOT NULL
-            ORDER BY slot DESC
-            LIMIT 1
-            "#,
-        )
+    /// Read the head state over any executor (pool or transaction), so a
+    /// caller can pin it to the same snapshot as other reads.
+    async fn read_snapshot<'e, E: PgExecutor<'e>>(executor: E) -> Result<Option<SlotState>> {
+        let row = sqlx::query(&format!(
+            "SELECT {SLOT_STATE_COLUMNS} FROM slots \
+             WHERE el_block_number IS NOT NULL ORDER BY slot DESC LIMIT 1"
+        ))
         .fetch_optional(executor)
         .await?;
+        row.as_ref().map(decode_slot_state_row).transpose()
+    }
 
-        row.map(|row| {
-            let head_slot = row.get::<i32, _>("slot");
-            Ok(HeadSnapshot {
-                state: decode_state_row(&row).with_context(|| {
-                    format!("slots row for slot {head_slot} had invalid state data")
-                })?,
-                last_processed_slot: row.get::<i32, _>("last_processed_slot") as u32,
-            })
-        })
-        .transpose()
+    /// Return the state derived at a committed execution block, or `None` when no committed
+    /// slot holds that block.
+    pub async fn state_at_block(&self, block: ExecutionBlockId) -> Result<Option<SlotState>> {
+        let row = match block {
+            ExecutionBlockId::Number(number) => {
+                let Ok(number) = i32::try_from(number) else {
+                    return Ok(None);
+                };
+                sqlx::query(&format!(
+                    "SELECT {SLOT_STATE_COLUMNS} FROM slots WHERE el_block_number = $1"
+                ))
+                .bind(number)
+                .fetch_optional(&self.pool)
+                .await?
+            }
+            ExecutionBlockId::Hash(hash) => {
+                sqlx::query(&format!(
+                    "SELECT {SLOT_STATE_COLUMNS} FROM slots WHERE el_block_hash = $1"
+                ))
+                .bind(hash.as_slice().to_vec())
+                .fetch_optional(&self.pool)
+                .await?
+            }
+        };
+        row.as_ref().map(decode_slot_state_row).transpose()
     }
 
     /// Return the beacon block root for a committed slot, `None` when it has none or is not
@@ -336,7 +363,7 @@ impl StateLogDb {
     pub async fn snapshot_with_created_indices(
         &self,
         commitments: &[Hash],
-    ) -> Result<(Option<HeadSnapshot>, HashMap<Hash, i64>)> {
+    ) -> Result<(Option<SlotState>, HashMap<Hash, i64>)> {
         let mut tx = self
             .pool
             .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
@@ -373,6 +400,15 @@ impl StateLogDb {
 
 fn db_bytes_to_b256(bytes: &[u8]) -> Result<B256> {
     B256::try_from(bytes).map_err(|_| anyhow!("expected 32 bytes, got {}", bytes.len()))
+}
+
+fn decode_slot_state_row(row: &PgRow) -> Result<SlotState> {
+    let slot = row.get::<i32, _>("slot");
+    Ok(SlotState {
+        state: decode_state_row(row)
+            .with_context(|| format!("slots row for slot {slot} had invalid state data"))?,
+        slot: slot as u32,
+    })
 }
 
 /// Decode the DON state from a row with an execution block, the block the state was derived at.
@@ -540,7 +576,7 @@ mod tests {
             .await?
             .expect("a slot is committed");
         assert_eq!(snapshot.state, state);
-        assert_eq!(snapshot.last_processed_slot, 10);
+        assert_eq!(snapshot.slot, 10);
 
         drop_db(&db_name, &admin_url).await?;
         Ok(())
@@ -565,7 +601,8 @@ mod tests {
             .await?
             .expect("a slot is committed");
         assert_eq!(snapshot.state, state);
-        assert_eq!(snapshot.last_processed_slot, 12);
+        assert_eq!(snapshot.slot, 10);
+        assert_eq!(state_log.last_processed_slot().await?, Some(12));
 
         drop_db(&db_name, &admin_url).await?;
         Ok(())
@@ -630,7 +667,7 @@ mod tests {
             .await?
             .expect("a slot is committed");
         assert_eq!(snapshot.state, h1);
-        assert_eq!(snapshot.last_processed_slot, 1);
+        assert_eq!(snapshot.slot, 1);
 
         drop_db(&db_name, &admin_url).await?;
         Ok(())
@@ -679,10 +716,7 @@ mod tests {
 
         // The atomic read returns the same index against the head state.
         let (snapshot, indices) = state_log.snapshot_with_created_indices(&[a, b]).await?;
-        assert_eq!(
-            snapshot.expect("a slot is committed").last_processed_slot,
-            1
-        );
+        assert_eq!(snapshot.expect("a slot is committed").slot, 1);
         assert_eq!(indices.get(&a), Some(&1));
         assert_eq!(indices.get(&b), None);
 

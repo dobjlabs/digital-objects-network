@@ -169,19 +169,24 @@ Reorg rollback does not modify RocksDB. The surviving Postgres `DonState` determ
 - `GET /sync-progress`
   - returns `last_processed_slot`
 - `GET /v1/state/head`
-  - returns:
-    - `last_processed_slot`
+  - returns the head state, derived at the last slot with an execution block:
+    - `slot` (the slot of that execution block; `/sync-progress` reports the last processed slot)
     - `state_root`
     - `block_number`
+    - `block_hash`
     - `created_count`
     - `nullifier_count`
     - `state_root_count`
+- `GET /v1/state/by_el/{block_id}`
+  - `block_id` is a decimal execution block number or a `0x`-prefixed 32-byte execution block hash
+  - returns the state derived at that execution block, with the same fields as `/v1/state/head`
+  - `400` for a malformed `block_id`, `404` when no committed slot holds that block
 - `POST /v1/state/membership`
   - request body:
     - `object_commitments` (array of hash strings)
     - `nullifiers` (array of hash strings)
   - returns membership for both sets from one captured state:
-    - `last_processed_slot`
+    - `slot` (the slot of the head state the results are answered against)
     - `state_root`
     - `created_results` (array of `{ commitment, present }`)
     - `nullifier_results` (array of `{ nullifier, present }`)
@@ -189,14 +194,14 @@ Reorg rollback does not modify RocksDB. The surviving Postgres `DonState` determ
   - request body:
     - `object_commitments` (array of hash strings)
   - returns:
-    - `last_processed_slot`
+    - `slot` (the slot of the head state the results are answered against)
     - `state_root`
     - `results` (array of `{ commitment, present }`)
 - `POST /v1/state/nullifier/contains`
   - request body:
     - `nullifiers` (array of hash strings)
   - returns:
-    - `last_processed_slot`
+    - `slot` (the slot of the head state the results are answered against)
     - `state_root`
     - `results` (array of `{ nullifier, present }`)
 - `POST /v1/txlib/grounding-witness`

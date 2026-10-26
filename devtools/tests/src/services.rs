@@ -172,7 +172,7 @@ impl Services {
                         tx.landed_after = Some(landed_after);
                         println!(
                             "relayer job {} landed after {landed_after:.2?} (slot {})",
-                            tx.job_id, membership.last_processed_slot
+                            tx.job_id, membership.slot
                         );
                     }
                 }

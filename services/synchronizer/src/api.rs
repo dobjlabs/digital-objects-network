@@ -1,9 +1,9 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use alloy::primitives::Address;
+use alloy::primitives::{Address, B256};
 use anyhow::Result;
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
     routing::{get, post},
     Json, Router,
@@ -22,7 +22,7 @@ use wire_types::HealthResponse;
 
 use crate::{
     container_db::ContainerDb,
-    state_log_db::{HeadSnapshot, StateLogDb},
+    state_log_db::{ExecutionBlockId, SlotState, StateLogDb},
 };
 
 const MAX_HASH_QUERY_ITEMS: usize = 256;
@@ -38,7 +38,7 @@ struct AppState {
 
 /// Membership of each queried commitment and nullifier, answered against one head snapshot.
 struct Membership {
-    head: HeadSnapshot,
+    head: SlotState,
     created_present: Vec<bool>,
     nullifier_present: Vec<bool>,
 }
@@ -55,6 +55,7 @@ pub async fn run_api_server(
         .route("/info", get(get_info))
         .route("/sync-progress", get(get_sync_progress))
         .route("/v1/state/head", get(get_state_head))
+        .route("/v1/state/by_el/{block_id}", get(get_state_by_el))
         .route("/v1/state/membership", post(post_state_membership))
         .route(
             "/v1/state/object/contains",
@@ -108,9 +109,14 @@ async fn get_info(State(app_state): State<AppState>) -> Json<Info> {
 async fn get_sync_progress(
     State(app_state): State<AppState>,
 ) -> Result<Json<SyncProgressResponse>, (StatusCode, String)> {
-    let head = load_head_snapshot(&app_state).await?;
+    let last_processed_slot = app_state
+        .state_log
+        .last_processed_slot()
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(not_initialized)?;
     Ok(Json(SyncProgressResponse {
-        last_processed_slot: head.last_processed_slot,
+        last_processed_slot,
     }))
 }
 
@@ -118,15 +124,70 @@ async fn get_state_head(
     State(app_state): State<AppState>,
 ) -> Result<Json<StateHeadResponse>, (StatusCode, String)> {
     let head = load_head_snapshot(&app_state).await?;
-    let metadata = head.state.metadata;
-    Ok(Json(StateHeadResponse {
-        last_processed_slot: head.last_processed_slot,
+    Ok(Json(state_head_response(head)))
+}
+
+/// `block_id` is a decimal execution block number or a `0x`-prefixed 32-byte block hash.
+async fn get_state_by_el(
+    State(app_state): State<AppState>,
+    Path(block_id): Path<String>,
+) -> Result<Json<StateHeadResponse>, (StatusCode, String)> {
+    let block = parse_execution_block_id(&block_id)?;
+    let slot_state = app_state
+        .state_log
+        .state_at_block(block)
+        .await
+        .map_err(internal_error)?;
+    match slot_state {
+        Some(slot_state) => Ok(Json(state_head_response(slot_state))),
+        None => {
+            load_head_snapshot(&app_state).await?;
+            Err((
+                StatusCode::NOT_FOUND,
+                format!("no state derived at execution block {block_id}"),
+            ))
+        }
+    }
+}
+
+fn state_head_response(slot_state: SlotState) -> StateHeadResponse {
+    let metadata = slot_state.state.metadata;
+    StateHeadResponse {
+        slot: slot_state.slot,
         state_root: metadata.state_root,
         block_number: metadata.block.number as i64,
+        block_hash: metadata.block.hash,
         created_count: metadata.created_count as usize,
         nullifier_count: metadata.nullifier_count as usize,
         state_root_count: metadata.state_root_count as usize,
-    }))
+    }
+}
+
+fn parse_execution_block_id(block_id: &str) -> Result<ExecutionBlockId, (StatusCode, String)> {
+    let invalid = || {
+        (
+            StatusCode::BAD_REQUEST,
+            format!(
+                "invalid execution block id {block_id:?}: expected a decimal block number or a 0x-prefixed 32-byte block hash"
+            ),
+        )
+    };
+    if let Some(hex) = block_id.strip_prefix("0x") {
+        if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(invalid());
+        }
+        return hex
+            .parse::<B256>()
+            .map(ExecutionBlockId::Hash)
+            .map_err(|_| invalid());
+    }
+    if block_id.is_empty() || !block_id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(invalid());
+    }
+    block_id
+        .parse::<u32>()
+        .map(ExecutionBlockId::Number)
+        .map_err(|_| invalid())
 }
 
 async fn post_state_object_contains(
@@ -135,7 +196,7 @@ async fn post_state_object_contains(
 ) -> Result<Json<ObjectContainsResponse>, (StatusCode, String)> {
     let membership = load_membership(&app_state, &body.object_commitments, &[]).await?;
     Ok(Json(ObjectContainsResponse {
-        last_processed_slot: membership.head.last_processed_slot,
+        slot: membership.head.slot,
         state_root: membership.head.state.metadata.state_root,
         results: object_contains_entries(&body.object_commitments, membership.created_present),
     }))
@@ -147,7 +208,7 @@ async fn post_state_nullifier_contains(
 ) -> Result<Json<NullifierContainsResponse>, (StatusCode, String)> {
     let membership = load_membership(&app_state, &[], &body.nullifiers).await?;
     Ok(Json(NullifierContainsResponse {
-        last_processed_slot: membership.head.last_processed_slot,
+        slot: membership.head.slot,
         state_root: membership.head.state.metadata.state_root,
         results: nullifier_contains_entries(&body.nullifiers, membership.nullifier_present),
     }))
@@ -160,7 +221,7 @@ async fn post_state_membership(
     let membership =
         load_membership(&app_state, &body.object_commitments, &body.nullifiers).await?;
     Ok(Json(MembershipResponse {
-        last_processed_slot: membership.head.last_processed_slot,
+        slot: membership.head.slot,
         state_root: membership.head.state.metadata.state_root,
         created_results: object_contains_entries(
             &body.object_commitments,
@@ -239,7 +300,7 @@ async fn load_membership(
     })
 }
 
-async fn load_head_snapshot(app_state: &AppState) -> Result<HeadSnapshot, (StatusCode, String)> {
+async fn load_head_snapshot(app_state: &AppState) -> Result<SlotState, (StatusCode, String)> {
     app_state
         .state_log
         .head_snapshot()

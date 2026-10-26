@@ -12,6 +12,7 @@
 //! feature. Only the synchronizer server and the driver speak this API,
 //! and both enable the feature.
 
+use alloy_primitives::B256;
 use pod2::backends::plonky2::primitives::merkletree::MerkleProof;
 use pod2::middleware::Hash;
 use serde::{Deserialize, Serialize};
@@ -24,14 +25,16 @@ pub struct SyncProgressResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Summary of the head state exposed to clients.
+/// Summary of a state derived at one execution block, exposed to clients.
 pub struct StateHeadResponse {
-    /// Last slot fully committed by the synchronizer.
-    pub last_processed_slot: u32,
-    /// Head state root.
+    /// Slot whose execution block the state was derived at.
+    pub slot: u32,
+    /// State root.
     pub state_root: Hash,
-    /// Execution block number committed inside the head state root.
+    /// Execution block number committed inside the state root.
     pub block_number: i64,
+    /// Execution block hash committed inside the state root.
+    pub block_hash: B256,
     /// Number of objects in the global created set.
     pub created_count: usize,
     /// Number of spent nullifiers in committed state.
@@ -59,8 +62,8 @@ pub struct ObjectContainsEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Batch created-object-membership response.
 pub struct ObjectContainsResponse {
-    /// Last slot fully committed by the synchronizer.
-    pub last_processed_slot: u32,
+    /// Slot of the head state the results are answered against.
+    pub slot: u32,
     /// Head state root the results are answered against.
     pub state_root: Hash,
     /// Per-commitment membership results.
@@ -86,8 +89,8 @@ pub struct NullifierContainsEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Batch nullifier-membership response.
 pub struct NullifierContainsResponse {
-    /// Last slot fully committed by the synchronizer.
-    pub last_processed_slot: u32,
+    /// Slot of the head state the results are answered against.
+    pub slot: u32,
     /// Head state root the results are answered against.
     pub state_root: Hash,
     /// Per-hash membership results.
@@ -106,8 +109,8 @@ pub struct MembershipRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Combined batch membership response anchored to one state head.
 pub struct MembershipResponse {
-    /// Last slot fully committed by the synchronizer.
-    pub last_processed_slot: u32,
+    /// Slot of the head state the results are answered against.
+    pub slot: u32,
     /// Head state root the results are answered against.
     pub state_root: Hash,
     /// Per-object created-set membership results.

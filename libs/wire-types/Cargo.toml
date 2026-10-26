@@ -11,6 +11,7 @@ edition = "2024"
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+alloy-primitives = { workspace = true, features = ["serde"] }
 schemars = { version = "1", optional = true }
 # `chain` feature only — embeds a pod2 MerkleProof in two synchronizer
 # response types. Server code and the driver enable this; cli/mcp don't.
