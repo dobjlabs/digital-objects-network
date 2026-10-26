@@ -183,6 +183,7 @@ Reorg rollback does not modify RocksDB. The surviving Postgres `DonState` determ
   - returns membership for both sets from one captured state:
     - `last_processed_slot`
     - `state_root`
+    - `block_number`
     - `created_results` (array of `{ commitment, present }`)
     - `nullifier_results` (array of `{ nullifier, present }`)
 - `POST /v1/state/object/contains`

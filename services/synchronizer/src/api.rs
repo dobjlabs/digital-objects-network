@@ -162,6 +162,7 @@ async fn post_state_membership(
     Ok(Json(MembershipResponse {
         last_processed_slot: membership.head.last_processed_slot,
         state_root: membership.head.state.metadata.state_root,
+        block_number: membership.head.state.metadata.block.number as i64,
         created_results: object_contains_entries(
             &body.object_commitments,
             membership.created_present,

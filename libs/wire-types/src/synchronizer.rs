@@ -110,6 +110,8 @@ pub struct MembershipResponse {
     pub last_processed_slot: u32,
     /// Head state root the results are answered against.
     pub state_root: Hash,
+    /// Execution block number committed inside that head state root.
+    pub block_number: i64,
     /// Per-object created-set membership results.
     pub created_results: Vec<ObjectContainsEntry>,
     /// Per-nullifier membership results.
