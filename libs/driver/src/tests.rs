@@ -458,7 +458,7 @@ fn test_list_actions_filters_by_input_class() {
 }
 
 #[test]
-fn batch_summaries_keep_file_errors_separate_and_include_transaction_ownership() {
+fn batch_summaries_skip_unreadable_files_and_include_transaction_ownership() {
     let fx = fixture("log_1.dobj");
     let record = fx.driver.execute(fx.input("CraftWood")).unwrap();
     std::fs::write(fx.paths.objects_dir.join("invalid.dobj"), "not JSON").unwrap();
@@ -468,23 +468,24 @@ fn batch_summaries_keep_file_errors_separate_and_include_transaction_ownership()
         "invalid.dobj".to_string(),
         record.output_files[0].clone(),
     ];
-    let summaries = fx.driver.read_objects(&paths).unwrap();
-    let input = summaries[0].as_ref().unwrap();
+    let summaries = fx.driver.read_available_objects(&paths).unwrap();
+    assert_eq!(summaries.len(), 2);
+    let input = &summaries[0];
+    assert_eq!(input.file_name, paths[0]);
     assert_eq!(input.held_by_run_id.as_deref(), Some("execute"));
-    assert!(matches!(
-        summaries[1]
-            .as_ref()
-            .unwrap_err()
-            .downcast_ref::<crate::DriverError>(),
-        Some(crate::DriverError::ObjectFileNotFound(_))
-    ));
-    assert!(summaries[2].is_err());
-    let output = summaries[3].as_ref().unwrap();
+    let output = &summaries[1];
     assert_eq!(output.status, ObjectStatus::Pending);
     assert_eq!(
         serde_json::to_value(output).unwrap(),
         serde_json::to_value(fx.summary(&paths[3])).unwrap()
     );
+    std::fs::rename(
+        &fx.paths.transactions_dir,
+        fx.paths.transactions_dir.with_extension("saved"),
+    )
+    .unwrap();
+    std::fs::write(&fx.paths.transactions_dir, "not a directory").unwrap();
+    assert!(fx.driver.read_available_objects(&paths).is_err());
 }
 
 #[test]
