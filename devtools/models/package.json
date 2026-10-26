@@ -1,0 +1,16 @@
+{
+  "name": "service-models",
+  "private": true,
+  "scripts": {
+    "typecheck:synchronizer": "quint typecheck ../../services/synchronizer/model/reorgs.qnt && quint typecheck ../../services/synchronizer/model/reorgs.test.qnt && quint typecheck ../../services/synchronizer/model/publication.qnt",
+    "test:synchronizer": "quint test ../../services/synchronizer/model/reorgs.test.qnt --seed=20261025 && quint test ../../services/synchronizer/model/publication.qnt --seed=20261025",
+    "simulate:synchronizer": "quint run ../../services/synchronizer/model/reorgs.qnt --invariant=safety --max-samples=10000 --max-steps=50 --seed=20261025 --verbosity=1 && quint run ../../services/synchronizer/model/publication.qnt --invariant=safety --max-samples=3000 --max-steps=35 --seed=20261025 --verbosity=1",
+    "check:synchronizer": "pnpm run typecheck:synchronizer && pnpm run test:synchronizer && pnpm run simulate:synchronizer",
+    "check": "pnpm run check:synchronizer",
+    "integration": "QUINT_SEED=\"${QUINT_SEED:-20261025}\" PATH=\"$PWD/node_modules/.bin:$PATH\" cargo test -p synchronizer --release --locked -- --include-ignored --test-threads=1"
+  },
+  "devDependencies": {
+    "@informalsystems/quint": "0.33.0"
+  },
+  "packageManager": "pnpm@10.34.8"
+}

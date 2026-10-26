@@ -38,3 +38,4 @@ wire-types = { workspace = true, features = ["chain"] }
 [dev-dependencies]
 payload = { path = "../../libs/payload", features = ["test-utils"] }
 tempfile = "3"
+quint-connect = { workspace = true }

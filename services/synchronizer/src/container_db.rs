@@ -45,6 +45,8 @@ pub fn created_array_holds(created: &Array, index: i64, commitment: Hash) -> Res
 #[derive(Clone)]
 pub struct ContainerDb {
     db: Arc<TransactionDB>,
+    #[cfg(test)]
+    flushes: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl fmt::Debug for ContainerDb {
@@ -63,6 +65,8 @@ impl ContainerDb {
             .with_context(|| format!("Failed to open RocksDB at path {db_path}"))?;
         Ok(Self {
             db: Arc::new(inner),
+            #[cfg(test)]
+            flushes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         })
     }
 
@@ -70,7 +74,16 @@ impl ContainerDb {
     pub fn sync(&self) -> Result<()> {
         self.db
             .flush_wal(true)
-            .map_err(|e| anyhow!("rocksdb: flush_wal: {e}"))
+            .map_err(|e| anyhow!("rocksdb: flush_wal: {e}"))?;
+        #[cfg(test)]
+        self.flushes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn flush_count(&self) -> u64 {
+        self.flushes.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     pub fn open_created(&self, root: Hash) -> Result<Array> {

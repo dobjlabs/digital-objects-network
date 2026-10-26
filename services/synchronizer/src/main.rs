@@ -10,6 +10,8 @@ mod catchup;
 mod config;
 mod container_db;
 mod don_state;
+#[cfg(test)]
+mod model_hooks;
 mod node;
 mod state_log_db;
 mod state_machine;

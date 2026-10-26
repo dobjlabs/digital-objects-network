@@ -243,3 +243,5 @@ The defaults for `SYNC_DELAY_MS` and `CATCHUP_BATCH_SIZE` are computed from the 
 ```bash
 RUST_LOG=info cargo run --release --bin synchronizer
 ```
+
+The [Quint ancestry contract](model/README.md) exercises chain selection, state replay and recovery against the production synchronizer.

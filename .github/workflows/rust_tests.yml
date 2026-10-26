@@ -11,12 +11,31 @@ jobs:
   test:
     if: github.event.pull_request.draft == false
     name: Rust tests
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_PG_ADMIN_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+      TEST_RELAYER_DB_ADMIN: postgres://postgres:postgres@127.0.0.1:5432/postgres
+      QUINT_SEED: "20261025"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: pnpm/action-setup@v6
         with:
-          version: 10
+          version: 10.34.8
       - uses: actions/setup-node@v6
         with:
           node-version: 22
@@ -24,6 +43,10 @@ jobs:
           cache-dependency-path: |
             interfaces/gui/pnpm-lock.yaml
             apps/bitcraft/tests/pnpm-lock.yaml
+            devtools/models/pnpm-lock.yaml
+      - name: Install model tooling
+        working-directory: devtools/models
+        run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Build default browser UI
         working-directory: interfaces/gui
         run: |
@@ -40,3 +63,8 @@ jobs:
           python3 -m unittest discover -s apps/bitcraft/tests -p '*_test.py'
       - name: Run tests
         run: cargo test --release --locked --features dobjd/bundled-ui,dobjd/bundled-bitcraft-ui
+      # Ignored tests in workspace binaries run here; library-only ignored tests stay excluded.
+      - name: Test ignored binary tests
+        run: |
+          export PATH="$PWD/devtools/models/node_modules/.bin:$PATH"
+          cargo test --release --locked --features dobjd/bundled-ui,dobjd/bundled-bitcraft-ui --bins -- --ignored --test-threads=1

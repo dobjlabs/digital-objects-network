@@ -32,7 +32,7 @@ pub(crate) struct SyncStart {
     pub(crate) head: BlockHeader,
 }
 
-enum MissingSlotAction {
+pub(crate) enum SlotAction {
     Rewound(u32),
     Applied,
 }
@@ -119,36 +119,13 @@ async fn run_sync_loop(
                     return Ok(());
                 }
 
-                match fetched_slot {
-                    FetchedSlot::Missing { slot } => {
-                        match handle_missing_slot(&node, slot).await? {
-                            MissingSlotAction::Rewound(rewind_slot) => {
-                                next_slot = rewind_slot;
-                                reorg_detected = true;
-                                break;
-                            }
-                            MissingSlotAction::Applied => {
-                                next_slot = slot + 1;
-                            }
-                        }
+                match process_fetched_slot(&node, fetched_slot).await? {
+                    SlotAction::Rewound(rewind_slot) => {
+                        next_slot = rewind_slot;
+                        reorg_detected = true;
+                        break;
                     }
-                    FetchedSlot::Present {
-                        slot,
-                        header,
-                        context,
-                    } => {
-                        if let Some(rewind_slot) =
-                            handle_reorgs_for_present_slot(&node, slot, &header).await?
-                        {
-                            next_slot = rewind_slot;
-                            reorg_detected = true;
-                            break;
-                        }
-
-                        let processed = node.derive_from_context(*context).await?;
-                        node.commit_slot(&processed).await?;
-                        next_slot = slot + 1;
-                    }
+                    SlotAction::Applied => next_slot += 1,
                 }
             }
 
@@ -176,10 +153,10 @@ async fn run_sync_loop(
             }
             SlotHeaderState::Missing => {
                 match handle_missing_slot(&node, next_slot).await? {
-                    MissingSlotAction::Rewound(rewind_slot) => {
+                    SlotAction::Rewound(rewind_slot) => {
                         next_slot = rewind_slot;
                     }
-                    MissingSlotAction::Applied => {
+                    SlotAction::Applied => {
                         next_slot += 1;
                     }
                 }
@@ -217,19 +194,35 @@ async fn run_sync_loop(
     }
 }
 
+pub(crate) async fn process_fetched_slot(node: &Node, fetched: FetchedSlot) -> Result<SlotAction> {
+    match fetched {
+        FetchedSlot::Missing { slot } => handle_missing_slot(node, slot).await,
+        FetchedSlot::Present {
+            slot,
+            header,
+            context,
+        } => {
+            if let Some(rewind_slot) = handle_reorgs_for_present_slot(node, slot, &header).await? {
+                return Ok(SlotAction::Rewound(rewind_slot));
+            }
+            let processed = node.derive_from_context(*context).await?;
+            node.commit_slot(&processed).await?;
+            Ok(SlotAction::Applied)
+        }
+    }
+}
+
 /// Handle a slot that currently has no block header.
 ///
 /// Returns whether the loop should continue from a rewind slot or from the next slot.
-async fn handle_missing_slot(node: &Node, slot: u32) -> Result<MissingSlotAction> {
+async fn handle_missing_slot(node: &Node, slot: u32) -> Result<SlotAction> {
     // A previously committed slot becoming empty implies chain history changed.
     if node.state_log.slot_root(slot).await?.is_some() {
         warn!(
             slot,
             "Detected reorg: slot was previously present but is now missing; rewinding"
         );
-        return Ok(MissingSlotAction::Rewound(
-            rewind_for_reorg(node, slot).await?,
-        ));
+        return Ok(SlotAction::Rewound(rewind_for_reorg(node, slot).await?));
     }
 
     // Skipped slots are valid on beacon; commit one anyway so the slot history stays contiguous.
@@ -240,7 +233,7 @@ async fn handle_missing_slot(node: &Node, slot: u32) -> Result<MissingSlotAction
         derived: None,
     })
     .await?;
-    Ok(MissingSlotAction::Applied)
+    Ok(SlotAction::Applied)
 }
 
 /// Run all present-slot reorg checks.

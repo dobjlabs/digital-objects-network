@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+#[cfg(test)]
+use std::sync::Arc;
 
 use alloy::primitives::B256;
 use anyhow::{anyhow, Context, Result};
@@ -24,6 +26,10 @@ pub struct HeadSnapshot {
 #[derive(Clone)]
 pub struct StateLogDb {
     pool: PgPool,
+    #[cfg(test)]
+    pub(crate) publish_gate: Arc<std::sync::Mutex<Option<Arc<crate::model_hooks::Gate>>>>,
+    #[cfg(test)]
+    pub(crate) read_gate: Arc<std::sync::Mutex<Option<Arc<crate::model_hooks::Gate>>>>,
 }
 
 impl StateLogDb {
@@ -41,7 +47,13 @@ impl StateLogDb {
             .connect(database_url)
             .await
             .with_context(|| "Failed to connect to the state log Postgres")?;
-        let store = Self { pool };
+        let store = Self {
+            pool,
+            #[cfg(test)]
+            publish_gate: Arc::new(std::sync::Mutex::new(None)),
+            #[cfg(test)]
+            read_gate: Arc::new(std::sync::Mutex::new(None)),
+        };
         store.bootstrap().await?;
         if let Some(first_slot) = store.first_committed_slot().await? {
             anyhow::ensure!(
@@ -51,6 +63,22 @@ impl StateLogDb {
             );
         }
         Ok(store)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn pause_publish(&self, stage: crate::model_hooks::Stage) {
+        let gate = self.publish_gate.lock().unwrap().clone();
+        if let Some(gate) = gate {
+            gate.pause(stage).await;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn pause_read(&self, stage: crate::model_hooks::Stage) {
+        let gate = self.read_gate.lock().unwrap().clone();
+        if let Some(gate) = gate {
+            gate.pause(stage).await;
+        }
     }
 
     /// Create the Postgres schema used by the synchronizer control plane.
@@ -252,6 +280,9 @@ impl StateLogDb {
         .execute(&mut *tx)
         .await?;
 
+        #[cfg(test)]
+        self.pause_publish(crate::model_hooks::Stage::SlotInserted)
+            .await;
         for (commitment, index) in derived.iter().flat_map(|derived| &derived.created_added) {
             // `commitment` is the PRIMARY KEY; a conflict is a bug and fails loudly.
             sqlx::query(
@@ -267,6 +298,9 @@ impl StateLogDb {
             })?;
         }
 
+        #[cfg(test)]
+        self.pause_publish(crate::model_hooks::Stage::IndexInserted)
+            .await;
         tx.commit().await?;
         Ok(())
     }
@@ -342,6 +376,9 @@ impl StateLogDb {
             .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
             .await?;
         let snapshot = Self::read_snapshot(&mut *tx).await?;
+        #[cfg(test)]
+        self.pause_read(crate::model_hooks::Stage::ReadSnapshot)
+            .await;
         let indices = Self::read_created_indices(&mut *tx, commitments).await?;
         tx.commit().await?;
         Ok((snapshot, indices))
@@ -376,7 +413,7 @@ fn db_bytes_to_b256(bytes: &[u8]) -> Result<B256> {
 }
 
 /// Decode the DON state from a row with an execution block, the block the state was derived at.
-fn decode_state_row(row: &PgRow) -> Result<DonState> {
+pub(crate) fn decode_state_row(row: &PgRow) -> Result<DonState> {
     let block = ExecutionBlock {
         number: row.get::<i32, _>("el_block_number") as u32,
         timestamp: row.get::<i64, _>("el_block_timestamp") as u64,

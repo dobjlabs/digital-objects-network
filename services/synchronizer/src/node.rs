@@ -29,6 +29,9 @@ use crate::don_state::{DonState, ExecutionBlock};
 use crate::state_log_db::StateLogDb;
 use crate::state_machine::{DerivedSlot, StateMachine, MAX_STATE_ROOT_AGE_BLOCKS};
 
+#[cfg(test)]
+mod model_tests;
+
 /// Runtime integration layer that connects network inputs (beacon/execution),
 /// pure state derivation (`StateMachine`), and the state log (`StateLogDb`).
 pub struct Node {
@@ -489,6 +492,10 @@ impl Node {
         // must not outlive those nodes in a crash, so they are synced to disk first.
         if processed.derived.is_some() {
             self.state_machine.sync()?;
+            #[cfg(test)]
+            self.state_log
+                .pause_publish(crate::model_hooks::Stage::Flushed)
+                .await;
         }
         self.state_log
             .commit_slot(
