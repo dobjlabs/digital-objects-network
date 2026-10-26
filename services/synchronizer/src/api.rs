@@ -138,6 +138,14 @@ async fn get_state_by_el(
             format!("invalid execution block id: {err}"),
         )
     })?;
+    if let BlockHashOrNumber::Number(number) = block {
+        if i64::try_from(number).is_err() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("execution block number {number} is out of range"),
+            ));
+        }
+    }
     let slot_state = app_state
         .state_log
         .slot_state_at_el_block(block)

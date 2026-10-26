@@ -30,7 +30,7 @@ impl StateRoots {
 /// Execution block that became canonical with a slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExecutionBlock {
-    pub number: u32,
+    pub number: u64,
     pub timestamp: u64,
     pub hash: B256,
 }

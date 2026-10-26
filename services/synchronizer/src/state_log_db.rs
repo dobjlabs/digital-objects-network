@@ -78,7 +78,7 @@ impl StateLogDb {
             CREATE TABLE IF NOT EXISTS slots (
                 slot INTEGER PRIMARY KEY,
                 cl_block_root BYTEA NULL,
-                el_block_number INTEGER NULL,
+                el_block_number BIGINT NULL,
                 el_block_timestamp BIGINT NULL,
                 el_block_hash BYTEA NULL,
                 don_created_root BYTEA NULL,
@@ -117,7 +117,7 @@ impl StateLogDb {
                 WHERE el_block_number IS NOT NULL
             "#,
             r#"
-            CREATE UNIQUE INDEX IF NOT EXISTS slots_el_block_hash_uq
+            CREATE INDEX IF NOT EXISTS slots_el_block_hash_idx
                 ON slots(el_block_hash)
                 WHERE el_block_hash IS NOT NULL
             "#,
@@ -197,9 +197,8 @@ impl StateLogDb {
     ) -> Result<Option<SlotState>> {
         let row = match block {
             BlockHashOrNumber::Number(number) => {
-                let Ok(number) = i32::try_from(number) else {
-                    return Ok(None);
-                };
+                let number = i64::try_from(number)
+                    .with_context(|| format!("block number {number} exceeds the stored range"))?;
                 sqlx::query(&format!(
                     "SELECT {SLOT_STATE_COLUMNS} FROM slots WHERE el_block_number = $1"
                 ))
@@ -266,7 +265,7 @@ impl StateLogDb {
         )
         .bind(slot as i32)
         .bind(block_root.map(|root| root.as_slice().to_vec()))
-        .bind(state.map(|state| state.metadata.block.number as i32))
+        .bind(state.map(|state| state.metadata.block.number as i64))
         .bind(state.map(|state| state.metadata.block.timestamp as i64))
         .bind(state.map(|state| state.metadata.block.hash.as_slice().to_vec()))
         .bind(state.map(|state| hash_to_db_bytes(state.roots.created)))
@@ -376,7 +375,7 @@ impl StateLogDb {
     }
 
     /// Return the state roots derived at or above the given execution block number.
-    pub async fn recent_state_roots(&self, min_block_number: u32) -> Result<Vec<(Hash, i64)>> {
+    pub async fn recent_state_roots(&self, min_block_number: u64) -> Result<Vec<(Hash, i64)>> {
         let rows = sqlx::query(
             r#"
             SELECT don_state_root, el_block_number
@@ -385,15 +384,15 @@ impl StateLogDb {
             ORDER BY el_block_number ASC, slot ASC
             "#,
         )
-        .bind(min_block_number as i32)
+        .bind(min_block_number as i64)
         .fetch_all(&self.pool)
         .await?;
 
         rows.into_iter()
             .map(|row| {
                 let state_root: Vec<u8> = row.get("don_state_root");
-                let block_number = row.get::<i32, _>("el_block_number");
-                Ok((db_bytes_to_hash(&state_root)?, i64::from(block_number)))
+                let block_number = row.get::<i64, _>("el_block_number");
+                Ok((db_bytes_to_hash(&state_root)?, block_number))
             })
             .collect()
     }
@@ -415,7 +414,7 @@ fn decode_slot_state_row(row: &PgRow) -> Result<SlotState> {
 /// Decode the DON state from a row with an execution block, the block the state was derived at.
 fn decode_state_row(row: &PgRow) -> Result<DonState> {
     let block = ExecutionBlock {
-        number: row.get::<i32, _>("el_block_number") as u32,
+        number: row.get::<i64, _>("el_block_number") as u64,
         timestamp: row.get::<i64, _>("el_block_timestamp") as u64,
         hash: db_bytes_to_b256(&row.get::<Vec<u8>, _>("el_block_hash"))?,
     };
@@ -458,15 +457,15 @@ mod tests {
         hash_values(&[Value::from(n)])
     }
 
-    fn unique_execution_block(block_number: u32) -> ExecutionBlock {
+    fn unique_execution_block(block_number: u64) -> ExecutionBlock {
         ExecutionBlock {
             number: block_number,
-            timestamp: (block_number as u64) * 1000,
+            timestamp: block_number * 1000,
             hash: B256::repeat_byte(block_number as u8),
         }
     }
 
-    fn unique_state(block_number: u32, marker: i64) -> DonState {
+    fn unique_state(block_number: u64, marker: i64) -> DonState {
         DonState {
             roots: StateRoots {
                 created: unique_hash(marker),
@@ -477,9 +476,9 @@ mod tests {
             metadata: StateMetadata {
                 state_root: unique_hash(marker + 4),
                 block: unique_execution_block(block_number),
-                created_count: block_number as u64,
-                nullifier_count: block_number as u64 + 1,
-                state_root_count: block_number as u64 + 2,
+                created_count: block_number,
+                nullifier_count: block_number + 1,
+                state_root_count: block_number + 2,
             },
         }
     }

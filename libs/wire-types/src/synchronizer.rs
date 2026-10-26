@@ -2,7 +2,8 @@
 //!
 //! Lifted out of the `synchronizer` crate so consumers (driver, dobjd,
 //! tests) can deserialize synchronizer responses without pulling in
-//! synchronizer's server-side deps (rocksdb, sqlx-postgres, alloy, axum).
+//! synchronizer's server-side deps (rocksdb, sqlx-postgres, the full alloy
+//! stack, axum). Only `alloy-primitives` is shared, for execution block hashes.
 //! That's the entire point -- `rocksdb` requires a C++ toolchain and is
 //! the dominant Windows-build headache; keeping it on the server side
 //! lets `dobjd` build clean on Windows.

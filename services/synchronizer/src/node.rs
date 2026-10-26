@@ -299,7 +299,7 @@ impl Node {
         Ok(Some(CanonicalPayload {
             committing_block_root,
             execution_block: ExecutionBlock {
-                number: execution_block.header.number.try_into()?,
+                number: execution_block.header.number,
                 timestamp: execution_block.header.timestamp,
                 hash: execution_block_hash,
             },
@@ -461,7 +461,7 @@ impl Node {
                 .metadata
                 .block
                 .number
-                .saturating_sub(MAX_STATE_ROOT_AGE_BLOCKS as u32)
+                .saturating_sub(MAX_STATE_ROOT_AGE_BLOCKS as u64)
         });
         let recent_state_roots = self.state_log.recent_state_roots(min_block_number).await?;
 
