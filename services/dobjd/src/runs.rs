@@ -141,10 +141,9 @@ impl RunEntry {
             status: ProofProgressStatus::Failed,
             message: message.clone(),
             old_root: None,
-            new_root: None,
             output_files: None,
             output_status: None,
-            nullified_files: None,
+            input_files: None,
             at_ms: now_ms(),
         };
         inner.started_at_ms.get_or_insert(event.at_ms);
@@ -325,9 +324,8 @@ impl RunReporter {
         self.entry.succeed(RunActionResult {
             run_id: self.run_id.clone(),
             old_root: payload::encode_hash_hex(&result.old_root),
-            new_root: payload::encode_hash_hex(&result.new_root),
             output_files: result.output_files.clone(),
-            nullified_files: result.nullified_files.clone(),
+            input_files: result.input_files.clone(),
         });
     }
 
@@ -350,10 +348,9 @@ impl ExecutionReporter for RunReporter {
                 status: ProofProgressStatus::Running,
                 message: message.to_string(),
                 old_root: None,
-                new_root: None,
                 output_files: None,
                 output_status: None,
-                nullified_files: None,
+                input_files: None,
                 at_ms: now_ms(),
             },
             ExecutionPhase::Commit => RunActionProgress {
@@ -362,10 +359,9 @@ impl ExecutionReporter for RunReporter {
                 status: ProofProgressStatus::Running,
                 message: message.to_string(),
                 old_root: ctx.old_root.as_ref().map(payload::encode_hash_hex),
-                new_root: None,
                 output_files: (!ctx.output_files.is_empty()).then(|| ctx.output_files.clone()),
                 output_status: ctx.output_status,
-                nullified_files: None,
+                input_files: None,
                 at_ms: now_ms(),
             },
         };
@@ -380,10 +376,9 @@ impl ExecutionReporter for RunReporter {
                 status: ProofProgressStatus::Done,
                 message: "Proof generation complete".to_string(),
                 old_root: None,
-                new_root: None,
                 output_files: None,
                 output_status: None,
-                nullified_files: None,
+                input_files: None,
                 at_ms: now_ms(),
             },
             ExecutionPhase::Commit => match result {
@@ -391,12 +386,11 @@ impl ExecutionReporter for RunReporter {
                     run_id: self.run_id.clone(),
                     phase,
                     status: ProofProgressStatus::Done,
-                    message: "Commit complete".to_string(),
+                    message: "Transaction recorded and submitted".to_string(),
                     old_root: Some(payload::encode_hash_hex(&result.old_root)),
-                    new_root: Some(payload::encode_hash_hex(&result.new_root)),
                     output_files: Some(result.output_files.clone()),
-                    output_status: Some(ObjectStatus::Live),
-                    nullified_files: Some(result.nullified_files.clone()),
+                    output_status: Some(ObjectStatus::Pending),
+                    input_files: Some(result.input_files.clone()),
                     at_ms: now_ms(),
                 },
                 None => return,
@@ -504,10 +498,9 @@ mod tests {
             status,
             message: message.to_string(),
             old_root: None,
-            new_root: None,
             output_files: None,
             output_status: None,
-            nullified_files: None,
+            input_files: None,
             at_ms: now_ms(),
         }
     }
@@ -516,9 +509,8 @@ mod tests {
         RunActionResult {
             run_id: "r1".to_string(),
             old_root: "0xold".to_string(),
-            new_root: "0xnew".to_string(),
             output_files: vec!["out.dobj".to_string()],
-            nullified_files: vec!["in.dobj".to_string()],
+            input_files: vec!["in.dobj".to_string()],
         }
     }
 
@@ -528,13 +520,11 @@ mod tests {
         )
         .unwrap();
         ExecuteActionResult {
+            tx_final: root,
             old_root: root,
-            new_root: root,
             output_files: vec![],
-            nullified_files: vec![],
+            input_files: vec![],
             relayer_job_id: "job".into(),
-            tx_hash: None,
-            block_number: None,
         }
     }
 
@@ -718,7 +708,7 @@ mod tests {
 
         let snapshot = entry.snapshot();
         assert_eq!(snapshot.status, RunStatus::Succeeded);
-        assert_eq!(snapshot.result.unwrap().new_root, "0xnew");
+        assert_eq!(snapshot.result.unwrap().old_root, "0xold");
         assert!(snapshot.error.is_none());
         assert_eq!(snapshot.progress.len(), 1);
         let (_, terminal) = entry.events_from(0);
@@ -972,26 +962,20 @@ mod tests {
             "0000000000000000000000000000000000000000000000000000000000000001",
         )
         .unwrap();
-        let new_root = payload::decode_hash_hex(
-            "0000000000000000000000000000000000000000000000000000000000000002",
-        )
-        .unwrap();
         reporter.finish_success(&ExecuteActionResult {
+            tx_final: old_root,
             old_root,
-            new_root,
             output_files: vec!["o.dobj".to_string()],
-            nullified_files: vec!["n.dobj".to_string()],
+            input_files: vec!["n.dobj".to_string()],
             relayer_job_id: "job".to_string(),
-            tx_hash: Some("0xtx".to_string()),
-            block_number: Some(1),
         });
 
         let snapshot = entry.snapshot();
         assert_eq!(snapshot.status, RunStatus::Succeeded);
         let result = snapshot.result.unwrap();
         assert_eq!(result.run_id, "r1");
-        assert_eq!(result.new_root, payload::encode_hash_hex(&new_root));
-        assert_eq!(result.nullified_files, vec!["n.dobj".to_string()]);
+        assert_eq!(result.old_root, payload::encode_hash_hex(&old_root));
+        assert_eq!(result.input_files, vec!["n.dobj".to_string()]);
     }
 
     #[test]

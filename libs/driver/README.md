@@ -8,7 +8,7 @@ This crate is the backend used by `dobjd`. It owns:
 - settings loading/saving
 - the built-in action and class catalog
 - synchronizer and relayer HTTP integration
-- synchronous action execution and rollback
+- the stages of a transaction: proving, recording, submitting and settling
 
 It is intentionally a library, not a daemon and not a CLI.
 
@@ -24,18 +24,28 @@ It is intentionally a library, not a daemon and not a CLI.
 - importing an external `.dobj` (one not produced by this driver) — validates
   class identity + on-chain grounding, then files it under a canonical name
   derived from its commitment
-- executing an action end to end:
-  - resolve inputs
-  - fetch grounding witness
-  - generate proof
-  - build relayer payload
-  - stage output and nullified files
-  - submit to relayer
-  - wait for relayer confirmation
-  - wait for synchronizer observation
-  - rollback staged files if any step fails
+- the stages of a transaction, each one call so a caller can schedule them
+  separately:
+  - `prove`: takes holds on the inputs, refusing any that is held by another
+    proof or spent by a transaction awaiting the chain, fetches the grounding
+    witness, runs the action and shrinks the proof. Writes nothing; the holds
+    live in the returned value.
+  - `record`: writes the outputs as `unknown`, the payload, then the record,
+    whose file is the commit point. Refuses an input another record spends and
+    an output file that already exists. Releases the holds either way.
+  - `submit`: posts a recorded payload to the relayer, refusing a grounding the
+    synchronizer has aged out. Idempotent.
+  - `delete_transaction`: removes a recorded transaction that was never
+    offered to the relayer, with its output files.
+  - `settle`: one pass over every open record, reading membership and the head
+    block from one synchronizer snapshot and the relayer's job status, then
+    marking records `landed` or `expired` and moving object files accordingly.
+  - `execute`: `prove`, `record` and `submit` in one call. Landing is reported
+    by settlement.
 
 Because the API is blocking, GUI callers should run it on a worker thread, for example with `spawn_blocking`.
+
+A run spends most of its time waiting on the network, so the driver owns no scheduling: how many proofs run at once, and when payloads are submitted, is the caller's policy. What the driver keeps is what the chain's commitment model needs: the output dicts of every transaction that may still land, and the guarantee that an input is never offered to two transactions.
 
 ## Public Entry Points
 
@@ -66,10 +76,15 @@ Core read APIs:
   already spent on-chain. Tolerates an unreachable synchronizer by importing
   the object as `Unknown`
 
-Execution APIs:
+Transaction APIs:
 
-- `execute(input)`
-- `execute_with_reporter(input, reporter)`
+- `prove(input, owner, reporter)`
+- `record(proved)`
+- `submit(tx_final)`
+- `delete_transaction(tx_final)`
+- `settle()`
+- `list_transactions()`, `get_transaction(tx_final)`, `held_inputs()`
+- `execute(input)`, `execute_with_reporter(input, reporter)`
 
 Important public types are defined in [`src/types.rs`](src/types.rs):
 
@@ -101,6 +116,8 @@ Current settings are intentionally small:
 - `synchronizer_api_url`
 - `relayer_api_url`
 
+The record contract is specified in [`model/README.md`](model/README.md).
+
 ## Catalog
 
 The shipped catalog is `PexeCatalog` ([`src/pexe_catalog.rs`](src/pexe_catalog.rs)), which loads `.pexe` plugin archives from `~/.dobj/actions/`.
@@ -123,7 +140,9 @@ The driver depends on traits, not the HTTP implementations directly:
 
 ## Storage Model
 
-Object files stay backward-compatible with the existing `.dobj` JSON schema. The parser and serializer live in [`src/object_record.rs`](src/object_record.rs), and filesystem placement logic lives in [`src/object_store.rs`](src/object_store.rs).
+An object file says only what the chain has said about the object: `unknown`, `live` or `nullified`. The parser and serializer live in [`src/object_record.rs`](src/object_record.rs), and filesystem placement logic lives in [`src/object_store.rs`](src/object_store.rs). Whether an output is awaiting a transaction (`pending` in listings) and its Ethereum tx hash are read from the transaction records when objects are listed, so each fact has one source.
+
+Each proved transaction has a directory under `~/.dobj/transactions/<txFinal>/` holding `payload.bin`, the protocol artifact that goes to the relayer, and `record.json`, the record served by dobjd. The record is written last, by rename, so a crash mid-write leaves at most inert output files and a directory without a record, which the driver ignores. Input holds are in memory only; a restart loses every proof in progress and nothing on disk depends on them.
 
 Live objects are stored in:
 
@@ -148,7 +167,8 @@ File names are preserved as:
 ## Minimal Example
 
 ```rust
-use driver::{Driver, ExecuteActionInput, ObjectSelector};
+use driver::{Driver, ExecuteActionInput};
+use wire_types::QualifiedName;
 
 fn main() -> anyhow::Result<()> {
     let driver = Driver::open_default()?;
@@ -156,15 +176,21 @@ fn main() -> anyhow::Result<()> {
     let objects = driver.list_objects(None)?;
     println!("objects: {}", objects.len());
 
-    let report = driver.check_action("CraftWood")?;
+    let action = QualifiedName::new("craft-basics", "CraftWood");
+    let report = driver.check_action(&action)?;
     println!("feasible: {}", report.feasible);
 
     let result = driver.execute(ExecuteActionInput {
-        action_id: "CraftWood".to_string(),
-        input_objects: vec![ObjectSelector::FileName("Log_....dobj".to_string())],
+        action,
+        input_objects: vec!["craft-basics__log_....dobj".to_string()],
+        args: Default::default(),
     })?;
+    println!("submitted as relayer job {}", result.relayer_job_id);
 
-    println!("new root: {}", result.new_root);
+    // Later, as often as wanted: settle marks the transaction landed or
+    // expired and moves the object files.
+    let outcome = driver.settle()?;
+    println!("records changed: {}", outcome.records.len());
     Ok(())
 }
 ```

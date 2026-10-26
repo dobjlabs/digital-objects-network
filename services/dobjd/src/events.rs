@@ -48,10 +48,9 @@ mod tests {
             status: ProofProgressStatus::Running,
             message: "msg".to_string(),
             old_root: None,
-            new_root: None,
             output_files: None,
             output_status: None,
-            nullified_files: None,
+            input_files: None,
             at_ms: 0,
         });
         let json = serde_json::to_value(&event).unwrap();

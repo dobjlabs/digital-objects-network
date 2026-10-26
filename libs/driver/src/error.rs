@@ -24,6 +24,9 @@ pub enum DriverError {
     #[error("object file not found: {0}")]
     ObjectFileNotFound(String),
 
+    #[error("transaction not found: {0}")]
+    TransactionNotFound(String),
+
     #[error("invalid input: {0}")]
     InvalidInput(String),
 

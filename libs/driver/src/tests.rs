@@ -1,26 +1,23 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{Result, anyhow};
 use payload::test_state::TestState;
+use payload::{decode_hash_hex, encode_hash_hex};
 use pod2::middleware::Hash;
 use sdk::SpendableObjects;
 use tempfile::tempdir;
-use txlib::{GroundingWitness, StateHeader};
+use txlib::{GroundingWitness, MAX_STATE_ROOT_AGE_BLOCKS, StateHeader};
+use wire_types::relayer::{JobStatus, JobStatusResponse, SubmitProofResponse};
+use wire_types::transactions::{TransactionRecord, TransactionState};
 
 use crate::catalog::ActionCatalog;
-use crate::clients::{
-    RelayerClient, RelayerConfirmation, SynchronizerClient, SynchronizerHead,
-    SynchronizerMembership,
-};
+use crate::clients::{RelayerClient, SynchronizerClient, SynchronizerHead, SynchronizerMembership};
 use crate::driver::{Driver, DriverDeps, PayloadBuilder};
-use crate::object_record::{ObjectRecord, ensure_extra_pod_deserializers_registered};
-use crate::object_store::{
-    ObjectFileEntry, ensure_store_dirs, load_object_files, write_object_file,
-};
+use crate::object_record::{FileStatus, ObjectRecord, ensure_extra_pod_deserializers_registered};
+use crate::object_store::{ensure_store_dirs, load_object_files, write_object_file};
 use crate::pexe_catalog::{PexeCatalog, test_plugin_bytes};
-use crate::{ActionQuery, DriverPaths, ExecuteActionInput, ObjectQuery};
+use crate::{ActionQuery, DriverPaths, ExecuteActionInput, NoopExecutionReporter, ObjectQuery};
 use wire_types::{ObjectStatus, QualifiedName};
 
 fn temp_paths() -> DriverPaths {
@@ -80,7 +77,16 @@ fn craft_basics(name: &str) -> QualifiedName {
     QualifiedName::new("craft-basics", name)
 }
 
-fn make_input_record(file_name: &str) -> (ObjectFileEntry, DriverDeps) {
+/// A local Log with shared mock chain and relayer state.
+struct Fixture {
+    paths: DriverPaths,
+    driver: Driver,
+    input_file: String,
+    chain: Arc<Mutex<MockChain>>,
+    relayer: Arc<Mutex<MockRelayerState>>,
+}
+
+fn fixture(file_name: &str) -> Fixture {
     ensure_extra_pod_deserializers_registered();
     let catalog = make_catalog();
     let outputs = catalog
@@ -93,32 +99,85 @@ fn make_input_record(file_name: &str) -> (ObjectFileEntry, DriverDeps) {
         .unwrap();
     let source_tx = outputs.tx.clone();
     let spendable = outputs.obj(0);
-    let content_hash = spendable.obj.commitment();
     let record = ObjectRecord {
-        content_hash,
+        content_hash: spendable.obj.commitment(),
         class: craft_basics("Log"),
-        status: ObjectStatus::Live,
-        tx_hash: None,
+        status: FileStatus::Live,
         obj: spendable.obj,
         tx_final: tx_hash(&source_tx),
     };
     let mut state = TestState::default();
     apply_tx(&mut state, &source_tx);
-    (
-        ObjectFileEntry {
-            file_name: file_name.to_string(),
-            record,
-        },
-        DriverDeps {
-            catalog: Arc::new(RwLock::new(Arc::new(catalog))),
-            synchronizer: Arc::new(MockSynchronizer {
-                state,
-                ..MockSynchronizer::default()
-            }),
-            relayer: Arc::new(MockRelayer::default()),
-            payload_builder: Arc::new(MockPayloadBuilder),
-        },
-    )
+    let chain = Arc::new(Mutex::new(MockChain {
+        head_block: state.block_number,
+        ..MockChain::default()
+    }));
+    let relayer = Arc::new(Mutex::new(MockRelayerState::default()));
+    let deps = DriverDeps {
+        catalog: Arc::new(RwLock::new(Arc::new(catalog))),
+        synchronizer: Arc::new(MockSynchronizer {
+            state,
+            chain: chain.clone(),
+        }),
+        relayer: Arc::new(MockRelayer {
+            inner: relayer.clone(),
+        }),
+        payload_builder: Arc::new(MockPayloadBuilder),
+    };
+    let paths = temp_paths();
+    write_object_file(&paths, &record, file_name).unwrap();
+    let driver = Driver::open(paths.clone(), deps).unwrap();
+    Fixture {
+        paths,
+        driver,
+        input_file: file_name.to_string(),
+        chain,
+        relayer,
+    }
+}
+
+impl Fixture {
+    fn input(&self, action: &str) -> ExecuteActionInput {
+        ExecuteActionInput {
+            action: craft_basics(action),
+            input_objects: vec![self.input_file.clone()],
+            args: Default::default(),
+        }
+    }
+
+    fn land(&self, record: &TransactionRecord) {
+        let mut chain = self.chain.lock().unwrap();
+        for hex in &record.created {
+            chain.created.insert(decode_hash_hex(hex).unwrap());
+        }
+        for hex in &record.nullifiers {
+            chain.nullifiers.insert(decode_hash_hex(hex).unwrap());
+        }
+    }
+
+    fn advance_head_to(&self, block: i64) {
+        self.chain.lock().unwrap().head_block = block;
+    }
+
+    fn stored(&self, file_name: &str) -> ObjectRecord {
+        let live = self.paths.objects_dir.join(file_name);
+        let path = if live.exists() {
+            live
+        } else {
+            self.paths.nullified_objects_dir.join(file_name)
+        };
+        crate::object_record::parse_object_record_file(&path).unwrap()
+    }
+
+    fn summary(&self, file_name: &str) -> wire_types::ObjectSummary {
+        self.driver
+            .read_object(std::path::Path::new(file_name))
+            .unwrap()
+    }
+
+    fn tx_final(record: &TransactionRecord) -> Hash {
+        decode_hash_hex(&record.tx_final).unwrap()
+    }
 }
 
 #[test]
@@ -241,18 +300,24 @@ impl PayloadBuilder for MockPayloadBuilder {
 }
 
 #[derive(Default)]
-struct MockSynchronizer {
-    fail_wait: bool,
-    state: TestState,
-    membership_grounded: HashSet<Hash>,
-    membership_nullifiers: HashSet<Hash>,
+struct MockChain {
+    created: HashSet<Hash>,
+    nullifiers: HashSet<Hash>,
+    head_block: i64,
     fail_membership: bool,
+}
+
+struct MockSynchronizer {
+    /// Source of grounding witnesses; membership reads use `chain` instead.
+    state: TestState,
+    chain: Arc<Mutex<MockChain>>,
 }
 
 impl SynchronizerClient for MockSynchronizer {
     fn fetch_head(&self, _sync_api_url: &str) -> Result<SynchronizerHead> {
         Ok(SynchronizerHead {
             state_root: state_header(&self.state).hash(),
+            block_number: self.chain.lock().unwrap().head_block,
         })
     }
 
@@ -275,54 +340,57 @@ impl SynchronizerClient for MockSynchronizer {
     fn fetch_membership_with_nullifiers(
         &self,
         _sync_api_url: &str,
-        _object_commitments: &[Hash],
-        _nullifiers: &[Hash],
+        object_commitments: &[Hash],
+        nullifiers: &[Hash],
     ) -> Result<SynchronizerMembership> {
-        if self.fail_membership {
+        let chain = self.chain.lock().unwrap();
+        if chain.fail_membership {
             return Err(anyhow!("synchronizer unreachable"));
         }
         Ok(SynchronizerMembership {
-            created_objects: self.membership_grounded.clone(),
-            on_chain_nullifiers: self.membership_nullifiers.clone(),
-        })
-    }
-
-    fn wait_for_tx(
-        &self,
-        _sync_api_url: &str,
-        _created_commitments: &[Hash],
-        _nullifiers: &[Hash],
-        _timeout_secs: u64,
-        _poll_interval_ms: u64,
-    ) -> Result<SynchronizerHead> {
-        if self.fail_wait {
-            return Err(anyhow!("synchronizer timeout"));
-        }
-        Ok(SynchronizerHead {
-            state_root: state_header(&self.state).hash(),
+            created_objects: object_commitments
+                .iter()
+                .filter(|commitment| chain.created.contains(commitment))
+                .copied()
+                .collect(),
+            on_chain_nullifiers: nullifiers
+                .iter()
+                .filter(|nullifier| chain.nullifiers.contains(nullifier))
+                .copied()
+                .collect(),
+            block_number: chain.head_block,
         })
     }
 }
 
 #[derive(Default)]
-struct MockRelayer {
+struct MockRelayerState {
     fail_submit: bool,
-    fail_wait: bool,
+    submitted: Vec<Vec<u8>>,
+    status: Option<JobStatus>,
+    tx_hash: Option<String>,
+    last_error: Option<String>,
+}
+
+struct MockRelayer {
+    inner: Arc<Mutex<MockRelayerState>>,
 }
 
 impl RelayerClient for MockRelayer {
     fn submit_proof(
         &self,
         _relayer_api_url: &str,
-        _payload_bytes: &[u8],
+        payload_bytes: &[u8],
         _client_ref: Option<String>,
-    ) -> Result<wire_types::relayer::SubmitProofResponse> {
-        if self.fail_submit {
+    ) -> Result<SubmitProofResponse> {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.fail_submit {
             return Err(anyhow!("relayer submit failed"));
         }
-        Ok(wire_types::relayer::SubmitProofResponse {
+        inner.submitted.push(payload_bytes.to_vec());
+        Ok(SubmitProofResponse {
             job_id: "job-1".to_string(),
-            status: wire_types::relayer::JobStatus::Queued,
+            status: JobStatus::Queued,
             tx_final: Default::default(),
             state_root: Default::default(),
             attempt_count: 0,
@@ -330,43 +398,37 @@ impl RelayerClient for MockRelayer {
         })
     }
 
-    fn wait_for_tx_hash(
-        &self,
-        _relayer_api_url: &str,
-        _job_id: &str,
-        _timeout_secs: u64,
-        _poll_interval_ms: u64,
-    ) -> Result<String> {
-        if self.fail_wait {
-            return Err(anyhow!("relayer timeout"));
-        }
-        Ok("0xtx".to_string())
-    }
-
-    fn wait_for_confirmation(
-        &self,
-        _relayer_api_url: &str,
-        _job_id: &str,
-        _timeout_secs: u64,
-        _poll_interval_ms: u64,
-    ) -> Result<RelayerConfirmation> {
-        if self.fail_wait {
-            return Err(anyhow!("relayer timeout"));
-        }
-        Ok(RelayerConfirmation {
-            job_id: "job-1".to_string(),
-            tx_hash: Some("0xtx".to_string()),
-            block_number: Some(7),
+    fn fetch_job_status(&self, _relayer_api_url: &str, job_id: &str) -> Result<JobStatusResponse> {
+        let inner = self.inner.lock().unwrap();
+        Ok(JobStatusResponse {
+            job_id: job_id.to_string(),
+            status: inner.status.unwrap_or(JobStatus::Queued),
+            tx_hash: inner.tx_hash.clone(),
+            block_number: None,
+            attempt_count: 1,
+            last_error: inner.last_error.clone(),
+            updated_at: 0,
+            created_at: 0,
+            tx_final: Default::default(),
+            state_root: Default::default(),
         })
     }
+}
 
-    fn lookup_tx_hashes(
-        &self,
-        _relayer_api_url: &str,
-        tx_finals: &[Hash],
-    ) -> Result<HashMap<Hash, String>> {
-        Ok(tx_finals.iter().map(|h| (*h, "0xtx".to_string())).collect())
-    }
+fn mock_deps() -> (DriverDeps, Arc<Mutex<MockChain>>) {
+    let chain = Arc::new(Mutex::new(MockChain::default()));
+    let deps = DriverDeps {
+        catalog: Arc::new(RwLock::new(Arc::new(make_catalog()))),
+        synchronizer: Arc::new(MockSynchronizer {
+            state: TestState::default(),
+            chain: chain.clone(),
+        }),
+        relayer: Arc::new(MockRelayer {
+            inner: Arc::new(Mutex::new(MockRelayerState::default())),
+        }),
+        payload_builder: Arc::new(MockPayloadBuilder),
+    };
+    (deps, chain)
 }
 
 #[test]
@@ -375,12 +437,7 @@ fn test_list_actions_filters_by_input_class() {
     // whatever pexe plugins happen to live under ~/.dobj/actions/.
     let paths = temp_paths();
     ensure_store_dirs(&paths).unwrap();
-    let deps = DriverDeps {
-        catalog: Arc::new(RwLock::new(Arc::new(make_catalog()))),
-        synchronizer: Arc::new(MockSynchronizer::default()),
-        relayer: Arc::new(MockRelayer::default()),
-        payload_builder: Arc::new(MockPayloadBuilder),
-    };
+    let (deps, _) = mock_deps();
     let driver = Driver::open(paths, deps).unwrap();
     let wood = craft_basics("Wood");
     let filtered = driver
@@ -401,137 +458,388 @@ fn test_list_actions_filters_by_input_class() {
 }
 
 #[test]
-fn test_confirmed_actions_update_input_and_output_liveness() {
+fn execute_records_and_submits_and_settle_lands() {
     for action_name in ["CraftWood", "RekeyLog"] {
-        let (mut entry, deps) = make_input_record("log_1.dobj");
-        entry.record.tx_hash = Some("0xcreation".to_string());
-        let paths = temp_paths();
-        write_object_file(&paths, &entry.record, &entry.file_name).unwrap();
-        let driver = Driver::open(paths.clone(), deps).unwrap();
+        let fx = fixture("log_1.dobj");
         let action = craft_basics(action_name);
-        assert!(driver.check_action(&action).unwrap().feasible);
+        assert!(fx.driver.check_action(&action).unwrap().feasible);
 
-        let result = driver
-            .execute(ExecuteActionInput {
-                action: action.clone(),
-                input_objects: vec![entry.file_name.clone()],
-                args: Default::default(),
-            })
-            .unwrap();
+        let result = fx.driver.execute(fx.input(action_name)).unwrap();
+        assert_eq!(result.input_files, vec![fx.input_file.clone()]);
+        assert_eq!(result.relayer_job_id, "job-1");
+        assert_eq!(fx.relayer.lock().unwrap().submitted, vec![vec![1, 2, 3]]);
 
-        let report = driver.check_action(&action).unwrap();
+        let record = fx.driver.get_transaction(&result.tx_final).unwrap();
+        assert_eq!(record.state, TransactionState::Submitted);
+        assert_eq!(record.relayer_job_id.as_deref(), Some("job-1"));
+        assert_eq!(record.output_files, result.output_files);
+        assert_eq!(record.grounding_root, encode_hash_hex(&result.old_root));
+        assert!(record.submit_attempted_at_ms.is_some());
+
+        // Nothing has landed: the input is still live on disk but offered to
+        // no action, and the outputs await the relayer.
+        assert_eq!(fx.stored(&fx.input_file).status, FileStatus::Live);
+        let report = fx.driver.check_action(&action).unwrap();
         assert!(
             report
                 .available_inputs
                 .iter()
-                .all(|candidate| candidate.file_name != entry.file_name),
-            "{action_name} suggested its consumed input: {report:?}"
+                .all(|candidate| candidate.file_name != fx.input_file),
+            "{action_name} offered its locked input: {report:?}"
         );
+        assert!(!report.feasible);
+        for file_name in &result.output_files {
+            assert_eq!(fx.stored(file_name).status, FileStatus::Unknown);
+            let summary = fx.summary(file_name);
+            assert_eq!(summary.status, ObjectStatus::Pending);
+            assert_eq!(summary.tx_hash, None);
+        }
+        let err = fx
+            .driver
+            .prove(fx.input(action_name), "second", &NoopExecutionReporter)
+            .unwrap_err();
+        assert!(err.to_string().contains("awaiting the chain"), "{err}");
+
+        fx.land(&record);
+        fx.relayer.lock().unwrap().tx_hash = Some("0xtx".to_string());
+        let outcome = fx.driver.settle().unwrap();
+        assert_eq!(outcome.records.len(), 1);
+        assert_eq!(outcome.records[0].state, TransactionState::Landed);
+        assert_eq!(outcome.records[0].tx_hash.as_deref(), Some("0xtx"));
+        let mut changed = outcome
+            .objects
+            .iter()
+            .map(|summary| summary.file_name.clone())
+            .collect::<Vec<_>>();
+        changed.sort();
+        let mut expected = result.output_files.clone();
+        expected.push(fx.input_file.clone());
+        expected.sort();
+        assert_eq!(changed, expected);
+
+        assert!(!fx.paths.objects_dir.join(&fx.input_file).exists());
+        let consumed = fx.stored(&fx.input_file);
+        assert_eq!(consumed.status, FileStatus::Nullified);
+        for file_name in &result.output_files {
+            assert_eq!(fx.stored(file_name).status, FileStatus::Live);
+            let summary = fx.summary(file_name);
+            assert_eq!(summary.status, ObjectStatus::Live);
+            assert_eq!(summary.tx_hash.as_deref(), Some("0xtx"));
+        }
+        let report = fx.driver.check_action(&action).unwrap();
         assert_eq!(report.feasible, action_name == "RekeyLog");
         if action_name == "RekeyLog" {
-            assert_eq!(report.available_inputs.len(), 1);
             assert!(
                 result
                     .output_files
                     .contains(&report.available_inputs[0].file_name)
             );
         }
-
-        assert_eq!(result.nullified_files, vec![entry.file_name.clone()]);
-        assert!(!paths.objects_dir.join(&entry.file_name).exists());
-        let consumed = crate::object_record::parse_object_record_file(
-            &paths.nullified_objects_dir.join(&entry.file_name),
-        )
-        .unwrap();
-        assert_eq!(consumed.status, ObjectStatus::Nullified);
-        assert_eq!(consumed.tx_hash, entry.record.tx_hash);
-        assert_eq!(consumed.tx_final, entry.record.tx_final);
-        assert_eq!(consumed.content_hash, entry.record.content_hash);
-        for file_name in &result.output_files {
-            let output =
-                crate::object_record::parse_object_record_file(&paths.objects_dir.join(file_name))
-                    .unwrap();
-            assert_eq!(output.status, ObjectStatus::Live);
-            assert_eq!(output.tx_hash.as_deref(), Some("0xtx"));
-        }
+        let outcome = fx.driver.settle().unwrap();
+        assert!(outcome.records.is_empty() && outcome.objects.is_empty());
     }
 }
 
 #[test]
-fn test_execute_keeps_inputs_live_without_synchronizer_confirmation() {
-    let (entry, mut deps) = make_input_record("log_1.dobj");
-    let mut state = TestState::default();
-    state.apply_tx(vec![entry.record.obj.commitment()], vec![]);
-    deps.synchronizer = Arc::new(MockSynchronizer {
-        state,
-        fail_wait: true,
-        ..MockSynchronizer::default()
-    });
-    let paths = temp_paths();
-    write_object_file(&paths, &entry.record, &entry.file_name).unwrap();
-    let driver = Driver::open(paths.clone(), deps).unwrap();
-    let action = craft_basics("CraftWood");
+fn execute_keeps_the_record_when_the_relayer_refuses() {
+    let fx = fixture("log_1.dobj");
+    fx.relayer.lock().unwrap().fail_submit = true;
 
-    let error = driver
-        .execute(ExecuteActionInput {
-            action: action.clone(),
-            input_objects: vec![entry.file_name.clone()],
-            args: Default::default(),
-        })
+    let err = fx.driver.execute(fx.input("CraftWood")).unwrap_err();
+    assert!(err.to_string().contains("relayer submit failed"), "{err}");
+
+    let records = fx.driver.list_transactions().unwrap();
+    assert_eq!(records.len(), 1);
+    let record = &records[0];
+    assert_eq!(record.state, TransactionState::Recorded);
+    assert!(record.submit_attempted_at_ms.is_some());
+    assert_eq!(record.relayer_job_id, None);
+    for file_name in &record.output_files {
+        assert_eq!(fx.summary(file_name).status, ObjectStatus::Unknown);
+    }
+    assert_eq!(fx.stored(&fx.input_file).status, FileStatus::Live);
+
+    // A failed request may have reached the relayer; keep the input locked.
+    let err = fx
+        .driver
+        .delete_transaction(&Fixture::tx_final(record))
         .unwrap_err();
-    assert!(error.to_string().contains("synchronizer timeout"));
+    assert!(err.to_string().contains("may still land"), "{err}");
+    let err = fx
+        .driver
+        .prove(fx.input("CraftWood"), "retry", &NoopExecutionReporter)
+        .unwrap_err();
+    assert!(err.to_string().contains("awaiting the chain"), "{err}");
 
-    let report = driver.check_action(&action).unwrap();
-    assert!(report.feasible);
-    assert_eq!(report.available_inputs[0].file_name, entry.file_name);
-    assert!(!paths.nullified_objects_dir.join(&entry.file_name).exists());
-    let records = load_object_files(&paths).unwrap();
-    assert_eq!(records.len(), 2);
-    for stored in records {
-        if stored.file_name == entry.file_name {
-            assert_eq!(stored.record.status, ObjectStatus::Live);
-        } else {
-            assert_eq!(stored.record.status, ObjectStatus::Unknown);
-            assert_eq!(stored.record.tx_hash.as_deref(), Some("0xtx"));
-        }
+    fx.relayer.lock().unwrap().fail_submit = false;
+    let submitted = fx.driver.submit(&Fixture::tx_final(record)).unwrap();
+    assert_eq!(submitted.state, TransactionState::Submitted);
+    assert_eq!(submitted.relayer_job_id.as_deref(), Some("job-1"));
+    fx.driver.submit(&Fixture::tx_final(record)).unwrap();
+    assert_eq!(fx.relayer.lock().unwrap().submitted.len(), 1);
+}
+
+#[test]
+fn prove_holds_its_inputs_until_recorded() {
+    let fx = fixture("log_1.dobj");
+    let first = fx
+        .driver
+        .prove(fx.input("CraftWood"), "run-1", &NoopExecutionReporter)
+        .unwrap();
+    assert_eq!(
+        fx.driver.held_inputs(),
+        HashMap::from([(fx.input_file.clone(), "run-1".to_string())])
+    );
+    assert!(
+        !fx.driver
+            .check_action(&craft_basics("CraftWood"))
+            .unwrap()
+            .feasible
+    );
+    let err = fx
+        .driver
+        .prove(fx.input("CraftWood"), "run-2", &NoopExecutionReporter)
+        .unwrap_err();
+    assert!(err.to_string().contains("held by run-1"), "{err}");
+    assert!(fx.driver.list_transactions().unwrap().is_empty());
+    assert_eq!(load_object_files(&fx.paths).unwrap().len(), 1);
+
+    drop(first);
+    assert!(fx.driver.held_inputs().is_empty());
+    let second = fx
+        .driver
+        .prove(fx.input("CraftWood"), "run-2", &NoopExecutionReporter)
+        .unwrap();
+    let record = fx.driver.record(second).unwrap();
+    assert!(fx.driver.held_inputs().is_empty());
+    assert_eq!(record.state, TransactionState::Recorded);
+    assert_eq!(record.input_files, vec![fx.input_file.clone()]);
+    for file_name in &record.output_files {
+        let stored = fx.stored(file_name);
+        assert_eq!(stored.status, FileStatus::Unknown);
+        assert_eq!(stored.tx_final, Fixture::tx_final(&record));
+    }
+    assert_eq!(
+        crate::transactions::read_payload(&fx.paths, &Fixture::tx_final(&record)).unwrap(),
+        vec![1, 2, 3]
+    );
+}
+
+#[test]
+fn record_refuses_an_output_file_that_exists() {
+    let fx = fixture("log_1.dobj");
+    let proved = fx
+        .driver
+        .prove(fx.input("CraftWood"), "run-1", &NoopExecutionReporter)
+        .unwrap();
+    let output_files = proved.output_files().unwrap();
+    let squatter = ObjectRecord {
+        content_hash: proved.outputs[0].obj.commitment(),
+        class: proved.outputs[0].class.clone(),
+        status: FileStatus::Unknown,
+        obj: proved.outputs[0].obj.clone(),
+        tx_final: Hash::default(),
+    };
+    write_object_file(&fx.paths, &squatter, &output_files[0]).unwrap();
+
+    let err = fx.driver.record(proved).unwrap_err();
+    assert!(
+        err.to_string().contains("output file already exists"),
+        "{err}"
+    );
+    assert!(fx.driver.held_inputs().is_empty());
+    assert!(fx.driver.list_transactions().unwrap().is_empty());
+    assert_eq!(
+        std::fs::read_dir(&fx.paths.transactions_dir)
+            .unwrap()
+            .count(),
+        0
+    );
+    assert_eq!(fx.stored(&output_files[0]).tx_final, Hash::default());
+}
+
+#[test]
+fn delete_removes_a_recorded_transaction() {
+    let fx = fixture("log_1.dobj");
+    let proved = fx
+        .driver
+        .prove(fx.input("CraftWood"), "run-1", &NoopExecutionReporter)
+        .unwrap();
+    let record = fx.driver.record(proved).unwrap();
+    let tx_final = Fixture::tx_final(&record);
+
+    let deleted = fx.driver.delete_transaction(&tx_final).unwrap();
+    assert_eq!(deleted, record);
+    assert!(fx.driver.list_transactions().unwrap().is_empty());
+    assert!(!fx.paths.transactions_dir.join(&record.tx_final).exists());
+    for file_name in &record.output_files {
+        assert!(!fx.paths.objects_dir.join(file_name).exists());
+    }
+    let err = fx.driver.delete_transaction(&tx_final).unwrap_err();
+    assert!(matches!(
+        err.downcast_ref::<crate::DriverError>(),
+        Some(crate::DriverError::TransactionNotFound(_))
+    ));
+    assert!(
+        fx.driver
+            .check_action(&craft_basics("CraftWood"))
+            .unwrap()
+            .feasible
+    );
+    fx.driver
+        .prove(fx.input("CraftWood"), "run-2", &NoopExecutionReporter)
+        .unwrap();
+}
+
+#[test]
+fn delete_refuses_a_submitted_transaction() {
+    let fx = fixture("log_1.dobj");
+    let result = fx.driver.execute(fx.input("CraftWood")).unwrap();
+    let err = fx.driver.delete_transaction(&result.tx_final).unwrap_err();
+    assert!(err.to_string().contains("is submitted"), "{err}");
+    assert_eq!(fx.driver.list_transactions().unwrap().len(), 1);
+}
+
+#[test]
+fn settle_expires_an_aged_grounding_and_frees_its_inputs() {
+    let fx = fixture("log_1.dobj");
+    let result = fx.driver.execute(fx.input("CraftWood")).unwrap();
+    let record = fx.driver.get_transaction(&result.tx_final).unwrap();
+
+    fx.advance_head_to(record.grounding_block + MAX_STATE_ROOT_AGE_BLOCKS);
+    let outcome = fx.driver.settle().unwrap();
+    assert!(
+        outcome.records.is_empty(),
+        "at the limit the transaction can still land"
+    );
+
+    fx.advance_head_to(record.grounding_block + MAX_STATE_ROOT_AGE_BLOCKS + 1);
+    let outcome = fx.driver.settle().unwrap();
+    assert_eq!(outcome.records.len(), 1);
+    let expired = &outcome.records[0];
+    assert_eq!(expired.state, TransactionState::Expired);
+    assert!(
+        expired.reason.as_deref().unwrap().contains("behind"),
+        "{expired:?}"
+    );
+    for file_name in &record.output_files {
+        assert!(!fx.paths.objects_dir.join(file_name).exists());
+    }
+    assert_eq!(fx.stored(&fx.input_file).status, FileStatus::Live);
+    assert_eq!(fx.summary(&fx.input_file).status, ObjectStatus::Live);
+    assert!(
+        fx.driver
+            .check_action(&craft_basics("CraftWood"))
+            .unwrap()
+            .feasible
+    );
+
+    fx.land(&record);
+    let outcome = fx.driver.settle().unwrap();
+    assert!(outcome.records.is_empty());
+    assert_eq!(
+        fx.driver.get_transaction(&result.tx_final).unwrap().state,
+        TransactionState::Expired
+    );
+
+    let proved = fx
+        .driver
+        .prove(fx.input("CraftWood"), "again", &NoopExecutionReporter)
+        .unwrap();
+    fx.driver.record(proved).unwrap();
+}
+
+#[test]
+fn submit_refuses_an_aged_grounding() {
+    let fx = fixture("log_1.dobj");
+    let proved = fx
+        .driver
+        .prove(fx.input("CraftWood"), "run-1", &NoopExecutionReporter)
+        .unwrap();
+    let record = fx.driver.record(proved).unwrap();
+    fx.advance_head_to(record.grounding_block + MAX_STATE_ROOT_AGE_BLOCKS + 1);
+
+    let err = fx.driver.submit(&Fixture::tx_final(&record)).unwrap_err();
+    assert!(
+        err.to_string().contains("behind the synchronizer head"),
+        "{err}"
+    );
+    assert!(fx.relayer.lock().unwrap().submitted.is_empty());
+    let unchanged = fx
+        .driver
+        .get_transaction(&Fixture::tx_final(&record))
+        .unwrap();
+    assert_eq!(unchanged, record);
+    fx.driver
+        .delete_transaction(&Fixture::tx_final(&record))
+        .unwrap();
+}
+
+#[test]
+fn settle_annotates_a_relayer_failure_and_still_lands() {
+    let fx = fixture("log_1.dobj");
+    let result = fx.driver.execute(fx.input("CraftWood")).unwrap();
+    {
+        let mut relayer = fx.relayer.lock().unwrap();
+        relayer.status = Some(JobStatus::Failed);
+        relayer.last_error = Some("nonce too low".to_string());
+    }
+    let outcome = fx.driver.settle().unwrap();
+    assert_eq!(outcome.records.len(), 1);
+    let annotated = &outcome.records[0];
+    assert_eq!(annotated.state, TransactionState::Submitted);
+    assert_eq!(annotated.relayer_failure.as_deref(), Some("nonce too low"));
+    for file_name in &result.output_files {
+        assert_eq!(fx.summary(file_name).status, ObjectStatus::Pending);
+    }
+
+    fx.land(annotated);
+    let outcome = fx.driver.settle().unwrap();
+    assert_eq!(outcome.records[0].state, TransactionState::Landed);
+    assert_eq!(
+        outcome.records[0].relayer_failure.as_deref(),
+        Some("nonce too low")
+    );
+    for file_name in &result.output_files {
+        assert_eq!(fx.summary(file_name).status, ObjectStatus::Live);
     }
 }
 
 #[test]
-fn test_execute_rolls_back_on_relayer_submit_failure() {
-    let (entry, mut deps) = make_input_record("log_1.dobj");
-    deps.relayer = Arc::new(MockRelayer {
-        fail_submit: true,
-        ..MockRelayer::default()
-    });
-    let paths = temp_paths();
-    ensure_store_dirs(&paths).unwrap();
-    write_object_file(&paths, &entry.record, &entry.file_name).unwrap();
-    let driver = Driver::open(paths.clone(), deps).unwrap();
+fn settle_with_an_unreachable_synchronizer_changes_nothing() {
+    let fx = fixture("log_1.dobj");
+    let result = fx.driver.execute(fx.input("CraftWood")).unwrap();
+    fx.chain.lock().unwrap().fail_membership = true;
+    let err = fx.driver.settle().unwrap_err();
+    assert!(err.to_string().contains("unreachable"), "{err}");
+    assert_eq!(
+        fx.driver.get_transaction(&result.tx_final).unwrap().state,
+        TransactionState::Submitted
+    );
+}
 
-    let err = driver
-        .execute(ExecuteActionInput {
-            action: craft_basics("CraftWood"),
-            input_objects: vec!["log_1.dobj".to_string()],
-            args: Default::default(),
-        })
-        .unwrap_err();
-    assert!(err.to_string().contains("relayer submit failed"));
-
-    // Submission never reached the relayer. Output files are kept as Unknown
-    // so the user can retry submission without regenerating proofs.
-    let remaining = load_object_files(&paths).unwrap();
-    assert_eq!(remaining.len(), 2);
-    let input = remaining
-        .iter()
-        .find(|e| e.file_name == "log_1.dobj")
-        .unwrap();
-    assert!(!input.record.is_nullified());
-    let output = remaining
-        .iter()
-        .find(|e| e.file_name != "log_1.dobj")
-        .unwrap();
-    assert_eq!(output.record.status, ObjectStatus::Unknown);
+#[test]
+fn transactions_without_a_record_file_are_not_transactions() {
+    let fx = fixture("log_1.dobj");
+    let orphan = Hash::default();
+    crate::transactions::write_payload(&fx.paths, &orphan, b"half written").unwrap();
+    assert!(fx.driver.list_transactions().unwrap().is_empty());
+    assert!(matches!(
+        fx.driver
+            .get_transaction(&orphan)
+            .unwrap_err()
+            .downcast_ref::<crate::DriverError>(),
+        Some(crate::DriverError::TransactionNotFound(_))
+    ));
+    // A crash before record persistence leaves an output without a transaction record.
+    let stray = ObjectRecord {
+        status: FileStatus::Unknown,
+        tx_final: orphan,
+        ..fx.stored(&fx.input_file)
+    };
+    write_object_file(&fx.paths, &stray, "stray.dobj").unwrap();
+    assert_eq!(fx.summary("stray.dobj").status, ObjectStatus::Unknown);
+    assert!(fx.driver.settle().unwrap().objects.is_empty());
 }
 
 /// A `.dobj` whose `class` text matches what an action expects must STILL
@@ -545,72 +853,23 @@ fn test_execute_rejects_class_hash_mismatch_with_matching_class_id() {
     // A real Log object (obj["type"] = IsLog hash) written to disk with a
     // forged class of "craft-basics::Wood". CraftSticks consumes a Wood, so
     // the qualified-name check passes; the cryptographic hash check then fires.
-    let (mut entry, deps) = make_input_record("forged_wood.dobj");
-    entry.record.class = craft_basics("Wood");
-    let paths = temp_paths();
-    ensure_store_dirs(&paths).unwrap();
-    write_object_file(&paths, &entry.record, &entry.file_name).unwrap();
-    let driver = Driver::open(paths.clone(), deps).unwrap();
+    let fx = fixture("forged_wood.dobj");
+    let forged = ObjectRecord {
+        class: craft_basics("Wood"),
+        ..fx.stored(&fx.input_file)
+    };
+    write_object_file(&fx.paths, &forged, &fx.input_file).unwrap();
 
-    let err = driver
-        .execute(ExecuteActionInput {
-            action: craft_basics("CraftSticks"),
-            input_objects: vec!["forged_wood.dobj".to_string()],
-            args: Default::default(),
-        })
-        .unwrap_err();
+    let err = fx.driver.execute(fx.input("CraftSticks")).unwrap_err();
     let msg = err.to_string();
     assert!(
         msg.contains("class hash mismatch"),
         "expected hash-mismatch error, got: {msg}"
     );
+    assert!(fx.driver.held_inputs().is_empty());
 }
 
-#[test]
-fn test_execute_keeps_files_after_relayer_accepts() {
-    let (entry, mut deps) = make_input_record("log_1.dobj");
-    deps.relayer = Arc::new(MockRelayer {
-        fail_wait: true,
-        ..MockRelayer::default()
-    });
-    let paths = temp_paths();
-    ensure_store_dirs(&paths).unwrap();
-    write_object_file(&paths, &entry.record, &entry.file_name).unwrap();
-    let driver = Driver::open(paths.clone(), deps).unwrap();
-
-    let err = driver
-        .execute(ExecuteActionInput {
-            action: craft_basics("CraftWood"),
-            input_objects: vec!["log_1.dobj".to_string()],
-            args: Default::default(),
-        })
-        .unwrap_err();
-    assert!(err.to_string().contains("relayer timeout"));
-
-    // The relayer accepted the job but wait_for_tx_hash failed, so outputs
-    // stay as Unknown (Pending requires a tx_hash). Files are kept so the
-    // next sync_objects can reconcile.
-    let remaining = load_object_files(&paths).unwrap();
-    assert_eq!(remaining.len(), 2);
-    let input = remaining
-        .iter()
-        .find(|e| e.file_name == "log_1.dobj")
-        .unwrap();
-    assert!(!input.record.is_nullified());
-    let output = remaining
-        .iter()
-        .find(|e| e.file_name != "log_1.dobj")
-        .unwrap();
-    assert_eq!(output.record.status, ObjectStatus::Unknown);
-}
-
-// ---------------------------------------------------------------------------
-// import_object
-// ---------------------------------------------------------------------------
-
-/// Build a real Log object and return its serialized `.dobj` JSON plus the
-/// source-tx hash and nullifier, so a test can configure `MockSynchronizer`
-/// membership to drive `import_object` down each path.
+/// Serialized Log, producing transaction hash, and nullifier for import tests.
 fn make_importable_log() -> (String, Hash, Hash) {
     ensure_extra_pod_deserializers_registered();
     let catalog = make_catalog();
@@ -623,14 +882,12 @@ fn make_importable_log() -> (String, Hash, Hash) {
         )
         .unwrap();
     let spendable = outputs.obj(0);
-    let content_hash = spendable.obj.commitment();
     let commitment = spendable.obj.commitment();
     let nullifier = txlib::object_nullifier_hash(&spendable.obj).unwrap();
     let record = ObjectRecord {
-        content_hash,
+        content_hash: commitment,
         class: craft_basics("Log"),
-        status: ObjectStatus::Live,
-        tx_hash: None,
+        status: FileStatus::Live,
         obj: spendable.obj,
         tx_final: outputs.tx.dict().commitment(),
     };
@@ -642,27 +899,23 @@ fn import_driver(
     grounded: HashSet<Hash>,
     nullifiers: HashSet<Hash>,
     fail_membership: bool,
-) -> Driver {
+) -> (Driver, Arc<Mutex<MockChain>>) {
     let paths = temp_paths();
     ensure_store_dirs(&paths).unwrap();
-    let deps = DriverDeps {
-        catalog: Arc::new(RwLock::new(Arc::new(make_catalog()))),
-        synchronizer: Arc::new(MockSynchronizer {
-            membership_grounded: grounded,
-            membership_nullifiers: nullifiers,
-            fail_membership,
-            ..MockSynchronizer::default()
-        }),
-        relayer: Arc::new(MockRelayer::default()),
-        payload_builder: Arc::new(MockPayloadBuilder),
-    };
-    Driver::open(paths, deps).unwrap()
+    let (deps, chain) = mock_deps();
+    {
+        let mut chain = chain.lock().unwrap();
+        chain.created = grounded;
+        chain.nullifiers = nullifiers;
+        chain.fail_membership = fail_membership;
+    }
+    (Driver::open(paths, deps).unwrap(), chain)
 }
 
 #[test]
 fn test_import_grounded_object_is_live() {
     let (json, source_tx, _nullifier) = make_importable_log();
-    let driver = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
+    let (driver, _) = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
     let summary = driver.import_object(&json).unwrap();
     assert_eq!(summary.class, craft_basics("Log"));
     assert_eq!(summary.status, ObjectStatus::Live);
@@ -672,15 +925,49 @@ fn test_import_grounded_object_is_live() {
 #[test]
 fn test_import_ungrounded_object_is_unknown() {
     let (json, _source_tx, _nullifier) = make_importable_log();
-    let driver = import_driver(HashSet::new(), HashSet::new(), false);
+    let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
     let summary = driver.import_object(&json).unwrap();
     assert_eq!(summary.status, ObjectStatus::Unknown);
 }
 
 #[test]
+fn sync_objects_follows_the_chain_forward_only() {
+    let (json, commitment, nullifier) = make_importable_log();
+    let (driver, chain) = import_driver(HashSet::new(), HashSet::new(), false);
+    let summary = driver.import_object(&json).unwrap();
+    assert_eq!(summary.status, ObjectStatus::Unknown);
+
+    chain.lock().unwrap().created.insert(commitment);
+    let synced = driver.sync_objects(None).unwrap();
+    assert_eq!(synced.len(), 1);
+    assert_eq!(synced[0].status, ObjectStatus::Live);
+
+    chain.lock().unwrap().nullifiers.insert(nullifier);
+    let synced = driver.sync_objects(None).unwrap();
+    assert_eq!(synced[0].status, ObjectStatus::Nullified);
+    assert!(
+        driver
+            .paths()
+            .nullified_objects_dir
+            .join(&summary.file_name)
+            .exists()
+    );
+
+    chain.lock().unwrap().nullifiers.clear();
+    let synced = driver.sync_objects(None).unwrap();
+    assert_eq!(synced[0].status, ObjectStatus::Nullified);
+
+    let query = ObjectQuery {
+        exclude_nullified: true,
+        ..ObjectQuery::default()
+    };
+    assert!(driver.sync_objects(Some(&query)).unwrap().is_empty());
+}
+
+#[test]
 fn test_read_object_raw_returns_stored_file() {
     let (json, source_tx, _nullifier) = make_importable_log();
-    let driver = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
+    let (driver, _) = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
     let summary = driver.import_object(&json).unwrap();
     let raw = driver
         .read_object_raw(std::path::Path::new(&summary.file_name))
@@ -692,7 +979,7 @@ fn test_read_object_raw_returns_stored_file() {
 
 #[test]
 fn test_read_object_raw_missing_file_is_not_found() {
-    let driver = import_driver(HashSet::new(), HashSet::new(), false);
+    let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
     let err = driver
         .read_object_raw(std::path::Path::new("missing.dobj"))
         .unwrap_err();
@@ -705,10 +992,10 @@ fn test_read_object_raw_missing_file_is_not_found() {
 #[test]
 fn test_discard_object_unsafe_moves_file_out_of_store() {
     let (json, _source_tx, _nullifier) = make_importable_log();
-    let driver = import_driver(HashSet::new(), HashSet::new(), false);
+    let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
     let record: ObjectRecord = serde_json::from_str(&json).unwrap();
     let record = ObjectRecord {
-        status: ObjectStatus::Pending,
+        status: FileStatus::Unknown,
         ..record
     };
     write_object_file(driver.paths(), &record, "stale.dobj").unwrap();
@@ -717,14 +1004,14 @@ fn test_discard_object_unsafe_moves_file_out_of_store() {
     let summary = driver
         .discard_object_unsafe(std::path::Path::new("stale.dobj"))
         .unwrap();
-    assert_eq!(summary.status, ObjectStatus::Pending);
+    assert_eq!(summary.status, ObjectStatus::Unknown);
     assert!(driver.list_objects(None).unwrap().is_empty());
     let discarded =
         std::fs::read_to_string(driver.paths().discarded_objects_dir.join("stale.dobj")).unwrap();
     assert_eq!(discarded, on_disk);
 
     let spent = ObjectRecord {
-        status: ObjectStatus::Nullified,
+        status: FileStatus::Nullified,
         ..record
     };
     write_object_file(driver.paths(), &spent, "spent.dobj").unwrap();
@@ -749,10 +1036,10 @@ fn test_discard_object_unsafe_moves_file_out_of_store() {
 #[test]
 fn test_list_objects_can_exclude_nullified() {
     let (json, _source_tx, _nullifier) = make_importable_log();
-    let driver = import_driver(HashSet::new(), HashSet::new(), false);
+    let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
     let live_record: ObjectRecord = serde_json::from_str(&json).unwrap();
     let nullified_record = ObjectRecord {
-        status: ObjectStatus::Nullified,
+        status: FileStatus::Nullified,
         ..live_record.clone()
     };
     write_object_file(driver.paths(), &live_record, "live.dobj").unwrap();
@@ -777,12 +1064,8 @@ fn empty_catalog_driver() -> Driver {
     ensure_store_dirs(&paths).unwrap();
     let empty =
         PexeCatalog::from_bytes(std::iter::empty::<(std::path::PathBuf, Vec<u8>)>(), true).unwrap();
-    let deps = DriverDeps {
-        catalog: Arc::new(RwLock::new(Arc::new(empty))),
-        synchronizer: Arc::new(MockSynchronizer::default()),
-        relayer: Arc::new(MockRelayer::default()),
-        payload_builder: Arc::new(MockPayloadBuilder),
-    };
+    let (mut deps, _) = mock_deps();
+    deps.catalog = Arc::new(RwLock::new(Arc::new(empty)));
     Driver::open(paths, deps).unwrap()
 }
 
@@ -824,7 +1107,7 @@ fn install_plugin_rejects_bad_archive_and_leaves_catalog_intact() {
 #[test]
 fn test_import_spent_object_is_rejected() {
     let (json, source_tx, nullifier) = make_importable_log();
-    let driver = import_driver(
+    let (driver, _) = import_driver(
         HashSet::from([source_tx]),
         HashSet::from([nullifier]),
         false,
@@ -839,7 +1122,7 @@ fn test_import_spent_object_is_rejected() {
 #[test]
 fn test_import_duplicate_is_rejected() {
     let (json, source_tx, _nullifier) = make_importable_log();
-    let driver = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
+    let (driver, _) = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
     driver.import_object(&json).unwrap();
     let err = driver.import_object(&json).unwrap_err();
     assert!(
@@ -851,7 +1134,7 @@ fn test_import_duplicate_is_rejected() {
 #[test]
 fn test_import_sync_unreachable_falls_back_to_unknown() {
     let (json, _source_tx, _nullifier) = make_importable_log();
-    let driver = import_driver(HashSet::new(), HashSet::new(), true);
+    let (driver, _) = import_driver(HashSet::new(), HashSet::new(), true);
     let summary = driver.import_object(&json).unwrap();
     assert_eq!(summary.status, ObjectStatus::Unknown);
 }
@@ -862,7 +1145,7 @@ fn test_import_unknown_class_is_rejected() {
     let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
     value["class"]["name"] = serde_json::Value::String("Diamond".to_string());
     let tampered = serde_json::to_string(&value).unwrap();
-    let driver = import_driver(HashSet::new(), HashSet::new(), false);
+    let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
     let err = driver.import_object(&tampered).unwrap_err();
     assert!(
         err.to_string().contains("unknown class"),
@@ -872,14 +1155,12 @@ fn test_import_unknown_class_is_rejected() {
 
 #[test]
 fn test_import_class_hash_mismatch_is_rejected() {
-    // Forge a real Log's class to craft-basics::Wood: the qualified name is a
-    // known class, but the pod's `type` hash is IsLog, so the cryptographic
-    // hash check must fire — the same guarantee execute relies on.
+    // The class name is valid, but its hash disagrees with the object's type.
     let (json, _source_tx, _nullifier) = make_importable_log();
     let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
     value["class"]["name"] = serde_json::Value::String("Wood".to_string());
     let tampered = serde_json::to_string(&value).unwrap();
-    let driver = import_driver(HashSet::new(), HashSet::new(), false);
+    let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
     let err = driver.import_object(&tampered).unwrap_err();
     assert!(
         err.to_string().contains("class hash mismatch"),

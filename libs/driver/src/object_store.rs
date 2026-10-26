@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use hex::ToHex;
 use pod2::middleware::{Hash, StrKey, containers::Dictionary};
 use std::{collections::HashMap, fs, path::Path};
-use wire_types::QualifiedName;
+use wire_types::{ObjectStatus, QualifiedName};
 
 use crate::object_record::ObjectRecord;
 use crate::paths::DOBJ_EXTENSION;
@@ -51,6 +51,12 @@ pub(crate) fn ensure_store_dirs(paths: &DriverPaths) -> Result<()> {
         anyhow!(
             "failed to create actions directory {}: {err}",
             paths.actions_dir.display()
+        )
+    })?;
+    fs::create_dir_all(&paths.transactions_dir).map_err(|err| {
+        anyhow!(
+            "failed to create transactions directory {}: {err}",
+            paths.transactions_dir.display()
         )
     })?;
     Ok(())
@@ -178,14 +184,20 @@ pub(crate) fn load_object_files(paths: &DriverPaths) -> Result<Vec<ObjectFileEnt
     Ok(objects)
 }
 
-pub(crate) fn matches_query(entry: &ObjectFileEntry, query: &ObjectQuery) -> bool {
+/// `status` is the object's derived status, which may say `pending` where
+/// the file says `unknown`.
+pub(crate) fn matches_query(
+    entry: &ObjectFileEntry,
+    status: ObjectStatus,
+    query: &ObjectQuery,
+) -> bool {
     if let Some(class) = &query.class
         && &entry.record.class != class
     {
         return false;
     }
-    if let Some(status) = query.status
-        && status != entry.record.status
+    if let Some(wanted) = query.status
+        && wanted != status
     {
         return false;
     }
@@ -203,11 +215,11 @@ mod tests {
     use crate::paths::default_paths;
     use crate::pexe_catalog::{PexeCatalog, test_plugin_bytes};
     use crate::types::DriverPaths;
-    use wire_types::ObjectStatus;
 
     use super::{load_object_files, object_file_name, write_object_file};
     use crate::object_record::{
-        ObjectRecord, ensure_extra_pod_deserializers_registered, parse_object_record_file,
+        FileStatus, ObjectRecord, ensure_extra_pod_deserializers_registered,
+        parse_object_record_file,
     };
 
     fn temp_paths() -> DriverPaths {
@@ -252,8 +264,7 @@ mod tests {
         ObjectRecord {
             content_hash: spendable.obj.commitment(),
             class: wire_types::QualifiedName::new("craft-basics", "Log"),
-            status: ObjectStatus::Live,
-            tx_hash: None,
+            status: FileStatus::Live,
             obj: spendable.obj,
             tx_final,
         }

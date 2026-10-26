@@ -8,106 +8,15 @@ use payload::{
 };
 use pod2::middleware::{Hash, Params, StrKey, Value};
 use sdk::{ActionArgs, SpendableObjects};
-use txlib::object_nullifier_hash;
 
 use std::path::Path;
 
 use crate::driver::extract_basename;
 use crate::error::DriverError;
-use crate::object_record::ObjectRecord as StoredObjectRecord;
-use crate::object_store::{ObjectFileEntry, object_file_name, write_object_file};
-use crate::types::{DriverPaths, ExecuteActionInput};
-use wire_types::{ActionArgValues, ActionSummary, ObjectStatus};
-
-pub(crate) fn reconcile_objects(
-    paths: &DriverPaths,
-    objects: &mut [ObjectFileEntry],
-    created_objects: &HashSet<Hash>,
-    on_chain_nullifiers: &HashSet<Hash>,
-) -> Result<()> {
-    let mut errors: Vec<String> = Vec::new();
-
-    // First pass: nullify objects whose nullifiers appear on-chain.
-    for entry in objects.iter_mut() {
-        if entry.record.is_nullified() {
-            continue;
-        }
-        let nullifier_hash = match object_nullifier_hash(&entry.record.obj) {
-            Ok(hash) => hash,
-            Err(_) => continue,
-        };
-        if !on_chain_nullifiers.contains(&nullifier_hash) {
-            continue;
-        }
-        let nullified_record = StoredObjectRecord {
-            status: ObjectStatus::Nullified,
-            ..entry.record.clone()
-        };
-        if let Err(err) = write_object_file(paths, &nullified_record, &entry.file_name) {
-            errors.push(format!("failed to nullify {}: {err}", entry.file_name));
-            continue;
-        }
-        entry.record = nullified_record;
-    }
-
-    // Second pass: restore locally-nullified objects whose nullifiers are
-    // NOT in the on-chain set. This handles the case where a consuming
-    // action's proof failed and the nullifier never landed. The object
-    // is set to Unknown — it cannot be used as an action input until a
-    // subsequent sync promotes it back to Live.
-    for entry in objects.iter_mut() {
-        if !entry.record.is_nullified() {
-            continue;
-        }
-        let nullifier_hash = match object_nullifier_hash(&entry.record.obj) {
-            Ok(hash) => hash,
-            Err(_) => continue,
-        };
-        if on_chain_nullifiers.contains(&nullifier_hash) {
-            continue; // Confirmed nullified on-chain, keep as is.
-        }
-        let restored_record = StoredObjectRecord {
-            status: ObjectStatus::Unknown,
-            ..entry.record.clone()
-        };
-        if let Err(err) = write_object_file(paths, &restored_record, &entry.file_name) {
-            errors.push(format!("failed to restore {}: {err}", entry.file_name));
-            continue;
-        }
-        entry.record = restored_record;
-    }
-
-    // Third pass: mark non-nullified objects as Live when their commitment
-    // is present in the created set.
-    for entry in objects.iter_mut() {
-        if entry.record.is_nullified() || entry.record.status == ObjectStatus::Live {
-            continue;
-        }
-        let commitment = entry.record.obj.commitment();
-        if !created_objects.contains(&commitment) {
-            continue;
-        }
-        let live_record = StoredObjectRecord {
-            status: ObjectStatus::Live,
-            ..entry.record.clone()
-        };
-        if let Err(err) = write_object_file(paths, &live_record, &entry.file_name) {
-            errors.push(format!("failed to mark {} as live: {err}", entry.file_name));
-            continue;
-        }
-        entry.record = live_record;
-    }
-
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(anyhow!(
-            "reconcile encountered {} error(s): {}",
-            errors.len(),
-            errors.join("; ")
-        ))
-    }
-}
+use crate::object_record::{FileStatus, ObjectRecord as StoredObjectRecord};
+use crate::object_store::ObjectFileEntry;
+use crate::types::ExecuteActionInput;
+use wire_types::{ActionArgValues, ActionSummary};
 
 pub(crate) fn validate_execute_request(
     input: &ExecuteActionInput,
@@ -171,7 +80,7 @@ pub(crate) fn resolve_inputs(
             .iter()
             .find(|entry| entry.file_name == file_name)
             .ok_or_else(|| DriverError::ObjectFileNotFound(file_name.clone()))?;
-        if entry.record.status != ObjectStatus::Live {
+        if entry.record.status != FileStatus::Live {
             return Err(anyhow!(
                 "input object is not live (status: {:?}): {:#}",
                 entry.record.status,
@@ -215,77 +124,6 @@ pub(crate) fn resolve_inputs(
 pub(crate) fn obj_type_hash(obj: &pod2::middleware::containers::Dictionary) -> Option<Hash> {
     let value = obj.get(&StrKey::from("type")).ok()??;
     Some(Hash(value.raw().0))
-}
-
-#[derive(Debug)]
-pub(crate) struct SavedFiles {
-    pub(crate) output_files: Vec<String>,
-    pub(crate) nullified_files: Vec<String>,
-}
-
-pub(crate) fn save_results(
-    paths: &DriverPaths,
-    action: &ActionSummary,
-    resolved_inputs: &[ResolvedInput],
-    spendable_outputs: &SpendableObjects,
-) -> Result<SavedFiles> {
-    let nullified_files = resolved_inputs
-        .iter()
-        .map(|input| input.file_name.clone())
-        .collect();
-
-    if spendable_outputs.objs.len() != action.total_outputs.len() {
-        return Err(anyhow!(
-            "action {} output mismatch: descriptor expects {}, engine returned {}",
-            action.action,
-            action.total_outputs.len(),
-            spendable_outputs.objs.len()
-        ));
-    }
-
-    let tx_final = spendable_outputs.tx.dict().commitment();
-    let mut output_files = Vec::new();
-    for (index, output) in action.total_outputs.iter().enumerate() {
-        let spendable = spendable_outputs.obj(index);
-        let content_hash = spendable.obj.commitment();
-        let file_name = object_file_name(&output.class, &spendable.obj)?;
-        output_files.push(file_name.clone());
-
-        let live_record = StoredObjectRecord {
-            content_hash,
-            class: output.class.clone(),
-            status: ObjectStatus::Unknown,
-            tx_hash: None,
-            obj: spendable.obj,
-            tx_final,
-        };
-        write_object_file(paths, &live_record, &file_name)?;
-    }
-
-    Ok(SavedFiles {
-        output_files,
-        nullified_files,
-    })
-}
-
-/// Update the status and tx_hash of previously saved output files on disk.
-pub(crate) fn update_output_files(
-    paths: &DriverPaths,
-    output_files: &[String],
-    status: ObjectStatus,
-    tx_hash: Option<&str>,
-) -> Result<()> {
-    for file_name in output_files {
-        let file_path = paths.objects_dir.join(file_name);
-        let contents = std::fs::read_to_string(&file_path)
-            .map_err(|err| anyhow!("failed to read {file_name} for status update: {err}"))?;
-        let mut record: StoredObjectRecord = serde_json::from_str(&contents)
-            .map_err(|err| anyhow!("failed to parse {file_name} for status update: {err}"))?;
-        record.status = status;
-        record.tx_hash = tx_hash.map(|s| s.to_string());
-        write_object_file(paths, &record, file_name)?;
-    }
-    Ok(())
 }
 
 pub(crate) fn build_relayer_payload(

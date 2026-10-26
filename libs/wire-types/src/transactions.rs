@@ -1,0 +1,81 @@
+//! Transaction records stored beside payloads in `transactions/<txFinal>/`.
+//! Hex hashes allow the same record format on disk and over the wire without
+//! enabling chain dependencies.
+
+use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "schemars")]
+use schemars::JsonSchema;
+
+use crate::QualifiedName;
+
+/// Transaction lifecycle; `Landed` and `Expired` are terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum TransactionState {
+    /// Stored locally; relayer acceptance has not been recorded.
+    Recorded,
+    /// Relayer acceptance recorded with a job ID.
+    Submitted,
+    /// Every created commitment and nullifier is in the synchronizer's sets.
+    Landed,
+    /// Absent from the chain after the grounding age limit; can no longer land.
+    Expired,
+}
+
+impl TransactionState {
+    pub fn is_terminal(self) -> bool {
+        matches!(self, TransactionState::Landed | TransactionState::Expired)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionRecord {
+    /// Finalized transaction commitment, used as the record's key.
+    pub tx_final: String,
+    pub action: QualifiedName,
+    /// Basenames of the object files this transaction spends.
+    pub input_files: Vec<String>,
+    /// Basenames of the object files this transaction creates.
+    pub output_files: Vec<String>,
+    /// State root the transaction is grounded against.
+    pub grounding_root: String,
+    /// Execution block number of the grounding root.
+    pub grounding_block: i64,
+    /// Payload nullifiers.
+    pub nullifiers: Vec<String>,
+    /// Payload commitments, including intermediate states.
+    pub created: Vec<String>,
+    pub state: TransactionState,
+    /// Relayer job ID, set on acceptance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relayer_job_id: Option<String>,
+    /// Ethereum transaction hash, once the relayer has broadcast the blob.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tx_hash: Option<String>,
+    /// Relayer failure reason. A failed job may still land; this does not
+    /// determine the transaction's state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relayer_failure: Option<String>,
+    /// Explanation of the terminal state, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub recorded_at_ms: u64,
+    /// First submission attempt time. Once set, deletion is refused even
+    /// without a job ID: the relayer may have accepted the payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submit_attempted_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submitted_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled_at_ms: Option<u64>,
+}
+
+impl TransactionRecord {
+    pub fn is_open(&self) -> bool {
+        !self.state.is_terminal()
+    }
+}
