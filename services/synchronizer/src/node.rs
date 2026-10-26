@@ -437,7 +437,7 @@ impl Node {
                 derived: None,
             });
         };
-        let base_state = self.state_log.head_state().await?;
+        let base_state = self.state_log.don_state_at_head().await?;
 
         debug!(
             slot = slot_ctx.slot,

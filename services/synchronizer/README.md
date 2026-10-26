@@ -178,7 +178,7 @@ Reorg rollback does not modify RocksDB. The surviving Postgres `DonState` determ
     - `nullifier_count`
     - `state_root_count`
 - `GET /v1/state/by_el/{block_id}`
-  - `block_id` is a decimal execution block number or a `0x`-prefixed 32-byte execution block hash
+  - `block_id` is a decimal execution block number or a 32-byte execution block hash in hex (`0x` prefix optional)
   - returns the state derived at that execution block, with the same fields as `/v1/state/head`
   - `400` for a malformed `block_id`, `404` when no committed slot holds that block
 - `POST /v1/state/membership`

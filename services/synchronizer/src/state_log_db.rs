@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use alloy::primitives::B256;
+use alloy::{eips::BlockHashOrNumber, primitives::B256};
 use anyhow::{anyhow, Context, Result};
 use pod2::middleware::Hash;
 use sqlx::{
@@ -19,13 +19,6 @@ use crate::{
 pub struct SlotState {
     pub state: DonState,
     pub slot: u32,
-}
-
-/// An execution block, named by number or by hash.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExecutionBlockId {
-    Number(u32),
-    Hash(B256),
 }
 
 const SLOT_STATE_COLUMNS: &str = r#"
@@ -169,19 +162,24 @@ impl StateLogDb {
     }
 
     /// Return the head state, or `None` before the first slot.
-    pub async fn head_state(&self) -> Result<Option<DonState>> {
-        Ok(self.head_snapshot().await?.map(|snapshot| snapshot.state))
+    pub async fn don_state_at_head(&self) -> Result<Option<DonState>> {
+        Ok(self
+            .slot_state_at_head()
+            .await?
+            .map(|slot_state| slot_state.state))
     }
 
     /// Return the head state with its slot, or `None` before the first slot with an execution
     /// block.
-    pub async fn head_snapshot(&self) -> Result<Option<SlotState>> {
-        Self::read_snapshot(&self.pool).await
+    pub async fn slot_state_at_head(&self) -> Result<Option<SlotState>> {
+        Self::read_slot_state_at_head(&self.pool).await
     }
 
     /// Read the head state over any executor (pool or transaction), so a
     /// caller can pin it to the same snapshot as other reads.
-    async fn read_snapshot<'e, E: PgExecutor<'e>>(executor: E) -> Result<Option<SlotState>> {
+    async fn read_slot_state_at_head<'e, E: PgExecutor<'e>>(
+        executor: E,
+    ) -> Result<Option<SlotState>> {
         let row = sqlx::query(&format!(
             "SELECT {SLOT_STATE_COLUMNS} FROM slots \
              WHERE el_block_number IS NOT NULL ORDER BY slot DESC LIMIT 1"
@@ -193,9 +191,12 @@ impl StateLogDb {
 
     /// Return the state derived at a committed execution block, or `None` when no committed
     /// slot holds that block.
-    pub async fn state_at_el_block(&self, block: ExecutionBlockId) -> Result<Option<SlotState>> {
+    pub async fn slot_state_at_el_block(
+        &self,
+        block: BlockHashOrNumber,
+    ) -> Result<Option<SlotState>> {
         let row = match block {
-            ExecutionBlockId::Number(number) => {
+            BlockHashOrNumber::Number(number) => {
                 let Ok(number) = i32::try_from(number) else {
                     return Ok(None);
                 };
@@ -206,7 +207,7 @@ impl StateLogDb {
                 .fetch_optional(&self.pool)
                 .await?
             }
-            ExecutionBlockId::Hash(hash) => {
+            BlockHashOrNumber::Hash(hash) => {
                 sqlx::query(&format!(
                     "SELECT {SLOT_STATE_COLUMNS} FROM slots WHERE el_block_hash = $1"
                 ))
@@ -353,14 +354,14 @@ impl StateLogDb {
         Ok(map)
     }
 
-    /// Read the head snapshot and the created indices for `commitments` from
+    /// Read the head slot state and the created indices for `commitments` from
     /// one `REPEATABLE READ` transaction, so the state roots and the index rows
     /// reflect a single consistent Postgres snapshot. Without this a concurrent
     /// `commit_slot`/`rollback_to_slot` could land between the two reads and make
     /// the index inconsistent with the state a query is answering against. The
     /// RocksDB array read needs no coordination: nodes are content-addressed and
     /// immutable by root, so reading at the pinned root is stable regardless.
-    pub async fn snapshot_with_created_indices(
+    pub async fn slot_state_at_head_with_created_indices(
         &self,
         commitments: &[Hash],
     ) -> Result<(Option<SlotState>, HashMap<Hash, i64>)> {
@@ -368,10 +369,10 @@ impl StateLogDb {
             .pool
             .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
             .await?;
-        let snapshot = Self::read_snapshot(&mut *tx).await?;
+        let head = Self::read_slot_state_at_head(&mut *tx).await?;
         let indices = Self::read_created_indices(&mut *tx, commitments).await?;
         tx.commit().await?;
-        Ok((snapshot, indices))
+        Ok((head, indices))
     }
 
     /// Return the state roots derived at or above the given execution block number.
@@ -540,7 +541,7 @@ mod tests {
         let (state_log, db_name, admin_url) = fresh_state_log().await?;
 
         assert_eq!(state_log.last_processed_slot().await?, None);
-        assert!(state_log.head_snapshot().await?.is_none());
+        assert!(state_log.slot_state_at_head().await?.is_none());
 
         drop_db(&db_name, &admin_url).await?;
         Ok(())
@@ -571,12 +572,12 @@ mod tests {
             .commit_slot(10, None, Some(&derived(state)))
             .await?;
 
-        let snapshot = state_log
-            .head_snapshot()
+        let head = state_log
+            .slot_state_at_head()
             .await?
             .expect("a slot is committed");
-        assert_eq!(snapshot.state, state);
-        assert_eq!(snapshot.slot, 10);
+        assert_eq!(head.state, state);
+        assert_eq!(head.slot, 10);
 
         drop_db(&db_name, &admin_url).await?;
         Ok(())
@@ -596,12 +597,12 @@ mod tests {
             .await?;
         state_log.commit_slot(12, None, None).await?;
 
-        let snapshot = state_log
-            .head_snapshot()
+        let head = state_log
+            .slot_state_at_head()
             .await?
             .expect("a slot is committed");
-        assert_eq!(snapshot.state, state);
-        assert_eq!(snapshot.slot, 10);
+        assert_eq!(head.state, state);
+        assert_eq!(head.slot, 10);
         assert_eq!(state_log.last_processed_slot().await?, Some(12));
 
         drop_db(&db_name, &admin_url).await?;
@@ -662,12 +663,12 @@ mod tests {
 
         state_log.rollback_to_slot(1).await?;
 
-        let snapshot = state_log
-            .head_snapshot()
+        let head = state_log
+            .slot_state_at_head()
             .await?
             .expect("a slot is committed");
-        assert_eq!(snapshot.state, h1);
-        assert_eq!(snapshot.slot, 1);
+        assert_eq!(head.state, h1);
+        assert_eq!(head.slot, 1);
 
         drop_db(&db_name, &admin_url).await?;
         Ok(())
@@ -715,8 +716,10 @@ mod tests {
         assert_eq!(indices.get(&b), None);
 
         // The atomic read returns the same index against the head state.
-        let (snapshot, indices) = state_log.snapshot_with_created_indices(&[a, b]).await?;
-        assert_eq!(snapshot.expect("a slot is committed").slot, 1);
+        let (head, indices) = state_log
+            .slot_state_at_head_with_created_indices(&[a, b])
+            .await?;
+        assert_eq!(head.expect("a slot is committed").slot, 1);
         assert_eq!(indices.get(&a), Some(&1));
         assert_eq!(indices.get(&b), None);
 

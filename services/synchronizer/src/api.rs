@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use alloy::primitives::{Address, B256};
+use alloy::{eips::BlockHashOrNumber, primitives::Address};
 use anyhow::Result;
 use axum::{
     extract::{Path, State},
@@ -22,7 +22,7 @@ use wire_types::HealthResponse;
 
 use crate::{
     container_db::ContainerDb,
-    state_log_db::{ExecutionBlockId, SlotState, StateLogDb},
+    state_log_db::{SlotState, StateLogDb},
 };
 
 const MAX_HASH_QUERY_ITEMS: usize = 256;
@@ -36,7 +36,7 @@ struct AppState {
     info: Arc<Info>,
 }
 
-/// Membership of each queried commitment and nullifier, answered against one head snapshot.
+/// Membership of each queried commitment and nullifier, answered against one head state.
 struct Membership {
     head: SlotState,
     created_present: Vec<bool>,
@@ -123,19 +123,24 @@ async fn get_sync_progress(
 async fn get_state_head(
     State(app_state): State<AppState>,
 ) -> Result<Json<StateHeadResponse>, (StatusCode, String)> {
-    let head = load_head_snapshot(&app_state).await?;
+    let head = load_slot_state_at_head(&app_state).await?;
     Ok(Json(state_head_response(head)))
 }
 
-/// `block_id` is a decimal execution block number or a `0x`-prefixed 32-byte block hash.
+/// `block_id` is a decimal execution block number or a 32-byte block hash in hex.
 async fn get_state_by_el(
     State(app_state): State<AppState>,
     Path(block_id): Path<String>,
 ) -> Result<Json<StateHeadResponse>, (StatusCode, String)> {
-    let block = parse_execution_block_id(&block_id)?;
+    let block = block_id.parse::<BlockHashOrNumber>().map_err(|err| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("invalid execution block id: {err}"),
+        )
+    })?;
     let slot_state = app_state
         .state_log
-        .state_at_el_block(block)
+        .slot_state_at_el_block(block)
         .await
         .map_err(internal_error)?;
     match slot_state {
@@ -158,33 +163,6 @@ fn state_head_response(slot_state: SlotState) -> StateHeadResponse {
         nullifier_count: metadata.nullifier_count as usize,
         state_root_count: metadata.state_root_count as usize,
     }
-}
-
-fn parse_execution_block_id(block_id: &str) -> Result<ExecutionBlockId, (StatusCode, String)> {
-    let invalid = || {
-        (
-            StatusCode::BAD_REQUEST,
-            format!(
-                "invalid execution block id {block_id:?}: expected a decimal block number or a 0x-prefixed 32-byte block hash"
-            ),
-        )
-    };
-    if let Some(hex) = block_id.strip_prefix("0x") {
-        if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(invalid());
-        }
-        return hex
-            .parse::<B256>()
-            .map(ExecutionBlockId::Hash)
-            .map_err(|_| invalid());
-    }
-    if block_id.is_empty() || !block_id.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(invalid());
-    }
-    block_id
-        .parse::<u32>()
-        .map(ExecutionBlockId::Number)
-        .map_err(|_| invalid())
 }
 
 async fn post_state_object_contains(
@@ -240,12 +218,12 @@ async fn post_grounding_witness(
 ) -> Result<Json<GroundingWitnessResponse>, (StatusCode, String)> {
     ensure_hash_query_limit("objectCommitments", body.object_commitments.len())?;
     let object_commitments = body.object_commitments;
-    let (snapshot, indices) = app_state
+    let (head, indices) = app_state
         .state_log
-        .snapshot_with_created_indices(&object_commitments)
+        .slot_state_at_head_with_created_indices(&object_commitments)
         .await
         .map_err(internal_error)?;
-    let state = snapshot.ok_or_else(not_initialized)?.state;
+    let state = head.ok_or_else(not_initialized)?.state;
     let witnesses = app_state
         .containers
         .prove_created_for(&state.roots, &object_commitments, &indices)
@@ -282,12 +260,12 @@ async fn load_membership(
     nullifiers: &[Hash],
 ) -> Result<Membership, (StatusCode, String)> {
     ensure_membership_query_limit(object_commitments.len(), nullifiers.len())?;
-    let (snapshot, indices) = app_state
+    let (head, indices) = app_state
         .state_log
-        .snapshot_with_created_indices(object_commitments)
+        .slot_state_at_head_with_created_indices(object_commitments)
         .await
         .map_err(internal_error)?;
-    let head = snapshot.ok_or_else(not_initialized)?;
+    let head = head.ok_or_else(not_initialized)?;
     let containers = &app_state.containers;
     Ok(Membership {
         created_present: containers
@@ -300,10 +278,10 @@ async fn load_membership(
     })
 }
 
-async fn load_head_snapshot(app_state: &AppState) -> Result<SlotState, (StatusCode, String)> {
+async fn load_slot_state_at_head(app_state: &AppState) -> Result<SlotState, (StatusCode, String)> {
     app_state
         .state_log
-        .head_snapshot()
+        .slot_state_at_head()
         .await
         .map_err(internal_error)?
         .ok_or_else(not_initialized)
