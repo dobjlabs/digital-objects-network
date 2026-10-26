@@ -55,12 +55,6 @@ struct Chain {
     behavior: RpcBehavior,
 }
 
-struct PreparedTransaction {
-    tx_hash: String,
-    nonce: u64,
-    raw_transaction: Vec<u8>,
-}
-
 struct Gateway(Arc<Mutex<Chain>>, Arc<tokio::sync::Notify>);
 
 fn hash_text(hash: u32) -> String {
@@ -160,19 +154,31 @@ impl Gateway {
 
 #[async_trait]
 impl EthGateway for Gateway {
-    async fn submit_payload(&self, payload: &[u8], nonce: u64) -> Result<String> {
-        let prepared = self.prepare(payload, nonce)?;
-        self.broadcast_transaction(&prepared).await?;
-        Ok(prepared.tx_hash)
+    async fn prepare_payload(&self, payload: &[u8], nonce: u64) -> Result<PreparedTransaction> {
+        self.prepare(payload, nonce)
     }
 
-    async fn submit_payload_with_fees(
+    async fn broadcast(&self, transaction: &PreparedTransaction) -> Result<(), BroadcastError> {
+        self.broadcast_transaction(transaction)
+            .await
+            .map_err(|error| {
+                if self.0.lock().unwrap().behavior == RpcBehavior::RefuseBroadcast
+                    || error.to_string() == "model nonce already consumed"
+                {
+                    BroadcastError::RpcRefusal(error)
+                } else {
+                    BroadcastError::Uncertain(error)
+                }
+            })
+    }
+
+    async fn prepare_payload_with_fees(
         &self,
         payload: &[u8],
         nonce: u64,
         _: &FeeOverrides,
-    ) -> Result<String> {
-        self.submit_payload(payload, nonce).await
+    ) -> Result<PreparedTransaction> {
+        self.prepare(payload, nonce)
     }
 
     async fn get_next_nonce(&self) -> Result<u64> {
@@ -383,13 +389,6 @@ impl ModelDriver {
     }
 
     fn pending(&self, job: &RelayJob) -> Result<bool> {
-        let table: Option<String> = self.runtime.block_on(
-            sqlx::query_scalar("SELECT to_regclass('relay_pending_broadcasts')::text")
-                .fetch_one(&self.pool),
-        )?;
-        if table.is_none() {
-            return Ok(false);
-        }
         let raw: Option<Vec<u8>> = self.runtime.block_on(
             sqlx::query_scalar(
                 "SELECT raw_transaction FROM relay_pending_broadcasts WHERE job_id = $1",

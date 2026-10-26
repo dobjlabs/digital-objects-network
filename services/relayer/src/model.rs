@@ -18,11 +18,11 @@ pub struct RelayJob {
     pub state_root: Hash,
     /// Optional caller-provided trace string for observability.
     pub client_ref: Option<String>,
-    /// Total submission attempts made so far.
+    /// Nonce lookup and transaction preparation attempts made so far.
     pub attempt_count: u32,
-    /// Ethereum tx hash once broadcast succeeds.
+    /// Ethereum transaction identity, persisted before its first broadcast.
     pub tx_hash: Option<String>,
-    /// First successful submit timestamp (unix seconds).
+    /// First prepared submission timestamp (unix seconds).
     pub submitted_at: Option<i64>,
     /// Receipt block number when known.
     pub block_number: Option<u64>,
@@ -32,7 +32,7 @@ pub struct RelayJob {
     pub next_attempt_at: Option<i64>,
     /// Ethereum nonce used for current TX (needed for RBF replacement).
     pub nonce: Option<i64>,
-    /// Number of fee-bump replacements applied for this job.
+    /// Number of retained fee replacements, including uncertain broadcasts.
     pub bump_count: i32,
     /// Previous tx hashes replaced by fee bumps (most recent last).
     pub prev_tx_hashes: Vec<String>,

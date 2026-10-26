@@ -4,6 +4,6 @@
 
 ## Assumptions and exclusions
 
-This is single-worker, at-least-once delivery. A JSON-RPC refusal on the first send means the provider did not forward that transaction; a provider that forwards it and then reports refusal violates this assumption. Transport errors and later resend errors remain ambiguous; recovery must preserve signed bytes and identity. A tracking timeout, when configured, ends tracking only after receipt reconciliation. A timed-out job can still appear on-chain later.
+This is single-worker, at-least-once delivery. The model assumes the provider refusal behavior described in the [service storage contract](../README.md#storage-model). Transport errors and later resend errors remain ambiguous; recovery must preserve signed bytes and identity. A tracking timeout, when configured, ends tracking only after receipt reconciliation. A timed-out job can still appear on-chain later.
 
 Ethereum fee amounts and signing internals are abstracted, and the gateway supplies stable fees. Chain finality, receipt reorgs, external signers sharing the account, and RPC ambiguity during database recovery are outside the model. Restart reconnects to Postgres; interrupting a worker future exercises process-state loss without simulating an OS power failure.

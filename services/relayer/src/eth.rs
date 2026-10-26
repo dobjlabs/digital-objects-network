@@ -1,15 +1,19 @@
 use std::str::FromStr;
 
 use alloy::consensus::Transaction;
+use alloy::eips::Encodable2718;
 use alloy::{
     eips::eip4844::builder::{SidecarBuilder, SimpleCoder},
-    network::{Ethereum, TransactionBuilder4844},
+    network::{Ethereum, EthereumWallet, TransactionBuilder, TransactionBuilder4844},
     primitives::{Address, B256, U256},
-    providers::{DynProvider, Provider, ProviderBuilder},
+    providers::{
+        fillers::{FillProvider, RecommendedFillers},
+        DynProvider, Provider, ProviderBuilder,
+    },
     rpc::types::{BlockNumberOrTag, TransactionRequest},
     signers::local::PrivateKeySigner,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use tracing::{debug, info};
 
@@ -21,6 +25,7 @@ pub struct EthClient {
     from: Address,
     to: Address,
     max_fee_per_blob_gas: Option<u128>,
+    wallet: EthereumWallet,
 }
 
 /// Hard startup guard: signer must have at least this many wei.
@@ -57,10 +62,30 @@ pub struct FeeOverrides {
     pub max_fee_per_blob_gas: Option<u128>,
 }
 
+/// A signed transaction that can be persisted before network submission.
+#[derive(Debug, Clone)]
+pub struct PreparedTransaction {
+    pub tx_hash: String,
+    pub nonce: u64,
+    pub raw_transaction: Vec<u8>,
+}
+
+#[derive(Debug)]
+pub enum BroadcastError {
+    RpcRefusal(anyhow::Error),
+    Uncertain(anyhow::Error),
+}
+
 /// Worker-facing Ethereum operations. Kept as a trait for test mocking.
 #[async_trait]
 pub trait EthGateway: Send + Sync {
-    async fn submit_payload(&self, payload_bytes: &[u8], nonce: u64) -> Result<String>;
+    /// Fill and sign without submitting to the network.
+    async fn prepare_payload(
+        &self,
+        payload_bytes: &[u8],
+        nonce: u64,
+    ) -> Result<PreparedTransaction>;
+    async fn broadcast(&self, transaction: &PreparedTransaction) -> Result<(), BroadcastError>;
     async fn poll_receipt(&self, tx_hash: &str) -> Result<Option<ReceiptOutcome>>;
     /// Get the next available nonce for the relayer signer address.
     async fn get_next_nonce(&self) -> Result<u64>;
@@ -68,13 +93,13 @@ pub trait EthGateway: Send + Sync {
     async fn get_current_fees(&self) -> Result<FeeEstimate>;
     /// Fetch fee caps from a previously submitted (possibly pending) transaction.
     async fn get_pending_tx_fees(&self, tx_hash: &str) -> Result<Option<PendingTxFees>>;
-    /// Submit a blob TX with explicit nonce and fee overrides (for RBF replacement).
-    async fn submit_payload_with_fees(
+    /// Prepare a replacement with explicit nonce and fee overrides without broadcasting it.
+    async fn prepare_payload_with_fees(
         &self,
         payload_bytes: &[u8],
         nonce: u64,
         fees: &FeeOverrides,
-    ) -> Result<String>;
+    ) -> Result<PreparedTransaction>;
 }
 
 impl EthClient {
@@ -85,9 +110,9 @@ impl EthClient {
             .parse()
             .map_err(|e| anyhow!("invalid PRIVATE_KEY: {e}"))?;
         let from = signer.address();
+        let wallet = EthereumWallet::from(signer);
 
         let provider = ProviderBuilder::new()
-            .wallet(signer)
             .connect_http(cfg.rpc_url.parse()?)
             .erased();
 
@@ -105,6 +130,7 @@ impl EthClient {
             from,
             to: cfg.to_address,
             max_fee_per_blob_gas: cfg.max_fee_per_blob_gas,
+            wallet,
         };
 
         info!(
@@ -118,12 +144,31 @@ impl EthClient {
 
         Ok(client)
     }
+
+    async fn prepare_request(&self, request: TransactionRequest) -> Result<PreparedTransaction> {
+        let filled = FillProvider::new(self.provider.clone(), Ethereum::recommended_fillers())
+            .fill(request)
+            .await?;
+        let request = filled
+            .as_builder()
+            .context("transaction unexpectedly signed during filling")?;
+        let envelope = request.clone().build(&self.wallet).await?;
+        Ok(PreparedTransaction {
+            tx_hash: format!("{:#x}", envelope.tx_hash()),
+            nonce: envelope.nonce(),
+            raw_transaction: envelope.encoded_2718(),
+        })
+    }
 }
 
 #[async_trait]
 impl EthGateway for EthClient {
-    /// Build and broadcast an EIP-4844 blob transaction from payload bytes.
-    async fn submit_payload(&self, payload_bytes: &[u8], nonce: u64) -> Result<String> {
+    /// Fill and sign an EIP-4844 transaction without broadcasting it.
+    async fn prepare_payload(
+        &self,
+        payload_bytes: &[u8],
+        nonce: u64,
+    ) -> Result<PreparedTransaction> {
         info!(
             payload_bytes = payload_bytes.len(),
             nonce, "Preparing EIP-4844 transaction from relay payload"
@@ -148,12 +193,9 @@ impl EthGateway for EthClient {
             to = %self.to,
             nonce,
             max_fee_per_blob_gas = ?self.max_fee_per_blob_gas,
-            "Sending Ethereum blob transaction"
+            "Preparing Ethereum blob transaction"
         );
-        let pending = self.provider.send_transaction(tx).await?;
-        let tx_hash = format!("{:#x}", pending.tx_hash());
-        info!(tx_hash = %tx_hash, nonce, "Ethereum blob transaction submitted");
-        Ok(tx_hash)
+        self.prepare_request(tx).await
     }
 
     async fn get_next_nonce(&self) -> Result<u64> {
@@ -196,12 +238,12 @@ impl EthGateway for EthClient {
         }))
     }
 
-    async fn submit_payload_with_fees(
+    async fn prepare_payload_with_fees(
         &self,
         payload_bytes: &[u8],
         nonce: u64,
         fees: &FeeOverrides,
-    ) -> Result<String> {
+    ) -> Result<PreparedTransaction> {
         info!(
             payload_bytes = payload_bytes.len(),
             nonce,
@@ -227,10 +269,34 @@ impl EthGateway for EthClient {
             tx = tx.max_fee_per_blob_gas(blob_fee);
         }
 
-        let pending = self.provider.send_transaction(tx).await?;
-        let tx_hash = format!("{:#x}", pending.tx_hash());
-        info!(tx_hash = %tx_hash, nonce, "Fee-bumped blob transaction submitted");
-        Ok(tx_hash)
+        self.prepare_request(tx).await
+    }
+
+    async fn broadcast(&self, transaction: &PreparedTransaction) -> Result<(), BroadcastError> {
+        let pending = match self
+            .provider
+            .send_raw_transaction(&transaction.raw_transaction)
+            .await
+        {
+            Ok(pending) => pending,
+            Err(error)
+                if error.as_error_resp().is_some_and(|reply| {
+                    reply.message.to_ascii_lowercase().contains("already known")
+                }) =>
+            {
+                return Ok(())
+            }
+            Err(error) if error.as_error_resp().is_some() => {
+                return Err(BroadcastError::RpcRefusal(error.into()));
+            }
+            Err(error) => return Err(BroadcastError::Uncertain(error.into())),
+        };
+        if format!("{:#x}", pending.tx_hash()) != transaction.tx_hash {
+            return Err(BroadcastError::Uncertain(anyhow!(
+                "RPC returned a different transaction hash"
+            )));
+        }
+        Ok(())
     }
 
     /// Query receipt status for a previously broadcast transaction hash.
@@ -243,5 +309,135 @@ impl EthGateway for EthClient {
             success: r.status(),
             block_number: r.block_number,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::{
+        consensus::{transaction::SignerRecoverable, TxEnvelope},
+        eips::Decodable2718,
+    };
+
+    #[tokio::test]
+    async fn prepares_recoverable_blob_transaction_without_broadcasting() -> Result<()> {
+        let signer: PrivateKeySigner = format!("{:064x}", 1).parse()?;
+        let from = signer.address();
+        let client = EthClient {
+            provider: ProviderBuilder::new()
+                .connect_http("http://127.0.0.1:9".parse()?)
+                .erased(),
+            from,
+            to: Address::repeat_byte(7),
+            max_fee_per_blob_gas: Some(2),
+            wallet: EthereumWallet::from(signer),
+        };
+        let sidecar = SidecarBuilder::<SimpleCoder>::from_slice(b"fixture").build_4844()?;
+        let mut request = TransactionRequest::default()
+            .from(from)
+            .to(client.to)
+            .nonce(7)
+            .gas_limit(100_000)
+            .max_fee_per_gas(100)
+            .max_priority_fee_per_gas(1)
+            .max_fee_per_blob_gas(2)
+            .with_blob_sidecar(sidecar);
+        request.chain_id = Some(1);
+        let prepared = client.prepare_request(request).await?;
+        let mut bytes = prepared.raw_transaction.as_slice();
+        let decoded = TxEnvelope::decode_2718(&mut bytes)?;
+        assert!(bytes.is_empty());
+        assert_eq!(decoded.nonce(), 7);
+        assert_eq!(prepared.nonce, decoded.nonce());
+        assert_eq!(prepared.tx_hash, format!("{:#x}", decoded.tx_hash()));
+        assert_eq!(decoded.recover_signer()?, from);
+        assert_eq!(decoded.blob_versioned_hashes().unwrap().len(), 1);
+        assert_eq!(
+            decoded
+                .as_eip4844()
+                .unwrap()
+                .tx()
+                .sidecar()
+                .unwrap()
+                .blobs()
+                .len(),
+            1
+        );
+        assert_eq!(decoded.encoded_2718(), prepared.raw_transaction);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn raw_broadcast_distinguishes_acknowledgment_refusal_and_uncertainty() -> Result<()> {
+        use axum::{routing::post, Json, Router};
+        use serde_json::{json, Value};
+        use std::{
+            collections::VecDeque,
+            sync::{Arc, Mutex},
+        };
+
+        let hash = B256::repeat_byte(1);
+        let responses = Arc::new(Mutex::new(VecDeque::from([
+            json!({"result": hash}),
+            json!({"error": {"code": -32000, "message": "already known"}}),
+            json!({"result": B256::repeat_byte(2)}),
+            json!({"error": {"code": -32000, "message": "nonce too low"}}),
+        ])));
+        let replies = Arc::clone(&responses);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let rpc_url = format!("http://{}", listener.local_addr()?);
+        let router = Router::new().route(
+            "/",
+            post(move |Json(request): Json<Value>| {
+                let replies = Arc::clone(&replies);
+                async move {
+                    assert_eq!(request["method"], "eth_sendRawTransaction");
+                    assert_eq!(request["params"], json!(["0x010203"]));
+                    let mut reply = replies.lock().unwrap().pop_front().unwrap();
+                    reply["jsonrpc"] = json!("2.0");
+                    reply["id"] = request["id"].clone();
+                    Json(reply)
+                }
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let signer: PrivateKeySigner = format!("{:064x}", 1).parse()?;
+        let client = EthClient {
+            provider: ProviderBuilder::new()
+                .connect_http(rpc_url.parse()?)
+                .erased(),
+            from: signer.address(),
+            to: Address::ZERO,
+            max_fee_per_blob_gas: None,
+            wallet: EthereumWallet::from(signer),
+        };
+        let prepared = PreparedTransaction {
+            tx_hash: format!("{hash:#x}"),
+            nonce: 0,
+            raw_transaction: vec![1, 2, 3],
+        };
+        assert!(client.broadcast(&prepared).await.is_ok());
+        assert!(client.broadcast(&prepared).await.is_ok());
+        let mismatch = client.broadcast(&prepared).await.unwrap_err();
+        assert!(matches!(mismatch, BroadcastError::Uncertain(error)
+            if error.to_string().contains("different transaction hash")));
+        assert!(matches!(
+            client.broadcast(&prepared).await,
+            Err(BroadcastError::RpcRefusal(_))
+        ));
+        assert!(responses.lock().unwrap().is_empty());
+        server.abort();
+        let unavailable = EthClient {
+            provider: ProviderBuilder::new()
+                .connect_http("http://127.0.0.1:0".parse()?)
+                .erased(),
+            ..client
+        };
+        assert!(matches!(
+            unavailable.broadcast(&prepared).await,
+            Err(BroadcastError::Uncertain(_))
+        ));
+        Ok(())
     }
 }

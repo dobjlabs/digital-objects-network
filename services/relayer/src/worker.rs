@@ -6,7 +6,7 @@ use tracing::{info, warn};
 
 use crate::{
     db::Db,
-    eth::{EthGateway, FeeOverrides, ReceiptOutcome},
+    eth::{BroadcastError, EthGateway, FeeOverrides, PreparedTransaction, ReceiptOutcome},
     model::{JobStatus, RelayJob},
     time_utils::now_ts,
 };
@@ -118,9 +118,15 @@ async fn send_queued_job(
     job.updated_at = now;
     db.put_job(&job).await?;
 
-    // Query nonce before submission so we can pass it explicitly and store it
-    // for potential fee bumps. Single-worker guarantees no nonce race.
-    let nonce = eth_client.get_next_nonce().await?;
+    let nonce = match eth_client.get_next_nonce().await {
+        Ok(nonce) => nonce,
+        Err(error) => {
+            schedule_retry_or_fail(db, cfg, job, now, error).await?;
+            return Ok(());
+        }
+    };
+
+    let nonce = nonce.max(db.next_reserved_nonce().await?);
 
     info!(
         job_id = %job.job_id,
@@ -129,34 +135,64 @@ async fn send_queued_job(
         tx_final = %format_args!("{:#}", job.tx_final),
         state_root = %format_args!("{:#}", job.state_root),
         nonce,
-        "Submitting relay payload to Ethereum"
+        "Preparing relay payload for Ethereum"
     );
 
-    match eth_client.submit_payload(&job.payload_bytes, nonce).await {
-        Ok(tx_hash) => {
+    match eth_client.prepare_payload(&job.payload_bytes, nonce).await {
+        Ok(prepared) => {
+            let previous = job.clone();
             job.status = JobStatus::Submitted;
-            job.tx_hash = Some(tx_hash);
+            job.tx_hash = Some(prepared.tx_hash.clone());
             job.submitted_at = Some(now);
-            job.next_attempt_at = Some(now + cfg.receipt_poll_secs as i64);
             job.last_error = None;
-            job.nonce = Some(nonce as i64);
+            job.nonce = Some(i64::try_from(prepared.nonce)?);
             job.bump_count = 0;
             job.updated_at = now;
-            db.put_job(&job).await?;
-            info!(
-                job_id = %job.job_id,
-                tx_hash = ?job.tx_hash,
-                nonce = ?job.nonce,
-                next_attempt_at = ?job.next_attempt_at,
-                "Submitted blob transaction"
-            );
-            Ok(())
+            db.stage_broadcast(&job, &prepared).await?;
+            broadcast_prepared(db, eth_client, cfg, job, &prepared, Some(previous)).await
         }
         Err(err) => {
             schedule_retry_or_fail(db, cfg, job, now, err).await?;
             Ok(())
         }
     }
+}
+
+async fn broadcast_prepared(
+    db: &Db,
+    eth_client: &dyn EthGateway,
+    cfg: &WorkerConfig,
+    mut job: RelayJob,
+    prepared: &PreparedTransaction,
+    // A prior snapshot is available only immediately after staging, never during recovery.
+    previous: Option<RelayJob>,
+) -> Result<()> {
+    let now = now_ts();
+    job.next_attempt_at = Some(now + cfg.receipt_poll_secs as i64);
+    job.updated_at = now;
+    match (eth_client.broadcast(prepared).await, previous) {
+        (Ok(()), _) => {
+            job.last_error = None;
+            return db.put_job_and_clear_pending_broadcast(&job).await;
+        }
+        (Err(BroadcastError::RpcRefusal(error)), Some(mut previous)) => {
+            warn!(job_id = %job.job_id, tx_hash = %prepared.tx_hash, ?error,
+                "First broadcast refused; releasing prepared transaction");
+            if previous.tx_hash.is_none() {
+                return schedule_retry_or_fail(db, cfg, previous, now, error).await;
+            }
+            previous.next_attempt_at = Some(now + cfg.receipt_poll_secs as i64);
+            previous.last_error = Some(error.to_string());
+            previous.updated_at = now;
+            return db.put_job_and_clear_pending_broadcast(&previous).await;
+        }
+        (Err(BroadcastError::RpcRefusal(error) | BroadcastError::Uncertain(error)), _) => {
+            warn!(job_id = %job.job_id, tx_hash = %prepared.tx_hash, ?error,
+                "Broadcast not acknowledged; retaining prepared transaction");
+            job.last_error = Some(error.to_string());
+        }
+    }
+    db.put_job(&job).await
 }
 
 /// Poll receipt for a previously submitted tx and transition job state.
@@ -167,32 +203,10 @@ async fn poll_submitted_job(
     mut job: RelayJob,
 ) -> Result<()> {
     let now = now_ts();
-    let tx_hash_str = job
+    let mut tx_hash_str = job
         .tx_hash
         .clone()
         .ok_or_else(|| anyhow!("submitted job missing tx_hash"))?;
-
-    if let (Some(timeout_secs), Some(submitted_at)) = (cfg.receipt_timeout_secs, job.submitted_at) {
-        if now.saturating_sub(submitted_at) >= timeout_secs as i64 {
-            warn!(
-                job_id = %job.job_id,
-                tx_hash = %tx_hash_str,
-                timeout_secs = timeout_secs,
-                elapsed_secs = now.saturating_sub(submitted_at),
-                "Receipt polling timeout reached"
-            );
-            let block_number = job.block_number;
-            fail_job_with_block(
-                db,
-                &mut job,
-                now,
-                block_number,
-                format!("receipt timeout after {}s", timeout_secs),
-            )
-            .await?;
-            return Ok(());
-        }
-    }
 
     job.updated_at = now;
     db.put_job(&job).await?;
@@ -204,7 +218,25 @@ async fn poll_submitted_job(
         "Polling transaction receipt"
     );
 
-    match eth_client.poll_receipt(&tx_hash_str).await {
+    let mut receipt = eth_client.poll_receipt(&tx_hash_str).await;
+    if !matches!(receipt, Ok(Some(_))) {
+        for previous in job.prev_tx_hashes.clone().iter().rev() {
+            match eth_client.poll_receipt(previous).await {
+                Ok(Some(previous_receipt)) => {
+                    if !job.prev_tx_hashes.contains(&tx_hash_str) {
+                        job.prev_tx_hashes.push(tx_hash_str.clone());
+                    }
+                    tx_hash_str = previous.clone();
+                    job.tx_hash = Some(previous.clone());
+                    receipt = Ok(Some(previous_receipt));
+                    break;
+                }
+                Err(error) => receipt = Err(error),
+                Ok(None) => {}
+            }
+        }
+    }
+    match receipt {
         Ok(Some(ReceiptOutcome {
             success: true,
             block_number,
@@ -245,6 +277,34 @@ async fn poll_submitted_job(
             Ok(())
         }
         Ok(None) => {
+            if let (Some(timeout_secs), Some(submitted_at)) =
+                (cfg.receipt_timeout_secs, job.submitted_at)
+            {
+                if now.saturating_sub(submitted_at) >= timeout_secs as i64 {
+                    warn!(
+                        job_id = %job.job_id,
+                        tx_hash = %tx_hash_str,
+                        timeout_secs = timeout_secs,
+                        elapsed_secs = now.saturating_sub(submitted_at),
+                        "Receipt polling timeout reached"
+                    );
+                    let block_number = job.block_number;
+                    fail_job_with_block(
+                        db,
+                        &mut job,
+                        now,
+                        block_number,
+                        format!("receipt timeout after {}s", timeout_secs),
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            }
+
+            if let Some(prepared) = db.pending_broadcast(&job.job_id).await? {
+                return broadcast_prepared(db, eth_client, cfg, job, &prepared, None).await;
+            }
+
             // Check if we should attempt a fee bump.
             if let Some(bump_after) = cfg.fee_bump_after_secs {
                 if let (Some(submitted_at), Some(nonce)) = (job.submitted_at, job.nonce) {
@@ -252,7 +312,7 @@ async fn poll_submitted_job(
                     let elapsed = now.saturating_sub(submitted_at);
 
                     if elapsed >= bump_threshold && (job.bump_count as u32) < cfg.fee_bump_max {
-                        match try_fee_bump(
+                        match try_prepare_fee_bump(
                             eth_client,
                             cfg,
                             &job.payload_bytes,
@@ -262,22 +322,22 @@ async fn poll_submitted_job(
                         )
                         .await
                         {
-                            Ok(Some(new_tx_hash)) => {
-                                let old_hash = tx_hash_str.clone();
-                                job.prev_tx_hashes.push(old_hash.clone());
-                                job.tx_hash = Some(new_tx_hash.clone());
+                            Ok(Some(prepared)) => {
+                                let previous = job.clone();
+                                job.prev_tx_hashes.push(tx_hash_str.clone());
+                                job.tx_hash = Some(prepared.tx_hash.clone());
                                 job.bump_count += 1;
-                                job.next_attempt_at = Some(now + cfg.receipt_poll_secs as i64);
                                 job.updated_at = now;
-                                db.put_job(&job).await?;
-                                info!(
-                                    job_id = %job.job_id,
-                                    old_tx_hash = %old_hash,
-                                    new_tx_hash = %new_tx_hash,
-                                    bump_count = job.bump_count,
-                                    "Fee-bumped blob transaction"
-                                );
-                                return Ok(());
+                                db.stage_broadcast(&job, &prepared).await?;
+                                return broadcast_prepared(
+                                    db,
+                                    eth_client,
+                                    cfg,
+                                    job,
+                                    &prepared,
+                                    Some(previous),
+                                )
+                                .await;
                             }
                             Ok(None) => {
                                 // TX gone from mempool. Check if the nonce was
@@ -302,6 +362,9 @@ async fn poll_submitted_job(
                                         }
 
                                         if let Some(hash) = mined_hash {
+                                            if !job.prev_tx_hashes.contains(&tx_hash_str) {
+                                                job.prev_tx_hashes.push(tx_hash_str.clone());
+                                            }
                                             job.tx_hash = Some(hash);
                                             job.status = JobStatus::Confirmed;
                                             job.block_number = mined_block.or(job.block_number);
@@ -382,25 +445,29 @@ async fn poll_submitted_job(
                 fail_job_with_block(db, &mut job, now, block_number, err.to_string()).await?;
                 return Ok(());
             }
-            schedule_retry_or_fail(db, cfg, job, now, err).await?;
+            job.status = JobStatus::Submitted;
+            job.next_attempt_at = Some(now + cfg.receipt_poll_secs as i64);
+            job.last_error = Some(err.to_string());
+            job.updated_at = now;
+            db.put_job(&job).await?;
             Ok(())
         }
     }
 }
 
 /// Fetch the original TX's fees and current network fees, take the max of each,
-/// apply the bump multiplier, and resubmit at the same nonce.
+/// apply the bump multiplier, and prepare a replacement at the same nonce.
 ///
 /// Returns `Ok(None)` when the TX is no longer in the mempool (already mined
 /// or dropped) — the caller should stop bumping and just keep polling receipts.
-async fn try_fee_bump(
+async fn try_prepare_fee_bump(
     eth_client: &dyn EthGateway,
     cfg: &WorkerConfig,
     payload_bytes: &[u8],
     nonce: u64,
     current_tx_hash: &str,
     current_bump_count: i32,
-) -> Result<Option<String>> {
+) -> Result<Option<PreparedTransaction>> {
     let network = eth_client.get_current_fees().await?;
 
     // Fetch the queued TX's fee caps so we can guarantee the replacement exceeds them.
@@ -454,10 +521,10 @@ async fn try_fee_bump(
         "Attempting fee bump"
     );
 
-    let tx_hash = eth_client
-        .submit_payload_with_fees(payload_bytes, nonce, &fees)
+    let prepared = eth_client
+        .prepare_payload_with_fees(payload_bytes, nonce, &fees)
         .await?;
-    Ok(Some(tx_hash))
+    Ok(Some(prepared))
 }
 
 /// Mark a job as failed while preserving any known receipt block number.
@@ -563,12 +630,28 @@ mod tests {
 
     #[async_trait]
     impl EthGateway for MockEthGateway {
-        async fn submit_payload(&self, _payload_bytes: &[u8], _nonce: u64) -> Result<String> {
+        async fn broadcast(
+            &self,
+            _transaction: &PreparedTransaction,
+        ) -> Result<(), BroadcastError> {
+            Ok(())
+        }
+
+        async fn prepare_payload(
+            &self,
+            _payload_bytes: &[u8],
+            nonce: u64,
+        ) -> Result<PreparedTransaction> {
             self.submit_results
                 .lock()
                 .expect("poisoned")
                 .pop_front()
-                .unwrap_or_else(|| Err(anyhow!("unexpected submit call")))
+                .unwrap_or_else(|| Err(anyhow!("unexpected prepare call")))
+                .map(|tx_hash| PreparedTransaction {
+                    raw_transaction: tx_hash.as_bytes().to_vec(),
+                    tx_hash,
+                    nonce,
+                })
         }
 
         async fn poll_receipt(&self, _tx_hash: &str) -> Result<Option<ReceiptOutcome>> {
@@ -610,17 +693,22 @@ mod tests {
                 })))
         }
 
-        async fn submit_payload_with_fees(
+        async fn prepare_payload_with_fees(
             &self,
             _payload_bytes: &[u8],
-            _nonce: u64,
+            nonce: u64,
             _fees: &FeeOverrides,
-        ) -> Result<String> {
+        ) -> Result<PreparedTransaction> {
             self.bump_submit_results
                 .lock()
                 .expect("poisoned")
                 .pop_front()
-                .unwrap_or_else(|| Err(anyhow!("unexpected bump submit call")))
+                .unwrap_or_else(|| Err(anyhow!("unexpected bump prepare call")))
+                .map(|tx_hash| PreparedTransaction {
+                    raw_transaction: tx_hash.as_bytes().to_vec(),
+                    tx_hash,
+                    nonce,
+                })
         }
     }
 
@@ -775,6 +863,7 @@ mod tests {
     async fn submitted_job_times_out() -> Result<()> {
         let (db, admin_url, db_name) = setup_db().await?;
         let gateway = MockEthGateway::default();
+        gateway.poll_results.lock().unwrap().push_back(Ok(None));
 
         let mut job = mk_job(JobStatus::Submitted);
         job.tx_hash =

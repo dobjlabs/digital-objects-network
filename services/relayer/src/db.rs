@@ -3,7 +3,10 @@ use payload::{db_bytes_to_hash, hash_to_db_bytes};
 use pod2::middleware::Hash;
 use sqlx::{postgres::PgPoolOptions, Executor, PgPool, Row};
 
-use crate::model::{JobStatus, RelayJob};
+use crate::{
+    eth::PreparedTransaction,
+    model::{JobStatus, RelayJob},
+};
 
 /// Result of inserting by idempotency key (`tx_final`).
 pub enum InsertJobResult {
@@ -75,6 +78,15 @@ impl Db {
             self.pool.execute(stmt).await?;
         }
 
+        self.pool
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS relay_pending_broadcasts (
+                job_id TEXT PRIMARY KEY REFERENCES relay_jobs(job_id) ON DELETE CASCADE,
+                raw_transaction BYTEA NOT NULL
+            )"#,
+            )
+            .await?;
+
         Ok(())
     }
 
@@ -142,54 +154,90 @@ impl Db {
 
     /// Persist the current in-memory state of a known job row.
     pub async fn put_job(&self, job: &RelayJob) -> Result<()> {
-        let rows_affected = sqlx::query(
-            r#"
-            UPDATE relay_jobs
-            SET status = $2,
-                payload_bytes = $3,
-                tx_final = $4,
-                state_root = $5,
-                client_ref = $6,
-                attempt_count = $7,
-                tx_hash = $8,
-                submitted_at = $9,
-                block_number = $10,
-                last_error = $11,
-                next_attempt_at = $12,
-                nonce = $13,
-                bump_count = $14,
-                prev_tx_hashes = $15,
-                created_at = $16,
-                updated_at = $17
-            WHERE job_id = $1
-            "#,
-        )
-        .bind(&job.job_id)
-        .bind(job.status.as_str())
-        .bind(&job.payload_bytes)
-        .bind(hash_to_db_bytes(job.tx_final))
-        .bind(hash_to_db_bytes(job.state_root))
-        .bind(job.client_ref.clone())
-        .bind(job.attempt_count as i32)
-        .bind(job.tx_hash.clone())
-        .bind(job.submitted_at)
-        .bind(job.block_number.map(|value| value as i64))
-        .bind(job.last_error.clone())
-        .bind(job.next_attempt_at)
-        .bind(job.nonce)
-        .bind(job.bump_count)
-        .bind(&job.prev_tx_hashes)
-        .bind(job.created_at)
-        .bind(job.updated_at)
-        .execute(&self.pool)
-        .await?
-        .rows_affected();
+        self.write_job(job, false).await
+    }
 
-        if rows_affected == 0 {
+    pub async fn put_job_and_clear_pending_broadcast(&self, job: &RelayJob) -> Result<()> {
+        self.write_job(job, true).await
+    }
+
+    async fn write_job(&self, job: &RelayJob, discard_pending: bool) -> Result<()> {
+        let mut transaction = self.pool.begin().await?;
+        let affected = job_update(job)
+            .execute(&mut *transaction)
+            .await?
+            .rows_affected();
+        if affected == 0 {
             return Err(anyhow!("job not found: {}", job.job_id));
         }
-
+        if discard_pending || job.status.is_terminal() || job.tx_hash.is_none() {
+            sqlx::query("DELETE FROM relay_pending_broadcasts WHERE job_id = $1")
+                .bind(&job.job_id)
+                .execute(&mut *transaction)
+                .await?;
+        }
+        transaction.commit().await?;
         Ok(())
+    }
+
+    /// Publish transaction identity and recoverable bytes in one transaction before broadcast.
+    pub async fn stage_broadcast(
+        &self,
+        job: &RelayJob,
+        prepared: &PreparedTransaction,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            job.tx_hash.as_deref() == Some(prepared.tx_hash.as_str())
+                && job.nonce == Some(i64::try_from(prepared.nonce)?),
+            "prepared identity mismatch"
+        );
+        let mut transaction = self.pool.begin().await?;
+        let affected = job_update(job)
+            .execute(&mut *transaction)
+            .await?
+            .rows_affected();
+        anyhow::ensure!(affected == 1, "job not found: {}", job.job_id);
+        sqlx::query(
+            "INSERT INTO relay_pending_broadcasts (job_id, raw_transaction) VALUES ($1, $2)",
+        )
+        .bind(&job.job_id)
+        .bind(&prepared.raw_transaction)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    pub async fn pending_broadcast(&self, job: &str) -> Result<Option<PreparedTransaction>> {
+        let row: Option<(String, i64, Vec<u8>)> = sqlx::query_as(
+            r#"SELECT job.tx_hash, job.nonce, pending.raw_transaction
+               FROM relay_pending_broadcasts pending JOIN relay_jobs job USING (job_id)
+               WHERE job_id = $1"#,
+        )
+        .bind(job)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|(tx_hash, nonce, raw_transaction)| {
+            Ok(PreparedTransaction {
+                tx_hash,
+                nonce: u64::try_from(nonce)?,
+                raw_transaction,
+            })
+        })
+        .transpose()
+    }
+
+    /// Reserve prepared nonces awaiting acknowledgment even when the RPC has not accepted them.
+    pub async fn next_reserved_nonce(&self) -> Result<u64> {
+        let nonce: i64 = sqlx::query_scalar(
+            r#"SELECT COALESCE(MAX(nonce), -1) + 1 FROM relay_jobs
+               WHERE status IN ('sending', 'submitted') AND tx_hash IS NOT NULL
+                 AND EXISTS (SELECT 1 FROM relay_pending_broadcasts pending
+                             WHERE pending.job_id = relay_jobs.job_id)"#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(u64::try_from(nonce)?)
     }
 
     /// Lookup by API-facing `job_id`.
@@ -256,9 +304,8 @@ impl Db {
         row.map(row_to_job).transpose()
     }
 
-    /// Resolve the current Ethereum tx hash for each given `tx_final` that
-    /// exists and has been broadcast. Unknown or not-yet-broadcast commitments
-    /// are omitted from the result.
+    /// Resolve each known `tx_final` to its durably prepared Ethereum transaction identity.
+    /// Commitments without a prepared transaction are omitted.
     pub async fn tx_hashes_by_tx_finals(&self, tx_finals: &[Hash]) -> Result<Vec<(Hash, String)>> {
         let keys: Vec<Vec<u8>> = tx_finals.iter().map(|h| hash_to_db_bytes(*h)).collect();
         let rows = sqlx::query(
@@ -333,6 +380,50 @@ impl Db {
 
         row.map(row_to_job).transpose()
     }
+}
+
+fn job_update(
+    job: &RelayJob,
+) -> sqlx::query::Query<'_, sqlx::Postgres, sqlx::postgres::PgArguments> {
+    sqlx::query(
+        r#"
+            UPDATE relay_jobs
+            SET status = $2,
+                payload_bytes = $3,
+                tx_final = $4,
+                state_root = $5,
+                client_ref = $6,
+                attempt_count = $7,
+                tx_hash = $8,
+                submitted_at = $9,
+                block_number = $10,
+                last_error = $11,
+                next_attempt_at = $12,
+                nonce = $13,
+                bump_count = $14,
+                prev_tx_hashes = $15,
+                created_at = $16,
+                updated_at = $17
+            WHERE job_id = $1
+            "#,
+    )
+    .bind(&job.job_id)
+    .bind(job.status.as_str())
+    .bind(&job.payload_bytes)
+    .bind(hash_to_db_bytes(job.tx_final))
+    .bind(hash_to_db_bytes(job.state_root))
+    .bind(job.client_ref.clone())
+    .bind(job.attempt_count as i32)
+    .bind(job.tx_hash.clone())
+    .bind(job.submitted_at)
+    .bind(job.block_number.map(|value| value as i64))
+    .bind(job.last_error.clone())
+    .bind(job.next_attempt_at)
+    .bind(job.nonce)
+    .bind(job.bump_count)
+    .bind(&job.prev_tx_hashes)
+    .bind(job.created_at)
+    .bind(job.updated_at)
 }
 
 /// Decode a SQL row into `RelayJob` with explicit integer range checks.
@@ -551,6 +642,51 @@ mod tests {
         let next = db.next_due_job(now()).await?.expect("due job");
         assert_eq!(next.job_id, "job-b");
 
+        drop(db);
+        drop_db(&admin_url, &db_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local postgres"]
+    async fn prepared_broadcast_is_atomic_and_reserves_its_nonce() -> Result<()> {
+        let (db, admin_url, db_name) = setup_db().await?;
+        let mut job = mk_job("prepared", th(0xab), JobStatus::Queued, Some(now()));
+        db.insert_job(&job).await?;
+        let prepared = PreparedTransaction {
+            tx_hash: "first-signed-identity".into(),
+            nonce: 4,
+            raw_transaction: vec![1, 4, 0],
+        };
+        job.status = JobStatus::Submitted;
+        job.tx_hash = Some(prepared.tx_hash.clone());
+        job.nonce = Some(4);
+        db.stage_broadcast(&job, &prepared).await?;
+        assert_eq!(db.next_reserved_nonce().await?, 5);
+        db.recover_inflight_jobs(now()).await?;
+
+        let conflicting = PreparedTransaction {
+            tx_hash: "conflicting-identity".into(),
+            nonce: 4,
+            raw_transaction: vec![2, 4, 0],
+        };
+        job.tx_hash = Some(conflicting.tx_hash.clone());
+        assert!(db.stage_broadcast(&job, &conflicting).await.is_err());
+        let persisted = db.get_job("prepared").await?.unwrap();
+        let pending = db.pending_broadcast("prepared").await?.unwrap();
+        assert_eq!(
+            persisted.tx_hash.as_deref(),
+            Some(prepared.tx_hash.as_str())
+        );
+        assert_eq!(pending.tx_hash, prepared.tx_hash);
+        assert_eq!(pending.raw_transaction, prepared.raw_transaction);
+        assert_eq!(pending.nonce, prepared.nonce);
+
+        let mut terminal = persisted;
+        terminal.status = JobStatus::Failed;
+        db.put_job(&terminal).await?;
+        assert!(db.pending_broadcast("prepared").await?.is_none());
+        assert_eq!(db.next_reserved_nonce().await?, 0);
         drop(db);
         drop_db(&admin_url, &db_name).await?;
         Ok(())

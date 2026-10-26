@@ -44,6 +44,13 @@ Indexes:
 - `(status, next_attempt_at, created_at)` for due-job scheduling
 - `(next_attempt_at, created_at)` for due-job ordering in non-terminal statuses
 
+`relay_pending_broadcasts` relation:
+
+- `job_id TEXT PRIMARY KEY REFERENCES relay_jobs(job_id) ON DELETE CASCADE`
+- `raw_transaction BYTEA NOT NULL`
+
+The worker saves each signed transaction before broadcasting and reserves its nonce while acknowledgement is uncertain. Recovery resends the saved transaction. A JSON-RPC refusal on its first broadcast releases that candidate; transport errors and errors on later resends retain it. This assumes a provider does not forward a transaction and then return a JSON-RPC refusal.
+
 ## API
 
 - `GET /healthz` (no auth)
@@ -70,7 +77,7 @@ Indexes:
 - `MAX_FEE_PER_BLOB_GAS` (optional override)
 - `FEE_BUMP_AFTER_SECS` (seconds before first fee-bump attempt; unset = disabled)
 - `FEE_BUMP_MULTIPLIER_PCT` (default: `20`, i.e. 1.2x per bump; min `13` for EIP-1559)
-- `FEE_BUMP_MAX` (default: `5`, max replacement attempts per job)
+- `FEE_BUMP_MAX` (default: `5`, max retained fee replacements per job)
 
 ## Run
 
