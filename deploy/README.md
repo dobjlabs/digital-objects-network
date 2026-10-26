@@ -22,7 +22,7 @@ These figures are for running each service. Running the full compose stack on a
 single host requires their combined resources. The archiver's disk usage grows
 proportionally with the number of blobs matching `FILTER_ADDRESS`; size the
 volume accordingly and monitor it. The synchronizer's RocksDB store
-(`APP_STATE_DB_PATH`) is a rebuildable cache, but mounting a volume for it
+(`CONTAINER_DB_PATH`) is a rebuildable cache, but mounting a volume for it
 avoids a slow cold re-sync on restart.
 
 ## Quick start
@@ -67,7 +67,7 @@ docker run -d --name synchronizer -p 3000:3000 \
   -e RPC_URL=https://your-execution-rpc \
   -e BEACON_URL=https://your-beacon-api \
   -e TO_ADDRESS=0x... \
-  -e SYNC_METADATA_DB_URL=postgres://user:pass@host:5432/synchronizer \
+  -e STATE_LOG_DB_URL=postgres://user:pass@host:5432/synchronizer \
   -v don_data:/var/lib/don \
   ghcr.io/dobjlabs/digital-objects-network/synchronizer:latest
 ```
@@ -89,21 +89,21 @@ docker run -d --name archiver -p 3001:3001 \
 
 Set via `.env` (compose) or `-e` flags (`docker run`). Image defaults:
 `HTTP_BIND=0.0.0.0:<port>`, and the synchronizer's
-`APP_STATE_DB_PATH=/var/lib/don/synchronizer-db`.
+`CONTAINER_DB_PATH=/var/lib/don/synchronizer-db`.
 
 | Variable               | Service                | Required     | Notes                                                                           |
 | ---------------------- | ---------------------- | ------------ | ------------------------------------------------------------------------------- |
 | `RPC_URL`              | all                    | yes          | Execution-layer RPC                                                             |
 | `BEACON_URL`           | synchronizer, archiver | yes          | Beacon API with blob sidecars                                                   |
 | `TO_ADDRESS`           | all                    | yes          | L1 target address; must match across services (archiver reads `FILTER_ADDRESS`) |
-| `INIT_START_SLOT`      | synchronizer, archiver | yes          | Beacon slot both services start from on first run                               |
+| `INIT_START_SLOT`      | synchronizer, archiver | yes          | First-run slot; finalized with an execution block (`utils/genesis-slot.sh`)     |
 | `PRIVATE_KEY`          | relayer                | relayer only | Hot wallet that signs/pays for blob txs                                         |
 | `ARCHIVER_URL`         | synchronizer           | no           | Blobs older than beacon retention; unset, falls back to `BEACON_URL`            |
-| `SYNC_METADATA_DB_URL` | synchronizer           | no           | Defaults to the bundled Postgres; set to point at an external one               |
+| `STATE_LOG_DB_URL` | synchronizer           | no           | Defaults to the bundled Postgres; set to point at an external one               |
 | `DB_URL`               | relayer                | no           | Defaults to the bundled Postgres; set to point at an external one               |
 | `BLOBS_PATH`           | archiver               | no           | On-disk blob store path; mount a volume here                                    |
 | `IMAGE_TAG`            | compose                | no           | Image tag to run; pin to a release                                              |
-| `APP_STATE_DB_PATH`    | synchronizer           | no           | RocksDB cache path; mount a volume here                                         |
+| `CONTAINER_DB_PATH`    | synchronizer           | no           | RocksDB cache path; mount a volume here                                         |
 | `HTTP_BIND`            | all                    | no           | Defaults to `0.0.0.0:3000` / `:3200` / `:3001`                                  |
 | `RUST_LOG`             | all                    | no           | e.g. `info`                                                                     |
 
@@ -120,7 +120,7 @@ the archive survives restarts instead of re-downloading from the chain.
   on slot commits, the archiver on its blob-store directory). The network can
   have many independent archivers; just never point two at one volume.
 - **Pin `IMAGE_TAG`** to a release (e.g. `v0.1.0`) for reproducible runs.
-- **Hardened production:** point `SYNC_METADATA_DB_URL` / `DB_URL` at a managed
+- **Hardened production:** point `STATE_LOG_DB_URL` / `DB_URL` at a managed
   Postgres (the synchronizer's state is authoritative - back it up) and inject
   `PRIVATE_KEY` from a secret store instead of a plaintext `.env`. The relayer
   has no runtime balance check, so monitor the wallet balance externally.

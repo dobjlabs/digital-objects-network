@@ -457,7 +457,7 @@ impl Driver {
             .deps
             .synchronizer
             .fetch_head(&settings.synchronizer_api_url)?;
-        Ok(head.current_state_root)
+        Ok(head.state_root)
     }
 
     /// Import an external `.dobj` object — one not produced by this driver
@@ -778,7 +778,7 @@ impl Driver {
 
         let result = ExecuteActionResult {
             old_root,
-            new_root: sync_head.current_state_root,
+            new_root: sync_head.state_root,
             output_files: saved.output_files.clone(),
             nullified_files: saved.nullified_files.clone(),
             relayer_job_id: confirmation.job_id,

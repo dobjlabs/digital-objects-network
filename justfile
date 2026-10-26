@@ -136,11 +136,12 @@ dev-local: ensure-anvil ensure-db-local (ensure-local-settings LOCAL_DOBJ_ROOT) 
     export FILTER_ADDRESS="$TO_ADDRESS"
     # anvil's first genesis-funded dev account. Published test key, local only.
     export PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
-    # Must be >= 1: the synchronizer bootstraps from INIT_START_SLOT - 1.
+    # The synchronizer derives its genesis state at this slot, so it needs an execution block:
+    # anvil's block 1, which the synchronizer waits for on a fresh devnet.
     export INIT_START_SLOT=1
     export BLOBS_PATH=data/blobs-local/
-    export APP_STATE_DB_PATH=data/synchronizer-db-local
-    export SYNC_METADATA_DB_URL=postgres://postgres@localhost:5432/synchronizer_local
+    export CONTAINER_DB_PATH=data/synchronizer-db-local
+    export STATE_LOG_DB_URL=postgres://postgres@localhost:5432/synchronizer_local
     export DB_URL=postgres://postgres@localhost:5432/relayer_local
     # The shipped defaults pace requests for a 15 req/s public endpoint.
     export SYNC_DELAY_MS=50
@@ -258,12 +259,10 @@ create-db NAME:
 # `just relayer`.
 ensure-db: (create-db "synchronizer") (create-db "relayer")
 
-# Point the synchronizer + archiver at the current chain head on a *fresh* start.
-# Both require INIT_START_SLOT but use it only when their store is empty (they
-# resume from on-disk progress otherwise), so we rewrite a service's .env to the
-# current beacon head when its db is absent, or when INIT_START_SLOT is unset (the
-# var is required, so a resumed service still needs *some* value). Runs as part of
-# `just dev`; a no-op once each db exists and the var is set.
+# Set INIT_START_SLOT in the synchronizer + archiver .env to a recent genesis slot
+# (utils/genesis-slot.sh) when the service's store is absent or the var is unset.
+# Both use it only on an empty store and resume from stored progress otherwise.
+# Runs as part of `just dev`; a no-op once each store exists and the var is set.
 ensure-start-slot:
     #!/usr/bin/env bash
     set -uo pipefail
@@ -284,12 +283,6 @@ ensure-start-slot:
         mv "$tmp" "$file"
     }
 
-    head_slot() {  # <beacon_url> -> head slot number
-        local beacon="${1%/}" json
-        json="$(curl -fsSL "${beacon}/eth/v1/beacon/headers/head")" || return 1
-        printf '%s' "$json" | jq -r '.data.header.message.slot'
-    }
-
     ensure_slot() {  # <label> <env_file> <fresh:true|false>
         local label="$1" env="$2" fresh="$3" cur beacon slot
         if [ ! -f "$env" ]; then echo "$label: $env missing; skipping"; return 0; fi
@@ -299,17 +292,17 @@ ensure-start-slot:
         fi
         beacon="$(read_env "$env" BEACON_URL)"
         if [ -z "$beacon" ]; then echo "$label: no BEACON_URL in $env; leaving INIT_START_SLOT as-is"; return 0; fi
-        slot="$(head_slot "$beacon" 2>/dev/null || true)"
+        slot="$(utils/genesis-slot.sh "$beacon" 2>/dev/null || true)"
         if [[ "$slot" =~ ^[0-9]+$ ]]; then
             set_env "$env" INIT_START_SLOT "$slot"
-            echo "$label: INIT_START_SLOT -> $slot (head)"
+            echo "$label: INIT_START_SLOT -> $slot (finalized, with a canonical payload)"
         else
-            echo "$label: could not resolve beacon head; leaving INIT_START_SLOT as-is"
+            echo "$label: could not find a finalized slot with a canonical payload; leaving INIT_START_SLOT as-is"
         fi
     }
 
-    sync_db="$(read_env services/synchronizer/.env APP_STATE_DB_PATH)"; sync_db="${sync_db:-data/synchronizer-db}"
-    [ -d "$sync_db" ] && sync_fresh=false || sync_fresh=true
+    container_db="$(read_env services/synchronizer/.env CONTAINER_DB_PATH)"; container_db="${container_db:-data/synchronizer-db}"
+    [ -d "$container_db" ] && sync_fresh=false || sync_fresh=true
     ensure_slot synchronizer services/synchronizer/.env "$sync_fresh"
 
     blobs="$(read_env services/archiver/.env BLOBS_PATH)"; blobs="${blobs:-/tmp/blobs/}"

@@ -1,6 +1,6 @@
 # Synchronizer
 
-Service that tracks Digital Object blob transactions on Ethereum, derives app state, persists persistent-container data in RocksDB, stores state heads in Postgres, and serves proof-backed query APIs over HTTP.
+Service that tracks Digital Object blob transactions on Ethereum, derives the Digital Objects Network (DON) state, persists its Merkle containers in RocksDB, stores the committed state of each slot in Postgres, and serves proof-backed query APIs over HTTP.
 
 ## What it does
 
@@ -14,27 +14,28 @@ Service that tracks Digital Object blob transactions on Ethereum, derives app st
    - fetches matching blob sidecars
    - parses and verifies `TxFinalized` payloads
    - prefetches the payloads' created-object commitments from the Postgres created index
-   - opens the current Merkle containers from the `StateHead`
-   - derives the next `StateHead`
-4. Publishes the new slot/head and its created-index rows in one Postgres transaction, and serves state/proof APIs for clients like `gui`.
+   - opens the Merkle containers of the head `DonState`
+   - derives the next `DonState`
+4. Publishes the new slot/state and its created-index rows in one Postgres transaction, and serves state/proof APIs for clients like `gui`.
 
 ## State model
 
 The synchronizer splits state into two layers:
 
-- RocksDB stores the content-addressed POD2 Merkle backing store
+- RocksDB (`ContainerDb`) stores the content-addressed POD2 Merkle backing store
   - persistent Merkle nodes
   - persistent POD2 values
-- Postgres stores the control plane
+- Postgres (`StateLogDb`) stores the state log: how the DON state advances with each update to
+  the bulletin board the synchronizer follows (currently blob space, one update per slot)
   - slot metadata
-  - the `StateHead` for each slot
+  - the `DonState` derived at each slot with an execution block
   - the created index: object commitment -> position in the created array
 
-There is no state head stored in RocksDB, and no resident in-memory head/cache. Every slot derivation and API read loads the current state head from Postgres, then reopens the needed persistent containers from RocksDB by root.
+No `DonState` is stored in RocksDB, and there is no resident in-memory state cache. Every slot derivation and API read loads the head state from Postgres, then reopens the needed persistent containers from RocksDB by root.
 
-### `StateHead`
+### `DonState`
 
-`StateHead` is the compact committed app-state snapshot stored on slot rows. It is split into:
+`DonState` is the compact committed DON state snapshot stored on slot rows. It is split into:
 
 - `StateRoots`
   - `created`
@@ -42,18 +43,26 @@ There is no state head stored in RocksDB, and no resident in-memory head/cache. 
   - `prior_state_history`
   - `next_state_history`
 - `StateMetadata`
-  - `current_state_root`
-  - `current_block_number`
+  - `state_root`
+  - `block` (number, timestamp, hash)
   - `created_count`
   - `nullifier_count`
   - `state_root_count`
 
 `StateRoots.prior_state_history` is the prior-state root array root committed inside `txlib::StateHeader`.
-`StateRoots.next_state_history` is the full state root-history root after appending `StateMetadata.current_state_root`.
+`StateRoots.next_state_history` is the full state root-history root after appending `StateMetadata.state_root`.
+
+### Genesis
+
+`INIT_START_SLOT` is the genesis slot: a finalized slot with an execution block, which the
+synchronizer checks on first run (waiting for finalization if needed). It is derived like any
+other slot, from empty containers, and its state root grounds transactions like any later one.
+No DON transactions may exist before it. `just ensure-start-slot` picks the latest finalized
+slot.
 
 ## Storage model
 
-### RocksDB (`APP_STATE_DB_PATH`) — persistent Merkle backing store
+### RocksDB (`CONTAINER_DB_PATH`) — persistent Merkle backing store
 
 RocksDB stores:
 
@@ -70,34 +79,33 @@ The Merkle-backed containers are:
 
 The synchronizer reopens those containers from the roots stored in `StateRoots`.
 
-Important: RocksDB is not the source of truth. It is an append-only backing store for Merkle data. Derivation may materialize nodes that are never committed; those orphaned nodes are harmless and are ignored unless a future `StateHead` points at them.
+Important: RocksDB is not the source of truth. It is an append-only backing store for Merkle data. Derivation may materialize nodes that are never committed; those orphaned nodes are harmless and are ignored unless a future `DonState` points at them.
 
-### Postgres (`SYNC_METADATA_DB_URL`) — state heads and sync metadata
+### Postgres (`STATE_LOG_DB_URL`) — the state log
 
-Postgres stores the synchronization state:
-
-- `state_slots`
-  - one row per slot
-  - on first initialization, the first row is a bootstrap row at `start_slot - 1`
-  - that bootstrap row uses the real beacon/execution metadata when `start_slot - 1` had a block
-  - if `start_slot - 1` was an empty beacon slot, its block fields remain `NULL`
-  - includes `block_root`, `parent_root`, `execution_block_number`, `current_state_root`, `is_empty`
-  - includes normalized `head_*` columns for the `StateHead` at that slot
+- `slots`
+  - one row per slot from `INIT_START_SLOT` on (checked at startup); column prefixes say where
+    the data comes from: `cl_` the consensus layer, `el_` the execution layer, `don_` the DON
+    state
+  - `cl_block_root`: `NULL` when the beacon chain produced no block
+  - `el_block_*`: the execution block that became canonical with the slot, and `don_*`: the
+    `DonState` derived at it; all set or all `NULL` (enforced by a `CHECK`)
 - `created_index`
   - reverse index from object commitment to its position in the created array
   - one row per created object: `commitment` (primary key), `array_index`, `slot`
   - rows are inserted in the same transaction that commits their slot and
     deleted in the same transaction that rolls the slot back, so the index
-    never diverges from the state head
+    never diverges from the committed state
   - reads treat the index as a hint: every membership and proof answer
     cross-checks it against the created array at the queried root
 
-Postgres is the sole source of `StateHead`. The highest committed
-`state_slots.slot` is the current state head.
+The head state is the `DonState` of the highest slot with an execution block; the highest slot
+overall is the last processed one. Until the genesis slot is committed, the state and progress
+APIs answer `503`.
 
 ## Slot derivation rules
 
-Each payload publishes every created state, including states consumed later in the same transaction. The created index records them all; their nullifiers determine which states have been spent.
+Each payload publishes every created object state, including object states consumed later in the same transaction. The created index records them all; their nullifiers determine which object states have been spent.
 
 For each decoded blob payload, the synchronizer:
 
@@ -114,12 +122,12 @@ For each decoded blob payload, the synchronizer:
 
 After processing all blobs in the slot, it computes the next state root from:
 
-- current execution block number
+- the slot's execution block number
 - created array root
 - nullifiers set root
 - prior state root-array root
 
-Then it appends that new state root to the persistent state root history array and derives a new `StateHead`.
+Then it appends that new state root to the persistent state root history array and derives a new `DonState`.
 
 Important: state root history advances for each processed slot, even if that slot accepted zero app transactions.
 
@@ -129,39 +137,42 @@ Important: state root history advances for each processed slot, even if that slo
 
 The synchronizer derives candidate state by mutating persistent containers in RocksDB. Once derivation succeeds, publication is a single Postgres transaction:
 
-1. Insert the slot row, including the normalized `head_*` columns
+1. Insert the slot row, including the normalized `DonState` columns
 2. Insert one `created_index` row per object commitment the slot added
 
 Because the Merkle nodes were already materialized during derivation, there is no second write to RocksDB.
 
 ### Crash semantics
 
-- If the process crashes before the Postgres commit, the old state head remains in force and any newly written RocksDB nodes are just orphaned.
-- If the process crashes after the Postgres commit, the published `StateHead` is already durable and sufficient to reopen the persistent containers.
+- If the process crashes before the Postgres commit, the previously committed head state remains in force and any newly written RocksDB nodes are just orphaned.
+- If the process crashes after the Postgres commit, the published `DonState` is already durable and sufficient to reopen the persistent containers.
 
 ### Reorg handling
 
 On reorg:
 
-- the synchronizer finds the last common ancestor slot
-- deletes `state_slots` rows after the keep-point, and the `created_index`
+- the synchronizer finds the last common ancestor slot, walking back no further than
+  `INIT_START_SLOT`
+- deletes `slots` rows after the keep-point, and the `created_index`
   rows those slots added, in one transaction
 - resumes syncing from the first divergent slot
 
-Reorg rollback does not modify RocksDB. The surviving Postgres `StateHead` determines which Merkle roots are current after rewind.
+`INIT_START_SLOT` is finalized, so a reorg never reaches it. If no common ancestor is found after
+it anyway, every row is deleted and syncing restarts by re-deriving the genesis state.
+
+Reorg rollback does not modify RocksDB. The surviving Postgres `DonState` determines which Merkle roots are current after rewind.
 
 ## API
 
 - `GET /healthz`
   - returns `{"ok": true}`
 - `GET /sync-progress`
-  - returns `last_processed_slot`, `last_processed_block_number`
+  - returns `last_processed_slot`
 - `GET /v1/state/head`
   - returns:
     - `last_processed_slot`
-    - `last_processed_block_number`
-    - `current_state_root`
-    - `current_block_number`
+    - `state_root`
+    - `block_number`
     - `created_count`
     - `nullifier_count`
     - `state_root_count`
@@ -169,9 +180,9 @@ Reorg rollback does not modify RocksDB. The surviving Postgres `StateHead` deter
   - request body:
     - `object_commitments` (array of hash strings)
     - `nullifiers` (array of hash strings)
-  - returns membership for both sets from one captured state head:
+  - returns membership for both sets from one captured state:
     - `last_processed_slot`
-    - `current_state_root`
+    - `state_root`
     - `created_results` (array of `{ commitment, present }`)
     - `nullifier_results` (array of `{ nullifier, present }`)
 - `POST /v1/state/object/contains`
@@ -179,14 +190,14 @@ Reorg rollback does not modify RocksDB. The surviving Postgres `StateHead` deter
     - `object_commitments` (array of hash strings)
   - returns:
     - `last_processed_slot`
-    - `current_state_root`
+    - `state_root`
     - `results` (array of `{ commitment, present }`)
 - `POST /v1/state/nullifier/contains`
   - request body:
     - `nullifiers` (array of hash strings)
   - returns:
     - `last_processed_slot`
-    - `current_state_root`
+    - `state_root`
     - `results` (array of `{ nullifier, present }`)
 - `POST /v1/txlib/grounding-witness`
   - request body:
@@ -199,9 +210,9 @@ Reorg rollback does not modify RocksDB. The surviving Postgres `StateHead` deter
     - `priorStateHistoryRoot`
     - `createdProofs` (array of `{ commitment, present, index, proof }`)
 
-Membership and grounding-witness requests read the state head and the
+Membership and grounding-witness requests read the head state and the
 created index from one `REPEATABLE READ` Postgres transaction, so the index
-entries always match the captured head's roots. The RocksDB reads then run
+entries always match the captured state's roots. The RocksDB reads then run
 against those pinned roots; Merkle nodes are content-addressed and immutable
 by root, so a concurrent commit or rollback cannot change what the captured
 roots resolve to.
@@ -213,12 +224,12 @@ Hashes in request and response bodies are pod2 `Hash` values, serialized as lowe
 - `RPC_URL`
 - `BEACON_URL`
 - `TO_ADDRESS`
-- `INIT_START_SLOT` (beacon slot to start syncing from on first run; resumed from stored progress afterward)
+- `INIT_START_SLOT` (the genesis slot, `>= 1`: a finalized slot with an execution block, where syncing starts on first run; resumed from stored progress afterward, and must not change once the database has synced)
 
 ## Optional env vars
 
-- `APP_STATE_DB_PATH` (default: `data/synchronizer-db`)
-- `SYNC_METADATA_DB_URL` (default: `postgres://postgres@localhost:5432/synchronizer`)
+- `CONTAINER_DB_PATH` (default: `data/synchronizer-db`)
+- `STATE_LOG_DB_URL` (default: `postgres://postgres@localhost:5432/synchronizer`)
 - `HTTP_BIND` (default: `127.0.0.1:3000`)
 - `RPC_RETRIES` (default: `6`) — how many times to ask again for a beacon block, execution block or archived blobs that a lagging node does not serve yet. Failed requests (rate limits, gateway errors, broken connections) are retried separately by the clients, with exponential backoff.
 - `RPC_RETRY_MS` (default: `1000`) — delay in ms between those requests.

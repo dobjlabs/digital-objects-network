@@ -28,7 +28,7 @@ const HASH_BATCH_LIMIT: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SynchronizerHead {
-    pub current_state_root: Hash,
+    pub state_root: Hash,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,10 +92,9 @@ impl SynchronizerClient for HttpSynchronizerClient {
             &endpoint,
             "synchronizer head response",
         )?;
-        let current_state_root = payload
-            .current_state_root
-            .ok_or_else(|| anyhow!("synchronizer has no grounded state yet"))?;
-        Ok(SynchronizerHead { current_state_root })
+        Ok(SynchronizerHead {
+            state_root: payload.state_root,
+        })
     }
 
     fn fetch_grounding_witness(
@@ -288,12 +287,12 @@ fn send_json_request<T: DeserializeOwned>(
             .text()
             .map(|body| body.trim().chars().take(2048).collect::<String>())
             .unwrap_or_else(|error| format!("could not read error response: {error}"));
-        let message = format!("synchronizer request to {endpoint} failed with {status}");
-        return Err(anyhow!(if detail.is_empty() {
-            message
-        } else {
-            format!("{message}: {detail}")
-        }));
+        return Err(anyhow!(
+            "request failed with {} {}: {}",
+            status.as_u16(),
+            status,
+            detail,
+        ));
     }
 
     response
@@ -383,61 +382,6 @@ fn render_requested_hashes(
 mod tests {
     use super::*;
     use pod2::middleware::RawValue;
-    use std::io::{BufRead, BufReader, Read, Write};
-    use std::net::TcpListener;
-
-    #[test]
-    fn grounding_witness_error_identifies_endpoint_and_server_cause() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
-            let mut reader = BufReader::new(&mut stream);
-            let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            assert!(line.starts_with("POST /v1/txlib/grounding-witness "));
-            let mut content_length = 0;
-            loop {
-                line.clear();
-                reader.read_line(&mut line).unwrap();
-                if line == "\r\n" {
-                    break;
-                }
-                if let Some(length) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                    content_length = length.trim().parse::<usize>().unwrap();
-                }
-            }
-            let mut body = vec![0; content_length];
-            reader.read_exact(&mut body).unwrap();
-            let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            assert_eq!(request["objectCommitments"], serde_json::json!([]));
-            let detail = "Inner: node with hash 0x1234 not found";
-            write!(
-                stream,
-                "HTTP/1.1 500 Internal Server Error\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{detail}",
-                detail.len()
-            )
-            .unwrap();
-        });
-        let client = HttpSynchronizerClient {
-            client: reqwest::blocking::Client::builder()
-                .no_proxy()
-                .timeout(Duration::from_secs(5))
-                .build()
-                .unwrap(),
-        };
-        let error = client
-            .fetch_grounding_witness(&format!("http://{address}"), &[])
-            .unwrap_err();
-        server.join().unwrap();
-        let message = error.to_string();
-        assert!(message.contains(&format!("http://{address}/v1/txlib/grounding-witness")));
-        assert!(message.contains("500 Internal Server Error"));
-        assert!(message.contains("node with hash 0x1234 not found"));
-    }
 
     fn test_hash(byte: u8) -> Hash {
         Hash::from(RawValue::from(i64::from(byte)))

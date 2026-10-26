@@ -252,7 +252,7 @@ struct MockSynchronizer {
 impl SynchronizerClient for MockSynchronizer {
     fn fetch_head(&self, _sync_api_url: &str) -> Result<SynchronizerHead> {
         Ok(SynchronizerHead {
-            current_state_root: state_header(&self.state).hash(),
+            state_root: state_header(&self.state).hash(),
         })
     }
 
@@ -299,7 +299,7 @@ impl SynchronizerClient for MockSynchronizer {
             return Err(anyhow!("synchronizer timeout"));
         }
         Ok(SynchronizerHead {
-            current_state_root: state_header(&self.state).hash(),
+            state_root: state_header(&self.state).hash(),
         })
     }
 }

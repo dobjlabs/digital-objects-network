@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use eth_clients::{
     beacon::types::{BlockAndRoot, BlockHeader, BlockId, HeadEventData, Topic},
     common::is_node_error,
@@ -20,17 +20,6 @@ enum SlotHeaderState {
     Shutdown,
     Missing,
     Present(BlockHeader),
-}
-
-enum HeadCheckResult {
-    BehindTarget,
-    Missing,
-    Present(BlockHeader),
-}
-
-enum AdvanceDecision {
-    ContinueWaiting,
-    Return(SlotHeaderState),
 }
 
 struct HeadTracker {
@@ -55,7 +44,7 @@ pub(crate) async fn run_sync_forever(
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
     loop {
-        let result = match initialize_sync(&node, node.config.init_start_slot).await {
+        let result = match initialize_sync(&node).await {
             Ok(sync_start) => {
                 run_sync_loop(
                     Arc::clone(&node),
@@ -164,7 +153,7 @@ async fn run_sync_loop(
             }
 
             if reorg_detected {
-                // Re-fetch beacon head before restarting — chain view may have changed.
+                // Re-fetch beacon head before restarting: the chain view may have changed.
                 head_tracker.head = node.get_beacon_head_header().await?;
             }
 
@@ -233,7 +222,7 @@ async fn run_sync_loop(
 /// Returns whether the loop should continue from a rewind slot or from the next slot.
 async fn handle_missing_slot(node: &Node, slot: u32) -> Result<MissingSlotAction> {
     // A previously committed slot becoming empty implies chain history changed.
-    if node.slot_root(slot).await?.is_some() {
+    if node.state_log.slot_root(slot).await?.is_some() {
         warn!(
             slot,
             "Detected reorg: slot was previously present but is now missing; rewinding"
@@ -243,15 +232,14 @@ async fn handle_missing_slot(node: &Node, slot: u32) -> Result<MissingSlotAction
         ));
     }
 
-    // Skipped slots are valid on beacon; commit a Missing slot so the
-    // slot history stays contiguous.
-    let processed = ProcessedSlot::Missing {
-        slot,
-        carried_head: node.current_head().await?,
-    };
-
+    // Skipped slots are valid on beacon; commit one anyway so the slot history stays contiguous.
     info!(slot, "No block produced for slot");
-    node.commit_slot(&processed).await?;
+    node.commit_slot(&ProcessedSlot {
+        slot,
+        block_root: None,
+        derived: None,
+    })
+    .await?;
     Ok(MissingSlotAction::Applied)
 }
 
@@ -263,9 +251,9 @@ async fn handle_reorgs_for_present_slot(
     slot: u32,
     beacon_block_header: &BlockHeader,
 ) -> Result<Option<u32>> {
-    let last_processed_slot = node.last_processed_slot().await?;
-    let stored_root_for_slot = node.slot_root(slot).await?;
-    if last_processed_slot >= slot && stored_root_for_slot.is_none() {
+    let last_processed_slot = node.state_log.last_processed_slot().await?;
+    let stored_root_for_slot = node.state_log.slot_root(slot).await?;
+    if last_processed_slot.is_some_and(|last| last >= slot) && stored_root_for_slot.is_none() {
         // A previously empty slot becoming non-empty implies chain history changed.
         warn!(
             slot,
@@ -287,18 +275,15 @@ async fn handle_reorgs_for_present_slot(
         }
     }
 
-    if let Some(prev_slot) = slot.checked_sub(1) {
-        if let Some(prev_root) = node.slot_root(prev_slot).await? {
-            // Parent mismatch means our local chain view diverged from current chain.
-            if beacon_block_header.parent_root != prev_root {
-                warn!(
-                    slot,
-                    expected_parent = ?prev_root,
-                    actual_parent = ?beacon_block_header.parent_root,
-                    "Detected reorg: parent linkage mismatch; rewinding"
-                );
-                return Ok(Some(rewind_for_reorg(node, slot).await?));
-            }
+    if let Some(prev_root) = node.state_log.slot_root(slot - 1).await? {
+        if beacon_block_header.parent_root != prev_root {
+            warn!(
+                slot,
+                expected_parent = ?prev_root,
+                actual_parent = ?beacon_block_header.parent_root,
+                "Detected reorg: parent linkage mismatch; rewinding"
+            );
+            return Ok(Some(rewind_for_reorg(node, slot).await?));
         }
     }
 
@@ -309,7 +294,7 @@ async fn handle_reorgs_for_present_slot(
 async fn rewind_for_reorg(node: &Node, current_slot: u32) -> Result<u32> {
     let rewind_start = find_divergence_slot(node, current_slot).await?;
     let keep_slot = rewind_start - 1;
-    node.rollback_to_slot(keep_slot).await?;
+    node.state_log.rollback_to_slot(keep_slot).await?;
     info!(
         current_slot,
         rewind_start, keep_slot, "Rewound state to divergence boundary"
@@ -317,59 +302,46 @@ async fn rewind_for_reorg(node: &Node, current_slot: u32) -> Result<u32> {
     Ok(rewind_start)
 }
 
+/// Find the first slot to re-derive from: the one after the last block both the stored and the
+/// live chain have. The walk stops at `INIT_START_SLOT`, which is finalized.
 async fn find_divergence_slot(node: &Node, current_slot: u32) -> Result<u32> {
+    let init_start_slot = node.config.init_start_slot;
     let mut slot = current_slot;
-    while let Some(prev_slot) = slot.checked_sub(1) {
-        // Walk backward until stored and live roots match (last common ancestor).
-        let stored_root = node.slot_root(prev_slot).await?;
+    while slot > init_start_slot {
+        let prev_slot = slot - 1;
+        let stored_root = node.state_log.slot_root(prev_slot).await?;
         let live_root = node
             .beacon_cli
             .get_block_header(BlockId::Slot(prev_slot))
             .await?
             .map(|header| header.root);
-        match (stored_root, live_root) {
-            // Both sides agree on an actual block root: true common ancestor.
-            (Some(s), Some(l)) if s == l => return Ok(prev_slot + 1),
-            // Both empty: not a real anchor, keep walking.
-            (None, None) => {}
-            // Otherwise: diverged (roots differ, or one side has a block the other doesn't).
-            _ => {}
+        if stored_root.is_some() && stored_root == live_root {
+            return Ok(slot);
         }
         slot = prev_slot;
     }
-    Err(anyhow!(
-        "No common ancestor found while handling reorg at slot {current_slot};"
-    ))
+    warn!(
+        current_slot,
+        init_start_slot, "No common ancestor after INIT_START_SLOT; re-deriving from it"
+    );
+    Ok(init_start_slot)
 }
 
-async fn initialize_sync(node: &Node, init_start_slot: u32) -> Result<SyncStart> {
+async fn initialize_sync(node: &Node) -> Result<SyncStart> {
     let spec = node.beacon_cli.get_spec().await?;
     info!(?spec, "Loaded beacon spec");
 
     let head = node.get_beacon_head_header().await?;
     info!(head_slot = head.slot, head_root = ?head.root, "Fetched initial beacon head");
 
-    let bootstrap_start_slot = init_start_slot;
-    let bootstrap_slot = bootstrap_start_slot.checked_sub(1).ok_or_else(|| {
-        anyhow!("bootstrap start slot must be > 0 to insert initial bootstrap row")
-    })?;
-
-    if bootstrap_slot > head.slot {
-        return Err(anyhow!(
-            "INIT_START_SLOT {bootstrap_start_slot} is ahead of current beacon head {}; cannot bootstrap slot {}",
-            head.slot,
-            bootstrap_slot
-        ));
-    }
-
-    let bootstrap_record = node.load_committed_slot_record(bootstrap_slot).await?;
-
-    let start_slot = node
-        .sync_db
-        .ensure_bootstrap_row(bootstrap_record)
-        .await?
-        .checked_add(1)
-        .ok_or_else(|| anyhow!("last processed slot overflow"))?;
+    let start_slot = match node.state_log.last_processed_slot().await? {
+        Some(last_processed_slot) => last_processed_slot + 1,
+        None => {
+            let init_start_slot = node.config.init_start_slot;
+            node.validate_genesis_slot(init_start_slot).await?;
+            init_start_slot
+        }
+    };
 
     info!(
         start_slot,
@@ -428,10 +400,8 @@ impl HeadTracker {
                 self.events = Some(stream);
 
                 // Re-check immediately after subscribe to close subscribe-vs-head race windows.
-                match Self::decide_after_head_check(self.resolve_slot_from_head(node, slot).await?)
-                {
-                    AdvanceDecision::ContinueWaiting => {}
-                    AdvanceDecision::Return(state) => return Ok(state),
+                if let Some(state) = self.resolve_slot_from_head(node, slot).await? {
+                    return Ok(state);
                 }
             }
             let event_source = self.events.as_mut().expect("head events present");
@@ -445,10 +415,10 @@ impl HeadTracker {
                 }
                 _ = tokio::time::sleep(HEAD_CHECK_INTERVAL) => {
                     // Polling fallback keeps liveness if the SSE stream is stale but not closed.
-                    match Self::decide_after_head_check(self.resolve_slot_from_head(node, slot).await?) {
-                        AdvanceDecision::ContinueWaiting => continue,
-                        AdvanceDecision::Return(state) => return Ok(state),
+                    if let Some(state) = self.resolve_slot_from_head(node, slot).await? {
+                        return Ok(state);
                     }
+                    continue;
                 }
                 event = event_source.next() => event,
             };
@@ -466,12 +436,9 @@ impl HeadTracker {
                         continue;
                     }
 
-                    // Events are hints; re-read state head/slot before deciding.
-                    match Self::decide_after_head_check(
-                        self.resolve_slot_from_head(node, slot).await?,
-                    ) {
-                        AdvanceDecision::ContinueWaiting => {}
-                        AdvanceDecision::Return(state) => return Ok(state),
+                    // Events are hints; re-read the beacon head before deciding.
+                    if let Some(state) = self.resolve_slot_from_head(node, slot).await? {
+                        return Ok(state);
                     }
                 }
                 Some(Err(err)) => {
@@ -499,14 +466,20 @@ impl HeadTracker {
         }
     }
 
-    async fn resolve_slot_from_head(&mut self, node: &Node, slot: u32) -> Result<HeadCheckResult> {
+    /// Refresh the beacon head and resolve `slot` against it; `None` while the head has not
+    /// reached `slot` yet.
+    async fn resolve_slot_from_head(
+        &mut self,
+        node: &Node,
+        slot: u32,
+    ) -> Result<Option<SlotHeaderState>> {
         self.head = node.get_beacon_head_header().await?;
 
         if self.head.slot < slot {
-            return Ok(HeadCheckResult::BehindTarget);
+            return Ok(None);
         }
         if self.head.slot == slot {
-            return Ok(HeadCheckResult::Present(self.head.clone()));
+            return Ok(Some(SlotHeaderState::Present(self.head.clone())));
         }
 
         // Head passed target: explicit target lookup distinguishes produced vs skipped slot.
@@ -515,25 +488,15 @@ impl HeadTracker {
             target_slot = slot,
             "Target slot behind head; fetching explicit slot header"
         );
-        Ok(
+        Ok(Some(
             match node
                 .beacon_cli
                 .get_block_header(BlockId::Slot(slot))
                 .await?
             {
-                Some(header) => HeadCheckResult::Present(header),
-                None => HeadCheckResult::Missing,
+                Some(header) => SlotHeaderState::Present(header),
+                None => SlotHeaderState::Missing,
             },
-        )
-    }
-
-    fn decide_after_head_check(result: HeadCheckResult) -> AdvanceDecision {
-        match result {
-            HeadCheckResult::BehindTarget => AdvanceDecision::ContinueWaiting,
-            HeadCheckResult::Missing => AdvanceDecision::Return(SlotHeaderState::Missing),
-            HeadCheckResult::Present(header) => {
-                AdvanceDecision::Return(SlotHeaderState::Present(header))
-            }
-        }
+        ))
     }
 }
