@@ -282,10 +282,16 @@ fn send_json_request<T: DeserializeOwned>(
         .send()
         .with_context(|| format!("failed to query endpoint at {endpoint}"))?;
     if !response.status().is_success() {
+        let status = response.status();
+        let detail = response
+            .text()
+            .map(|body| body.trim().chars().take(2048).collect::<String>())
+            .unwrap_or_else(|error| format!("could not read error response: {error}"));
         return Err(anyhow!(
-            "request failed with {} {}",
-            response.status().as_u16(),
-            response.status()
+            "request failed with {} {}: {}",
+            status.as_u16(),
+            status,
+            detail,
         ));
     }
 
