@@ -1,30 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
-import { build } from "vite";
+import { buildModule, importModule } from "./buildModule.mjs";
 
-async function buildClient(buildUrl, development = false) {
-  const result = await build({
-    configFile: false,
-    root: fileURLToPath(new URL("..", import.meta.url)),
-    logLevel: "silent",
+function buildClient(buildUrl, development = false) {
+  return buildModule(new URL("../src/shared/api/httpClient.ts", import.meta.url), {
     define: {
       "import.meta.env.VITE_DOBJD_URL": JSON.stringify(buildUrl),
       "import.meta.env.DEV": JSON.stringify(development),
     },
-    build: {
-      write: false,
-      minify: false,
-      lib: {
-        entry: fileURLToPath(new URL("../src/shared/api/httpClient.ts", import.meta.url)),
-        formats: ["es"],
-        fileName: "httpClient",
-      },
-    },
   });
-  const builds = Array.isArray(result) ? result : [result];
-  return builds.flatMap((build) => build.output)
-    .find((output) => output.type === "chunk" && output.isEntry).code;
 }
 
 test("built client selects the same daemon for HTTP and SSE", async (t) => {
@@ -82,9 +66,7 @@ test("built client selects the same daemon for HTTP and SSE", async (t) => {
         close() {}
       };
       const fetch = t.mock.method(globalThis, "fetch", async () => new Response("[]"));
-      const module = await import(
-        `data:text/javascript;base64,${Buffer.from(scenario.code).toString("base64")}#${index}`
-      );
+      const module = await importModule(scenario.code, index);
       await module.loadObjects();
       const unlistenGlobal = module.listenObjectEvents({ object: () => {}, removed: () => {} });
       const unlistenRun = module.listenRunActionProgressForRun("run-1", () => {});

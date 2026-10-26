@@ -716,6 +716,7 @@ mod tests {
         let landed = wait_terminal(&registry, &first).await;
         assert_eq!(landed.status, RunStatus::Succeeded);
         let result = landed.result.unwrap();
+        assert_eq!(result.run_id, first.run_id);
         assert_eq!(result.output_files, vec!["out.dobj".to_string()]);
         assert_eq!(result.input_files, vec!["in.dobj".to_string()]);
         assert_eq!(result.old_root, "0xroot");
@@ -833,22 +834,35 @@ mod tests {
     }
 
     #[test]
-    fn progress_advances_status_and_indexes_events() {
-        let entry = RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0);
-        assert_eq!(entry.status(), RunStatus::Queued);
+    fn run_lifecycle_preserves_inputs_timestamps_and_replay() {
+        let inputs = vec!["a.dobj".to_string(), "b.dobj".to_string()];
+        let entry = RunEntry::new("r1".to_string(), action("A"), inputs.clone(), 0);
+        let queued = entry.snapshot();
+        assert_eq!(queued.status, RunStatus::Queued);
+        assert_eq!(queued.input_object_paths, inputs);
+        assert!(queued.created_at_ms > 0);
+        assert_eq!(queued.started_at_ms, None);
+        assert_eq!(queued.finished_at_ms, None);
 
-        entry.push_progress(step(
+        let first = step(
             ExecutionPhase::GenerateProof,
             ProofProgressStatus::Running,
             "gen",
-        ));
+        );
+        let first_at_ms = first.at_ms;
+        entry.push_progress(first);
         assert_eq!(entry.status(), RunStatus::GenerateProof);
-        entry.push_progress(step(
+        let mut committing = step(
             ExecutionPhase::Commit,
             ProofProgressStatus::Running,
             "commit",
-        ));
-        assert_eq!(entry.status(), RunStatus::Committing);
+        );
+        committing.at_ms = first_at_ms + 1;
+        entry.push_progress(committing);
+        let running = entry.snapshot();
+        assert_eq!(running.status, RunStatus::Committing);
+        assert_eq!(running.started_at_ms, Some(first_at_ms));
+        assert_eq!(running.finished_at_ms, None);
 
         let (all, terminal) = entry.events_from(0);
         assert_eq!(
@@ -856,32 +870,19 @@ mod tests {
             [0, 1]
         );
         assert!(!terminal);
-
-        // Replay from index 1 yields only the later event: the Last-Event-ID
-        // resume semantics the SSE stream depends on.
         let (tail, _) = entry.events_from(1);
         assert_eq!(tail.len(), 1);
         assert_eq!(tail[0].0, 1);
         assert_eq!(tail[0].1.message, "commit");
-    }
 
-    #[test]
-    fn succeed_is_terminal() {
-        let entry = RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0);
-        entry.push_progress(step(
-            ExecutionPhase::GenerateProof,
-            ProofProgressStatus::Running,
-            "gen",
-        ));
         entry.succeed(ok_result());
-
-        let snapshot = entry.snapshot();
-        assert_eq!(snapshot.status, RunStatus::Succeeded);
-        assert_eq!(snapshot.result.unwrap().old_root, "0xold");
-        assert!(snapshot.error.is_none());
-        assert_eq!(snapshot.progress.len(), 1);
-        let (_, terminal) = entry.events_from(0);
-        assert!(terminal);
+        let finished = entry.snapshot();
+        assert_eq!(finished.status, RunStatus::Succeeded);
+        assert_eq!(finished.result, Some(ok_result()));
+        assert!(finished.error.is_none());
+        assert_eq!(finished.progress, running.progress);
+        assert!(finished.finished_at_ms.unwrap() >= first_at_ms);
+        assert!(entry.events_from(0).1);
     }
 
     #[test]
@@ -906,6 +907,8 @@ mod tests {
         let snapshot = entry.snapshot();
         assert_eq!(snapshot.status, RunStatus::Failed);
         assert_eq!(snapshot.error.as_deref(), Some("boom"));
+        assert_eq!(snapshot.started_at_ms, Some(event.at_ms));
+        assert_eq!(snapshot.finished_at_ms, Some(event.at_ms));
         // The terminal failure event is appended so SSE subscribers see it.
         assert_eq!(snapshot.progress.len(), 1);
         assert_eq!(snapshot.progress[0].status, ProofProgressStatus::Failed);
@@ -946,76 +949,19 @@ mod tests {
     }
 
     #[test]
-    fn reaping_only_touches_terminal_runs() {
+    fn reaper_keeps_active_runs_and_retains_terminal_runs_until_expired() {
         let registry = RunRegistry::default();
-        let live = start(&registry, "live");
-        let done = start(&registry, "done");
-        done.succeed(ok_result());
-        // In-flight runs are never reaped, even at zero TTL; terminal ones
-        // go once their TTL has elapsed.
-        registry.entries.reap(Duration::from_secs(0));
-        assert!(registry.get("live").is_some());
-        assert!(registry.get("done").is_none());
-        live.fail("stopped".to_string());
-        registry.entries.reap(Duration::from_secs(3600));
-        assert!(registry.get("live").is_some());
-    }
-
-    #[test]
-    fn reaper_keeps_in_flight_and_recent_terminal_runs() {
-        let registry = RunRegistry::default();
-        let _live = start(&registry, "live");
-        let done = start(&registry, "done");
-        done.succeed(ok_result());
-        // RUN_RETENTION has not elapsed, so nothing is dropped yet.
+        start(&registry, "active");
+        start(&registry, "succeeded").succeed(ok_result());
+        start(&registry, "failed").fail("stopped".to_string());
         registry.entries.reap(crate::registry::RETENTION);
-        assert!(registry.get("live").is_some());
-        assert!(registry.get("done").is_some());
-    }
-
-    #[test]
-    fn timestamps_follow_the_run_lifecycle() {
-        let entry = RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0);
-        let queued = entry.snapshot();
-        assert!(queued.created_at_ms > 0);
-        assert_eq!(queued.started_at_ms, None);
-        assert_eq!(queued.finished_at_ms, None);
-
-        let first = step(
-            ExecutionPhase::GenerateProof,
-            ProofProgressStatus::Running,
-            "gen",
-        );
-        let first_at_ms = first.at_ms;
-        entry.push_progress(first);
-        entry.push_progress(step(
-            ExecutionPhase::Commit,
-            ProofProgressStatus::Running,
-            "commit",
-        ));
-        let running = entry.snapshot();
-        assert_eq!(running.started_at_ms, Some(first_at_ms));
-        assert_eq!(running.finished_at_ms, None);
-
-        entry.succeed(ok_result());
-        let finished = entry.snapshot().finished_at_ms.unwrap();
-        assert!(finished >= first_at_ms);
-    }
-
-    #[test]
-    fn failure_records_finish_time_even_when_queued() {
-        let entry = RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0);
-        let event = entry.fail("boom".to_string());
-        let snapshot = entry.snapshot();
-        assert_eq!(snapshot.started_at_ms, Some(event.at_ms));
-        assert_eq!(snapshot.finished_at_ms, Some(event.at_ms));
-    }
-
-    #[test]
-    fn snapshot_reports_input_paths() {
-        let inputs = vec!["a.dobj".to_string(), "b.dobj".to_string()];
-        let entry = RunEntry::new("r1".to_string(), action("A"), inputs.clone(), 0);
-        assert_eq!(entry.snapshot().input_object_paths, inputs);
+        for id in ["active", "succeeded", "failed"] {
+            assert!(registry.get(id).is_some());
+        }
+        registry.entries.reap(Duration::ZERO);
+        assert!(registry.get("active").is_some());
+        assert!(registry.get("succeeded").is_none());
+        assert!(registry.get("failed").is_none());
     }
 
     #[test]
@@ -1034,44 +980,44 @@ mod tests {
     }
 
     #[test]
-    fn reporter_drives_entry_through_lifecycle() {
-        let events = EventHub::new();
-        let entry = Arc::new(RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0));
-        let reporter = RunReporter::new(events, entry.clone());
-
-        let ctx = ExecutionStepContext::default();
-        reporter.on_step(ExecutionPhase::GenerateProof, "gen", &ctx);
-        assert_eq!(entry.status(), RunStatus::GenerateProof);
-        reporter.on_step(ExecutionPhase::Commit, "commit", &ctx);
-        assert_eq!(entry.status(), RunStatus::Committing);
-
-        reporter.finish_landed(&record("tx-1", TransactionState::Landed));
-
-        let snapshot = entry.snapshot();
-        assert_eq!(snapshot.status, RunStatus::Succeeded);
-        let result = snapshot.result.unwrap();
-        assert_eq!(result.run_id, "r1");
-        assert_eq!(result.old_root, "0xroot");
-        assert_eq!(result.input_files, vec!["in.dobj".to_string()]);
-        assert_eq!(snapshot.progress.len(), 3);
-    }
-
-    #[test]
-    fn reporter_failure_is_terminal_and_logged() {
-        let events = EventHub::new();
-        let entry = Arc::new(RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0));
-        let reporter = RunReporter::new(events, entry.clone());
-
-        reporter.finish_failure("kaboom".to_string());
-
-        let snapshot = entry.snapshot();
-        assert_eq!(snapshot.status, RunStatus::Failed);
-        assert_eq!(snapshot.error.as_deref(), Some("kaboom"));
-        assert!(
-            snapshot
-                .progress
-                .iter()
-                .any(|event| event.status == ProofProgressStatus::Failed)
-        );
+    fn reporter_broadcasts_the_retained_progress_for_success_and_failure() {
+        for failed in [false, true] {
+            let events = EventHub::new();
+            let mut rx = events.subscribe();
+            let entry = Arc::new(RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0));
+            let reporter = RunReporter::new(events, entry.clone());
+            reporter.on_step(ExecutionPhase::GenerateProof, "gen", &Default::default());
+            reporter.on_done(ExecutionPhase::GenerateProof);
+            reporter.on_step(ExecutionPhase::Commit, "commit", &Default::default());
+            if failed {
+                reporter.finish_failure("kaboom".to_string());
+            } else {
+                reporter.finish_landed(&record("tx-1", TransactionState::Landed));
+            }
+            let progress = entry.snapshot().progress;
+            assert_eq!(
+                progress
+                    .iter()
+                    .map(|event| event.status)
+                    .collect::<Vec<_>>(),
+                [
+                    ProofProgressStatus::Running,
+                    ProofProgressStatus::Done,
+                    ProofProgressStatus::Running,
+                    if failed {
+                        ProofProgressStatus::Failed
+                    } else {
+                        ProofProgressStatus::Done
+                    },
+                ]
+            );
+            for retained in progress {
+                let Event::RunActionProgress(broadcast) = rx.try_recv().unwrap().event else {
+                    panic!("expected run progress");
+                };
+                assert_eq!(broadcast, retained);
+            }
+            assert!(rx.try_recv().is_err());
+        }
     }
 }

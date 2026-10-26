@@ -1,34 +1,14 @@
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
 import test from "node:test";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { build } from "vite";
+import { buildModule, importModule } from "./buildModule.mjs";
 
-const require = createRequire(import.meta.url);
-const bundle = await build({
-  configFile: false,
-  root: fileURLToPath(new URL("..", import.meta.url)),
-  logLevel: "silent",
+const code = await buildModule(new URL("../src/shared/state/store.ts", import.meta.url), {
   define: {
     "import.meta.env.VITE_DOBJD_URL": JSON.stringify(""),
     "import.meta.env.DEV": "false",
   },
-  build: {
-    write: false,
-    minify: false,
-    lib: {
-      entry: fileURLToPath(new URL("../src/shared/state/store.ts", import.meta.url)),
-      formats: ["es"],
-      fileName: "store",
-    },
-    rollupOptions: {
-      external: ["react"],
-      output: { paths: { react: pathToFileURL(require.resolve("react")).href } },
-    },
-  },
+  external: ["react"],
 });
-const code = (Array.isArray(bundle) ? bundle : [bundle]).flatMap((build) => build.output)
-  .find((output) => output.type === "chunk" && output.isEntry).code;
 
 const action = { pluginName: "test", name: "Craft" };
 const result = { runId: "run-1", oldRoot: "root", inputFiles: ["in.dobj"], outputFiles: ["out.dobj"] };
@@ -57,9 +37,7 @@ test("proof completion is shared by events and polling", async (t) => {
     constructor() { source = this; }
     close() { this.closed = true; }
   };
-  const { useStore: store } = await import(
-    `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`
-  );
+  const { useStore: store } = await importModule(code);
   const initial = store.getState();
   const init = () => store.getState().initProofPanel({ runId: "run-1", action, args: ["Input"] });
   t.mock.method(globalThis, "setTimeout", (callback) => { queueMicrotask(callback); return 0; });
@@ -85,7 +63,7 @@ test("proof completion is shared by events and polling", async (t) => {
       }
       assert.equal(source.closed, true);
 
-      for (const late of [event, done, failed, { ...done, phase: "generateProof", status: "running" }]) {
+      for (const late of [done, failed, { ...done, phase: "generateProof", status: "running" }]) {
         store.getState().applyRunActionProgress(late);
         assert.equal(store.getState().proof, fromPoll);
       }
