@@ -25,15 +25,7 @@ pub async fn list(
     Query(query): Query<RunListQuery>,
 ) -> Json<Vec<ProofJobState>> {
     let active_only = query.status == Some(RunListFilter::Active);
-    Json(
-        state
-            .services
-            .jobs
-            .entries(active_only)
-            .iter()
-            .map(|entry| entry.snapshot())
-            .collect(),
-    )
+    Json(state.services.list_proofs(active_only))
 }
 
 /// `GET /proofs/{jobId}`: return the job state, optionally waiting for
@@ -43,11 +35,5 @@ pub async fn get(
     Path(job_id): Path<String>,
     Query(query): Query<WaitQuery>,
 ) -> ApiResult<Json<ProofJobState>> {
-    if state.services.jobs.get(&job_id).is_none() {
-        return Err(crate::error::ApiError::new(
-            StatusCode::NOT_FOUND,
-            format!("unknown job: {job_id}"),
-        ));
-    }
     Ok(Json(state.services.wait_for_proof(&job_id, query).await?))
 }

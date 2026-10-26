@@ -495,15 +495,21 @@ impl Driver {
                 changed_files.extend(record.input_files.iter().cloned());
             }
         }
-        let changed = entries
-            .iter()
-            .filter(|entry| changed_files.contains(&entry.file_name))
-            .cloned()
-            .collect::<Vec<_>>();
-        outcome.objects = self.summaries(&changed, &records);
+        let summaries = self.summaries(
+            entries
+                .iter()
+                .filter(|entry| all_objects || changed_files.contains(&entry.file_name)),
+            &records,
+        );
         let listing = if all_objects {
-            self.summaries(&entries, &records)
+            outcome.objects = summaries
+                .iter()
+                .filter(|summary| changed_files.contains(&summary.file_name))
+                .cloned()
+                .collect();
+            summaries
         } else {
+            outcome.objects = summaries;
             Vec::new()
         };
         Ok((outcome, listing))

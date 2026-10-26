@@ -8,6 +8,7 @@ use driver::{Driver, DriverError, Hash};
 use wire_types::transactions::TransactionRecord;
 use wire_types::{ObjectSummary, ProofJobState, WaitQuery};
 
+use crate::error::ServiceError;
 use crate::events::{Event, EventHub};
 use crate::jobs::JobRegistry;
 use crate::mcp::McpRuntime;
@@ -47,21 +48,48 @@ impl Services {
     }
 
     pub fn publish_objects(&self, file_names: &[String]) {
-        for file_name in file_names {
-            match self.object_summary(file_name) {
-                Ok(summary) => {
-                    self.events.publish(Event::Object(summary));
+        if file_names.is_empty() {
+            return;
+        }
+        match self.driver.read_objects(file_names) {
+            Ok(summaries) => {
+                for (file_name, summary) in file_names.iter().zip(summaries) {
+                    match summary {
+                        Ok(summary) => {
+                            self.events.publish(Event::Object(summary));
+                        }
+                        Err(err) => tracing::debug!("no summary for {file_name}: {err:#}"),
+                    }
                 }
-                Err(err) => tracing::debug!("no summary for {file_name}: {err:#}"),
             }
+            Err(err) => tracing::debug!("could not read object summaries: {err:#}"),
         }
     }
 
     pub fn announce_transaction(&self, record: &TransactionRecord) {
         self.events.publish(Event::Transaction(record.clone()));
-        self.publish_objects(&record.output_files);
-        self.publish_objects(&record.input_files);
+        let file_names = record
+            .output_files
+            .iter()
+            .chain(&record.input_files)
+            .cloned()
+            .collect::<Vec<_>>();
+        self.publish_objects(&file_names);
         self.settler.wake();
+    }
+
+    pub fn submit_transaction(&self, tx_final: &Hash) -> Result<TransactionRecord> {
+        let record = self.driver.submit(tx_final)?;
+        self.announce_transaction(&record);
+        Ok(record)
+    }
+
+    pub fn list_proofs(&self, active_only: bool) -> Vec<ProofJobState> {
+        self.jobs
+            .entries(active_only)
+            .iter()
+            .map(|entry| entry.snapshot())
+            .collect()
     }
 
     /// Submit transactions in order; stop at the first error without rolling
@@ -69,9 +97,7 @@ impl Services {
     pub fn submit_transactions(&self, tx_finals: &[Hash]) -> Result<Vec<TransactionRecord>> {
         let mut records = Vec::with_capacity(tx_finals.len());
         for tx_final in tx_finals {
-            let record = self.driver.submit(tx_final)?;
-            self.announce_transaction(&record);
-            records.push(record);
+            records.push(self.submit_transaction(tx_final)?);
         }
         Ok(records)
     }
@@ -93,7 +119,7 @@ impl Services {
         let entry = self
             .jobs
             .get(job_id)
-            .ok_or_else(|| anyhow::anyhow!("unknown job: {job_id}"))?;
+            .ok_or_else(|| ServiceError::ProofJobNotFound(job_id.to_string()))?;
         wait_until(
             &self.events,
             query,

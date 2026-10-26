@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use payload::blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES;
 use wire_types::relayer::{JobStatusResponse, SubmitProofRequest, SubmitProofResponse};
@@ -38,27 +38,11 @@ impl RelayerClient for HttpRelayerClient {
             "{}/api/v1/proofs/{job_id}",
             relayer_api_url.trim_end_matches('/')
         );
-        let response = self
-            .client
-            .get(&endpoint)
-            .send()
-            .with_context(|| format!("failed to query relayer job at {endpoint}"))?;
-
-        let status = response.status();
-        let body = response
-            .text()
-            .with_context(|| format!("failed to read relayer status response from {endpoint}"))?;
-        if !status.is_success() {
-            return Err(anyhow!(
-                "relayer status failed with {} {}: {}",
-                status.as_u16(),
-                status,
-                body
-            ));
-        }
-
-        serde_json::from_str::<JobStatusResponse>(&body)
-            .map_err(|err| anyhow!("failed to decode relayer status response: {err}; body={body}"))
+        super::send_json_request(
+            self.client.get(&endpoint),
+            &endpoint,
+            "relayer status response",
+        )
     }
 
     fn submit_proof(
@@ -81,25 +65,10 @@ impl RelayerClient for HttpRelayerClient {
             client_ref,
         };
 
-        let response = self
-            .client
-            .post(&endpoint)
-            .json(&request)
-            .send()
-            .map_err(|err| anyhow!("failed to submit proof to relayer at {endpoint}: {err}"))?;
-
-        let status = response.status();
-        let body = response.text().unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "relayer submit failed with {} {}: {}",
-                status.as_u16(),
-                status,
-                body
-            ));
-        }
-
-        serde_json::from_str::<SubmitProofResponse>(&body)
-            .map_err(|err| anyhow!("failed to decode relayer submit response: {err}; body={body}"))
+        super::send_json_request(
+            self.client.post(&endpoint).json(&request),
+            &endpoint,
+            "relayer submit response",
+        )
     }
 }

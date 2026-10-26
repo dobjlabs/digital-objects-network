@@ -218,13 +218,34 @@ impl Driver {
     /// Missing files produce [`DriverError::ObjectFileNotFound`] (HTTP
     /// 404), not a generic 500.
     pub fn read_object(&self, path: &Path) -> Result<ObjectSummary> {
+        self.summary_of(self.read_object_entry(path)?)
+    }
+
+    /// Reads each requested file using one snapshot of transaction records,
+    /// holds and class metadata. Individual missing or invalid files retain
+    /// their own errors so callers can still use the other summaries.
+    pub fn read_objects(&self, paths: &[impl AsRef<Path>]) -> Result<Vec<Result<ObjectSummary>>> {
+        let records = load_records(&self.paths)?;
+        let index = RecordIndex::new(&records);
+        let held = self.holds.labels();
+        let catalog = self.catalog();
+        Ok(paths
+            .iter()
+            .map(|path| {
+                self.read_object_entry(path.as_ref())
+                    .map(|entry| self.object_summary(&entry, &index, &held, catalog.as_ref()))
+            })
+            .collect())
+    }
+
+    fn read_object_entry(&self, path: &Path) -> Result<ObjectFileEntry> {
         let file_name = extract_basename(path)?;
         let resolved = self.resolve_managed_path(&file_name);
         if !resolved.exists() {
             return Err(DriverError::ObjectFileNotFound(file_name).into());
         }
         let record = parse_object_record_file(&resolved)?;
-        self.summary_of(ObjectFileEntry { file_name, record })
+        Ok(ObjectFileEntry { file_name, record })
     }
 
     /// The object file's contents exactly as stored on disk, resolved the
@@ -532,16 +553,17 @@ impl Driver {
             .remove(0))
     }
 
-    pub(crate) fn summaries(
+    pub(crate) fn summaries<'a>(
         &self,
-        entries: &[ObjectFileEntry],
+        entries: impl IntoIterator<Item = &'a ObjectFileEntry>,
         records: &[TransactionRecord],
     ) -> Vec<ObjectSummary> {
         let index = RecordIndex::new(records);
         let held = self.holds.labels();
+        let catalog = self.catalog();
         entries
-            .iter()
-            .map(|entry| self.object_summary(entry, &index, &held))
+            .into_iter()
+            .map(|entry| self.object_summary(entry, &index, &held, catalog.as_ref()))
             .collect()
     }
 
@@ -552,8 +574,9 @@ impl Driver {
         entry: &ObjectFileEntry,
         index: &RecordIndex<'_>,
         held: &HashMap<String, String>,
+        catalog: &dyn ActionCatalog,
     ) -> ObjectSummary {
-        let class_info = self.catalog().get_class(&entry.record.class);
+        let class_info = catalog.get_class(&entry.record.class);
         let record = index.by_tx_final.get(&entry.record.tx_final);
         let status = match (entry.record.status, record.map(|record| record.state)) {
             (FileStatus::Unknown, Some(TransactionState::Submitted)) => ObjectStatus::Pending,

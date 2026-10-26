@@ -28,9 +28,9 @@ use crate::state::AppState;
 pub async fn run_action(
     State(state): State<AppState>,
     Json(req): Json<RunActionRequest>,
-) -> ApiResult<(StatusCode, Json<RunAccepted>)> {
-    let accepted = crate::runs::spawn_run(&state.services, req.input)?;
-    Ok((StatusCode::ACCEPTED, Json(accepted)))
+) -> (StatusCode, Json<RunAccepted>) {
+    let accepted = crate::runs::spawn_run(&state.services, req.input);
+    (StatusCode::ACCEPTED, Json(accepted))
 }
 
 /// `GET /actions/runs` -- every run dobjd still holds, oldest first: runs in

@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use anyhow::{Context, Result, anyhow};
+use super::send_json_request;
+use anyhow::{Result, anyhow};
 use pod2::middleware::Hash;
-use serde::de::DeserializeOwned;
 use txlib::{GroundingWitness, StateHeader};
 use wire_types::synchronizer::{
     GroundingWitnessRequest, GroundingWitnessResponse, MembershipRequest, MembershipResponse,
@@ -184,33 +184,6 @@ impl SynchronizerClient for HttpSynchronizerClient {
             block_number: block_number.expect("at least one membership request was made"),
         })
     }
-}
-
-fn send_json_request<T: DeserializeOwned>(
-    request: reqwest::blocking::RequestBuilder,
-    endpoint: &str,
-    decode_context: &str,
-) -> Result<T> {
-    let response = request
-        .send()
-        .with_context(|| format!("failed to query endpoint at {endpoint}"))?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let detail = response
-            .text()
-            .map(|body| body.trim().chars().take(2048).collect::<String>())
-            .unwrap_or_else(|error| format!("could not read error response: {error}"));
-        return Err(anyhow!(
-            "request failed with {} {}: {}",
-            status.as_u16(),
-            status,
-            detail,
-        ));
-    }
-
-    response
-        .json()
-        .with_context(|| format!("failed to decode {decode_context}"))
 }
 
 /// Validate and index the per-object created-set proofs returned by the

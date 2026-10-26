@@ -15,7 +15,7 @@ use dobj_mcp::ops::DobjOps;
 use dobj_mcp::types as mcp;
 use tokio::task::JoinHandle;
 
-use crate::state::Services;
+use crate::state::{Services, parse_tx_final};
 
 /// How long a stop waits for graceful shutdown (in-flight responses
 /// flushing, sessions closing) before the serve task is aborted outright.
@@ -159,11 +159,6 @@ fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
     tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(future))
 }
 
-fn parse_tx_final(hex: &str) -> anyhow::Result<::driver::Hash> {
-    payload::decode_hash_hex(hex)
-        .map_err(|err| ::driver::DriverError::InvalidInput(format!("txFinal {hex}: {err}")).into())
-}
-
 impl DobjOps for DobjdOps {
     fn list_objects(&self) -> anyhow::Result<Vec<mcp::ObjectSummary>> {
         // The driver folds each object's class metadata (emoji, description)
@@ -196,7 +191,7 @@ impl DobjOps for DobjdOps {
     }
 
     fn run_action(&self, input: mcp::RunActionInput) -> anyhow::Result<mcp::RunAccepted> {
-        crate::runs::spawn_run(&self.services, input)
+        Ok(crate::runs::spawn_run(&self.services, input))
     }
 
     fn get_run(&self, run_id: &str) -> anyhow::Result<mcp::RunState> {
@@ -223,13 +218,7 @@ impl DobjOps for DobjdOps {
     }
 
     fn list_proofs(&self, active_only: bool) -> anyhow::Result<Vec<mcp::ProofJobState>> {
-        Ok(self
-            .services
-            .jobs
-            .entries(active_only)
-            .iter()
-            .map(|entry| entry.snapshot())
-            .collect())
+        Ok(self.services.list_proofs(active_only))
     }
 
     fn submit_transactions(
@@ -239,7 +228,7 @@ impl DobjOps for DobjdOps {
         let tx_finals = tx_finals
             .iter()
             .map(|hex| parse_tx_final(hex))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
         self.services.submit_transactions(&tx_finals)
     }
 

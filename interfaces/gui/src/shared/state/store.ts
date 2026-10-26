@@ -11,6 +11,7 @@ import {
   type ObjectSummaryPayload as ObjectSummary,
   type QualifiedNamePayload,
   type RunActionProgress,
+  type RunActionResult,
   type RunState,
 } from "../api/httpClient";
 import { normalizeErrorMessage } from "../error";
@@ -88,6 +89,33 @@ interface ProofState {
   summary: ProofSummary | null;
   error: string | null;
   stats: ProofStats;
+}
+
+function isProofTerminal(proof: ProofState): boolean {
+  return proof.status === "summary" || proof.status === "error";
+}
+
+function finishProof(proof: ProofState, result: RunActionResult): ProofState {
+  if (isProofTerminal(proof)) return proof;
+  return {
+    ...proof,
+    status: "summary",
+    oldRoot: result.oldRoot,
+    summary: { inputs: result.inputFiles, live: result.outputFiles },
+    steps: proof.steps.map((step) => ({
+      ...step,
+      status: "done",
+      detail:
+        step.id === "commit" ? "Transaction landed" : "Proof generation complete",
+    })),
+    messages: [...proof.messages, "Transaction landed"].slice(-8),
+    error: null,
+  };
+}
+
+function failProof(proof: ProofState, message: string): ProofState {
+  if (isProofTerminal(proof)) return proof;
+  return { ...proof, status: "error", error: message };
 }
 
 export type ContextSelection =
@@ -270,63 +298,37 @@ export const useStore = create<AppState>((set, get) => ({
     }),
   applyRunActionProgress: (event) =>
     set((prev) => {
-      if (prev.proof.runActionId !== event.runId) return prev;
-
-      // Terminal failure arrives as its own event now; surface it on the
-      // panel immediately rather than waiting for the poll to catch up.
+      if (prev.proof.runActionId !== event.runId || isProofTerminal(prev.proof)) {
+        return prev;
+      }
       if (event.status === "failed") {
+        return { proof: failProof(prev.proof, event.message) };
+      }
+      if (event.phase === "commit" && event.status === "done") {
         return {
-          ...prev,
-          proof: {
-            ...prev.proof,
-            status: "error",
-            error: event.message,
-          },
+          proof: finishProof(prev.proof, {
+            runId: event.runId,
+            oldRoot: event.oldRoot ?? prev.proof.oldRoot ?? "",
+            inputFiles: event.inputFiles ?? [],
+            outputFiles: event.outputFiles ?? [],
+          }),
         };
       }
 
-      const nextSteps = prev.proof.steps.map((step) => ({ ...step }));
-      const updateStep = (stepId: string, patch: Partial<ProofStep>) => {
-        const index = nextSteps.findIndex((step) => step.id === stepId);
-        if (index === -1) return;
-        nextSteps[index] = { ...nextSteps[index], ...patch };
-      };
-
-      let nextStatus = prev.proof.status;
-      let nextOldRoot = prev.proof.oldRoot;
-      let nextSummary = prev.proof.summary;
-
-      if (event.phase === "generateProof") {
-        nextStatus = "generating";
-        updateStep("generate-proof", {
-          status: event.status,
-          detail: event.message,
-        });
-      } else if (event.phase === "commit") {
-        nextStatus = event.status === "done" ? "summary" : "committing";
-        nextOldRoot = event.oldRoot ?? nextOldRoot;
-        updateStep("commit", {
-          status: event.status,
-          detail: event.message,
-        });
-        if (event.status === "done") {
-          nextSummary = {
-            inputs: event.inputFiles ?? [],
-            live: event.outputFiles ?? [],
-          };
-        }
-      }
-
+      const isCommit = event.phase === "commit";
+      const stepId = isCommit ? "commit" : "generate-proof";
+      const stepStatus = event.status;
       return {
-        ...prev,
         proof: {
           ...prev.proof,
-          status: nextStatus,
+          status: isCommit ? "committing" : "generating",
           messages: [...prev.proof.messages, event.message].slice(-8),
-          steps: nextSteps,
-          oldRoot: nextOldRoot,
-          summary: nextSummary,
-          stats: prev.proof.stats,
+          steps: prev.proof.steps.map((step) =>
+            step.id === stepId
+              ? { ...step, status: stepStatus, detail: event.message }
+              : step,
+          ),
+          oldRoot: event.oldRoot ?? prev.proof.oldRoot,
         },
       };
     }),
@@ -393,19 +395,22 @@ export const useStore = create<AppState>((set, get) => ({
         ? inputBindings.map((binding) => binding.label)
         : ["(no inputs)"];
     let stopRunEvents: (() => void) | null = null;
+    let runId: string | null = null;
+    const previousRunId = get().proof.runActionId;
 
     try {
       // dobjd assigns the run id and returns it immediately; the proof +
       // commit run on a background worker. Initialize the panel against that
       // id, then subscribe to the run's replayable SSE before polling for the
       // authoritative terminal result.
-      const { runId } = await runAction({
+      const accepted = await runAction({
         action,
         inputObjectPaths: inputBindings.map((binding) => binding.objectPath),
         ...(args && Object.keys(args).length > 0 ? { args } : {}),
       });
+      runId = accepted.runId;
       get().initProofPanel({ runId, action, args: verifyTargets });
-      stopRunEvents = await listenRunActionProgressForRun(runId, (event) => {
+      stopRunEvents = listenRunActionProgressForRun(runId, (event) => {
         get().applyRunActionProgress(event);
       });
 
@@ -417,44 +422,53 @@ export const useStore = create<AppState>((set, get) => ({
       }
       const result = finalState.result;
 
-      set((prev) => {
-        if (prev.proof.runActionId !== runId) return prev;
-        return {
-          ...prev,
-          proof: {
-            ...prev.proof,
-            status: "summary",
-            oldRoot: result.oldRoot,
-            summary: {
-              inputs: result.inputFiles,
-              live: result.outputFiles,
-            },
-          },
-        };
-      });
-
-      await new Promise((resolve) => setTimeout(resolve, postDoneHoldMs));
-      get().resetProofPanel(runId);
+      set((prev) =>
+        prev.proof.runActionId === runId
+          ? { proof: finishProof(prev.proof, result) }
+          : prev,
+      );
     } catch (error) {
       const errorMessage = normalizeErrorMessage(error, "Failed to run action");
       console.error("Failed to run SDK action:", error);
-      set((prev) => ({
-        ...prev,
-        proof: {
-          runActionId: null,
-          action: null,
-          status: "error",
-          args: verifyTargets,
-          messages: [],
-          steps: [],
-          oldRoot: null,
-          summary: null,
-          error: errorMessage,
-          stats: prev.proof.stats,
-        },
-      }));
+      set((prev) => {
+        if (runId) {
+          return prev.proof.runActionId === runId
+            ? { proof: failProof(prev.proof, errorMessage) }
+            : prev;
+        }
+        if (
+          prev.proof.runActionId !== previousRunId ||
+          (prev.proof.status !== "idle" && prev.proof.status !== "error")
+        ) {
+          return prev;
+        }
+        return {
+          proof: failProof(
+            {
+              ...prev.proof,
+              runActionId: null,
+              status: "idle",
+              action,
+              args: verifyTargets,
+              messages: [],
+              steps: [],
+              oldRoot: null,
+              summary: null,
+            },
+            errorMessage,
+          ),
+        };
+      });
     } finally {
       stopRunEvents?.();
+      if (
+        runId &&
+        get().proof.runActionId === runId &&
+        get().proof.status === "summary"
+      ) {
+        await sleep(postDoneHoldMs);
+        get().resetProofPanel(runId);
+      }
     }
   },
 }));

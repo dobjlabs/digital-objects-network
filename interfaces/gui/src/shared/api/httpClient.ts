@@ -208,7 +208,7 @@ function ensureEventSource() {
 function subscribeHttp<T>(
   type: string,
   handler: Handler<T>,
-): Promise<UnlistenFn> {
+): UnlistenFn {
   ensureEventSource();
   let set = httpHandlers.get(type);
   if (!set) {
@@ -221,25 +221,19 @@ function subscribeHttp<T>(
     if (!s) return;
     s.delete(handler as Handler<unknown>);
   };
-  return Promise.resolve(unlisten);
-}
-
-export function listenRunActionProgress(
-  handler: (event: RunActionProgress) => void,
-): Promise<UnlistenFn> {
-  return subscribeHttp<RunActionProgress>("run-action-progress", handler);
+  return unlisten;
 }
 
 /** Subscribe to object summaries and file removals. */
-export async function listenObjectEvents(handlers: {
+export function listenObjectEvents(handlers: {
   object: (object: ObjectSummaryPayload) => void;
   removed: (event: ObjectRemovedEvent) => void;
-}): Promise<UnlistenFn> {
-  const unlistenObject = await subscribeHttp<ObjectSummaryPayload>(
+}): UnlistenFn {
+  const unlistenObject = subscribeHttp<ObjectSummaryPayload>(
     "object",
     handlers.object,
   );
-  const unlistenRemoved = await subscribeHttp<ObjectRemovedEvent>(
+  const unlistenRemoved = subscribeHttp<ObjectRemovedEvent>(
     "object-removed",
     handlers.removed,
   );
@@ -250,12 +244,12 @@ export async function listenObjectEvents(handlers: {
 }
 
 /** Fires on reconnection so subscribers can reload missed state. */
-export function listenEventStreamReopen(handler: () => void): Promise<UnlistenFn> {
+export function listenEventStreamReopen(handler: () => void): UnlistenFn {
   ensureEventSource();
   reopenHandlers.add(handler);
-  return Promise.resolve(() => {
+  return () => {
     reopenHandlers.delete(handler);
-  });
+  };
 }
 
 function isTerminalRunProgress(event: RunActionProgress): boolean {
@@ -268,7 +262,7 @@ function isTerminalRunProgress(event: RunActionProgress): boolean {
 export function listenRunActionProgressForRun(
   runId: string,
   handler: (event: RunActionProgress) => void,
-): Promise<UnlistenFn> {
+): UnlistenFn {
   const source = new EventSource(
     `${HTTP_BASE}/actions/runs/${encodeURIComponent(runId)}/events`,
   );
@@ -292,5 +286,5 @@ export function listenRunActionProgressForRun(
     // EventSource auto-reconnects, resending Last-Event-ID so the daemon can
     // replay from the run's buffered progress log.
   };
-  return Promise.resolve(close);
+  return close;
 }
