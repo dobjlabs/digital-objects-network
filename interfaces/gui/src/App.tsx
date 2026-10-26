@@ -95,46 +95,22 @@ function App() {
   // The event stream has no replay; reload objects after reconnecting.
   useEffect(() => {
     let cancelled = false;
-    const disposers: Array<() => void> = [];
-    const keep = (subscription: Promise<() => void>, what: string) => {
-      subscription
-        .then((dispose) => {
-          if (cancelled) {
-            dispose();
-            return;
-          }
-          disposers.push(dispose);
-        })
-        .catch((error) => {
-          console.error(`Failed to subscribe to ${what}:`, error);
-        });
-    };
-    keep(
-      listenObjectEvents({
-        object: (object) => {
-          if (!cancelled) applyObjectUpdate(object);
-        },
-        removed: ({ fileName }) => {
-          if (!cancelled) removeObject(fileName);
-        },
-      }),
-      "object events",
-    );
-    keep(
-      listenEventStreamReopen(() => {
-        if (cancelled) return;
-        hydrateData().catch((error) => {
-          if (!cancelled) {
-            console.error("Failed to refresh GUI after reconnecting:", error);
-          }
-        });
-      }),
-      "event stream reconnects",
-    );
+    const stopObjects = listenObjectEvents({
+      object: applyObjectUpdate,
+      removed: ({ fileName }) => removeObject(fileName),
+    });
+    const stopReopen = listenEventStreamReopen(() => {
+      hydrateData().catch((error) => {
+        if (!cancelled) {
+          console.error("Failed to refresh GUI after reconnecting:", error);
+        }
+      });
+    });
 
     return () => {
       cancelled = true;
-      for (const dispose of disposers) dispose();
+      stopObjects();
+      stopReopen();
     };
   }, [applyObjectUpdate, hydrateData, removeObject]);
 

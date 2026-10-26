@@ -86,8 +86,8 @@ test("built client selects the same daemon for HTTP and SSE", async (t) => {
         `data:text/javascript;base64,${Buffer.from(scenario.code).toString("base64")}#${index}`
       );
       await module.loadObjects();
-      const unlistenGlobal = await module.listenRunActionProgress(() => {});
-      const unlistenRun = await module.listenRunActionProgressForRun("run-1", () => {});
+      const unlistenGlobal = module.listenObjectEvents({ object: () => {}, removed: () => {} });
+      const unlistenRun = module.listenRunActionProgressForRun("run-1", () => {});
       assert.equal(fetch.mock.calls[0].arguments[0], `${scenario.expected}/objects`);
       assert.deepEqual(eventUrls, [
         `${scenario.expected}/events`,
