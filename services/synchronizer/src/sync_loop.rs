@@ -268,16 +268,19 @@ async fn handle_reorgs_for_present_slot(
         }
     }
 
-    if let Some(prev_root) = node.state_log.slot_root(slot - 1).await? {
-        if beacon_block_header.parent_root != prev_root {
-            warn!(
-                slot,
-                expected_parent = ?prev_root,
-                actual_parent = ?beacon_block_header.parent_root,
-                "Detected reorg: parent linkage mismatch; rewinding"
-            );
-            return Ok(Some(rewind_for_reorg(node, slot).await?));
-        }
+    if slot == node.config.init_start_slot {
+        return Ok(None);
+    }
+
+    let prev_root = node.state_log.latest_block_root_before(slot).await?;
+    if beacon_block_header.parent_root != prev_root {
+        warn!(
+            slot,
+            expected_parent = ?prev_root,
+            actual_parent = ?beacon_block_header.parent_root,
+            "Detected reorg: parent linkage mismatch; rewinding"
+        );
+        return Ok(Some(rewind_for_reorg(node, slot).await?));
     }
 
     Ok(None)

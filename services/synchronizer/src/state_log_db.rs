@@ -230,6 +230,18 @@ impl StateLogDb {
         root.flatten().as_deref().map(db_bytes_to_b256).transpose()
     }
 
+    /// Return the nearest committed consensus block root strictly before `slot`, skipping empty slots.
+    /// Fails when no preceding block has been committed.
+    pub async fn latest_block_root_before(&self, slot: u32) -> Result<B256> {
+        let root: Vec<u8> = sqlx::query_scalar(
+            "SELECT cl_block_root FROM slots WHERE slot < $1 AND cl_block_root IS NOT NULL ORDER BY slot DESC LIMIT 1",
+        )
+        .bind(slot as i32)
+        .fetch_one(&self.pool)
+        .await?;
+        db_bytes_to_b256(&root)
+    }
+
     /// Commit one new slot as the new highest slot, writing
     /// its created-index rows in the same transaction so the index is always
     /// consistent with the committed state.
