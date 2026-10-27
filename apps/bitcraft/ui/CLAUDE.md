@@ -29,10 +29,9 @@ page needs its host added there.
 The Inventory Summary (`?page=summary`) is laid out like Finder's Get Info
 window: the inventory's Total Bit Value beside an icon, then "General" (the
 value and the live object total) and "Live objects" (a count per class)
-sections, which can be collapsed. It refreshes on every job event from
-dobjd's `/events` stream, when that stream reconnects, and on window focus.
-It polls every 10 seconds only while some object is pending or unknown,
-since those settle when the inventory is read, without an event.
+sections, which can be collapsed. Both inventory views apply `object` and `object-removed` events from dobjd's `/events` stream, including changes made by other clients. They read inventory and transaction snapshots on load, stream connection or reconnection, sequence gaps, and window focus. Changes received during a snapshot read are reapplied to its result. Recorded transactions settle in the daemon and need no UI polling; pending or unknown objects with no open local transaction record are reconciled every 10 seconds.
+
+Actions using independent inputs can run concurrently, including actions with no inputs. Selected inputs must be live and unheld. The page reserves inputs while the start request is pending and until the run finishes; daemon holds also cover work started in another window or client. Each job keeps its replayable run stream and reads the run's authoritative state without reloading inventory on progress.
 
 Recipe Info is loaded as
 `?page=recipebook`: it shows only the action list and details, and runs none

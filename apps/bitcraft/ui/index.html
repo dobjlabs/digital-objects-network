@@ -884,7 +884,8 @@
   const STARTUP_RUN_STORAGE_KEY = "bitcraft.startup-pocketknife-run";
   let startupPocketknifeActive = false;
   let startupPocketknifeRun = null;
-  let startupPocketknifeTimer = null;
+  let startupPocketknifeTxFinal = null;
+  let startupPocketknifeSubmitError = null;
 
   function isPocketknife(className) {
     return className.pluginName === PLUGIN_NAME && className.name === "Pocketknife";
@@ -913,8 +914,6 @@
 
   function stopStartupPocketknife() {
     startupPocketknifeActive = false;
-    clearInterval(startupPocketknifeTimer);
-    startupPocketknifeTimer = null;
   }
 
   function updateStartupPocketknife(run = startupPocketknifeRun) {
@@ -931,7 +930,18 @@
       || [...objectsByFileName.values()].some((object) => isPocketknife(object.class))) {
       setStartupProgress(2);
     }
-    if (run?.requestError || run?.state?.status === "failed") {
+    const transaction = inventory?.records().find((record) =>
+      record.txFinal === startupPocketknifeTxFinal || run?.runId && record.owner === run.runId);
+    if (transaction) startupPocketknifeTxFinal = transaction.txFinal;
+    if (transaction?.state === "expired" || startupPocketknifeTxFinal && !transaction) {
+      showStartupError(transaction?.reason ?? "The pocketknife transaction is no longer available.");
+      return;
+    }
+    if (transaction?.state === "recorded" && startupPocketknifeSubmitError) {
+      showStartupError(startupErrorText(startupPocketknifeSubmitError));
+      return;
+    }
+    if (!transaction && (run?.requestError || run?.state?.status === "failed")) {
       showStartupError(run.requestError ?? run.state.error ?? "Pocketknife creation failed.");
       return;
     }
@@ -939,7 +949,8 @@
       showStartupError(startupErrorText(run.transportError, "Could not check progress: "));
       return;
     }
-    if (run?.state?.status === "committing" || run?.state?.status === "succeeded") {
+    if (transaction || run?.state?.status === "committing" || run?.state?.status === "succeeded") {
+      setStartupProgress(2);
       showStartup("Waiting for confirmation...", "Your pocketknife is being confirmed by the network. This can take a little while.", pocketknifeIcon());
     } else {
       showStartup("Creating your first pocketknife...", "Bitcraft is making a cryptographic proof for your starter tool. You will be ready to gather resources soon.", pocketknifeIcon());
@@ -956,6 +967,12 @@
       + (dobjHome ? ` Its log is dobjd.log in ${dobjHome}.` : "");
   }
 
+  function startupInventoryError(error) {
+    if (startupPocketknifeActive) {
+      showStartupError(startupErrorText(error, "Could not refresh inventory: "));
+    }
+  }
+
   async function discardObjectUnsafe(fileName) {
     try {
       await postJson(`/objects/${encodeURIComponent(fileName)}/discard_unsafe`, {});
@@ -967,10 +984,11 @@
   async function ensureStartupPocketknife() {
     stopStartupPocketknife();
     startupPocketknifeRun = null;
+    startupPocketknifeTxFinal = null;
+    startupPocketknifeSubmitError = null;
     hideRestoredStartupRun();
     renderRuns();
-    const objects = await fetchJson("/objects/unspent");
-    showObjects(objects);
+    const objects = await inventory.reload();
     if (objects.some((object) => isPocketknife(object.class) && isLive(object))) {
       setStartupProgress(3);
       finishStartup();
@@ -985,9 +1003,28 @@
       activeRun.onUpdate = updateStartupPocketknife;
       updateStartupPocketknife(activeRun);
     } else {
-      // No run is left to finish these. The object listing reports local
-      // state when it cannot reach the synchronizer, so reaching it here is
-      // what shows the listing really found them off chain.
+      const transaction = inventory.records().find((record) =>
+        ["recorded", "submitted"].includes(record.state) && (
+          record.action.pluginName === PLUGIN_NAME && record.action.name === "CraftPocketknife"
+          || record.outputFiles.some((fileName) => objects.some((object) =>
+            object.fileName === fileName && isPocketknife(object.class)))
+        ));
+      if (transaction) {
+        startupPocketknifeTxFinal = transaction.txFinal;
+        updateStartupPocketknife();
+        if (transaction.state === "recorded" && transaction.submitAttemptedAtMs == null) {
+          try {
+            const records = await postJson("/transactions/submit", { txFinals: [transaction.txFinal] });
+            records.forEach((record) => inventory.accept({ type: "transaction", ...record }));
+          } catch (error) {
+            startupPocketknifeSubmitError = error;
+            throw error;
+          }
+        }
+        return;
+      }
+      // The listing can fall back to local state. Check the synchronizer
+      // before discarding outputs that have no run or open transaction.
       const staleKnives = objects.filter((object) => isPocketknife(object.class));
       if (staleKnives.length > 0) {
         try {
@@ -998,9 +1035,7 @@
       }
       for (const knife of staleKnives) {
         await discardObjectUnsafe(knife.fileName);
-      }
-      if (staleKnives.length > 0) {
-        showObjects(objects.filter((object) => !staleKnives.includes(object)));
+        inventory.accept({ type: "object-removed", fileName: knife.fileName });
       }
       const action = pluginActions.find((candidate) => candidate.action.name === "CraftPocketknife");
       if (!action) throw new Error("The starter pocketknife recipe is unavailable. Check that the Bitcraft plugin is installed.");
@@ -1011,13 +1046,6 @@
           updateStartupPocketknife(run);
         },
       });
-    }
-    if (startupPocketknifeActive) {
-      startupPocketknifeTimer = setInterval(() => {
-        if (!startupPocketknifeRun || !isRunInProgress(startupPocketknifeRun) || startupPocketknifeRun.transportError) {
-          return reloadObjects();
-        }
-      }, 1500);
     }
   }
 
@@ -1117,7 +1145,7 @@
   // `?page=summary` loads this page as the Inventory Summary window.
   const SUMMARY_PAGE = "summary";
   const SUMMARY_WINDOW_NAME = "bitcraft-inventory-summary";
-  const SUMMARY_REFRESH_MS = 10000;
+  const INVENTORY_RECONCILE_MS = 10000;
   const initialParams = new URLSearchParams(location.search);
   const isReferenceWindow = initialParams.get(PAGE_PARAM) === RECIPEBOOK_PAGE;
   const isSummaryWindow = initialParams.get(PAGE_PARAM) === SUMMARY_PAGE;
@@ -1128,11 +1156,6 @@
   // Windows opened from the top bar, by name.
   const openedWindows = new Map();
   const summaryView = document.getElementById("summary-view");
-  let summaryRefreshInFlight = false;
-  let summaryRefreshQueued = false;
-  // Set while the summary polls, which it does only while some object is
-  // not yet live.
-  let summaryPoll = null;
   const recipeList = document.getElementById("recipe-list");
   const recipeDetailsBody = document.getElementById("recipe-details-body");
   let recipeActions = [];
@@ -1154,8 +1177,7 @@
   // time, or a file's shown state changing.
   const flashStartedAt = new Map();
   const ROW_FLASH_MS = 1500;
-  let objectReloadInFlight = false;
-  let objectReloadQueued = false;
+  let inventory = null;
   let pluginActions = [];
   let objectsDirPath = "";
   // Runs started from this page, newest first. A selected run is always the
@@ -1446,7 +1468,7 @@
         label: qualifiedClassName(action.action),
         labelClass: "action-name",
         icon: actionIcon(action.action, 16),
-        isDisabled: () => runs.some(isRunInProgress),
+        isDisabled: () => !inputsAvailable(fileNames),
         onSelect: () => startRun(action, fileNames),
       });
     }
@@ -1588,7 +1610,20 @@
     };
   }
 
+  function inputRun(fileName) {
+    return runs.find((run) => isRunInProgress(run) && run.inputFileNames.includes(fileName));
+  }
+
+  function inputsAvailable(fileNames) {
+    return fileNames.every((fileName) => {
+      const object = objectsByFileName.get(fileName);
+      return object?.status === "live" && object.heldByRunId == null
+        && !inputRun(fileName);
+    });
+  }
+
   async function startRun(action, fileNames, { showInJobs = true, onUpdate = null } = {}) {
+    if (!inputsAvailable(fileNames)) return null;
     const inputFileNames = assignInputSlots(action, fileNames).map((object) => object.fileName);
     const run = newRun(action, inputFileNames);
     run.showInJobs = showInJobs;
@@ -1610,10 +1645,7 @@
       run.clientEndedAt = Date.now();
       run.onUpdate?.(run);
     }
-    renderRuns();
-    if (run.id === selectedRunId) {
-      renderDetails();
-    }
+    showSelection();
     return run;
   }
 
@@ -1632,7 +1664,6 @@
 
     const readState = async () => {
       if (!isRunInProgress(run)) return;
-      const previous = run.state;
       try {
         run.state = await fetchJson(runPath);
         run.transportError = null;
@@ -1648,17 +1679,7 @@
         run.clientEndedAt ??= Date.now();
         source?.close();
       }
-      // Inputs become held and outputs appear (pending, then live) only at
-      // a status change or a new progress step.
-      if (run.state?.status !== previous?.status
-        || run.state?.progress?.length !== previous?.progress?.length
-        || !isRunInProgress(run)) {
-        reloadObjects();
-      }
-      renderRuns();
-      if (run.id === selectedRunId) {
-        renderDetails();
-      }
+      showSelection();
       run.onUpdate?.(run);
     };
 
@@ -2032,11 +2053,6 @@
     openedWindows.set(name, window.open(url, name, features));
   }
 
-  // The Inventory Summary window reads only the inventory; it runs none of
-  // the main window's startup. Jobs announce their changes on the event
-  // stream, so it refreshes on every event and when the stream reconnects
-  // after missing some. A pending or unknown object settles only when the
-  // inventory is read, with no event, so it polls while one exists.
   // The Settings window shows the connection addresses from dobjd's settings.
   // They cannot be edited yet, so the fields are read-only.
   async function loadSettingsWindow() {
@@ -2056,53 +2072,121 @@
     }
   }
 
+  // Buffer changes during a snapshot read so its older response cannot
+  // overwrite events received while the request was in flight.
+  function watchInventory(onChange, { onError = () => {}, onReconnect = () => {} } = {}) {
+    let objects = new Map();
+    let transactions = new Map();
+    let buffered = null;
+    let reading = null;
+    let readAgain = false;
+    let lastSeq = null;
+    let opened = false;
+    let poll = null;
+    const source = new EventSource(`${DOBJD_URL}/events`);
+    const values = () => [...objects.values()];
+    const records = () => [...transactions.values()];
+    const reconcile = () => reload().catch((error) => {
+      console.warn("Could not refresh inventory:", error);
+      onError(error);
+    });
+    const notify = () => {
+      const recordedOutputs = new Set(records()
+        .filter((record) => ["recorded", "submitted"].includes(record.state))
+        .flatMap((record) => record.outputFiles));
+      const needsReconcile = values().some((object) => object.status !== "live"
+        && !recordedOutputs.has(object.fileName));
+      if (needsReconcile && poll === null) poll = setInterval(reconcile, INVENTORY_RECONCILE_MS);
+      if (!needsReconcile && poll !== null) {
+        clearInterval(poll);
+        poll = null;
+      }
+      onChange(values());
+    };
+    const apply = (event) => {
+      if (event.type === "object") {
+        const { type, seq, ...object } = event;
+        if (object.status === "nullified") objects.delete(object.fileName);
+        else objects.set(object.fileName, object);
+      } else if (event.type === "object-removed") {
+        objects.delete(event.fileName);
+      } else if (event.type === "transaction") {
+        const { type, seq, ...record } = event;
+        transactions.set(record.txFinal, record);
+      } else if (event.type === "transaction-deleted") {
+        transactions.delete(event.txFinal);
+      }
+    };
+    const accept = (event) => {
+      if (!["object", "object-removed", "transaction", "transaction-deleted"].includes(event.type)) return;
+      buffered?.push(event);
+      apply(event);
+      notify();
+    };
+    async function reload() {
+      if (reading) {
+        readAgain = true;
+        return reading;
+      }
+      reading = (async () => {
+        do {
+          readAgain = false;
+          buffered = [];
+          const [snapshot, recordSnapshot] = await Promise.all([
+            fetchJson("/objects/unspent"), fetchJson("/transactions"),
+          ]);
+          objects = new Map(snapshot.map((object) => [object.fileName, object]));
+          transactions = new Map(recordSnapshot.map((record) => [record.txFinal, record]));
+          buffered.forEach(apply);
+          buffered = null;
+          notify();
+        } while (readAgain);
+        return values();
+      })();
+      try {
+        return await reading;
+      } finally {
+        buffered = null;
+        reading = null;
+      }
+    }
+    source.onmessage = ({ data }) => {
+      let event;
+      try { event = JSON.parse(data); } catch { reconcile(); return; }
+      const gap = lastSeq !== null && event.seq !== lastSeq + 1;
+      lastSeq = event.seq;
+      accept(event);
+      if (gap) reconcile();
+    };
+    // The initial snapshot may precede the connection, so the first open
+    // needs reconciliation too. Later opens also cover daemon restarts.
+    source.onopen = () => {
+      lastSeq = null;
+      reconcile();
+      if (opened) onReconnect();
+      opened = true;
+    };
+    window.addEventListener("focus", reconcile);
+    window.addEventListener("beforeunload", () => {
+      source.close();
+      clearInterval(poll);
+    });
+    return { reload, records, accept, values };
+  }
+
   async function loadSummaryWindow() {
     document.body.classList.add("secondary-window");
     document.title = "Bitcraft Inventory Summary";
     summaryView.hidden = false;
     await Presentation.load();
-    await refreshSummary();
-    const events = new EventSource(`${DOBJD_URL}/events`);
-    let eventsOpened = false;
-    events.onopen = () => {
-      if (eventsOpened) refreshSummary();
-      eventsOpened = true;
-    };
-    events.onmessage = () => refreshSummary();
-    window.addEventListener("focus", () => refreshSummary());
-  }
-
-  function updateSummaryPolling(objects) {
-    const unsettled = objects.some((object) => !isLive(object));
-    if (unsettled && summaryPoll === null) {
-      summaryPoll = setInterval(refreshSummary, SUMMARY_REFRESH_MS);
-    } else if (!unsettled && summaryPoll !== null) {
-      clearInterval(summaryPoll);
-      summaryPoll = null;
-    }
-  }
-
-  async function refreshSummary() {
-    if (summaryRefreshInFlight) {
-      summaryRefreshQueued = true;
-      return;
-    }
-    summaryRefreshInFlight = true;
+    inventory = watchInventory(renderSummary);
     try {
-      const objects = await fetchJson("/objects/unspent");
-      renderSummary(objects);
-      updateSummaryPolling(objects);
+      await inventory.reload();
     } catch (error) {
       const message = document.createElement("div");
       message.className = "message error";
       message.textContent = `Could not read the inventory: ${error.message}`;
       summaryView.replaceChildren(message);
-    } finally {
-      summaryRefreshInFlight = false;
-      if (summaryRefreshQueued) {
-        summaryRefreshQueued = false;
-        refreshSummary();
-      }
     }
   }
 
@@ -2327,7 +2411,7 @@
   // succeeded and its nullifiers are on-chain.
   function inputFilePath(run, fileName) {
     const spent = run.state?.status === "succeeded"
-      && (run.state.result?.nullifiedFiles ?? []).includes(fileName);
+      && (run.state.result?.inputFiles ?? []).includes(fileName);
     return `${objectsDirPath}/${spent ? ".nullified/" : ""}${fileName}`;
   }
 
@@ -2385,8 +2469,7 @@
     run.detailsElapsedElement = appendFieldRow(properties, "duration", elapsedText(run));
     const result = run.state?.result;
     if (result) {
-      appendFieldRow(properties, "old root", result.oldRoot);
-      appendFieldRow(properties, "new root", result.newRoot);
+      appendFieldRow(properties, "grounding root", result.oldRoot);
     }
     const error = run.requestError ?? run.state?.error;
     if (error) {
@@ -2808,6 +2891,12 @@
   function showSelection() {
     for (const [rowFileName, row] of rowsByFileName) {
       row.classList.toggle("selected", selectedFileNames.has(rowFileName));
+      const object = objectsByFileName.get(rowFileName);
+      if (!object) continue;
+      const state = shownState(object);
+      for (const status of ["live", "held", "pending", "unknown"]) {
+        row.classList.toggle(status, state === status);
+      }
     }
     renderRuns();
     renderDetails();
@@ -2819,9 +2908,15 @@
     showStartup("Opening Bitcraft...", "Getting your inventory ready.");
     showMessage("Loading...", false);
     try {
-      const [objectsDir, objects, actions, welcome] = await Promise.all([
+      inventory ??= watchInventory(showObjects, {
+        onError: startupInventoryError,
+        onReconnect: () => {
+          if (!runs.some((run) => run.runId === null && !run.requestError)) restoreRuns();
+        },
+      });
+      const [objectsDir, , actions, welcome] = await Promise.all([
         fetchJson("/objects/dir"),
-        fetchJson("/objects/unspent"),
+        inventory.reload(),
         fetchJson("/actions"),
         loadUiTextFile(WELCOME_FILE),
         Presentation.load(),
@@ -2833,7 +2928,7 @@
       objectsDirPath = objectsDir.path;
       objectsDirHeader.textContent = objectsDir.path;
       objectsDirHeader.title = objectsDir.path;
-      showObjects(objects);
+      showObjects(inventory.values());
       if (!await restoreRuns()) throw new Error("Could not check active jobs. Please try again.");
       await ensureStartupPocketknife();
     } catch (error) {
@@ -2992,36 +3087,13 @@
     }
   }
 
-  // Keeps the current list on failure; the next completed run retries.
-  async function reloadObjects() {
-    if (objectReloadInFlight) {
-      objectReloadQueued = true;
-      return;
-    }
-    objectReloadInFlight = true;
-    try {
-      showObjects(await fetchJson("/objects/unspent"));
-    } catch (error) {
-      console.warn("Could not reload objects:", error);
-      if (isStartupUnfinished()) {
-        showStartupError(`Could not refresh inventory: ${error.message}`);
-      }
-    } finally {
-      objectReloadInFlight = false;
-      if (objectReloadQueued) {
-        objectReloadQueued = false;
-        reloadObjects();
-      }
-    }
-  }
-
   // The state a row's colour shows. `pending` takes precedence over being
   // held by a run, which takes precedence over the remaining statuses.
   function shownState(object) {
     if (object.status === "pending") {
       return "pending";
     }
-    return object.heldByRunId != null ? "held" : object.status;
+    return object.heldByRunId != null || inputRun(object.fileName) ? "held" : object.status;
   }
 
   // Pending objects are left out of every count and value until they are

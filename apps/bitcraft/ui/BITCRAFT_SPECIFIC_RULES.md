@@ -14,8 +14,7 @@ that block should be plugin-agnostic.
 
 ### Only bitcraft objects are listed
 
-- **Where:** `PLUGIN_NAME`, applied in `load()` to the result of
-  `GET /objects/unspent`.
+- **Where:** `PLUGIN_NAME`, applied in `showObjects()` to inventory snapshots and object events.
 - **Generic behavior:** list unspent objects from every installed plugin.
 - **Why:** this is a bitcraft inventory; other plugins' objects (e.g.
   `craft-basics`, `craft-rocket`, `nanoverse`) are out of scope.
@@ -56,9 +55,8 @@ that block should be plugin-agnostic.
   action that outputs a pocketknife suppresses creation. Re-read inventory
   after restoring runs so a run that finished during startup does not cause
   another knife to be crafted.
-- **Stale knives:** with no live knife and no such active run, a pending or
-  unknown knife is one whose commit failed. The inventory re-read has already
-  checked it against the synchronizer, so it is moved aside with
+- **Durable transactions:** if the run registry was lost, an open transaction that creates a pocketknife suppresses another craft. Startup follows its transaction and object events, keeping its outputs. A recorded transaction with no submission attempt is submitted using `/transactions/submit`; an attempted submission with an unknown outcome is followed until landing or expiry. Failure to read transaction records stops setup. Expiry or deletion shows an error and requires an explicit retry before creating another knife.
+- **Stale knives:** with no live knife, active crafting run, or open pocketknife transaction, a pending or unknown knife has no work left that could make it live. The inventory re-read has already checked it against the synchronizer, so it is moved aside with
   `POST /objects/{file_name}/discard_unsafe`, which keeps none of dobjd's
   object-state guarantees, and a new knife is crafted. This
   happens on "Try again" after a failed commit and on reopening the app.
@@ -123,8 +121,7 @@ that block should be plugin-agnostic.
   reopening the app retries after discarding its stale knife. The startup
   job is followed through its event stream like any other job; the
   terminal status arrives through the read prompted by dobjd closing the
-  stream. Inventory is polled after success until the knife is live.
-  Inventory refreshes alone do not trigger creation.
+  stream. Transaction and object events advance setup, including after the run registry is lost. Inventory changes alone do not trigger creation.
 - **Generic behavior:** loading the UI never starts actions or discards objects automatically.
 
 ## Action input constraints

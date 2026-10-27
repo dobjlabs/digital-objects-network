@@ -184,6 +184,36 @@ pub(crate) fn execute_input(input: &ActionInput) -> ExecuteActionInput {
     }
 }
 
+struct HeldInputReporter<'a, R> {
+    services: &'a Services,
+    reporter: &'a R,
+    files: std::cell::RefCell<Vec<String>>,
+}
+
+impl<R: ExecutionReporter> ExecutionReporter for HeldInputReporter<'_, R> {
+    fn on_inputs_held(&self, files: &[String]) {
+        *self.files.borrow_mut() = files.to_vec();
+        self.services.publish_objects(files);
+        self.reporter.on_inputs_held(files);
+    }
+
+    fn on_step(&self, phase: ExecutionPhase, message: &str, ctx: &ExecutionStepContext) {
+        self.reporter.on_step(phase, message, ctx);
+    }
+
+    fn on_done(&self, phase: ExecutionPhase) {
+        self.reporter.on_done(phase);
+    }
+}
+
+impl<R> Drop for HeldInputReporter<'_, R> {
+    fn drop(&mut self) {
+        // Proving and recording have released their holds before this guard,
+        // including when the worker unwinds.
+        self.services.publish_objects(self.files.get_mut());
+    }
+}
+
 /// Prove and record, publishing transaction and object changes.
 pub(crate) fn prove_and_record<R: ExecutionReporter>(
     services: &Services,
@@ -191,18 +221,14 @@ pub(crate) fn prove_and_record<R: ExecutionReporter>(
     owner: &str,
     reporter: &R,
 ) -> anyhow::Result<TransactionRecord> {
-    let proved = services.driver.prove(input, owner, reporter)?;
-    let input_files = proved.input_files().to_vec();
-    services.publish_objects(&input_files);
-    let recorded = services.driver.record(proved);
-    match recorded {
-        Ok(record) => {
-            services.announce_transaction(&record);
-            Ok(record)
-        }
-        Err(err) => {
-            services.publish_objects(&input_files);
-            Err(err)
-        }
-    }
+    let reporter = HeldInputReporter {
+        services,
+        reporter,
+        files: Default::default(),
+    };
+    let proved = services.driver.prove(input, owner, &reporter)?;
+    let record = services.driver.record(proved)?;
+    reporter.files.borrow_mut().clear();
+    services.announce_transaction(&record);
+    Ok(record)
 }
