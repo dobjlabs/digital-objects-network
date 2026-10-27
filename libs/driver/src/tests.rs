@@ -177,6 +177,46 @@ impl Fixture {
     }
 }
 
+struct SubmissionGate {
+    entered: std::sync::mpsc::Receiver<()>,
+    release: std::sync::mpsc::Sender<()>,
+}
+
+impl SubmissionGate {
+    fn wait(&self) {
+        self.entered
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+    }
+}
+
+impl Drop for SubmissionGate {
+    fn drop(&mut self) {
+        let _ = self.release.send(());
+    }
+}
+
+impl Fixture {
+    fn pause_submission(&self, fail: bool) -> SubmissionGate {
+        let (entered, notification) = std::sync::mpsc::channel();
+        let (release, blocked) = std::sync::mpsc::channel();
+        self.relayer.lock().unwrap().on_submit = Some(Box::new(move || {
+            entered.send(()).unwrap();
+            blocked
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .map_err(|err| anyhow!("submission was not released: {err}"))?;
+            if fail {
+                return Err(anyhow!("blocked submission failed"));
+            }
+            Ok(())
+        }));
+        SubmissionGate {
+            entered: notification,
+            release,
+        }
+    }
+}
+
 fn tx_final_of(record: &TransactionRecord) -> Hash {
     crate::transactions::record_tx_final(record).unwrap()
 }
@@ -392,6 +432,8 @@ impl SynchronizerClient for MockSynchronizer {
 #[derive(Default)]
 struct MockRelayerState {
     fail_submit: bool,
+    submit_calls: usize,
+    on_submit: Option<Box<dyn FnOnce() -> Result<()> + Send>>,
     submitted: Vec<Vec<u8>>,
     status: Option<JobStatus>,
     tx_hash: Option<String>,
@@ -409,13 +451,21 @@ impl RelayerClient for MockRelayer {
         payload_bytes: &[u8],
         _client_ref: Option<String>,
     ) -> Result<SubmitProofResponse> {
+        let on_submit = {
+            let mut inner = self.inner.lock().unwrap();
+            inner.submit_calls += 1;
+            inner.on_submit.take()
+        };
+        if let Some(on_submit) = on_submit {
+            on_submit()?;
+        }
         let mut inner = self.inner.lock().unwrap();
         if inner.fail_submit {
             return Err(anyhow!("relayer submit failed"));
         }
         inner.submitted.push(payload_bytes.to_vec());
         Ok(SubmitProofResponse {
-            job_id: "job-1".to_string(),
+            job_id: format!("job-{}", inner.submitted.len()),
             status: JobStatus::Queued,
             tx_final: Default::default(),
             state_root: Default::default(),
@@ -1692,4 +1742,143 @@ fn submission_started_during_head_query_waits_for_membership_before_expiry() {
         fx.driver.settle().unwrap().records[0].state,
         TransactionState::Landed
     );
+}
+
+#[test]
+fn concurrent_submits_of_one_transaction_share_the_accepted_job() {
+    let fx = fixture("log_1.dobj");
+    let proved = fx
+        .driver
+        .prove(fx.input("CraftWood"), "run", &NoopExecutionReporter)
+        .unwrap();
+    let record = fx.driver.record(proved).unwrap();
+    let tx_final = tx_final_of(&record);
+    let gate = fx.pause_submission(false);
+    let first = {
+        let driver = fx.driver.clone();
+        std::thread::spawn(move || driver.submit(&tx_final))
+    };
+    gate.wait();
+    let (started, ready) = std::sync::mpsc::channel();
+    let (finished, completion) = std::sync::mpsc::channel();
+    let second = {
+        let driver = fx.driver.clone();
+        std::thread::spawn(move || {
+            started.send(()).unwrap();
+            let result = driver.submit(&tx_final);
+            finished.send(()).unwrap();
+            result
+        })
+    };
+    ready
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    let premature = completion.recv_timeout(std::time::Duration::from_millis(100));
+    assert_eq!(
+        fx.driver.get_transaction(&tx_final).unwrap().state,
+        TransactionState::Recorded
+    );
+    assert!(!fx.driver.list_objects(None).unwrap().is_empty());
+    drop(gate);
+    let accepted = first.join().unwrap().unwrap();
+    let repeated = second.join().unwrap().unwrap();
+    assert!(
+        premature.is_err(),
+        "the overlapping call returned before acceptance"
+    );
+    assert_eq!(accepted, repeated);
+    assert_eq!(accepted.state, TransactionState::Submitted);
+    assert_eq!(fx.relayer.lock().unwrap().submit_calls, 1);
+    assert_eq!(fx.chain.lock().unwrap().head_requests, 1);
+}
+
+#[test]
+fn independent_transactions_can_submit_while_another_request_is_blocked() {
+    let fx = fixture("log_1.dobj");
+    let proved = fx
+        .driver
+        .prove(fx.input("CraftWood"), "first", &NoopExecutionReporter)
+        .unwrap();
+    let first_record = fx.driver.record(proved).unwrap();
+    let proved = fx
+        .driver
+        .prove(
+            ExecuteActionInput {
+                action: craft_basics("FindLog"),
+                input_objects: vec![],
+                args: Default::default(),
+            },
+            "second",
+            &NoopExecutionReporter,
+        )
+        .unwrap();
+    let second_record = fx.driver.record(proved).unwrap();
+    let gate = fx.pause_submission(false);
+    let first = {
+        let driver = fx.driver.clone();
+        std::thread::spawn(move || driver.submit(&tx_final_of(&first_record)))
+    };
+    gate.wait();
+    let (finished, completion) = std::sync::mpsc::channel();
+    let second = {
+        let driver = fx.driver.clone();
+        std::thread::spawn(move || {
+            let result = driver.submit(&tx_final_of(&second_record));
+            finished.send(()).unwrap();
+            result
+        })
+    };
+    let completed_independently = completion.recv_timeout(std::time::Duration::from_secs(2));
+    drop(gate);
+    let first = first.join().unwrap().unwrap();
+    let second = second.join().unwrap().unwrap();
+    assert!(
+        completed_independently.is_ok(),
+        "an unrelated submission was blocked"
+    );
+    assert_ne!(first.relayer_job_id, second.relayer_job_id);
+    assert_eq!(fx.relayer.lock().unwrap().submit_calls, 2);
+
+    let next_lock = fx.driver.submission_lock(&Hash::default());
+    let locks = fx.driver.submission_locks.lock().unwrap();
+    assert_eq!(locks.len(), 1);
+    assert!(locks.values().all(|lock| lock.strong_count() > 0));
+    drop(locks);
+    drop(next_lock);
+}
+
+#[test]
+fn a_failed_submission_releases_the_lock_for_a_waiting_retry() {
+    let fx = fixture("log_1.dobj");
+    let proved = fx
+        .driver
+        .prove(fx.input("CraftWood"), "run", &NoopExecutionReporter)
+        .unwrap();
+    let record = fx.driver.record(proved).unwrap();
+    let tx_final = tx_final_of(&record);
+    let gate = fx.pause_submission(true);
+    let first = {
+        let driver = fx.driver.clone();
+        std::thread::spawn(move || driver.submit(&tx_final))
+    };
+    gate.wait();
+    let (started, ready) = std::sync::mpsc::channel();
+    let second = {
+        let driver = fx.driver.clone();
+        std::thread::spawn(move || {
+            started.send(()).unwrap();
+            driver.submit(&tx_final)
+        })
+    };
+    ready
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    drop(gate);
+    let error = first.join().unwrap().unwrap_err();
+    assert!(error.to_string().contains("blocked submission failed"));
+    let retried = second.join().unwrap().unwrap();
+    assert_eq!(retried.state, TransactionState::Submitted);
+    assert!(retried.submit_attempted_at_ms.is_some());
+    assert_eq!(fx.relayer.lock().unwrap().submit_calls, 2);
+    assert_eq!(fx.relayer.lock().unwrap().submitted.len(), 1);
 }

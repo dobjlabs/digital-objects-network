@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 
 use anyhow::{Context, Result, anyhow};
 use payload::{decode_hash_hex, encode_hash_hex};
@@ -94,6 +94,7 @@ pub struct Driver {
     /// generation or network requests.
     pub(crate) store_lock: Arc<Mutex<()>>,
     pub(crate) holds: HoldTable,
+    pub(crate) submission_locks: Arc<Mutex<HashMap<Hash, Weak<Mutex<()>>>>>,
 }
 
 impl Driver {
@@ -110,7 +111,22 @@ impl Driver {
             deps,
             store_lock: Arc::new(Mutex::new(())),
             holds: HoldTable::default(),
+            submission_locks: Arc::default(),
         })
+    }
+
+    pub(crate) fn submission_lock(&self, tx_final: &Hash) -> Arc<Mutex<()>> {
+        let mut locks = self
+            .submission_locks
+            .lock()
+            .expect("submission lock table poisoned");
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = locks.get(tx_final).and_then(Weak::upgrade) {
+            return lock;
+        }
+        let lock = Arc::new(Mutex::new(()));
+        locks.insert(*tx_final, Arc::downgrade(&lock));
+        lock
     }
 
     pub fn paths(&self) -> &DriverPaths {

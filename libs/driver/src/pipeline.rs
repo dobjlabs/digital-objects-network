@@ -353,6 +353,8 @@ impl Driver {
     /// Submit a recorded payload and persist the relayer job ID.
     /// Refuse expired groundings; return submitted records unchanged.
     pub fn submit(&self, tx_final: &Hash) -> Result<TransactionRecord> {
+        let submission_lock = self.submission_lock(tx_final);
+        let _submission = submission_lock.lock().expect("submission lock poisoned");
         let settings = self.load_settings()?;
         let record = read_record(&self.paths, tx_final)?
             .ok_or_else(|| DriverError::TransactionNotFound(encode_hash_hex(tx_final)))?;

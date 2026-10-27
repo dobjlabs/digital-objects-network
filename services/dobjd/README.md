@@ -127,6 +127,10 @@ that the relayer may hold the payload, so the record stays until the chain
 lands or outruns it. The daemon retries attempted submissions whose acceptance
 was not recorded, with exponential backoff up to 60 seconds between attempts.
 Retries resume after a restart and stop on acceptance, landing, or expiry.
+Overlapping submissions for one `txFinal` wait for the in-flight call and
+reuse its accepted job. Calls for other transactions proceed independently.
+A failed request releases the submission lock while retaining the durable
+attempt flag, so retry remains possible and deletion stays guarded.
 Transactions that have never been offered to the relayer are not submitted
 automatically. Records survive a daemon restart; proof jobs, runs and
 input holds do not, and nothing on disk depends on them.

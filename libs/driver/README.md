@@ -34,7 +34,10 @@ It is intentionally a library, not a daemon and not a CLI.
     whose file is the commit point. Refuses an input another record spends and
     an output file that already exists. Releases the holds either way.
   - `submit`: posts a recorded payload to the relayer, refusing a grounding the
-    synchronizer has aged out. Idempotent.
+    synchronizer has aged out. Overlapping calls for the same `txFinal` wait on
+    a shared per-transaction lock and reread the record after acquiring it.
+    Accepted submissions return the existing job; failed calls release the lock
+    for retry. Different transactions can submit concurrently.
   - `delete_transaction`: removes a recorded transaction that was never
     offered to the relayer, with its output files.
   - `settle`: query membership for transactions with a submission attempt,
