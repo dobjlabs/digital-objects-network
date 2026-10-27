@@ -111,8 +111,7 @@ dobj run craft-basics::FindLog
 # [commit/done]          Commit complete
 # action:   craft-basics::FindLog
 # run id:   3f8c…
-# old root: 0xabcd...
-# new root: 0xefgh...
+# grounding root: 0xabcd...
 # outputs:
 #   + craft-basics_log_0x70e35...c96b.dobj
 
@@ -120,6 +119,11 @@ dobj run craft-basics::FindLog
 dobj events
 # {"type":"run-action-progress","runId":"CraftWood",...}
 ```
+
+The grounding root is the state used to prove the transaction. Run completion
+checks the transaction's membership in synchronized state; it does not return
+a post-transaction state root. Use `dobj state-root` to read the current head,
+which may also include other transactions.
 
 ## Relationship to other crates
 
