@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use driver::{ExecutionReporter, ExecutionStepContext, now_ms};
-use tokio::sync::Semaphore;
 use wire_types::transactions::{TransactionRecord, TransactionState};
 use wire_types::{
     ActionInput, ExecutionPhase, ObjectStatus, ProofProgressStatus, QualifiedName, RunAccepted,
@@ -16,9 +15,6 @@ use wire_types::{
 use crate::events::{Event, EventHub};
 use crate::registry::{Registry, Retained};
 use crate::state::{Services, transaction_event};
-
-/// Default concurrency limit for runs; excludes standalone proof jobs.
-pub const DEFAULT_MAX_CONCURRENT_PROOFS: usize = 1;
 
 struct RunInner {
     status: RunStatus,
@@ -187,27 +183,12 @@ fn progress_event(
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct RunRegistry {
     pub entries: Registry<RunEntry>,
-    /// Runs remain queued while waiting for a proof permit.
-    proof_permits: Arc<Semaphore>,
-}
-
-impl Default for RunRegistry {
-    fn default() -> Self {
-        Self::new(DEFAULT_MAX_CONCURRENT_PROOFS)
-    }
 }
 
 impl RunRegistry {
-    pub fn new(max_concurrent_proofs: usize) -> Self {
-        Self {
-            entries: Registry::default(),
-            proof_permits: Arc::new(Semaphore::new(max_concurrent_proofs)),
-        }
-    }
-
     pub fn get(&self, run_id: &str) -> Option<Arc<RunEntry>> {
         self.entries.get(run_id)
     }
@@ -319,8 +300,7 @@ impl ExecutionReporter for RunReporter {
 /// Start background execution and return a run handle.
 pub fn spawn_run(services: &Services, input: ActionInput) -> RunAccepted {
     let input = crate::proof_jobs::trimmed(input);
-    let proof_services = services.clone();
-    let submit_services = services.clone();
+    let services_for_worker = services.clone();
     let driver = services.driver.clone();
     let exec_input = crate::proof_jobs::execute_input(&input);
     spawn_worker(
@@ -329,14 +309,14 @@ pub fn spawn_run(services: &Services, input: ActionInput) -> RunAccepted {
         input.action,
         input.input_object_paths,
         move |reporter| {
-            crate::proof_jobs::prove_and_record(
-                &proof_services,
+            let record = crate::proof_jobs::prove_and_record(
+                &services_for_worker,
                 exec_input,
                 reporter.run_id(),
                 reporter,
-            )
+            )?;
+            submit_record(&services_for_worker, record, reporter)
         },
-        move |record, reporter| submit_record(&submit_services, record, reporter),
         move |tx_final| driver.get_transaction(&payload::decode_hash_hex(tx_final)?),
     )
 }
@@ -393,22 +373,17 @@ fn submit_record(
     Ok(record)
 }
 
-/// Release the proof permit before submission; supervise worker errors and
-/// panics, then follow the transaction until settlement.
-fn spawn_worker<P, S, R>(
+/// Supervise worker errors and panics, then follow the transaction until settlement.
+fn spawn_worker<S, R>(
     registry: &RunRegistry,
     events: EventHub,
     action: QualifiedName,
     input_object_paths: Vec<String>,
-    prove: P,
-    submit: S,
+    stage: S,
     read_record: R,
 ) -> RunAccepted
 where
-    P: FnOnce(&RunReporter) -> anyhow::Result<TransactionRecord> + Send + 'static,
-    S: FnOnce(TransactionRecord, &RunReporter) -> anyhow::Result<TransactionRecord>
-        + Send
-        + 'static,
+    S: FnOnce(&RunReporter) -> anyhow::Result<TransactionRecord> + Send + 'static,
     R: Fn(&str) -> anyhow::Result<TransactionRecord> + Send + Sync + 'static,
 {
     let run_id = uuid::Uuid::new_v4().to_string();
@@ -416,23 +391,11 @@ where
         RunEntry::new(run_id.clone(), action, input_object_paths, sequence)
     });
     let created_at_ms = entry.created_at_ms;
-    let permits = registry.proof_permits.clone();
     let reporter = RunReporter::new(events.clone(), entry);
 
     tokio::spawn(async move {
-        let permit = permits
-            .acquire_owned()
-            .await
-            .expect("proof semaphore is never closed");
         let worker = reporter.clone();
-        let staged = tokio::task::spawn_blocking(move || {
-            let record = {
-                let _permit = permit;
-                prove(&worker)?
-            };
-            submit(record, &worker)
-        })
-        .await;
+        let staged = tokio::task::spawn_blocking(move || stage(&worker)).await;
         let record = match staged {
             Ok(Ok(record)) => record,
             Ok(Err(err)) => return reporter.finish_failure(format!("{err:#}")),
@@ -573,57 +536,6 @@ mod tests {
         .unwrap_or_else(|_| panic!("run did not reach {wanted:?}"));
     }
 
-    #[tokio::test]
-    async fn a_blocked_submission_does_not_hold_the_proof_permit() {
-        let registry = RunRegistry::new(1);
-        let events = EventHub::new();
-        let (submitting, submission_started) = tokio::sync::oneshot::channel();
-        let (release, released) = std::sync::mpsc::channel();
-        let first = spawn_worker(
-            &registry,
-            events.clone(),
-            action("first"),
-            Vec::new(),
-            |_| Ok(record("tx-1", TransactionState::Recorded)),
-            move |mut record, _| {
-                submitting.send(()).unwrap();
-                released.recv_timeout(Duration::from_secs(5)).unwrap();
-                record.state = TransactionState::Landed;
-                Ok(record)
-            },
-            still_open,
-        );
-        tokio::time::timeout(Duration::from_secs(5), submission_started)
-            .await
-            .unwrap()
-            .unwrap();
-        let second = spawn_worker(
-            &registry,
-            events,
-            action("second"),
-            Vec::new(),
-            |_| Ok(record("tx-2", TransactionState::Landed)),
-            |record, _| Ok(record),
-            still_open,
-        );
-        let second_state = wait_terminal(&registry, &second).await;
-        assert_eq!(registry.proof_permits.available_permits(), 1);
-        assert!(
-            registry
-                .get(&first.run_id)
-                .unwrap()
-                .snapshot()
-                .finished_at_ms
-                .is_none()
-        );
-        release.send(()).unwrap();
-        assert_eq!(second_state.status, RunStatus::Succeeded);
-        assert_eq!(
-            wait_terminal(&registry, &first).await.status,
-            RunStatus::Succeeded
-        );
-    }
-
     #[test]
     fn transaction_progress_preserves_the_record_root_and_state() {
         let registry = RunRegistry::default();
@@ -654,8 +566,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runs_queue_on_the_proof_permit_and_follow_their_transaction() {
-        let registry = RunRegistry::new(1);
+    async fn runs_prove_concurrently_and_follow_their_own_transaction() {
+        let registry = RunRegistry::default();
         let events = EventHub::new();
         let (first_started, first_start) = tokio::sync::oneshot::channel();
         let (release, released) = std::sync::mpsc::channel();
@@ -675,7 +587,6 @@ mod tests {
                 reporter.commit_step("Waiting for the transaction to land", &Default::default());
                 Ok(record("tx-1", TransactionState::Submitted))
             },
-            |record, _| Ok(record),
             still_open,
         );
         tokio::time::timeout(Duration::from_secs(5), first_start)
@@ -692,21 +603,16 @@ mod tests {
                 reporter.commit_step("Waiting for the transaction to land", &Default::default());
                 Ok(record("tx-2", TransactionState::Submitted))
             },
-            |record, _| Ok(record),
             still_open,
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        assert_eq!(
-            registry.get(&second.run_id).unwrap().status(),
-            RunStatus::Queued
-        );
-
-        release.send(()).unwrap();
         wait_status(&registry, &second, RunStatus::Committing).await;
         assert_eq!(
             registry.get(&first.run_id).unwrap().status(),
-            RunStatus::Committing
+            RunStatus::GenerateProof
         );
+
+        release.send(()).unwrap();
+        wait_status(&registry, &first, RunStatus::Committing).await;
         events.publish(Event::Transaction(record("tx-2", TransactionState::Landed)));
         assert_eq!(
             wait_terminal(&registry, &second).await.status,
@@ -732,7 +638,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_run_fails_when_its_transaction_expires_or_disappears() {
-        let registry = RunRegistry::new(1);
+        let registry = RunRegistry::default();
         let events = EventHub::new();
         let expired = spawn_worker(
             &registry,
@@ -743,7 +649,6 @@ mod tests {
                 reporter.commit_step("Waiting", &Default::default());
                 Ok(record("tx-1", TransactionState::Submitted))
             },
-            |record, _| Ok(record),
             still_open,
         );
         wait_status(&registry, &expired, RunStatus::Committing).await;
@@ -765,7 +670,6 @@ mod tests {
                 reporter.commit_step("Waiting", &Default::default());
                 Ok(record("tx-2", TransactionState::Recorded))
             },
-            |record, _| Ok(record),
             still_open,
         );
         wait_status(&registry, &deleted, RunStatus::Committing).await;
@@ -783,7 +687,6 @@ mod tests {
             action("landed"),
             Vec::new(),
             |_| Ok(record("tx-3", TransactionState::Submitted)),
-            |record, _| Ok(record),
             |tx_final| Ok(record(tx_final, TransactionState::Landed)),
         );
         assert_eq!(
@@ -793,8 +696,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn errors_and_panics_release_the_proof_permit() {
-        let registry = RunRegistry::new(1);
+    async fn worker_errors_and_panics_fail_the_run() {
+        let registry = RunRegistry::default();
         let events = EventHub::new();
         let refused = spawn_worker(
             &registry,
@@ -802,7 +705,6 @@ mod tests {
             action("refused"),
             Vec::new(),
             |_| Err(anyhow::anyhow!("input is held by another run")),
-            |record, _| Ok(record),
             still_open,
         );
         assert_eq!(
@@ -817,25 +719,11 @@ mod tests {
             |_| {
                 panic!("worker panic");
             },
-            |record, _| Ok(record),
             still_open,
         );
         let state = wait_terminal(&registry, &panicked).await;
         assert_eq!(state.status, RunStatus::Failed);
         assert!(state.error.unwrap().contains("worker panic"));
-        let next = spawn_worker(
-            &registry,
-            events,
-            action("next"),
-            Vec::new(),
-            |_| Ok(record("tx-9", TransactionState::Landed)),
-            |record, _| Ok(record),
-            still_open,
-        );
-        assert_eq!(
-            wait_terminal(&registry, &next).await.status,
-            RunStatus::Succeeded
-        );
     }
 
     #[test]

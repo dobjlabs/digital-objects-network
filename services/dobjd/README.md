@@ -124,15 +124,10 @@ input holds do not, and nothing on disk depends on them.
 
 ### Runs are non-blocking
 
-`POST /runs` registers the run, kicks off a background worker, and
-returns a `runId` immediately. The worker waits for a proof permit
-(`DOBJD_MAX_PROOFS`, default `1`: later runs queue as `queued` rather than
-being refused), proves and records under the run's id, submits, then follows
-the transaction's record until the chain decides: `succeeded` with the result
-once it lands, `failed` with the reason if it expires. The objects a run was
-given stay marked with its id (`heldByRunId`) until then. A relayer refusal
-is reported in the progress log and leaves the transaction `recorded`; the
-run keeps following it.
+`POST /runs` registers the run, kicks off a background worker, and returns a `runId` immediately. The worker proves and records under the run's id, submits, then follows the transaction's record until the chain decides: `succeeded` with the result once it lands, `failed` with the reason if it expires. The objects a run was given stay marked with its id (`heldByRunId`) until then. A relayer refusal is reported in the progress log and leaves the transaction `recorded`; the run keeps following it.
+
+Runs and standalone proof jobs can prove concurrently. Callers control how much work they start according to CPU/GPU and memory capacity. The initial `queued` status means the background worker has not started yet. Input holds still prevent concurrent work from spending the same object.
+
 The worker records the run's status, ordered progress log, and terminal
 result/error in an in-memory registry. Follow a run either way:
 

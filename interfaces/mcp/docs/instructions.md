@@ -31,15 +31,7 @@ a podlang predicate — a declarative rule that defines all valid ways the
 object could have reached its current state. Use `list_classes` and
 `inspect_class` to discover the available classes and how they relate.
 
-**Actions.** Actions are state transitions that consume input objects,
-generate a ZK proof, and produce output objects. Each action takes
-seconds to minutes of CPU time for proof generation. Multiple runs can be
-accepted at once. Each waits for an in-memory proof semaphore, reporting
-`queued` until it acquires a permit. The limit is one by default, configurable
-with `DOBJD_MAX_PROOFS`. A run releases its permit after recording, so submission
-and waiting for the chain can overlap with the next proof. Queued runs do not
-survive a daemon restart. For finer control, `start_proof_job` proves without
-submitting and `submit_transactions` posts when you choose.
+**Actions.** Actions are state transitions that consume input objects, generate a ZK proof, and produce output objects. Each action takes seconds to minutes of CPU time for proof generation. Runs and standalone proof jobs can prove concurrently, so start only as many as the machine's CPU/GPU and memory capacity allow. Their initial `queued` status means the background work has not started yet. A daemon restart loses run and job tracking and unfinished proof work; recorded transactions survive. For finer control, `start_proof_job` proves without submitting and `submit_transactions` posts when you choose.
 Use `list_actions` to see what's available and what each action requires.
 
 **Nullifiers and liveness.** When an action consumes an object, it
@@ -128,8 +120,7 @@ chain). Poll each `runId` independently.
 To separate proving from submitting, use `start_proof_job`, then `get_proof_job` with
 `wait_ms` until it is `done`, then `submit_transactions` with its `txFinal`
 when ready, and `get_transaction` with `wait_ms` until it is `landed` or
-`expired`. Proof jobs are not queued behind the run slot, so start only as
-many as the machine should prove at once.
+`expired`.
 
 Pass `inputObjectPaths` explicitly (one per the action's required input
 classes, in order); resolve them from `list_objects` / `check_feasibility`

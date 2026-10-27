@@ -330,7 +330,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Start an action end to end. Returns immediately with a runId and status=queued; the run waits for a proof slot, proves, records and submits the transaction, then follows it until it lands on the chain. Poll get_run(runId) until status is succeeded or failed (then read result / error). Several runs may be queued at once. For separate control over proving and submitting, use start_proof_job and submit_transactions instead. `args` optionally supplies caller data by name in POD2 JSON form, e.g. {\"count\": {\"Int\": \"42\"}, \"label\": \"hello\"}. Scripts read these values with arg(name) inside unsafe blocks. Argument names read during loading are listed on list_actions items. Omitted values are absent; the script chooses any defaults."
+        description = "Start an action end to end. Returns immediately with a runId and status=queued; the background worker proves, records and submits the transaction, then follows it until it lands on the chain. Poll get_run(runId) until status is succeeded or failed (then read result / error). Runs can prove concurrently; limit how many you start according to CPU/GPU and memory capacity. For separate control over proving and submitting, use start_proof_job and submit_transactions instead. `args` optionally supplies caller data by name in POD2 JSON form, e.g. {\"count\": {\"Int\": \"42\"}, \"label\": \"hello\"}. Scripts read these values with arg(name) inside unsafe blocks. Argument names read during loading are listed on list_actions items. Omitted values are absent; the script chooses any defaults."
     )]
     fn start_run(
         &self,
@@ -372,7 +372,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Prove an action without submitting it. Returns immediately with a jobId; the job proves, then records a transaction on disk (status done, txFinal set) whose outputs are held as unknown until it lands. Nothing is posted to the relayer: call submit_transactions when ready, or delete_transaction to abandon it. Proof jobs are not queued behind start_run's proof slot; start as many as the machine should prove at once. Same parameters as start_run."
+        description = "Prove an action without submitting it. Returns immediately with a jobId; the job proves, then records a transaction on disk (status done, txFinal set) whose outputs are held as unknown until it lands. Nothing is posted to the relayer: call submit_transactions when ready, or delete_transaction to abandon it. Proof jobs and runs can prove concurrently; limit how many you start according to CPU/GPU and memory capacity. Same parameters as start_run."
     )]
     fn start_proof_job(
         &self,
