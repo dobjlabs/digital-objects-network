@@ -66,6 +66,11 @@ pub async fn run_api_server(
             post(post_state_nullifier_contains),
         )
         .route("/v1/txlib/grounding-witness", post(post_grounding_witness))
+        .route("/v1/tx/by_tx_hash/{tx_hash}", get(get_tx_status_by_tx_hash))
+        .route(
+            "/v1/tx/by_tx_final/{tx_final}",
+            get(get_tx_status_by_tx_final),
+        )
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(AppState {
             containers,
@@ -260,6 +265,20 @@ async fn post_grounding_witness(
             })
             .collect(),
     }))
+}
+
+async fn get_tx_status_by_tx_hash(
+    State(app_state): State<AppState>,
+    Path(tx_hash): Path<String>,
+) -> Result<Json<TxStatusResponse>, (StatusCode, String)> {
+    todo!()
+}
+
+async fn get_tx_status_by_tx_final(
+    State(app_state): State<AppState>,
+    Path(tx_final): Path<String>,
+) -> Result<Json<TxStatusResponse>, (StatusCode, String)> {
+    todo!()
 }
 
 async fn load_membership(
