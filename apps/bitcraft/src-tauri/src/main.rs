@@ -96,7 +96,7 @@ fn is_daemon_url(url: &tauri::Url) -> bool {
 }
 
 /// Sites the game page may open in the user's browser.
-const EXTERNAL_LINK_HOSTS: &[&str] = &["bitcraft.sh"];
+const EXTERNAL_LINK_HOSTS: &[&str] = &["bitcraft.sh", "discord.gg"];
 
 fn is_external_link(url: &tauri::Url) -> bool {
     url.scheme() == "https"
@@ -192,7 +192,7 @@ fn main() -> Result<()> {
         message: Mutex::new(if args.no_runtime {
             "Desktop shell only. Start without --no-runtime to launch the game.".into()
         } else {
-            "Preparing cryptography...".into()
+            "Preparing artifacts...".into()
         }),
         tray_available: AtomicBool::new(false),
         #[cfg(target_os = "linux")]
@@ -361,7 +361,11 @@ mod tests {
 
     #[test]
     fn only_listed_sites_open_in_the_browser() {
-        for url in ["https://bitcraft.sh/", "https://bitcraft.sh/guide?x=1"] {
+        for url in [
+            "https://bitcraft.sh/",
+            "https://bitcraft.sh/guide?x=1",
+            "https://discord.gg/cWtZZYrer",
+        ] {
             assert!(is_external_link(&url.parse().unwrap()), "{url}");
         }
         for url in [

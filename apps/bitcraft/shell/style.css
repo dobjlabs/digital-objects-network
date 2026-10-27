@@ -18,10 +18,8 @@ body {
   padding: 32px;
 }
 main { width: min(100%, 360px); text-align: center; }
-.icon { width: 96px; height: 120px; margin: 0 auto 16px; }
-.icon svg { display: block; }
+.logo { display: block; width: 128px; height: 128px; margin: 0 auto 16px; }
 #status { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.3; white-space: pre-wrap; overflow-wrap: anywhere; }
-.description { margin: 4px 0 0; color: #6b6b6b; line-height: 1.5; }
 .startup-progress {
   display: block;
   width: 100%;
@@ -37,7 +35,6 @@ main { width: min(100%, 360px); text-align: center; }
 .startup-progress::-webkit-progress-bar { background: #e2e2e2; }
 .startup-progress::-webkit-progress-value { background: #0a64d8; }
 .startup-progress::-moz-progress-bar { background: #0a64d8; }
-#startup-progress-label { margin: 6px 0 0; color: #6b6b6b; font-size: 12px; }
 .status-bar {
   flex: none;
   display: flex;

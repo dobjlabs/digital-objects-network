@@ -10,12 +10,24 @@ The main window always shows the inventory (the files view). Its top bar
 has three groups of icons, separated by thin dividers. The game views: a
 folder, permanently selected, for the files view; a bar chart that opens
 the Inventory Summary; and an open book that opens Recipe Info. The outside
-links: an info icon that opens the Bitcraft website in the player's
-browser, and a Discord icon that does nothing yet. Last, a gear that opens
-Settings. Recipe Info, the Inventory Summary and
+links: an info icon and a Discord icon, which open the Bitcraft website
+and its Discord server in the player's browser. Last, a gear that opens
+Settings. Their tooltips read Objects, Stats, Reference, More Info, Discord
+and Settings; they are drawn by the page's CSS (`data-tooltip`), not native
+`title` tooltips, so they appear without the system's hover delay. Recipe Info, the Inventory Summary and
 Settings each open their window once, and a later click focuses it. These
 windows load this same page in a mode of their own and run none of the
 main window's startup.
+
+"View raw", Open and a double-click on a row open `?page=raw&file=NAME`, a
+window that shows the file's stored text (an object's from dobjd's
+`GET /objects/{file_name}/raw`, or the welcome guide's Markdown), titled with
+the file's name. It opens wide enough for the title bar to show the whole
+name (the name measured in the title font, plus room for the window buttons;
+at least 480px). It sets its own light background, since the desktop app's
+webview shows a bare JSON response in the system's dark theme, and makes its
+text selectable, since the desktop app turns selection off on every page
+and the windows it opens inherit that.
 
 Settings (`?page=settings`) shows the synchronizer and relayer addresses
 from dobjd's `GET /settings` in read-only fields; they cannot be edited yet.
@@ -27,36 +39,63 @@ browser instead; anything else is blocked. A new external link from the
 page needs its host added there.
 
 The Inventory Summary (`?page=summary`) is laid out like Finder's Get Info
-window: the inventory's Total Bit Value beside an icon, then "General" (the
-value and the live object total) and "Live objects" (a count per class)
-sections, which can be collapsed. It refreshes on every job event from
+window: the inventory's Total Inventory Value beside an icon, then "General"
+(the value and the live object total) and "Live objects" (a count and a
+summed value per class) sections, which can be collapsed. It refreshes on every job event from
 dobjd's `/events` stream, when that stream reconnects, and on window focus.
 It polls every 10 seconds only while some object is pending or unknown,
 since those settle when the inventory is read, without an event.
 
 Recipe Info is loaded as
-`?page=recipebook`: it shows only the action list and details, and runs none
-of the main window's startup (no inventory, jobs, status bar or starter
-pocketknife). Its address tracks the selected action, so
-`?page=recipebook&action=bitcraft::GatherWood` (the parameter keeps its
-older name) opens Recipe Info with that action selected and shown.
+`?page=recipebook`: it shows only a list of classes, then actions, with the
+selected one's details, and runs none of the main window's startup (no
+inventory, jobs, status bar or starter pocketknife). A class's details list
+the actions it is an output of and an input to, which select that action
+when clicked, and a collapsed "Class Source" holding the class's `Is<Class>`
+predicate from `GET /classes` followed by the predicate of every action
+that outputs it, each after a `//` line naming it. Its address tracks the
+selection, so `?page=recipebook&class=bitcraft::Wood` or
+`?page=recipebook&action=bitcraft::GatherWood` (the page parameter keeps its
+older name) opens Recipe Info with that entry selected and shown.
+
+Resting the pointer on a row of the object list for a quarter second
+(`ROW_TOOLTIP_DELAY_MS`) shows a tooltip with the object's Total Bit Value
+alone; the welcome guide's row shows none. Rows carry their file name in `data-file-name` rather than a `title`, so
+no delayed native tooltip competes with it; the tooltip is a single element
+outside the list, placed by the script, since the scrolling list would clip
+it.
+
+Recipe Info's Details pane shows, under the hash, the `.pexe` a class or
+action is "defined in". dobjd reports that path only with actions, so a
+class shows the path of its plugin's actions.
+
+Class and action names in a Details pane are links to Recipe Info: the
+class of each selected object and a job's action in the main window, and an
+action's input and output classes and a class's actions in Recipe Info
+itself. Inside Recipe Info a link selects the entry. Elsewhere it opens
+Recipe Info at the entry; if that window is already open, the page asks it
+to select the entry, through a function it exposes for this, and sends it
+to the entry's address only when it cannot (as while its list loads).
 
 Startup keeps the inventory hidden until the player has a live pocketknife.
 Automatic setup jobs stay out of Jobs; manual jobs stay visible. Failures
 offer retry and never open the inventory. See `BITCRAFT_SPECIFIC_RULES.md`.
-The startup screen is laid out like the details pane (document icon, 16px
-heading, muted text, progress bar in the blue accent), and the same layout
-appears in the desktop `shell/`, whose `style.css` copies this page's values
-as literals. Keep both splash screens visually consistent, including the bottom status
-bar, which both show. On this page the bar is live: it reads the service
-addresses from dobjd's settings and probes each service. The desktop shell's
-"Preparing cryptography..." screen runs before dobjd is ready, so it cannot
-do either; its bar is hardcoded static markup that shows "Loading..." for
-the synchronizer and relayer statuses and addresses, with a yellow dot by
-each status, and a hardcoded version that must match `BITCRAFT_VERSION`
-here. The progress bar counts completed milestones: cryptography ready, pocketknife proof generated, and network
-confirmation. The step counter and heading describe the current work rather
-than the last completed milestone. Errors preserve the bar's completed progress.
+The startup screen shows the Bitcraft logo, a 16px heading and a progress
+bar in the blue accent, and the same layout appears in the desktop `shell/`,
+whose `style.css` copies this page's values as literals. The logo is the app
+icon (`../src-tauri/icons/icon.png`), copied to `assets/bitcraft-logo.png`
+here and `../shell/bitcraft-logo.png`; replace all three together. Keep both
+splash screens visually consistent, including the bottom status bar, which
+both show. On this page the bar is live: it reads the service addresses from
+dobjd's settings and probes each service. The desktop shell's "Preparing
+artifacts..." screen runs before dobjd is ready, so it cannot do either; its
+bar is hardcoded static markup that shows "Loading..." for the synchronizer
+and relayer statuses and addresses, with a yellow dot by each status, and a
+hardcoded version that must match `BITCRAFT_VERSION` here. The progress bar
+counts four steps: the shell's preparation, loading the inventory, the
+starter knife's proof, and its network confirmation. Only an error shows a
+description and the step setup stopped at. Errors preserve the bar's
+completed progress.
 Each step stays up at least one second (`STARTUP_STEP_MIN_MS`) even when its
 work finishes sooner. The tests' page harness ends these holds at the next
 turn of the event loop; pass `holdSteps` to keep them until `elapse()`.
