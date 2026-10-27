@@ -57,6 +57,8 @@ pub struct ExecutionStepContext {
 }
 
 pub trait ExecutionReporter {
+    /// Called after acquiring inputs, before network requests or proving.
+    fn on_inputs_held(&self, _files: &[String]) {}
     fn on_step(&self, _phase: ExecutionPhase, _message: &str, _ctx: &ExecutionStepContext) {}
     fn on_done(&self, _phase: ExecutionPhase) {}
 }

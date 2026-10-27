@@ -126,6 +126,7 @@ impl Driver {
             (resolved_inputs, holds)
         };
 
+        reporter.on_inputs_held(holds.files());
         let input_commitments = resolved_inputs
             .iter()
             .map(|entry| entry.record.obj.commitment())

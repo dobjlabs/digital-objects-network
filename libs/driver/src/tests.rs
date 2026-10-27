@@ -663,6 +663,61 @@ fn prove_holds_its_inputs_until_recorded() {
 }
 
 #[test]
+fn input_hold_notification_precedes_proving_and_unwinds_with_the_holds() {
+    struct Reporter<'a> {
+        driver: &'a Driver,
+        notified: &'a std::sync::atomic::AtomicBool,
+        panic: bool,
+    }
+    impl crate::ExecutionReporter for Reporter<'_> {
+        fn on_inputs_held(&self, files: &[String]) {
+            assert_eq!(files, ["log_1.dobj"]);
+            assert_eq!(
+                self.driver
+                    .read_object(std::path::Path::new(&files[0]))
+                    .unwrap()
+                    .held_by_run_id
+                    .as_deref(),
+                Some("run-1")
+            );
+            self.notified
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            assert!(!self.panic, "reporter failed");
+        }
+        fn on_step(
+            &self,
+            _: wire_types::ExecutionPhase,
+            message: &str,
+            _: &crate::ExecutionStepContext,
+        ) {
+            if message == "Generating proof" {
+                assert!(self.notified.load(std::sync::atomic::Ordering::Relaxed));
+            }
+        }
+    }
+    for panic in [false, true] {
+        let fx = fixture("log_1.dobj");
+        let notified = std::sync::atomic::AtomicBool::new(false);
+        let reporter = Reporter {
+            driver: &fx.driver,
+            notified: &notified,
+            panic,
+        };
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            fx.driver.prove(fx.input("CraftWood"), "run-1", &reporter)
+        }));
+        assert!(notified.load(std::sync::atomic::Ordering::Relaxed));
+        if panic {
+            assert!(outcome.is_err());
+        } else {
+            drop(outcome.unwrap().unwrap());
+        }
+        assert_eq!(fx.summary(&fx.input_file).held_by_run_id, None);
+        assert!(fx.driver.list_transactions().unwrap().is_empty());
+    }
+}
+
+#[test]
 fn record_refuses_an_output_file_that_exists() {
     let fx = fixture("log_1.dobj");
     let proved = fx

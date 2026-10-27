@@ -26,7 +26,7 @@ const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(setImm
 
 async function page(context, options = {}) {
   const backend = {
-    objects: [], actions: [recipe()], states: new Map(), posts: [], discards: [],
+    objects: [], transactions: [], submissions: [], actions: [recipe()], states: new Map(), posts: [], discards: [],
     inventoryError: false, listError: false, runError: false, postError: false, syncError: false,
     inventoryReads: 0, runGate: null, ...options,
   };
@@ -86,7 +86,20 @@ async function page(context, options = {}) {
         if (parsed.pathname === "/objects/unspent") {
           backend.inventoryReads++;
           if (backend.inventoryDown) throw new TypeError("Failed to fetch");
-          return respond(backend.objects, backend.inventoryError ? 503 : 200);
+          const snapshot = copy(backend.objects);
+          if (backend.inventoryGate) await backend.inventoryGate;
+          return respond(snapshot, backend.inventoryError ? 503 : 200);
+        }
+        if (parsed.pathname === "/transactions") return respond(backend.transactions, backend.transactionError ? 503 : 200);
+        if (parsed.pathname === "/transactions/submit") {
+          backend.submissions.push(JSON.parse(init.body).txFinals);
+          if (backend.submitError) return respond({}, 503);
+          const records = JSON.parse(init.body).txFinals.map((txFinal) => {
+            const record = backend.transactions.find((record) => record.txFinal === txFinal);
+            record.state = "submitted";
+            return record;
+          });
+          return respond(records);
         }
         if (parsed.pathname === "/state-root") return respond("0x00", backend.syncError ? 500 : 200);
         const discard = parsed.pathname.match(/^\/objects\/([^/]+)\/discard_unsafe$/);
@@ -111,7 +124,8 @@ async function page(context, options = {}) {
           backend.posts.push(input);
           if (backend.postError) return respond({}, 503);
           const runId = `run-${backend.posts.length}`;
-          backend.states.set(runId, state(runId));
+          backend.states.set(runId, state(runId, "queued", { action: input.action, inputObjectPaths: input.inputObjectPaths }));
+          if (backend.postGate) await backend.postGate;
           return respond({ runId, status: "queued", createdAtMs: 1000 });
         }
         if (parsed.pathname === "/runs") {
@@ -132,13 +146,6 @@ async function page(context, options = {}) {
   context.after(() => { dom.window.close(); assert.deepEqual(errors, []); });
   await flush();
   const { document } = dom.window;
-  // Fires the startup screen's inventory poll.
-  const tick = async () => {
-    for (const [id, timer] of [...timers]) {
-      if (timer.delay === 1500 && timers.has(id)) await timer.callback();
-    }
-    await flush();
-  };
   // Ends every startup step's minimum time.
   const elapse = async () => {
     for (const [id, hold] of [...holds]) {
@@ -158,6 +165,27 @@ async function page(context, options = {}) {
     for (const source of openStreams(runId)) source.onerror?.({});
     await flush();
   };
+  let nextSeq = 1;
+  let publishedObjects = copy(backend.objects);
+  const event = async (payload, seq = nextSeq++) => {
+    if (payload.type === "object") {
+      backend.objects = backend.objects.filter((object) => object.fileName !== payload.fileName);
+      const { type, ...object } = payload;
+      if (object.status !== "nullified") backend.objects.push(copy(object));
+    } else if (payload.type === "object-removed") {
+      backend.objects = backend.objects.filter((object) => object.fileName !== payload.fileName);
+    } else if (payload.type === "transaction") {
+      backend.transactions = backend.transactions.filter((record) => record.txFinal !== payload.txFinal);
+      const { type, ...record } = payload;
+      backend.transactions.push(copy(record));
+    } else if (payload.type === "transaction-deleted") {
+      backend.transactions = backend.transactions.filter((record) => record.txFinal !== payload.txFinal);
+    }
+    for (const source of sources.filter((source) => !source.closed && source.url === "http://127.0.0.1:7727/events")) {
+      source.onmessage?.({ data: JSON.stringify({ ...payload, seq }) });
+    }
+    await flush();
+  };
   // Mirrors dobjd: a state change is recorded with a progress event, and the
   // stream closes once the run has finished.
   const publish = async (runId, status, extra = {}) => {
@@ -168,6 +196,16 @@ async function page(context, options = {}) {
       message: status,
     }];
     backend.states.set(runId, { ...previous, status, ...extra, progress });
+    const objects = copy(backend.objects);
+    for (const object of objects) {
+      if (JSON.stringify(object) !== JSON.stringify(publishedObjects.find((previous) => previous.fileName === object.fileName))) {
+        await event({ type: "object", ...object });
+      }
+    }
+    for (const previous of publishedObjects) {
+      if (!objects.some((object) => object.fileName === previous.fileName)) await event({ type: "object-removed", fileName: previous.fileName });
+    }
+    publishedObjects = objects;
     const streams = openStreams(runId);
     for (const source of streams) source.onmessage?.({ data: JSON.stringify(progress.at(-1)) });
     if (status === "succeeded" || status === "failed") {
@@ -176,7 +214,7 @@ async function page(context, options = {}) {
     await flush();
   };
   return {
-    backend, document, dom, tick, sources, timers, holds, elapse, emit, dropStream, publish,
+    backend, document, dom, sources, timers, holds, elapse, emit, dropStream, publish, event,
     splash: document.querySelector("#startup-screen"),
     app: document.querySelector("#inventory-app"),
     jobs: () => [...document.querySelectorAll(".run-row")],
@@ -185,8 +223,7 @@ async function page(context, options = {}) {
     async retry() { document.querySelector("#startup-retry").click(); await flush(); },
     async complete(runId = "run-1") {
       backend.objects = [knife()];
-      await publish(runId, "succeeded", { result: { outputFiles: ["pocketknife.dobj"], nullifiedFiles: [] } });
-      await tick();
+      await publish(runId, "succeeded", { result: { outputFiles: ["pocketknife.dobj"], inputFiles: [] } });
     },
   };
 }
@@ -215,7 +252,7 @@ test("first launch waits for proof, confirmation, and a live knife, then reveals
   assert.equal(ui.progress(), 3);
   assert.equal(ui.app.hidden, true);
   await ui.publish("run-1", "succeeded");
-  assert.equal(ui.sources[0].closed, true, "the stream closing delivers the terminal state");
+  assert.equal(ui.sources.find((source) => source.url.includes("/runs/")).closed, true, "the stream closing delivers the terminal state");
   assert.equal(ui.splash.hidden, false, "terminal success alone does not make the knife usable");
   assert.equal(ui.progress(), 3, "confirmation requires a live knife");
   await ui.complete();
@@ -381,7 +418,7 @@ test("failed setup reports the cause and retries only on request", async (contex
   await ui.publish("run-1", "failed", { error: "Network rejected the proof" });
   assert.match(ui.document.querySelector("#startup-error").textContent, /Network rejected/);
   assert.equal(ui.document.querySelector("#startup-actions").hidden, false);
-  await ui.tick();
+  await flush();
   assert.equal(ui.backend.posts.length, 1);
   await ui.retry();
   assert.equal(ui.backend.posts.length, 2);
@@ -472,7 +509,7 @@ test("a failed commit retains its completed proof milestone and retry checks pro
   assert.equal(ui.document.querySelector("#startup-description").hidden, false);
   assert.match(ui.document.querySelector("#startup-progress").getAttribute("aria-valuetext"), /could not finish setup/);
   assert.equal(ui.document.querySelector("#startup-actions").hidden, false);
-  await ui.tick();
+  await flush();
   assert.equal(ui.progress(), 3);
   await ui.retry();
   assert.equal(ui.backend.posts.length, 2);
@@ -519,14 +556,14 @@ test("a daemon that stops responding mid-run says how to recover", async (contex
   assert.equal(ui.document.querySelector("#startup-actions").hidden, false);
 });
 
-test("progress reads reload the inventory only when the run's state changed", async (context) => {
+test("run progress does not re-read the inventory", async (context) => {
   const ui = await page(context);
   const before = ui.backend.inventoryReads;
   await ui.emit("run-1");
   await ui.emit("run-1");
   assert.equal(ui.backend.inventoryReads, before, "unchanged state leaves the inventory alone");
   await ui.publish("run-1", "generateProof");
-  assert.equal(ui.backend.inventoryReads, before + 1);
+  assert.equal(ui.backend.inventoryReads, before);
 });
 
 test("a stream close that arrives during a read is served after it", async (context) => {
@@ -539,7 +576,7 @@ test("a stream close that arrives during a read is served after it", async (cont
   ui.backend.runGate = null;
   releaseRead();
   await flush();
-  await ui.tick();
+  await flush();
   assert.equal(ui.app.hidden, false, "the queued read sees the terminal state");
 });
 
@@ -808,7 +845,7 @@ test("View raw opens a window titled with the file's name that shows its stored 
   assert.equal(opened[1].features, "noopener,popup,width=480,height=420");
   const longName = "bitcraft__miningdrill_e618b29d73604017_d1d8bf5829530d65.dobj";
   main.backend.objects.push({ ...knife(), fileName: longName });
-  await main.dom.window.reloadObjects();
+  main.dom.window.dispatchEvent(new main.dom.window.Event("focus"));
   await flush();
   main.document.querySelector(`.object-row[data-file-name="${longName}"]`)
     .dispatchEvent(new main.dom.window.MouseEvent("dblclick", { bubbles: true }));
@@ -875,7 +912,7 @@ test("the summary icon opens the Inventory Summary in one window", async (contex
   ]);
 });
 
-test("the Inventory Summary counts live objects and refreshes on job events", async (context) => {
+test("the Inventory Summary applies object events and reconciles untracked outputs", async (context) => {
   const item = (fileName, name, status = "live", pluginName = "bitcraft") => ({
     fileName, class: qname(name, pluginName), status, fields: { kvs: [] },
   });
@@ -911,10 +948,10 @@ test("the Inventory Summary counts live objects and refreshes on job events", as
   assert.equal(polls().length, 1, "polls while the stick is pending");
 
   document.querySelector('[data-section="classes"]').open = false;
-  ui.backend.objects.push(item("wood-3.dobj", "Wood"));
   const events = ui.sources.find((source) => source.url.endsWith("/events"));
-  events.onmessage({ data: "{}" });
-  await flush();
+  const eventReads = ui.backend.inventoryReads;
+  await ui.event({ type: "object", ...item("wood-3.dobj", "Wood") });
+  assert.equal(ui.backend.inventoryReads, eventReads, "an object event needs no inventory request");
   assert.deepEqual(fields("classes"), ["bitcraft::Pocketknife: 1 | 0.000 BIT", "bitcraft::Wood: 3 | 3.000 BIT"]);
   assert.equal(objectsTitle(), "Objects (4):");
   assert.equal(document.querySelector('[data-section="classes"]').open, false, "a collapsed section stays collapsed");
@@ -922,10 +959,10 @@ test("the Inventory Summary counts live objects and refreshes on job events", as
   const reads = ui.backend.inventoryReads;
   events.onopen();
   await flush();
-  assert.equal(ui.backend.inventoryReads, reads, "the first connection does not read again");
+  assert.equal(ui.backend.inventoryReads, reads + 1, "the first connection covers changes after the initial snapshot");
   events.onopen();
   await flush();
-  assert.equal(ui.backend.inventoryReads, reads + 1, "a reconnect reads the inventory");
+  assert.equal(ui.backend.inventoryReads, reads + 2, "a reconnect reads the inventory");
 
   ui.backend.objects.find((object) => object.fileName === "stick.dobj").status = "live";
   await polls()[0].callback();
@@ -988,7 +1025,7 @@ test("the top bar and the window title show the Inventory Value of live objects"
     "the value opens the Inventory Summary");
   assert.equal(ui.document.querySelector("#objects-footer"), null);
   ui.backend.objects.find((object) => object.fileName === "wood-3.dobj").status = "live";
-  await ui.dom.window.reloadObjects();
+  ui.dom.window.dispatchEvent(new ui.dom.window.Event("focus"));
   await flush();
   assert.equal(value(), "3.000 BIT");
   assert.equal(ui.document.title, "Bitcraft (3.000 BIT)");
@@ -1114,7 +1151,198 @@ test("the context menu offers only the level-up the tool's level and buckets all
   };
   assert.deepEqual(menuFor(), ["Open all", "bitcraft::LevelUpQuarry2"]);
   ui.backend.objects[2] = item("wood.dobj", "BucketOfWood", { n: 79 });
-  await dom.window.reloadObjects();
+  dom.window.dispatchEvent(new dom.window.Event("focus"));
   await flush();
   assert.deepEqual(menuFor(), ["Open all", "No available actions"]);
+});
+
+const wood = (fileName, extra = {}) => knife("live", { fileName, class: qname("Wood"), ...extra });
+const transaction = (state = "submitted", extra = {}) => ({
+  txFinal: "0xabc", state, owner: "lost-run", action: qname("CraftPocketknife"),
+  inputFiles: [], outputFiles: ["pocketknife.dobj"], ...extra,
+});
+const inventoryStream = (ui) => ui.sources.find((source) => source.url === "http://127.0.0.1:7727/events");
+
+test("independent runs overlap, including no-input actions, while local inputs are reserved before POST returns", async (context) => {
+  const craft = { ...recipe("CraftStick"), totalInputs: [{ class: qname("Wood") }] };
+  const ui = await page(context, { objects: [knife(), wood("a.dobj"), wood("b.dobj")], actions: [recipe(), craft] });
+  let release;
+  ui.backend.postGate = new Promise((resolve) => { release = resolve; });
+  const first = ui.dom.window.startRun(craft, ["a.dobj"]);
+  await flush();
+  assert.equal(ui.dom.window.inputsAvailable(["a.dobj"]), false);
+  assert.equal(ui.dom.window.inputsAvailable(["b.dobj"]), true);
+  assert.equal(await ui.dom.window.startRun(craft, ["a.dobj"]), null);
+  const second = ui.dom.window.startRun(craft, ["b.dobj"]);
+  const empty = ui.dom.window.startRun(recipe(), []);
+  await flush();
+  assert.equal(ui.backend.posts.length, 3, "other inputs and no-input actions do not wait");
+  ui.backend.postGate = null;
+  release();
+  await Promise.all([first, second, empty]);
+  await ui.publish("run-1", "failed", { error: "Proof failed" });
+  assert.equal(ui.dom.window.inputsAvailable(["a.dobj"]), true, "failure releases the local reservation");
+  assert.equal(ui.dom.window.inputsAvailable(["b.dobj"]), false, "the other run keeps its inputs");
+});
+
+test("external holds update an open action menu, and release enables the input again", async (context) => {
+  const craft = { ...recipe("CraftStick"), totalInputs: [{ class: qname("Wood") }] };
+  const ui = await page(context, { objects: [knife(), wood("wood.dobj")], actions: [recipe(), craft] });
+  const row = ui.document.querySelector('.object-row[data-file-name="wood.dobj"]');
+  row.dispatchEvent(new ui.dom.window.MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  const item = () => [...ui.document.querySelectorAll(".context-menu .menu-item")]
+    .find((item) => item.textContent.includes("CraftStick"));
+  assert.equal(item().classList.contains("disabled"), false);
+  const reads = ui.backend.inventoryReads;
+  await ui.event({ type: "object", ...wood("wood.dobj", { heldByRunId: "external" }) });
+  assert.equal(item().classList.contains("disabled"), true);
+  assert.equal(ui.document.querySelector('.object-row[data-file-name="wood.dobj"]').classList.contains("held"), true);
+  await ui.event({ type: "object", ...wood("wood.dobj", { heldByRunId: null }) });
+  assert.equal(item().classList.contains("disabled"), false);
+  assert.equal(ui.backend.inventoryReads, reads);
+});
+
+for (const mode of ["main", "summary"]) {
+  test(`${mode} inventory preserves events received during a stale snapshot, including removals and transaction ownership`, async (context) => {
+    const ui = await page(context, {
+      objects: [knife(), wood("old.dobj")],
+      ...(mode === "summary" ? { url: "http://127.0.0.1:7727/bitcraft/?page=summary" } : {}),
+    });
+    let release;
+    ui.backend.inventoryGate = new Promise((resolve) => { release = resolve; });
+    inventoryStream(ui).onopen();
+    await flush();
+    await ui.event({ type: "object", ...wood("new.dobj", { status: "unknown" }) });
+    await ui.event({ type: "transaction", ...transaction("submitted", { outputFiles: ["new.dobj"] }) });
+    await ui.event({ type: "object", ...wood("old.dobj", { status: "nullified" }) });
+    ui.backend.inventoryGate = null;
+    release();
+    await flush();
+    if (mode === "main") {
+      assert.ok(ui.document.querySelector('.object-row[data-file-name="new.dobj"]'));
+      assert.equal(ui.document.querySelector('.object-row[data-file-name="old.dobj"]'), null);
+    } else {
+      assert.equal(ui.document.querySelector('[data-section="classes"] > summary').textContent, "Objects (1):");
+      assert.equal([...ui.timers.values()].filter((timer) => timer.delay === 10000).length, 0,
+        "the transaction received during the snapshot keeps its output out of fallback polling");
+    }
+    await ui.event({ type: "object", ...wood("new.dobj") });
+    if (mode === "main") assert.equal(ui.document.title, "Bitcraft (1.000 BIT)");
+    else assert.equal(ui.document.querySelector(".summary-total").textContent, "1.000 BIT");
+    await ui.event({ type: "object-removed", fileName: "new.dobj" });
+    if (mode === "main") assert.equal(ui.document.querySelector('.object-row[data-file-name="new.dobj"]'), null);
+    else assert.equal(ui.document.querySelector(".summary-total").textContent, "0.000 BIT");
+  });
+}
+
+test("sequence gaps and reconnects recover missed inventory changes, including a daemon sequence reset", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  await ui.event({ type: "object", ...wood("a.dobj") }, 1);
+  ui.backend.objects.push(wood("missed.dobj"));
+  const reads = ui.backend.inventoryReads;
+  await ui.event({ type: "object", ...wood("a.dobj") }, 3);
+  assert.equal(ui.backend.inventoryReads, reads + 1);
+  assert.ok(ui.document.querySelector('.object-row[data-file-name="missed.dobj"]'));
+  inventoryStream(ui).onopen();
+  await flush();
+  ui.backend.objects.push(wood("after-restart.dobj"));
+  inventoryStream(ui).onopen();
+  await flush();
+  const resetReads = ui.backend.inventoryReads;
+  await ui.event({ type: "object", ...wood("a.dobj", { heldByRunId: "new-daemon" }) }, 1);
+  assert.equal(ui.backend.inventoryReads, resetReads, "a restarted daemon begins a new sequence");
+  assert.ok(ui.document.querySelector('.object-row[data-file-name="after-restart.dobj"]'));
+});
+
+test("recorded output updates need no inventory polling in the summary window", async (context) => {
+  const ui = await page(context, {
+    url: "http://127.0.0.1:7727/bitcraft/?page=summary",
+    objects: [knife("pending")], transactions: [transaction()],
+  });
+  const reads = ui.backend.inventoryReads;
+  assert.equal([...ui.timers.values()].filter((timer) => timer.delay === 10000).length, 0);
+  await ui.event({ type: "run-action-progress", runId: "external", phase: "commit", status: "running" });
+  await ui.event({ type: "object", ...knife() });
+  assert.equal(ui.backend.inventoryReads, reads);
+  assert.equal(ui.document.querySelector('[data-section="classes"] > summary').textContent, "Objects (1):");
+});
+
+for (const status of ["submitted", "recorded"]) {
+  test(`startup resumes a durable ${status} transaction after its run is lost`, async (context) => {
+    const ui = await page(context, { objects: [knife("pending")], transactions: [transaction(status)] });
+    assert.equal(ui.backend.posts.length, 0);
+    assert.deepEqual(ui.backend.discards, []);
+    assert.equal(ui.jobs().length, 0);
+    assert.equal(ui.progress(), 3);
+    assert.match(ui.title(), /Connecting to Bitcraft network/);
+    assert.equal(ui.backend.submissions.length, status === "recorded" ? 1 : 0);
+    await ui.event({ type: "transaction", ...transaction("landed") });
+    await ui.event({ type: "object", ...knife() });
+    assert.equal(ui.app.hidden, false);
+    assert.equal(ui.progress(), 4);
+  });
+}
+
+test("a submission attempt with an unknown outcome is followed without resubmitting or replacing its outputs", async (context) => {
+  const ui = await page(context, {
+    objects: [knife("unknown")], transactions: [transaction("recorded", { submitAttemptedAtMs: 1 })],
+  });
+  assert.equal(ui.backend.posts.length, 0);
+  assert.equal(ui.backend.submissions.length, 0);
+  assert.deepEqual(ui.backend.discards, []);
+  await ui.event({ type: "transaction", ...transaction("expired", { reason: "Grounding aged out" }) });
+  await ui.event({ type: "object-removed", fileName: "pocketknife.dobj" });
+  assert.match(ui.document.querySelector("#startup-error").textContent, /Grounding aged out/);
+  await ui.retry();
+  assert.equal(ui.backend.posts.length, 1, "a new proof is made only after expiry and an explicit retry");
+});
+
+test("failure to read durable transactions prevents startup from discarding outputs or creating duplicates", async (context) => {
+  const ui = await page(context, { objects: [knife("unknown")], transactionError: true });
+  assert.equal(ui.backend.posts.length, 0);
+  assert.deepEqual(ui.backend.discards, []);
+  assert.equal(ui.app.hidden, true);
+  ui.backend.transactionError = false;
+  ui.backend.transactions = [transaction()];
+  await ui.retry();
+  assert.equal(ui.backend.posts.length, 0);
+  assert.deepEqual(ui.backend.discards, []);
+});
+
+test("failed submission of an existing starter transaction stays recoverable without making another proof", async (context) => {
+  const ui = await page(context, { objects: [knife("unknown")], transactions: [transaction("recorded")], submitError: true });
+  assert.equal(ui.backend.posts.length, 0);
+  assert.deepEqual(ui.backend.discards, []);
+  assert.equal(ui.document.querySelector("#startup-error").hidden, false);
+  await ui.event({ type: "object", ...knife("unknown") });
+  assert.equal(ui.document.querySelector("#startup-error").hidden, false, "object updates preserve the submission error");
+  ui.backend.submitError = false;
+  await ui.retry();
+  assert.equal(ui.backend.posts.length, 0);
+  assert.equal(ui.backend.submissions.length, 2);
+  assert.equal(ui.document.querySelector("#startup-error").hidden, true);
+});
+
+test("deleting a starter transaction requires retry before making a replacement", async (context) => {
+  const ui = await page(context, { objects: [knife("unknown")], transactions: [transaction()] });
+  await ui.event({ type: "transaction-deleted", txFinal: "0xabc" });
+  await ui.event({ type: "object-removed", fileName: "pocketknife.dobj" });
+  assert.equal(ui.backend.posts.length, 0);
+  assert.match(ui.document.querySelector("#startup-error").textContent, /no longer available/);
+  await ui.retry();
+  assert.equal(ui.backend.posts.length, 1);
+});
+
+test("completed job details use spent input paths and the grounding root from the current run result", async (context) => {
+  const craft = { ...recipe("CraftStick"), totalInputs: [{ class: qname("Wood") }] };
+  const ui = await page(context, { objects: [knife(), wood("wood.dobj")], actions: [recipe(), craft] });
+  await ui.dom.window.startRun(craft, ["wood.dobj"]);
+  await ui.publish("run-1", "succeeded", {
+    result: { oldRoot: "0xgrounding", inputFiles: ["wood.dobj"], outputFiles: [] },
+  });
+  ui.jobs()[0].dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  const details = ui.document.querySelector("#details-body").textContent;
+  assert.match(details, /\.nullified\/wood\.dobj/);
+  assert.match(details, /grounding root0xgrounding/);
+  assert.doesNotMatch(details, /new root/);
 });

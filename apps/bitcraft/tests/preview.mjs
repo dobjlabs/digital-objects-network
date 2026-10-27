@@ -33,7 +33,7 @@ function runState(run) {
     inputObjectPaths: [], createdAtMs: run.createdAtMs, progress: [],
     finishedAtMs: ["failed", "succeeded"].includes(status) ? Date.now() : null,
     error: status === "failed" ? "The network could not confirm your pocketknife. Please try again." : null,
-    result: status === "succeeded" ? { outputFiles: [`pocketknife-${run.runId}.dobj`], nullifiedFiles: [] } : null,
+    result: status === "succeeded" ? { outputFiles: [`pocketknife-${run.runId}.dobj`], inputFiles: [] } : null,
   };
 }
 function knife(fileName, status) {
@@ -41,6 +41,42 @@ function knife(fileName, status) {
     fileName, class: qname("Pocketknife"), classHash: "preview", contentHash: "preview",
     fileSize: 1824, status, fields: { kvs: [] }, heldByRunId: null,
   };
+}
+function objectsFor(session) {
+  const objects = session.existing ? [knife("pocketknife.dobj", "live")] : [];
+  for (const run of session.runs) {
+    const state = runState(run);
+    if (["committing", "succeeded"].includes(state.status)) {
+      objects.push(knife(`pocketknife-${run.runId}.dobj`, state.status === "succeeded" ? "live" : "pending"));
+    }
+  }
+  return objects;
+}
+function transactionsFor(session) {
+  return session.runs.filter((run) => ["committing", "succeeded"].includes(runState(run).status)).map((run) => ({
+    txFinal: run.runId, owner: run.runId, action: qname("CraftPocketknife"),
+    state: runState(run).status === "succeeded" ? "landed" : "submitted",
+    inputFiles: [], outputFiles: [`pocketknife-${run.runId}.dobj`], submitAttemptedAtMs: run.createdAtMs,
+  }));
+}
+function publishChanges(session) {
+  const publish = (event) => {
+    const data = JSON.stringify({ ...event, seq: session.seq++ });
+    for (const response of session.streams) response.write(`data: ${data}\n\n`);
+  };
+  for (const [key, next, id, type] of [
+    ["transactions", transactionsFor(session), "txFinal", "transaction"],
+    ["objects", objectsFor(session), "fileName", "object"],
+  ]) {
+    for (const value of next) {
+      const previous = session[key].find((previous) => previous[id] === value[id]);
+      if (JSON.stringify(value) !== JSON.stringify(previous)) publish({ type, ...value });
+    }
+    for (const previous of session[key]) {
+      if (!next.some((value) => value[id] === previous[id])) publish({ type: type === "transaction" ? "transaction-deleted" : "object-removed", [id]: previous[id] });
+    }
+    session[key] = next;
+  }
 }
 async function asset(response, root, path) {
   const resolved = resolve(root, path);
@@ -66,7 +102,10 @@ const server = createServer(async (request, response) => {
     const scenario = url.pathname.match(/^\/(first-launch|existing|failure)\/$/);
     if (scenario) {
       const sessionId = randomUUID();
-      sessions.set(sessionId, { existing: scenario[1] === "existing", failNext: scenario[1] === "failure", runs: [] });
+      sessions.set(sessionId, {
+        existing: scenario[1] === "existing", failNext: scenario[1] === "failure", runs: [],
+        streams: new Set(), seq: 1, objects: [], transactions: [],
+      });
       const html = (await readFile(resolve(uiRoot, "index.html"), "utf8"))
         .replace("<head>", `<head><base href="/ui/"><meta name="dobjd-api-url" content="/api/${sessionId}">`);
       return reply(response, html, "text/html; charset=utf-8");
@@ -81,15 +120,16 @@ const server = createServer(async (request, response) => {
     const path = api[2];
     if (path === "/settings") return reply(response, {});
     if (path === "/objects/dir") return reply(response, { path: "Bitcraft / objects" });
-    if (path === "/objects/unspent") {
-      const objects = session.existing ? [knife("pocketknife.dobj", "live")] : [];
-      for (const run of session.runs) {
-        const state = runState(run);
-        if (["committing", "succeeded"].includes(state.status)) {
-          objects.push(knife(`pocketknife-${run.runId}.dobj`, state.status === "succeeded" ? "live" : "pending"));
-        }
-      }
-      return reply(response, objects);
+    if (path === "/objects/unspent") return reply(response, objectsFor(session));
+    if (path === "/transactions") return reply(response, transactionsFor(session));
+    if (path === "/events") {
+      response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store" });
+      response.write(": connected\n\n");
+      session.streams.add(response);
+      publishChanges(session);
+      const timer = setInterval(() => publishChanges(session), 500);
+      response.on("close", () => { clearInterval(timer); session.streams.delete(response); });
+      return;
     }
     if (path === "/actions") return reply(response, actions);
     if (path === "/runs" && request.method === "POST") {
