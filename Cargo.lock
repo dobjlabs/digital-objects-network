@@ -7279,6 +7279,7 @@ checksum = "09dac053f1cd375980747450bfc7250c264eaae0583872e845c0c7cd578872b5"
 name = "wire-types"
 version = "0.1.0"
 dependencies = [
+ "alloy-primitives",
  "pod2",
  "schemars 1.2.1",
  "serde",

@@ -79,7 +79,7 @@ impl StateMachine {
         &self,
         blob_payloads: &[(u32, Vec<u8>)],
         slot: u32,
-        block_number: u32,
+        block_number: u64,
     ) -> Vec<(u32, Payload)> {
         let mut parsed = Vec::with_capacity(blob_payloads.len());
         for (blob_index, bytes) in blob_payloads {
@@ -128,7 +128,7 @@ impl StateMachine {
         payload: &Payload,
         prior_indices: &HashMap<Hash, i64>,
         slot: u32,
-        block_number: u32,
+        block_number: u64,
     ) -> Result<()> {
         let Some(&state_root_block) = state.recent_state_roots.get(&payload.state_root) else {
             warn!(
@@ -138,7 +138,7 @@ impl StateMachine {
             );
             return Ok(());
         };
-        let age = i64::from(block_number) - state_root_block;
+        let age = block_number as i64 - state_root_block;
         if age > MAX_STATE_ROOT_AGE_BLOCKS {
             warn!(
                 slot,
@@ -334,10 +334,10 @@ mod tests {
         hash_values(&[Value::from(n)])
     }
 
-    fn block_meta(n: u32) -> ExecutionBlock {
+    fn block_meta(n: u64) -> ExecutionBlock {
         ExecutionBlock {
             number: n,
-            timestamp: (n as u64) * 1000,
+            timestamp: n * 1000,
             hash: alloy::primitives::B256::repeat_byte(n as u8),
         }
     }

@@ -1,9 +1,9 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use alloy::primitives::Address;
+use alloy::{eips::BlockHashOrNumber, primitives::Address};
 use anyhow::Result;
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
     routing::{get, post},
     Json, Router,
@@ -22,7 +22,7 @@ use wire_types::HealthResponse;
 
 use crate::{
     container_db::ContainerDb,
-    state_log_db::{HeadSnapshot, StateLogDb},
+    state_log_db::{SlotState, StateLogDb},
 };
 
 const MAX_HASH_QUERY_ITEMS: usize = 256;
@@ -36,9 +36,9 @@ struct AppState {
     info: Arc<Info>,
 }
 
-/// Membership of each queried commitment and nullifier, answered against one head snapshot.
+/// Membership of each queried commitment and nullifier, answered against one head state.
 struct Membership {
-    head: HeadSnapshot,
+    head: SlotState,
     created_present: Vec<bool>,
     nullifier_present: Vec<bool>,
 }
@@ -55,6 +55,7 @@ pub async fn run_api_server(
         .route("/info", get(get_info))
         .route("/sync-progress", get(get_sync_progress))
         .route("/v1/state/head", get(get_state_head))
+        .route("/v1/state/by_el/{block_id}", get(get_state_by_el))
         .route("/v1/state/membership", post(post_state_membership))
         .route(
             "/v1/state/object/contains",
@@ -108,25 +109,68 @@ async fn get_info(State(app_state): State<AppState>) -> Json<Info> {
 async fn get_sync_progress(
     State(app_state): State<AppState>,
 ) -> Result<Json<SyncProgressResponse>, (StatusCode, String)> {
-    let head = load_head_snapshot(&app_state).await?;
+    let last_processed_slot = app_state
+        .state_log
+        .last_processed_slot()
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(not_initialized)?;
     Ok(Json(SyncProgressResponse {
-        last_processed_slot: head.last_processed_slot,
+        last_processed_slot,
     }))
 }
 
 async fn get_state_head(
     State(app_state): State<AppState>,
 ) -> Result<Json<StateHeadResponse>, (StatusCode, String)> {
-    let head = load_head_snapshot(&app_state).await?;
-    let metadata = head.state.metadata;
-    Ok(Json(StateHeadResponse {
-        last_processed_slot: head.last_processed_slot,
+    let head = load_slot_state_at_head(&app_state).await?;
+    Ok(Json(state_head_response(head)))
+}
+
+/// `block_id` is a decimal execution block number or a 32-byte block hash in hex.
+async fn get_state_by_el(
+    State(app_state): State<AppState>,
+    Path(block_id): Path<String>,
+) -> Result<Json<StateHeadResponse>, (StatusCode, String)> {
+    let block = block_id.parse::<BlockHashOrNumber>().map_err(|err| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("invalid execution block id: {err}"),
+        )
+    })?;
+    if let BlockHashOrNumber::Number(number) = block {
+        if i64::try_from(number).is_err() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("execution block number {number} is out of range"),
+            ));
+        }
+    }
+    let slot_state = app_state
+        .state_log
+        .slot_state_at_el_block(block)
+        .await
+        .map_err(internal_error)?;
+    match slot_state {
+        Some(slot_state) => Ok(Json(state_head_response(slot_state))),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            format!("no state derived at execution block {block_id}"),
+        )),
+    }
+}
+
+fn state_head_response(slot_state: SlotState) -> StateHeadResponse {
+    let metadata = slot_state.state.metadata;
+    StateHeadResponse {
+        slot: slot_state.slot,
         state_root: metadata.state_root,
         block_number: metadata.block.number as i64,
+        block_hash: metadata.block.hash,
         created_count: metadata.created_count as usize,
         nullifier_count: metadata.nullifier_count as usize,
         state_root_count: metadata.state_root_count as usize,
-    }))
+    }
 }
 
 async fn post_state_object_contains(
@@ -135,7 +179,8 @@ async fn post_state_object_contains(
 ) -> Result<Json<ObjectContainsResponse>, (StatusCode, String)> {
     let membership = load_membership(&app_state, &body.object_commitments, &[]).await?;
     Ok(Json(ObjectContainsResponse {
-        last_processed_slot: membership.head.last_processed_slot,
+        block_number: membership.head.state.metadata.block.number as i64,
+        block_hash: membership.head.state.metadata.block.hash,
         state_root: membership.head.state.metadata.state_root,
         results: object_contains_entries(&body.object_commitments, membership.created_present),
     }))
@@ -147,7 +192,8 @@ async fn post_state_nullifier_contains(
 ) -> Result<Json<NullifierContainsResponse>, (StatusCode, String)> {
     let membership = load_membership(&app_state, &[], &body.nullifiers).await?;
     Ok(Json(NullifierContainsResponse {
-        last_processed_slot: membership.head.last_processed_slot,
+        block_number: membership.head.state.metadata.block.number as i64,
+        block_hash: membership.head.state.metadata.block.hash,
         state_root: membership.head.state.metadata.state_root,
         results: nullifier_contains_entries(&body.nullifiers, membership.nullifier_present),
     }))
@@ -160,7 +206,8 @@ async fn post_state_membership(
     let membership =
         load_membership(&app_state, &body.object_commitments, &body.nullifiers).await?;
     Ok(Json(MembershipResponse {
-        last_processed_slot: membership.head.last_processed_slot,
+        block_number: membership.head.state.metadata.block.number as i64,
+        block_hash: membership.head.state.metadata.block.hash,
         state_root: membership.head.state.metadata.state_root,
         created_results: object_contains_entries(
             &body.object_commitments,
@@ -179,12 +226,12 @@ async fn post_grounding_witness(
 ) -> Result<Json<GroundingWitnessResponse>, (StatusCode, String)> {
     ensure_hash_query_limit("objectCommitments", body.object_commitments.len())?;
     let object_commitments = body.object_commitments;
-    let (snapshot, indices) = app_state
+    let (head, indices) = app_state
         .state_log
-        .snapshot_with_created_indices(&object_commitments)
+        .slot_state_at_head_with_created_indices(&object_commitments)
         .await
         .map_err(internal_error)?;
-    let state = snapshot.ok_or_else(not_initialized)?.state;
+    let state = head.ok_or_else(not_initialized)?.state;
     let witnesses = app_state
         .containers
         .prove_created_for(&state.roots, &object_commitments, &indices)
@@ -221,12 +268,12 @@ async fn load_membership(
     nullifiers: &[Hash],
 ) -> Result<Membership, (StatusCode, String)> {
     ensure_membership_query_limit(object_commitments.len(), nullifiers.len())?;
-    let (snapshot, indices) = app_state
+    let (head, indices) = app_state
         .state_log
-        .snapshot_with_created_indices(object_commitments)
+        .slot_state_at_head_with_created_indices(object_commitments)
         .await
         .map_err(internal_error)?;
-    let head = snapshot.ok_or_else(not_initialized)?;
+    let head = head.ok_or_else(not_initialized)?;
     let containers = &app_state.containers;
     Ok(Membership {
         created_present: containers
@@ -239,10 +286,10 @@ async fn load_membership(
     })
 }
 
-async fn load_head_snapshot(app_state: &AppState) -> Result<HeadSnapshot, (StatusCode, String)> {
+async fn load_slot_state_at_head(app_state: &AppState) -> Result<SlotState, (StatusCode, String)> {
     app_state
         .state_log
-        .head_snapshot()
+        .slot_state_at_head()
         .await
         .map_err(internal_error)?
         .ok_or_else(not_initialized)

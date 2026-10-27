@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use alloy::primitives::B256;
+use alloy::{eips::BlockHashOrNumber, primitives::B256};
 use anyhow::{anyhow, Context, Result};
 use pod2::middleware::Hash;
 use sqlx::{
@@ -14,12 +14,27 @@ use crate::{
     state_machine::DerivedSlot,
 };
 
-/// Head state plus progress metadata loaded from Postgres.
+/// A state loaded from Postgres with the slot whose execution block it was derived at.
 #[derive(Debug, Clone, Copy)]
-pub struct HeadSnapshot {
+pub struct SlotState {
     pub state: DonState,
-    pub last_processed_slot: u32,
+    pub slot: u32,
 }
+
+const SLOT_STATE_COLUMNS: &str = r#"
+    slot,
+    el_block_number,
+    el_block_timestamp,
+    el_block_hash,
+    don_created_root,
+    don_nullifiers_root,
+    don_prior_state_history_root,
+    don_next_state_history_root,
+    don_state_root,
+    don_created_count,
+    don_nullifier_count,
+    don_state_root_count
+"#;
 
 #[derive(Clone)]
 pub struct StateLogDb {
@@ -63,7 +78,7 @@ impl StateLogDb {
             CREATE TABLE IF NOT EXISTS slots (
                 slot INTEGER PRIMARY KEY,
                 cl_block_root BYTEA NULL,
-                el_block_number INTEGER NULL,
+                el_block_number BIGINT NULL,
                 el_block_timestamp BIGINT NULL,
                 el_block_hash BYTEA NULL,
                 don_created_root BYTEA NULL,
@@ -100,6 +115,11 @@ impl StateLogDb {
             CREATE INDEX IF NOT EXISTS slots_el_block_number_idx
                 ON slots(el_block_number)
                 WHERE el_block_number IS NOT NULL
+            "#,
+            r#"
+            CREATE INDEX IF NOT EXISTS slots_el_block_hash_idx
+                ON slots(el_block_hash)
+                WHERE el_block_hash IS NOT NULL
             "#,
             // Reverse index from object commitment to its position in the created
             // `Array`. A materialized view of committed state: rows are inserted in
@@ -142,53 +162,60 @@ impl StateLogDb {
     }
 
     /// Return the head state, or `None` before the first slot.
-    pub async fn head_state(&self) -> Result<Option<DonState>> {
-        Ok(self.head_snapshot().await?.map(|snapshot| snapshot.state))
+    pub async fn don_state_at_head(&self) -> Result<Option<DonState>> {
+        Ok(self
+            .slot_state_at_head()
+            .await?
+            .map(|slot_state| slot_state.state))
     }
 
-    /// Return the head state plus sync progress from one Postgres snapshot, or `None` before
-    /// the first slot.
-    pub async fn head_snapshot(&self) -> Result<Option<HeadSnapshot>> {
-        Self::read_snapshot(&self.pool).await
+    /// Return the head state with its slot, or `None` before the first slot with an execution
+    /// block.
+    pub async fn slot_state_at_head(&self) -> Result<Option<SlotState>> {
+        Self::read_slot_state_at_head(&self.pool).await
     }
 
-    /// Read the head state plus progress over any executor (pool or
-    /// transaction), so a caller can pin it to the same snapshot as other reads.
-    async fn read_snapshot<'e, E: PgExecutor<'e>>(executor: E) -> Result<Option<HeadSnapshot>> {
-        let row = sqlx::query(
-            r#"
-            SELECT (SELECT MAX(slot) FROM slots) AS last_processed_slot,
-                   slot,
-                   el_block_number,
-                   el_block_timestamp,
-                   el_block_hash,
-                   don_created_root,
-                   don_nullifiers_root,
-                   don_prior_state_history_root,
-                   don_next_state_history_root,
-                   don_state_root,
-                   don_created_count,
-                   don_nullifier_count,
-                   don_state_root_count
-            FROM slots
-            WHERE el_block_number IS NOT NULL
-            ORDER BY slot DESC
-            LIMIT 1
-            "#,
-        )
+    /// Read the head state over any executor (pool or transaction), so a
+    /// caller can pin it to the same snapshot as other reads.
+    async fn read_slot_state_at_head<'e, E: PgExecutor<'e>>(
+        executor: E,
+    ) -> Result<Option<SlotState>> {
+        let row = sqlx::query(&format!(
+            "SELECT {SLOT_STATE_COLUMNS} FROM slots \
+             WHERE el_block_number IS NOT NULL ORDER BY slot DESC LIMIT 1"
+        ))
         .fetch_optional(executor)
         .await?;
+        row.as_ref().map(decode_slot_state_row).transpose()
+    }
 
-        row.map(|row| {
-            let head_slot = row.get::<i32, _>("slot");
-            Ok(HeadSnapshot {
-                state: decode_state_row(&row).with_context(|| {
-                    format!("slots row for slot {head_slot} had invalid state data")
-                })?,
-                last_processed_slot: row.get::<i32, _>("last_processed_slot") as u32,
-            })
-        })
-        .transpose()
+    /// Return the state derived at a committed execution block, or `None` when no committed
+    /// slot holds that block.
+    pub async fn slot_state_at_el_block(
+        &self,
+        block: BlockHashOrNumber,
+    ) -> Result<Option<SlotState>> {
+        let row = match block {
+            BlockHashOrNumber::Number(number) => {
+                let number = i64::try_from(number)
+                    .with_context(|| format!("block number {number} exceeds the stored range"))?;
+                sqlx::query(&format!(
+                    "SELECT {SLOT_STATE_COLUMNS} FROM slots WHERE el_block_number = $1"
+                ))
+                .bind(number)
+                .fetch_optional(&self.pool)
+                .await?
+            }
+            BlockHashOrNumber::Hash(hash) => {
+                sqlx::query(&format!(
+                    "SELECT {SLOT_STATE_COLUMNS} FROM slots WHERE el_block_hash = $1"
+                ))
+                .bind(hash.as_slice().to_vec())
+                .fetch_optional(&self.pool)
+                .await?
+            }
+        };
+        row.as_ref().map(decode_slot_state_row).transpose()
     }
 
     /// Return the beacon block root for a committed slot, `None` when it has none or is not
@@ -250,7 +277,7 @@ impl StateLogDb {
         )
         .bind(slot as i32)
         .bind(block_root.map(|root| root.as_slice().to_vec()))
-        .bind(state.map(|state| state.metadata.block.number as i32))
+        .bind(state.map(|state| state.metadata.block.number as i64))
         .bind(state.map(|state| state.metadata.block.timestamp as i64))
         .bind(state.map(|state| state.metadata.block.hash.as_slice().to_vec()))
         .bind(state.map(|state| hash_to_db_bytes(state.roots.created)))
@@ -338,29 +365,29 @@ impl StateLogDb {
         Ok(map)
     }
 
-    /// Read the head snapshot and the created indices for `commitments` from
+    /// Read the head slot state and the created indices for `commitments` from
     /// one `REPEATABLE READ` transaction, so the state roots and the index rows
     /// reflect a single consistent Postgres snapshot. Without this a concurrent
     /// `commit_slot`/`rollback_to_slot` could land between the two reads and make
     /// the index inconsistent with the state a query is answering against. The
     /// RocksDB array read needs no coordination: nodes are content-addressed and
     /// immutable by root, so reading at the pinned root is stable regardless.
-    pub async fn snapshot_with_created_indices(
+    pub async fn slot_state_at_head_with_created_indices(
         &self,
         commitments: &[Hash],
-    ) -> Result<(Option<HeadSnapshot>, HashMap<Hash, i64>)> {
+    ) -> Result<(Option<SlotState>, HashMap<Hash, i64>)> {
         let mut tx = self
             .pool
             .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
             .await?;
-        let snapshot = Self::read_snapshot(&mut *tx).await?;
+        let head = Self::read_slot_state_at_head(&mut *tx).await?;
         let indices = Self::read_created_indices(&mut *tx, commitments).await?;
         tx.commit().await?;
-        Ok((snapshot, indices))
+        Ok((head, indices))
     }
 
     /// Return the state roots derived at or above the given execution block number.
-    pub async fn recent_state_roots(&self, min_block_number: u32) -> Result<Vec<(Hash, i64)>> {
+    pub async fn recent_state_roots(&self, min_block_number: u64) -> Result<Vec<(Hash, i64)>> {
         let rows = sqlx::query(
             r#"
             SELECT don_state_root, el_block_number
@@ -369,15 +396,15 @@ impl StateLogDb {
             ORDER BY el_block_number ASC, slot ASC
             "#,
         )
-        .bind(min_block_number as i32)
+        .bind(min_block_number as i64)
         .fetch_all(&self.pool)
         .await?;
 
         rows.into_iter()
             .map(|row| {
                 let state_root: Vec<u8> = row.get("don_state_root");
-                let block_number = row.get::<i32, _>("el_block_number");
-                Ok((db_bytes_to_hash(&state_root)?, i64::from(block_number)))
+                let block_number = row.get::<i64, _>("el_block_number");
+                Ok((db_bytes_to_hash(&state_root)?, block_number))
             })
             .collect()
     }
@@ -387,10 +414,19 @@ fn db_bytes_to_b256(bytes: &[u8]) -> Result<B256> {
     B256::try_from(bytes).map_err(|_| anyhow!("expected 32 bytes, got {}", bytes.len()))
 }
 
+fn decode_slot_state_row(row: &PgRow) -> Result<SlotState> {
+    let slot = row.get::<i32, _>("slot");
+    Ok(SlotState {
+        state: decode_state_row(row)
+            .with_context(|| format!("slots row for slot {slot} had invalid state data"))?,
+        slot: slot as u32,
+    })
+}
+
 /// Decode the DON state from a row with an execution block, the block the state was derived at.
 fn decode_state_row(row: &PgRow) -> Result<DonState> {
     let block = ExecutionBlock {
-        number: row.get::<i32, _>("el_block_number") as u32,
+        number: row.get::<i64, _>("el_block_number") as u64,
         timestamp: row.get::<i64, _>("el_block_timestamp") as u64,
         hash: db_bytes_to_b256(&row.get::<Vec<u8>, _>("el_block_hash"))?,
     };
@@ -433,15 +469,15 @@ mod tests {
         hash_values(&[Value::from(n)])
     }
 
-    fn unique_execution_block(block_number: u32) -> ExecutionBlock {
+    fn unique_execution_block(block_number: u64) -> ExecutionBlock {
         ExecutionBlock {
             number: block_number,
-            timestamp: (block_number as u64) * 1000,
+            timestamp: block_number * 1000,
             hash: B256::repeat_byte(block_number as u8),
         }
     }
 
-    fn unique_state(block_number: u32, marker: i64) -> DonState {
+    fn unique_state(block_number: u64, marker: i64) -> DonState {
         DonState {
             roots: StateRoots {
                 created: unique_hash(marker),
@@ -452,9 +488,9 @@ mod tests {
             metadata: StateMetadata {
                 state_root: unique_hash(marker + 4),
                 block: unique_execution_block(block_number),
-                created_count: block_number as u64,
-                nullifier_count: block_number as u64 + 1,
-                state_root_count: block_number as u64 + 2,
+                created_count: block_number,
+                nullifier_count: block_number + 1,
+                state_root_count: block_number + 2,
             },
         }
     }
@@ -516,7 +552,7 @@ mod tests {
         let (state_log, db_name, admin_url) = fresh_state_log().await?;
 
         assert_eq!(state_log.last_processed_slot().await?, None);
-        assert!(state_log.head_snapshot().await?.is_none());
+        assert!(state_log.slot_state_at_head().await?.is_none());
 
         drop_db(&db_name, &admin_url).await?;
         Ok(())
@@ -547,12 +583,12 @@ mod tests {
             .commit_slot(10, None, Some(&derived(state)))
             .await?;
 
-        let snapshot = state_log
-            .head_snapshot()
+        let head = state_log
+            .slot_state_at_head()
             .await?
             .expect("a slot is committed");
-        assert_eq!(snapshot.state, state);
-        assert_eq!(snapshot.last_processed_slot, 10);
+        assert_eq!(head.state, state);
+        assert_eq!(head.slot, 10);
 
         drop_db(&db_name, &admin_url).await?;
         Ok(())
@@ -572,12 +608,13 @@ mod tests {
             .await?;
         state_log.commit_slot(12, None, None).await?;
 
-        let snapshot = state_log
-            .head_snapshot()
+        let head = state_log
+            .slot_state_at_head()
             .await?
             .expect("a slot is committed");
-        assert_eq!(snapshot.state, state);
-        assert_eq!(snapshot.last_processed_slot, 12);
+        assert_eq!(head.state, state);
+        assert_eq!(head.slot, 10);
+        assert_eq!(state_log.last_processed_slot().await?, Some(12));
 
         drop_db(&db_name, &admin_url).await?;
         Ok(())
@@ -637,12 +674,12 @@ mod tests {
 
         state_log.rollback_to_slot(1).await?;
 
-        let snapshot = state_log
-            .head_snapshot()
+        let head = state_log
+            .slot_state_at_head()
             .await?
             .expect("a slot is committed");
-        assert_eq!(snapshot.state, h1);
-        assert_eq!(snapshot.last_processed_slot, 1);
+        assert_eq!(head.state, h1);
+        assert_eq!(head.slot, 1);
 
         drop_db(&db_name, &admin_url).await?;
         Ok(())
@@ -690,11 +727,10 @@ mod tests {
         assert_eq!(indices.get(&b), None);
 
         // The atomic read returns the same index against the head state.
-        let (snapshot, indices) = state_log.snapshot_with_created_indices(&[a, b]).await?;
-        assert_eq!(
-            snapshot.expect("a slot is committed").last_processed_slot,
-            1
-        );
+        let (head, indices) = state_log
+            .slot_state_at_head_with_created_indices(&[a, b])
+            .await?;
+        assert_eq!(head.expect("a slot is committed").slot, 1);
         assert_eq!(indices.get(&a), Some(&1));
         assert_eq!(indices.get(&b), None);
 

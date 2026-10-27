@@ -519,9 +519,14 @@
           return;
         }
         try {
-          const r = await fetch(syncUrl + "/v1/state/head");
+          const [r, rp] = await Promise.all([
+            fetch(syncUrl + "/v1/state/head"),
+            fetch(syncUrl + "/sync-progress"),
+          ]);
           if (!r.ok) throw new Error("status " + r.status);
+          if (!rp.ok) throw new Error("status " + rp.status);
           const j = await r.json();
+          const progress = await rp.json();
           const pick = (...keys) =>
             keys.map((k) => j[k]).find((v) => v !== undefined);
           gsrEl.className = "";
@@ -539,7 +544,7 @@
           );
           setText(
             "u-slot",
-            fmtNum(pick("last_processed_slot", "lastProcessedSlot")),
+            fmtNum(progress.last_processed_slot ?? progress.lastProcessedSlot),
           );
           setDot("sync-dot", "ok");
           setText("sync-meta", "synchronizer");

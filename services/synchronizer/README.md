@@ -100,7 +100,7 @@ Important: RocksDB is not the source of truth. It is an append-only backing stor
     cross-checks it against the created array at the queried root
 
 The head state is the `DonState` of the highest slot with an execution block; the highest slot
-overall is the last processed one. Until the genesis slot is committed, the state and progress
+overall is the last processed one. Until the genesis slot is committed, the state head and progress
 APIs answer `503`.
 
 ## Slot derivation rules
@@ -169,19 +169,25 @@ Reorg rollback does not modify RocksDB. The surviving Postgres `DonState` determ
 - `GET /sync-progress`
   - returns `last_processed_slot`
 - `GET /v1/state/head`
-  - returns:
-    - `last_processed_slot`
+  - returns the head state, derived at the last slot with an execution block:
+    - `slot` (the slot of that execution block; `/sync-progress` reports the last processed slot)
     - `state_root`
     - `block_number`
+    - `block_hash`
     - `created_count`
     - `nullifier_count`
     - `state_root_count`
+- `GET /v1/state/by_el/{block_id}`
+  - `block_id` is a decimal execution block number or a 32-byte execution block hash in hex (`0x` prefix optional)
+  - returns the state derived at that execution block, with the same fields as `/v1/state/head`
+  - `400` for a malformed `block_id`, `404` when no committed slot holds that block
 - `POST /v1/state/membership`
   - request body:
     - `object_commitments` (array of hash strings)
     - `nullifiers` (array of hash strings)
   - returns membership for both sets from one captured state:
-    - `last_processed_slot`
+    - `block_number` (execution block of the head state the results are answered against)
+    - `block_hash`
     - `state_root`
     - `created_results` (array of `{ commitment, present }`)
     - `nullifier_results` (array of `{ nullifier, present }`)
@@ -189,14 +195,16 @@ Reorg rollback does not modify RocksDB. The surviving Postgres `DonState` determ
   - request body:
     - `object_commitments` (array of hash strings)
   - returns:
-    - `last_processed_slot`
+    - `block_number` (execution block of the head state the results are answered against)
+    - `block_hash`
     - `state_root`
     - `results` (array of `{ commitment, present }`)
 - `POST /v1/state/nullifier/contains`
   - request body:
     - `nullifiers` (array of hash strings)
   - returns:
-    - `last_processed_slot`
+    - `block_number` (execution block of the head state the results are answered against)
+    - `block_hash`
     - `state_root`
     - `results` (array of `{ nullifier, present }`)
 - `POST /v1/txlib/grounding-witness`
@@ -217,7 +225,7 @@ against those pinned roots; Merkle nodes are content-addressed and immutable
 by root, so a concurrent commit or rollback cannot change what the captured
 roots resolve to.
 
-Hashes in request and response bodies are pod2 `Hash` values, serialized as lowercase 64-character hex with no `0x` prefix; inputs must use that same form (a `0x` prefix or wrong length is rejected).
+Most hashes in request and response bodies are pod2 `Hash` values, serialized as lowercase 64-character hex with no `0x` prefix; inputs must use that same form (a `0x` prefix or wrong length is rejected).  The exception are APIs that refer to Ethereum execution layer blocks, which can be identified with with a 256 bit hash value, serialized as lowercase 64-character hex with or without a `0x` prefix.
 
 ## Required env vars
 
