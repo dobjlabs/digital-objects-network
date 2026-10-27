@@ -100,7 +100,7 @@ Important: RocksDB is not the source of truth. It is an append-only backing stor
     cross-checks it against the created array at the queried root
 
 The head state is the `DonState` of the highest slot with an execution block; the highest slot
-overall is the last processed one. Until the genesis slot is committed, the state and progress
+overall is the last processed one. Until the genesis slot is committed, the state head and progress
 APIs answer `503`.
 
 ## Slot derivation rules
