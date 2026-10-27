@@ -87,9 +87,13 @@ pub fn state_header(
 }
 
 #[derive(Debug, Default)]
+pub struct BlobStatus {
+    tx_final: Hash,
+    error: Option<String>,
+}
+
+#[derive(Debug, Default)]
 pub struct TxStatus {
     pub tx_hash: B256,
-    pub tx_final: Option<Hash>,
-    // Errors of a particular blob in the transaction
-    pub blob_errors: Vec<(u32, String)>,
+    pub blobs: Vec<BlobStatus>,
 }

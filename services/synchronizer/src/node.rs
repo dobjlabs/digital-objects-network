@@ -366,9 +366,7 @@ impl Node {
                             "Invalid byte encoding in blob at slot {slot}, blob_index {blob_index}: {err}"
                         );
                         warn!("{}", msg);
-                        txs_status[tx_idx]
-                            .blob_errors
-                            .push((blob_index as u32, msg));
+                        txs_status[tx_idx].blob_errors.push((blob_index,msg);
                     }
                 }
             }
