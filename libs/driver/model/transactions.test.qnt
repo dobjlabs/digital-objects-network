@@ -157,8 +157,8 @@ module transactions_tests {
   // Retrying attaches the existing relayer job rather than creating a second one.
   run crashAfterRelayerAcceptResubmitsIdempotentlyTest = init
     .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1)).then(crash(1, RelayerAccepted))
-    .expect(all { node.records.get(1).state == Recorded, relayer.keys() == Set(1), safety })
-    .then(submit(1))
+    .expect(all { node.records.get(1).state == Recorded, node.records.get(1).attempted, relayer.keys() == Set(1), safety })
+    .then(retry(1))
     .expect(all { node.records.get(1).state == Submitted, relayer.keys() == Set(1), safety })
     .then(chainLand(1)).then(settle)
     .expect(all { node.records.get(1).state == Landed, safety })
@@ -241,4 +241,171 @@ module transactions_tests {
       freeLiveObjects == Set(1, 4),
       safety,
     })
+
+  run failedSubmissionSurvivesRestartAndRetriesTest = init
+    .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1))
+    .then(submitWith(1, false, Unavailable))
+    .expect(all {
+      node.records.get(1).state == Recorded,
+      node.records.get(1).attempted,
+      relayer == Map(),
+      freeLiveObjects == Set(2),
+      safety,
+    })
+    .then(restart)
+    .expect(all { node.records.get(1).attempted, safety })
+    .then(submitWith(1, true, Unavailable))
+    .expect(all { node.records.get(1).state == Recorded, relayer == Map(), safety })
+    .then(retry(1)).then(chainLand(1)).then(settle)
+    .expect(all { node.records.get(1).state == Landed, safety })
+
+  run failedSubmissionCannotBeDeletedEvenWhenRelayerHasNothingTest = init
+    .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1))
+    .then(submitWith(1, false, Unavailable))
+    .expect(all { relayer == Map(), node.records.get(1).attempted, safety })
+    .then(delete(1)).fail()
+
+  run automaticRetryRefusesNeverSubmittedRecordTest = init
+    .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1)).then(restart)
+    .expect(all { not(node.records.get(1).attempted), relayer == Map(), safety })
+    .then(retry(1)).fail()
+
+  run lostResponsesReuseExistingRelayerJobTest = init
+    .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1))
+    .then(submitWith(1, false, ResponseLost)).then(relayerBroadcast(1))
+    .then(submitWith(1, true, ResponseLost))
+    .expect(all {
+      node.records.get(1).state == Recorded,
+      relayer.keys() == Set(1),
+      relayer.get(1).broadcast,
+      safety,
+    })
+    .then(restart).then(retry(1))
+    .expect(all { node.records.get(1).state == Submitted, relayer.get(1).broadcast, safety })
+    .then(chainLand(1)).then(settle)
+    .expect(all { node.records.get(1).state == Landed, safety })
+
+  run automaticRetryRefusesExpiredGroundingTest = init
+    .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1))
+    .then(submitWith(1, false, Unavailable))
+    .then(chainAdvance).then(chainAdvance).then(chainAdvance)
+    .then(retry(1)).fail()
+
+  run expiryStopsAutomaticRetryTest = init
+    .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1))
+    .then(submitWith(1, false, Unavailable))
+    .then(chainAdvance).then(chainAdvance).then(chainAdvance).then(settle)
+    .expect(all { node.records.get(1).state == Expired, freeLiveObjects == Set(1, 2), safety })
+    .then(retry(1)).fail()
+
+  run landingStopsAutomaticRetryTest = init
+    .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1))
+    .then(submitWith(1, false, ResponseLost)).then(chainLand(1)).then(settle)
+    .expect(all { node.records.get(1).state == Landed, safety })
+    .then(retry(1)).fail()
+
+  run partialOutputFailureRollsBackOnlyItsOwnWorkTest = init
+    .then(startProofWith(1, Set(1), Set(3, 4)))
+    .then(startProofWith(2, Set(2), Set(3)))
+    .then(recordFailed(1, OutputWrite, Set(3)))
+    .expect(all {
+      node.objects.keys() == Set(1, 2),
+      node.records == Map(),
+      node.payloads == Set(),
+      node.jobs.keys() == Set(2),
+      node.holds == Map(2 -> 2),
+      strays == Set(),
+      freeLiveObjects == Set(1),
+      safety,
+    })
+    .then(finishProof(2))
+    .expect(all { node.objects.get(3).tx == 2, safety })
+
+  run payloadFailureRollsBackAndReleasesInputTest = init
+    .then(startProofWith(1, Set(1), Set(3)))
+    .then(recordFailed(1, PayloadWrite, Set(3)))
+    .expect(all {
+      node.objects.keys() == Set(1, 2),
+      node.records == Map(),
+      node.payloads == Set(),
+      node.jobs == Map(),
+      node.holds == Map(),
+      strays == Set(),
+      freeLiveObjects == Set(1, 2),
+      safety,
+    })
+    .then(startProofWith(2, Set(1), Set(3))).then(finishProof(2))
+    .expect(all { node.objects.get(3).tx == 2, safety })
+
+  run recordFailureRollsBackPayloadAndOutputsTest = init
+    .then(startProofWith(1, Set(1), Set(3)))
+    .then(recordFailed(1, RecordWrite, Set(3)))
+    .expect(all {
+      node.objects.keys() == Set(1, 2),
+      node.records == Map(),
+      node.payloads == Set(),
+      node.jobs == Map(),
+      node.holds == Map(),
+      strays == Set(),
+      safety,
+    })
+
+  run settlementSkipsRecordsCommittedAfterQueryTest = init
+    .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1))
+    .then(startProofWith(2, Set(2), Set(4)))
+    .then(chainAdvance).then(chainAdvance).then(chainAdvance)
+    .then(querySettlement)
+    .expect(node.settlement.transactions == Set(1))
+    .then(finishProof(2)).then(applySettlement)
+    .expect(all {
+      node.records.get(1).state == Expired,
+      node.records.get(2).state == Recorded,
+      node.records.get(2) == previousRecords.get(2),
+      node.objects.get(4) == { status: Unknown, tx: 2 },
+      not(node.objects.keys().contains(3)),
+      freeLiveObjects == Set(1),
+      safety,
+    })
+    .then(settle)
+    .expect(all { node.records.get(2).state == Expired, not(node.objects.keys().contains(4)), safety })
+
+  run settlementKeepsMembershipAndExpiryAtSameHeadTest = init
+    .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1)).then(submit(1))
+    .then(chainAdvance).then(chainAdvance).then(querySettlement)
+    .then(chainLand(1)).then(chainAdvance).then(applySettlement)
+    .expect(all {
+      node.records.get(1).state == Submitted,
+      node.objects.get(3).status == Unknown,
+      safety,
+    })
+    .then(settle)
+    .expect(all { node.records.get(1).state == Landed, node.objects.get(3).status == Live, safety })
+
+  run settlementDoesNotExpireReplacementAfterDeletionTest = init
+    .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1))
+    .then(chainAdvance).then(chainAdvance).then(chainAdvance).then(querySettlement)
+    .then(delete(1)).then(startProofWith(2, Set(1), Set(3))).then(finishProof(2))
+    .then(applySettlement)
+    .expect(all {
+      node.records.keys() == Set(2),
+      node.records.get(2).state == Recorded,
+      node.objects.get(3) == { status: Unknown, tx: 2 },
+      safety,
+    })
+
+  run restartDiscardsPendingSettlementTest = init
+    .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1))
+    .then(submitWith(1, false, Unavailable)).then(querySettlement).then(restart)
+    .expect(all {
+      not(node.settlement.pending),
+      node.records.get(1).state == Recorded,
+      node.records.get(1).attempted,
+      safety,
+    })
+    .then(retry(1)).then(chainLand(1)).then(querySettlement).then(applySettlement)
+    .expect(all { node.records.get(1).state == Landed, safety })
+
+  run concurrentSettlementQueriesAreRefusedTest = init
+    .then(querySettlement).then(querySettlement).fail()
+
 }

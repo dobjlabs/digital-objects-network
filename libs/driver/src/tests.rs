@@ -305,6 +305,7 @@ struct MockChain {
     nullifiers: HashSet<Hash>,
     head_block: i64,
     fail_membership: bool,
+    on_membership: Option<Box<dyn FnOnce() + Send>>,
 }
 
 struct MockSynchronizer {
@@ -343,11 +344,11 @@ impl SynchronizerClient for MockSynchronizer {
         object_commitments: &[Hash],
         nullifiers: &[Hash],
     ) -> Result<SynchronizerMembership> {
-        let chain = self.chain.lock().unwrap();
+        let mut chain = self.chain.lock().unwrap();
         if chain.fail_membership {
             return Err(anyhow!("synchronizer unreachable"));
         }
-        Ok(SynchronizerMembership {
+        let membership = SynchronizerMembership {
             created_objects: object_commitments
                 .iter()
                 .filter(|commitment| chain.created.contains(commitment))
@@ -359,7 +360,13 @@ impl SynchronizerClient for MockSynchronizer {
                 .copied()
                 .collect(),
             block_number: chain.head_block,
-        })
+        };
+        let on_membership = chain.on_membership.take();
+        drop(chain);
+        if let Some(on_membership) = on_membership {
+            on_membership();
+        }
+        Ok(membership)
     }
 }
 
@@ -1324,4 +1331,78 @@ fn test_import_class_hash_mismatch_is_rejected() {
         err.to_string().contains("class hash mismatch"),
         "expected hash-mismatch error, got: {err}"
     );
+}
+
+#[test]
+fn settle_skips_records_committed_during_membership_query() {
+    let fx = fixture("log_1.dobj");
+    let anchor = fx.driver.execute(fx.input("CraftWood")).unwrap();
+    let late = fx
+        .driver
+        .prove(
+            ExecuteActionInput {
+                action: craft_basics("FindLog"),
+                input_objects: vec![],
+                args: Default::default(),
+            },
+            "late-run",
+            &NoopExecutionReporter,
+        )
+        .unwrap();
+    let late_tx_final = late.tx_final;
+    let late_outputs = late.output_files().unwrap();
+    let driver = fx.driver.clone();
+    fx.chain.lock().unwrap().on_membership = Some(Box::new(move || {
+        driver.record(late).unwrap();
+    }));
+    fx.advance_head_to(anchor.grounding_block + MAX_STATE_ROOT_AGE_BLOCKS + 1);
+
+    let outcome = fx.driver.settle().unwrap();
+    assert_eq!(outcome.records.len(), 1);
+    assert_eq!(outcome.records[0].tx_final, anchor.tx_final);
+    assert_eq!(outcome.open_records, 1);
+    assert_eq!(
+        fx.driver.get_transaction(&late_tx_final).unwrap().state,
+        TransactionState::Recorded
+    );
+    for file in &late_outputs {
+        assert!(fx.paths.objects_dir.join(file).is_file());
+    }
+
+    let outcome = fx.driver.settle().unwrap();
+    assert_eq!(outcome.records.len(), 1);
+    assert_eq!(outcome.records[0].state, TransactionState::Expired);
+    for file in &late_outputs {
+        assert!(!fx.paths.objects_dir.join(file).exists());
+    }
+}
+
+#[test]
+fn record_rolls_back_outputs_and_payload_when_persistence_fails() {
+    for blocked_path in [
+        crate::paths::PAYLOAD_FILE.to_string(),
+        format!("{}.tmp", crate::paths::RECORD_FILE),
+    ] {
+        let fx = fixture("log_1.dobj");
+        let proved = fx
+            .driver
+            .prove(fx.input("CraftWood"), "run-1", &NoopExecutionReporter)
+            .unwrap();
+        let output_files = proved.output_files().unwrap();
+        assert!(!output_files.is_empty());
+        let transaction_dir = crate::transactions::transaction_dir(&fx.paths, &proved.tx_final);
+        std::fs::create_dir_all(transaction_dir.join(blocked_path)).unwrap();
+
+        fx.driver.record(proved).unwrap_err();
+        for file in output_files {
+            assert!(!fx.paths.objects_dir.join(file).exists());
+        }
+        assert!(!transaction_dir.exists());
+        assert!(fx.driver.list_transactions().unwrap().is_empty());
+        assert_eq!(fx.summary(&fx.input_file).held_by_run_id, None);
+        assert_eq!(fx.stored(&fx.input_file).status, FileStatus::Live);
+        fx.driver
+            .prove(fx.input("CraftWood"), "run-2", &NoopExecutionReporter)
+            .unwrap();
+    }
 }

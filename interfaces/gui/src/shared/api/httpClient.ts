@@ -176,11 +176,13 @@ let sharedEventSource: EventSource | null = null;
 const httpHandlers = new Map<string, Set<Handler<unknown>>>();
 const reopenHandlers = new Set<() => void>();
 let streamOpenedBefore = false;
+let lastEventSeq: number | null = null;
 
 function ensureEventSource() {
   if (sharedEventSource) return;
   sharedEventSource = new EventSource(`${HTTP_BASE}/events`);
   sharedEventSource.onopen = () => {
+    lastEventSeq = null;
     if (streamOpenedBefore) {
       for (const handler of reopenHandlers) handler();
     }
@@ -192,6 +194,13 @@ function ensureEventSource() {
       parsed = JSON.parse(e.data);
     } catch {
       return;
+    }
+    if (typeof parsed.seq === "number") {
+      const gap = lastEventSeq !== null && parsed.seq !== lastEventSeq + 1;
+      lastEventSeq = parsed.seq;
+      if (gap) {
+        for (const handler of reopenHandlers) handler();
+      }
     }
     const { type, ...payload } = parsed;
     if (!type) return;
@@ -242,7 +251,7 @@ export function listenObjectEvents(handlers: {
   };
 }
 
-/** Fires on reconnection so subscribers can reload missed state. */
+/** Fires on reconnection or a sequence gap so subscribers can reload missed state. */
 export function listenEventStreamReopen(handler: () => void): UnlistenFn {
   ensureEventSource();
   reopenHandlers.add(handler);

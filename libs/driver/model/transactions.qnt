@@ -26,6 +26,7 @@ module transactions {
     outputs: Set[int],
     grounding: int,       // Block of the state root used to prove the transaction.
     state: RecordState,
+    attempted: bool,
     broadcast: bool,      // Latest broadcast information copied from the relayer.
     relayerFailed: bool,  // A reported failure; it does not decide chain inclusion.
   }
@@ -33,19 +34,6 @@ module transactions {
   // Its ID becomes the transaction ID if recording succeeds.
   type Job = { inputs: Set[int], outputs: Set[int], grounding: int }
 
-  // Everything owned by one driver. Objects, payloads, and records survive a
-  // restart; holds and jobs exist only in memory. Payload bytes are represented
-  // by the set of transaction IDs whose payloads have been written.
-  type Node = {
-    objects: int -> ObjectFile,
-    payloads: Set[int],
-    records: int -> Record,
-    holds: int -> int,    // Input object ID -> proof job holding that input.
-    jobs: int -> Job,
-    nextId: int,
-  }
-  // The chain and relayer are independent of the driver. The chain remembers
-  // created objects and spent inputs even while local files are stale.
   type Chain = { head: int, created: Set[int], nullifiers: Set[int], landed: Set[int] }
   type RelayerJob = {
     inputs: Set[int],
@@ -54,9 +42,28 @@ module transactions {
     broadcast: bool,
     failed: bool,
   }
+  type SettlementSnapshot = {
+    pending: bool,
+    transactions: Set[int],
+    chain: Chain,
+    relayer: int -> RelayerJob,
+  }
+  // Objects, payloads, and records survive a restart. Holds, jobs, and the
+  // pending query are volatile; payload bytes are abstracted as file existence.
+  type Node = {
+    objects: int -> ObjectFile,
+    payloads: Set[int],
+    records: int -> Record,
+    holds: int -> int,
+    jobs: int -> Job,
+    settlement: SettlementSnapshot,
+    nextId: int,
+  }
+  type SubmissionResult = Accepted | Unavailable | ResponseLost
+  type RecordFailure = OutputWrite | PayloadWrite | RecordWrite
   // The output batch, payload write, and record write are modeled as atomic.
-  // Crashes can occur between them; torn files and partial output batches are
-  // outside the model.
+  // Crashes can occur between them. Recoverable failures also explore partial
+  // output batches; cleanup succeeds unless the process crashes.
   type CrashPhase = OutputsWritten | PayloadWritten | RecordWritten | RelayerAccepted
 
   // Save the selected command in each state so counterexample traces show what
@@ -64,14 +71,17 @@ module transactions {
   type Command = Init
     | StartProof({ id: int, inputs: Set[int], outputs: Set[int] })
     | FinishProof({ id: int })
+    | RecordFailed({ id: int, failure: RecordFailure, outputsWritten: Set[int] })
     | Crash({ id: int, phase: CrashPhase })
     | Delete({ tx: int })
-    | Submit({ tx: int })
+    | Submit({ tx: int, result: SubmissionResult })
+    | Retry({ tx: int, result: SubmissionResult })
     | RelayerBroadcast({ tx: int })
     | RelayerFail({ tx: int })
     | ChainLand({ tx: int })
     | ChainAdvance
-    | Settle
+    | QuerySettlement
+    | ApplySettlement({ transactions: Set[int] })
     | Restart
 
   // Exploration bounds
@@ -99,6 +109,7 @@ module transactions {
   var deleted: Set[int]                     // Transactions explicitly abandoned.
   var strays: Set[int]                      // Output names left by a crash before a record exists.
   var previousObjects: int -> ObjectFile    // File view before the most recent action.
+  var previousRecords: int -> Record
 
   // Derived views and updates
   //
@@ -127,6 +138,7 @@ module transactions {
     outputs: job.outputs,
     grounding: job.grounding,
     state: Recorded,
+    attempted: false,
     broadcast: false,
     relayerFailed: false,
   }
@@ -180,6 +192,13 @@ module transactions {
   action unchangedEnvironment = all { chain' = chain, relayer' = relayer }
   action unchangedGhosts = all { deleted' = deleted, strays' = strays }
 
+  pure val noSettlement: SettlementSnapshot = {
+    pending: false,
+    transactions: Set(),
+    chain: { head: 0, created: Set(), nullifiers: Set(), landed: Set() },
+    relayer: Map(),
+  }
+
   // Initial state
   //
   // Start with two confirmed, unspent objects and no proof or transaction jobs.
@@ -192,6 +211,7 @@ module transactions {
       records: Map(),
       holds: Map(),
       jobs: Map(),
+      settlement: noSettlement,
       nextId: 1,
     },
     chain' = { head: 0, created: genesisObjects, nullifiers: Set(), landed: Set() },
@@ -199,6 +219,7 @@ module transactions {
     deleted' = Set(),
     strays' = Set(),
     previousObjects' = genesisObjects.mapBy(basename => { status: Live, tx: 0 }),
+    previousRecords' = Map(),
   }
 
   // Proving and recording
@@ -223,6 +244,7 @@ module transactions {
     unchangedEnvironment,
     unchangedGhosts,
     previousObjects' = node.objects,
+    previousRecords' = node.records,
   }
 
   // Simulation chooses input and output subsets. Empty or otherwise invalid
@@ -254,6 +276,29 @@ module transactions {
     unchangedEnvironment,
     unchangedGhosts,
     previousObjects' = node.objects,
+    previousRecords' = node.records,
+  }
+
+  action recordFailed(id: int, failure: RecordFailure, outputsWritten: Set[int]): bool = all {
+    node.jobs.keys().contains(id),
+    not(recordRefused(id)),
+    outputsWritten.subseteq(node.jobs.get(id).outputs),
+    failure == OutputWrite or outputsWritten == node.jobs.get(id).outputs,
+    command' = RecordFailed({ id: id, failure: failure, outputsWritten: outputsWritten }),
+    node' = {
+      val partial = { ...node,
+        objects: writeOutputs(node.objects, outputsWritten, id),
+        payloads: if (failure == OutputWrite) node.payloads else node.payloads.union(Set(id)),
+      }
+      released({ ...partial,
+        objects: without(partial.objects, outputsWritten),
+        payloads: partial.payloads.exclude(Set(id)),
+      }, id)
+    },
+    unchangedEnvironment,
+    unchangedGhosts,
+    previousObjects' = node.objects,
+    previousRecords' = node.records,
   }
 
   // Crashes and recovery
@@ -267,6 +312,7 @@ module transactions {
       objects: writeOutputs(n.objects, job.outputs, id),
       holds: Map(),
       jobs: Map(),
+      settlement: noSettlement,
     }
     val payloadWritten = { ...outputsWritten, payloads: n.payloads.union(Set(id)) }
     match phase {
@@ -288,7 +334,12 @@ module transactions {
           node.records.get(id).state == Recorded,
           not(relayer.keys().contains(id)),
           chain.head - node.records.get(id).grounding <= maxAge,
-          node' = { ...node, holds: Map(), jobs: Map() },
+          node' = { ...node,
+            holds: Map(),
+            jobs: Map(),
+            settlement: noSettlement,
+            records: node.records.set(id, { ...node.records.get(id), attempted: true }),
+          },
           relayer' = relayer.put(id, relayerJobFor(node.records.get(id))),
           strays' = strays,
         }
@@ -305,18 +356,16 @@ module transactions {
     chain' = chain,
     deleted' = deleted,
     previousObjects' = node.objects,
+    previousRecords' = node.records,
   }
 
   // Deletion and submission
   //
-  // Deletion frees the inputs and removes the transaction's unconfirmed outputs.
-  // It is safe only if the relayer has no payload that could later land. The model
-  // can inspect the relayer directly; the driver must conservatively track whether
-  // a submission attempt could have reached it.
+  // An attempted request may have reached the relayer even without acknowledgment.
   action delete(tx: int): bool = all {
     node.records.keys().contains(tx),
     node.records.get(tx).state == Recorded,
-    not(relayer.keys().contains(tx)),
+    not(node.records.get(tx).attempted),
     command' = Delete({ tx: tx }),
     node' = { ...node,
       objects: without(node.objects, ownedUnknownOutputs(node.objects, node.records.get(tx), tx)),
@@ -327,25 +376,31 @@ module transactions {
     deleted' = deleted.union(Set(tx)),
     strays' = strays,
     previousObjects' = node.objects,
+    previousRecords' = node.records,
   }
 
-  // Submission accepts only a still-valid Recorded transaction. Repeating a
-  // request after a crash reuses the relayer's existing job, assuming submissions
-  // are idempotent by transaction ID. This closes the uncertain submission window.
-  action submit(tx: int): bool = all {
+  action submitWith(tx: int, automatic: bool, result: SubmissionResult): bool = all {
     node.records.keys().contains(tx),
     node.records.get(tx).state == Recorded,
+    not(automatic) or node.records.get(tx).attempted,
     chain.head - node.records.get(tx).grounding <= maxAge,
-    command' = Submit({ tx: tx }),
+    command' = if (automatic) Retry({ tx: tx, result: result }) else Submit({ tx: tx, result: result }),
     node' = { ...node,
-      records: node.records.set(tx, { ...node.records.get(tx), state: Submitted }),
+      records: node.records.set(tx, { ...node.records.get(tx),
+        attempted: true,
+        state: if (result == Accepted) Submitted else Recorded,
+      }),
     },
-    relayer' = if (relayer.keys().contains(tx)) relayer
+    relayer' = if (result == Unavailable or relayer.keys().contains(tx)) relayer
       else relayer.put(tx, relayerJobFor(node.records.get(tx))),
     chain' = chain,
     unchangedGhosts,
     previousObjects' = node.objects,
+    previousRecords' = node.records,
   }
+
+  action submit(tx: int): bool = submitWith(tx, false, Accepted)
+  action retry(tx: int): bool = submitWith(tx, true, Accepted)
 
   // Relayer and chain progress
   //
@@ -360,6 +415,7 @@ module transactions {
     chain' = chain,
     unchangedGhosts,
     previousObjects' = node.objects,
+    previousRecords' = node.records,
   }
 
   // Failure records a relayer report without withdrawing the payload. A send
@@ -373,6 +429,7 @@ module transactions {
     chain' = chain,
     unchangedGhosts,
     previousObjects' = node.objects,
+    previousRecords' = node.records,
   }
 
   // Chain acceptance is the environmental safety assumption: grounding must
@@ -395,6 +452,7 @@ module transactions {
     relayer' = relayer,
     unchangedGhosts,
     previousObjects' = node.objects,
+    previousRecords' = node.records,
   }
 
   // Time can advance without a transaction landing. Stop at a bounded head
@@ -407,6 +465,7 @@ module transactions {
     relayer' = relayer,
     unchangedGhosts,
     previousObjects' = node.objects,
+    previousRecords' = node.records,
   }
 
   // Settlement
@@ -425,48 +484,80 @@ module transactions {
       else annotated
     }
 
-  // One pass uses a single chain snapshot for membership and age checks, then
-  // updates records and local files together. Splitting those reads could falsely
-  // expire a transaction that landed between them.
-  action settle = all {
-    command' = Settle,
-    node' = {
-      val settledRecords = node.records.keys().mapBy(tx => {
-        val record = node.records.get(tx)
-        // Recorded transactions still receive membership checks, including after
-        // a crash that lost the relayer job ID. Relayer polling is Submitted-only.
-        val atRelayer = record.state == Submitted and relayer.keys().contains(tx)
-        settleRecord(record, chain,
-          if (atRelayer) relayer.get(tx).broadcast else record.broadcast,
-          if (atRelayer) relayer.get(tx).failed else record.relayerFailed)
-      })
-      // Remove expired outputs only while their files still belong to that record.
-      val expiredOutputs = settledRecords.keys()
-        .filter(tx => settledRecords.get(tx).state == Expired)
-        .map(tx => ownedUnknownOutputs(node.objects, settledRecords.get(tx), tx))
-        .flatten()
-      val reconciled = node.objects.keys().exclude(expiredOutputs).mapBy(basename => {
-        val file = node.objects.get(basename)
-        // A spent object is also in the created set, so spending takes precedence.
-        if (chain.nullifiers.contains(basename)) { ...file, status: Nullified }
-        else if (chain.created.contains(basename)) { ...file, status: Live }
-        else file
-      })
-      { ...node, objects: reconciled, records: settledRecords }
-    },
+  pure def captureSettlement(localNode: Node, currentChain: Chain, relayerJobs: int -> RelayerJob): SettlementSnapshot = {
+    val transactions = localNode.records.keys().filter(tx => isOpen(localNode.records.get(tx).state))
+    val commitments = transactions.map(tx => localNode.records.get(tx).outputs).flatten().union(localNode.objects.keys())
+    val nullifiers = transactions.map(tx => localNode.records.get(tx).inputs).flatten().union(localNode.objects.keys())
+    val submittedTransactions = transactions.filter(tx => localNode.records.get(tx).state == Submitted).intersect(relayerJobs.keys())
+    {
+      pending: true,
+      transactions: transactions,
+      chain: { ...currentChain, created: currentChain.created.intersect(commitments), nullifiers: currentChain.nullifiers.intersect(nullifiers) },
+      relayer: submittedTransactions.mapBy(tx => relayerJobs.get(tx)),
+    }
+  }
+
+  pure def settledNode(localNode: Node, snapshot: SettlementSnapshot): Node = {
+    val settledRecords = localNode.records.keys().mapBy(tx => {
+      val record = localNode.records.get(tx)
+      val atRelayer = snapshot.relayer.keys().contains(tx)
+      if (not(snapshot.transactions.contains(tx))) record
+      else settleRecord(record, snapshot.chain,
+        if (atRelayer) snapshot.relayer.get(tx).broadcast else record.broadcast,
+        if (atRelayer) snapshot.relayer.get(tx).failed else record.relayerFailed)
+    })
+    val expiredOutputs = settledRecords.keys()
+      .filter(tx => settledRecords.get(tx).state == Expired)
+      .map(tx => ownedUnknownOutputs(localNode.objects, settledRecords.get(tx), tx))
+      .flatten()
+    val reconciled = localNode.objects.keys().exclude(expiredOutputs).mapBy(basename => {
+      val file = localNode.objects.get(basename)
+      if (file.status == Nullified or snapshot.chain.nullifiers.contains(basename)) { ...file, status: Nullified }
+      else if (snapshot.chain.created.contains(basename)) { ...file, status: Live }
+      else file
+    })
+    { ...localNode, objects: reconciled, records: settledRecords, settlement: noSettlement }
+  }
+
+  action querySettlement = all {
+    not(node.settlement.pending),
+    command' = QuerySettlement,
+    node' = { ...node, settlement: captureSettlement(node, chain, relayer) },
     unchangedEnvironment,
     unchangedGhosts,
     previousObjects' = node.objects,
+    previousRecords' = node.records,
+  }
+
+  action applySettlement = all {
+    node.settlement.pending,
+    command' = ApplySettlement({ transactions: node.settlement.transactions }),
+    node' = settledNode(node, node.settlement),
+    unchangedEnvironment,
+    unchangedGhosts,
+    previousObjects' = node.objects,
+    previousRecords' = node.records,
+  }
+
+  action settle = all {
+    not(node.settlement.pending),
+    command' = ApplySettlement({ transactions: openRecords }),
+    node' = settledNode(node, captureSettlement(node, chain, relayer)),
+    unchangedEnvironment,
+    unchangedGhosts,
+    previousObjects' = node.objects,
+    previousRecords' = node.records,
   }
 
   // Restart preserves disk and the environment but discards proof jobs and
   // holds. Persisted transactions remain available for submission and settlement.
   action restart = all {
     command' = Restart,
-    node' = { ...node, holds: Map(), jobs: Map() },
+    node' = { ...node, holds: Map(), jobs: Map(), settlement: noSettlement },
     unchangedEnvironment,
     unchangedGhosts,
     previousObjects' = node.objects,
+    previousRecords' = node.records,
   }
 
   // Exploration
@@ -477,17 +568,23 @@ module transactions {
   action step = {
     nondet id = 1.to(maxProofs).oneOf()
     nondet phase = Set(OutputsWritten, PayloadWritten, RecordWritten, RelayerAccepted).oneOf()
+    nondet failure = Set(OutputWrite, PayloadWrite, RecordWrite).oneOf()
+    nondet written = objectIds.powerset().oneOf()
+    nondet result = Set(Accepted, Unavailable, ResponseLost).oneOf()
     any {
       startProof,
       finishProof(id),
+      recordFailed(id, failure, written),
       crash(id, phase),
       delete(id),
-      submit(id),
+      submitWith(id, false, result),
+      submitWith(id, true, result),
       relayerBroadcast(id),
       relayerFail(id),
       chainLand(id),
       chainAdvance,
-      settle,
+      querySettlement,
+      applySettlement,
       restart,
     }
   }
@@ -574,6 +671,42 @@ module transactions {
   // Explicit abandonment must never delete a payload the relayer can still land.
   val deletedNeverAtRelayer = deleted.intersect(relayer.keys()).size() == 0
 
+  val submissionAttemptsPersist = previousRecords.keys()
+    .filter(tx => previousRecords.get(tx).attempted)
+    .forall(tx => node.records.keys().contains(tx) and node.records.get(tx).attempted)
+
+  val relayerPayloadsWereAttempted = relayer.keys().forall(tx =>
+    node.records.keys().contains(tx) and node.records.get(tx).attempted)
+
+  val submittedRecordsWereAttempted = node.records.keys().forall(tx =>
+    node.records.get(tx).state != Submitted or node.records.get(tx).attempted)
+
+  val automaticRetriesRequireAttempt = match command {
+    | Retry(attempt) => previousRecords.keys().contains(attempt.tx) and previousRecords.get(attempt.tx).attempted
+    | _ => true
+  }
+
+  val recordingFailuresCleanUp = match command {
+    | RecordFailed(failure) => all {
+        node.objects == previousObjects,
+        node.records == previousRecords,
+        not(node.records.keys().contains(failure.id)),
+        not(node.payloads.contains(failure.id)),
+        not(node.jobs.keys().contains(failure.id)),
+        node.holds.keys().forall(basename => node.holds.get(basename) != failure.id),
+      }
+    | _ => true
+  }
+
+  val settlementOnlyUpdatesQueriedRecords = match command {
+    | ApplySettlement(snapshot) => all {
+        node.records.keys() == previousRecords.keys(),
+        previousRecords.keys().exclude(snapshot.transactions)
+          .forall(tx => node.records.get(tx) == previousRecords.get(tx)),
+      }
+    | _ => true
+  }
+
   // Single entry point for the simulator's invariant checks and scenario tests.
   val safety = all {
     disjointOpenInputs,
@@ -587,5 +720,11 @@ module transactions {
     statusesFollowChain,
     objectsMonotone,
     deletedNeverAtRelayer,
+    submissionAttemptsPersist,
+    relayerPayloadsWereAttempted,
+    submittedRecordsWereAttempted,
+    automaticRetriesRequireAttempt,
+    recordingFailuresCleanUp,
+    settlementOnlyUpdatesQueriedRecords,
   }
 }

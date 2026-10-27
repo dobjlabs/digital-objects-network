@@ -246,38 +246,65 @@ impl Driver {
                 None => return Err(DriverError::ObjectFileNotFound(input.clone()).into()),
             }
         }
+        if read_record(&self.paths, &proved.tx_final)?.is_some() {
+            return Err(DriverError::Conflict(format!(
+                "transaction {} is already recorded",
+                encode_hash_hex(&proved.tx_final)
+            ))
+            .into());
+        }
         for output in &output_files {
-            if entries.iter().any(|entry| &entry.file_name == output) {
+            if self.paths.objects_dir.join(output).try_exists()?
+                || self.paths.nullified_objects_dir.join(output).try_exists()?
+            {
                 return Err(
                     DriverError::Conflict(format!("output file already exists: {output}")).into(),
                 );
             }
         }
 
-        for (output, file_name) in proved.outputs.iter().zip(&output_files) {
-            let record = ObjectRecord {
-                content_hash: output.obj.commitment(),
-                class: output.class.clone(),
-                status: FileStatus::Unknown,
-                obj: output.obj.clone(),
-                tx_final: proved.tx_final,
-            };
-            write_object_file(&self.paths, &record, file_name)?;
-        }
-        write_payload(&self.paths, &proved.tx_final, &proved.payload_bytes)?;
         let record = TransactionRecord::recorded(
             encode_hash_hex(&proved.tx_final),
             proved.action.clone(),
             proved.owner.clone(),
             proved.input_files().to_vec(),
-            output_files,
+            output_files.clone(),
             encode_hash_hex(&proved.grounding_root),
             proved.grounding_block,
             proved.nullifiers.iter().map(encode_hash_hex).collect(),
             proved.created.iter().map(encode_hash_hex).collect(),
             now_ms(),
         );
-        write_record(&self.paths, &record)?;
+        let mut attempted_outputs = Vec::new();
+        let result = (|| -> Result<()> {
+            for (output, file_name) in proved.outputs.iter().zip(&output_files) {
+                attempted_outputs.push(file_name);
+                let output_record = ObjectRecord {
+                    content_hash: output.obj.commitment(),
+                    class: output.class.clone(),
+                    status: FileStatus::Unknown,
+                    obj: output.obj.clone(),
+                    tx_final: proved.tx_final,
+                };
+                write_object_file(&self.paths, &output_record, file_name)?;
+            }
+            write_payload(&self.paths, &proved.tx_final, &proved.payload_bytes)?;
+            write_record(&self.paths, &record)
+        })();
+        if let Err(mut err) = result {
+            for file_name in attempted_outputs {
+                let path = self.paths.objects_dir.join(file_name);
+                if let Err(cleanup) = fs::remove_file(&path)
+                    && cleanup.kind() != std::io::ErrorKind::NotFound
+                {
+                    err = err.context(format!("failed to roll back output {file_name}: {cleanup}"));
+                }
+            }
+            if let Err(cleanup) = remove_transaction(&self.paths, &proved.tx_final) {
+                err = err.context(format!("failed to roll back transaction: {cleanup:#}"));
+            }
+            return Err(err);
+        }
         Ok(record)
     }
 
@@ -396,6 +423,11 @@ impl Driver {
     fn settle_with(&self, all_objects: bool) -> Result<(SettleOutcome, Vec<ObjectSummary>)> {
         let settings = self.load_settings()?;
         let records = load_records(&self.paths)?;
+        let queried_transactions = records
+            .iter()
+            .filter(|record| record.is_open())
+            .map(|record| record.tx_final.clone())
+            .collect::<HashSet<_>>();
         let mut commitments = HashSet::new();
         let mut nullifiers = HashSet::new();
         for record in records.iter().filter(|record| record.is_open()) {
@@ -453,7 +485,10 @@ impl Driver {
         let mut outcome = SettleOutcome::default();
         let settled_at_ms = now_ms();
         let mut records = load_records(&self.paths)?;
-        for record in records.iter_mut().filter(|record| record.is_open()) {
+        for record in records
+            .iter_mut()
+            .filter(|record| record.is_open() && queried_transactions.contains(&record.tx_final))
+        {
             let before = record.clone();
             if let Some(job) = relayer_jobs.get(&record.tx_final) {
                 if job.tx_hash.is_some() {

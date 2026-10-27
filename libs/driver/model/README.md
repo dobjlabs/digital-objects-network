@@ -1,24 +1,40 @@
 # Transaction record contract
 
-[transactions.qnt](transactions.qnt) is the driver's contract for the life of a transaction once proving is split from recording, submitting and settling. It covers taking and releasing input holds, recording outputs and payload, deleting a recorded transaction, submitting to the relayer, relayer broadcast and failure, the chain landing or outrunning a transaction, the settlement pass, and crashes at each write inside record and inside submit. [transactions.test.qnt](transactions.test.qnt) pins the scenarios that decided the design; `safety` is checked by random simulation over the same commands.
+[transactions.qnt](transactions.qnt) models the driver's transaction lifecycle: proof holds, recording, submission attempts and retries, settlement queries and their application, recoverable write failures, and process crashes. [transactions.test.qnt](transactions.test.qnt) exercises deterministic boundary cases; `safety` is checked by random simulation over the same transitions.
 
-The state is the driver as it sits on disk and in memory: object files (status and the txFinal that wrote them), the transactions directory (payloads and records), the hold table and the proof jobs. The environment is the chain (head block, created set, nullifier set) and the relayer (one job per txFinal, with broadcast and failed flags). Basenames double as commitments and nullifiers, so one small integer names an object everywhere. A record's txFinal is the id of the proof job that produced it.
+Local state includes object files, payload files, transaction records, proof jobs, holds, and a pending settlement snapshot. Objects, payloads, and records survive a restart. Jobs, holds, and snapshots do not. Each record has a durable `attempted` flag, representing the presence of `submitAttemptedAtMs`; the model does not track timestamps. The environment is the chain and one relayer job per transaction ID. Small integers stand for filenames, commitments, nullifiers, and transaction IDs.
 
 ## What the contract says
 
-Open records (`Recorded`, `Submitted`) have pairwise disjoint inputs, and no held basename is an input of an open record. `Landed` and `Expired` are terminal and agree with the chain: a landed record's transaction is in the chain's landed set and an expired record's never is. A landed record's outputs exist, carry its txFinal and are no longer `Unknown`; its inputs are `Nullified`. An expired record owns no `Unknown` output file. Every `Unknown` file is owned by an open record, except a file left by a crash before the record file was written. `Live` means the commitment is in the created set and `Nullified` means the nullifier is in the nullifier set, so object status is never ahead of the chain. Status moves only forward, and a file's txFinal never changes. A deleted transaction is never one the relayer holds.
+Open records (`Recorded`, `Submitted`) have disjoint inputs, and no proof holds an input owned by an open record. `Landed` and `Expired` are terminal and agree with actual chain inclusion. A landed record retains its outputs with confirmed statuses and its inputs are nullified. An expired record owns no unknown output. Unknown files belong to open records, except outputs left by a crash before recording committed. File status moves only forward, and a surviving file cannot change producer.
 
-Three decisions in the plan fall out of these invariants, and each is a one-line change to the model that `quint run` refutes within a second:
+Submission attempts are durable and cannot be undone by failure or restart. Deletion uses that local flag: it is forbidden after an attempt even when the relayer has no job. A successful request records acceptance; an unavailable relayer leaves the record attempted but unaccepted; a lost response can leave a remote job without local acceptance. Retrying reuses that job. Automatic retries require an attempted, still-valid `Recorded` transaction. They cannot submit untouched records or retry terminal transactions.
 
-- Relayer failure is an annotation, not a terminal state. A job can fail after its send went out, so a `failed` job may still land. If settle treated it as terminal and removed the outputs, the later landing would leave a landed transaction with no output files. `relayerFailureIsAnAnnotationTest` is the trace.
-- Settle reads the head block and the membership answers from one snapshot. The expiry rule is `head - grounding > maxAge` against the same head the membership answer was taken at. Reading the head after the membership answer is the same as expiring one block early, and `quint run` then finds a transaction marked `Expired` that lands. `landedAtTheAgeLimitStaysLandedTest` is the boundary trace.
-- Deletion must exclude transactions whose payload may be at the relayer. If the process dies after the relayer accepted the payload but before the record was marked `Submitted`, the record still reads `Recorded` while the payload can land. Deleting it would remove the outputs of a transaction that lands. `Crash(RelayerAccepted)` is that window; `deleteRefusedAfterRelayerAcceptTest` and `crashAfterRelayerAcceptStillSettlesTest` show the refusal and that settle lands the record anyway, since membership covers every open record and the relayer is idempotent on txFinal.
+Settlement has separate `querySettlement` and `applySettlement` transitions. A query captures the transaction IDs, requested membership results and their head, and relayer annotations. Recording, submission, deletion, chain progress, and crashes can occur before application. Application changes only records in that snapshot, using its head for expiry; a late record waits for another query. Only one query can be pending, and restart discards it. `settle` is a convenience action that captures and applies a snapshot atomically for lifecycle scenarios; random simulation uses the split transitions.
+
+`recordFailed` models recoverable failures during output, payload, and record writes. It can write a subset of outputs before an output-write failure, then rolls back its files and releases only its own proof holds. Other jobs and existing object files survive. Crashes remain separate: outputs or payloads written before the record's commit point can remain on disk without a transaction record.
+
+## Boundary scenarios
+
+The deterministic suite includes:
+
+- Failure before relayer acceptance, restart, repeated failure, and successful retry; lost responses reuse a relayer job without clearing its annotations.
+- Refused deletion after an unsuccessful submission attempt, and refused automatic retries for untouched, stale, landed, and expired transactions.
+- Partial output rollback while another proof holds unrelated inputs, plus payload and record-write rollback followed by reuse of released inputs and output names.
+- A stale proof recorded between settlement query and application, deletion followed by a replacement record, and a landing at the grounding-age limit while an earlier query is pending.
+- Discarding a pending settlement snapshot on restart and refusing overlapping queries.
+
+The earlier ownership, collision, chained-spend, expiry, and crash scenarios remain. `relayerFailureIsAnAnnotationTest` checks that a failed relayer job may still land; `crashAfterRelayerAcceptStillSettlesTest` checks landing without locally recorded acceptance.
 
 ## Assumptions and exclusions
 
-The chain lands a payload only while `head - grounding <= maxAge` and only if none of its commitments or nullifiers collide with committed state; this is the synchronizer's rule and the contract's one assumption about the environment. The real rule compares the inclusion block with the grounding block, so the model's guard admits landings the synchronizer would refuse, which is the safe direction for the invariants. The output-file batch, payload write, and record rename are modeled as atomic steps. Imports, the discard escape hatch, transactions proved outside the driver, explicit reservations and relayer fee bumps are outside the contract; so is any liveness claim, since the environment may stop advancing.
+The chain accepts a payload only while `head - grounding <= maxAge` and only when its commitments and nullifiers do not collide with committed state. The real rule compares the inclusion block with grounding, so the model admits landings the synchronizer would refuse, which is conservative for safety.
 
-Bounds: four object ids, two present and live at the start, at most four proofs, a head of at most eight blocks and a grounding age limit of two. Random simulation reaches landings, expiries, deletes, collisions and every crash phase often; chained spends and two concurrent landings are rare, so the test module pins them.
+A query captures membership and head together. It includes the current object files as well as open-record effects, representing an inventory reconciliation pass. Multi-batch HTTP behavior is abstracted into that snapshot. The record commit and each crash-phase output batch are atomic; torn files and crashes during partial output batches are excluded. Recoverable write failures and their rollback form one transition under the store lock, and rollback filesystem operations are assumed to succeed. Cleanup failures and corrupted files are outside this model.
+
+Imports, unsafe discard, externally proved transactions, explicit reservations, and relayer fee bumps remain excluded. GUI events, run progress, exact retry delays, and backoff bookkeeping are covered by implementation tests. Simulation has no fairness requirement and makes no eventual-completion claim: the relayer or chain may stop progressing indefinitely.
+
+Bounds: four object IDs, two initially live objects, at most four proof starts, a head of at most eight blocks, and a grounding age limit of two. Simulation explores submission outcomes, recoverable failures, query/application interleavings, and crashes alongside the normal lifecycle. Deterministic scenarios cover cases that sampling may rarely reach.
 
 ## Run
 
@@ -37,15 +53,8 @@ pnpm --dir devtools/models test:driver
 pnpm --dir devtools/models simulate:driver
 ```
 
-`check:driver` runs all three. The [shared tooling](../../../devtools/models/README.md)
-pins Quint 0.33.0, the dependency lockfile, and the simulation seed and bounds.
-The [Quint workflow](../../../.github/workflows/models.yml) runs these checks in CI.
+`check:driver` runs all three. The [shared tooling](../../../devtools/models/README.md) pins Quint 0.33.0, the dependency lockfile, and the simulation seed and bounds. The [Quint workflow](../../../.github/workflows/models.yml) runs these checks in CI.
 
 ## Rust replay adapter
 
-The driver adapter is still to be implemented. It will replay model
-transitions against a `Driver` on a temporary home, using mock synchronizer
-and relayer state, gates at crash boundaries, and restart by reopening the
-driver. It will compare object files,
-transaction records, and holds against `node`; auxiliary variables such as
-`deleted`, `strays`, and `previousObjects` are used only by the specification.
+The driver adapter is still to be implemented. It will replay transitions against a `Driver` on a temporary home, with mock synchronizer and relayer state, controlled query and crash boundaries, and restart by reopening the driver. It will compare files, records, and holds with `node`. `command`, `deleted`, `strays`, `previousObjects`, and `previousRecords` support trace inspection and specification checks; they are not persisted driver data. Passing the model checks validates the specification, without proving that Rust implements it.

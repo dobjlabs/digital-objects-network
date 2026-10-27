@@ -80,3 +80,48 @@ test("built client selects the same daemon for HTTP and SSE", async (t) => {
     });
   }
 });
+
+test("sequence gaps reload snapshots and reconnects reset sequence tracking", async (t) => {
+  const descriptors = new Map(["document", "window", "EventSource"].map((key) => [
+    key, Object.getOwnPropertyDescriptor(globalThis, key),
+  ]));
+  t.after(() => {
+    for (const [key, descriptor] of descriptors) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete globalThis[key];
+    }
+  });
+  globalThis.document = { querySelector: () => null };
+  globalThis.window = { location: { origin: "http://127.0.0.1:7737" } };
+  let source;
+  globalThis.EventSource = class {
+    constructor() { source = this; }
+    close() {}
+  };
+  const fetch = t.mock.method(globalThis, "fetch", async () => new Response("[]"));
+  const module = await importModule(await buildClient(""), "sequence-gaps");
+  const received = [];
+  const stopObjects = module.listenObjectEvents({ object: (event) => received.push(event), removed: () => {} });
+  const reloads = [];
+  const stopReload = module.listenEventStreamReopen(() => reloads.push(module.loadObjects()));
+  source.onopen();
+  const send = (seq, type = "object") => source.onmessage({ data: JSON.stringify({ seq, type, fileName: `${seq}.dobj` }) });
+  send(1);
+  send(2, "transaction");
+  send(4);
+  send(5);
+  await Promise.all(reloads);
+  assert.equal(fetch.mock.calls.length, 1);
+  assert.deepEqual(received.map((event) => event.fileName), ["1.dobj", "4.dobj", "5.dobj"]);
+
+  source.onopen();
+  send(100);
+  send(101);
+  await Promise.all(reloads);
+  assert.equal(fetch.mock.calls.length, 2);
+  send(103, "transaction");
+  await Promise.all(reloads);
+  assert.equal(fetch.mock.calls.length, 3);
+  stopObjects();
+  stopReload();
+});

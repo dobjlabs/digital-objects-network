@@ -439,11 +439,20 @@ fn submit_record(
         }
         Err(err) => {
             let current = services.driver.get_transaction(&tx_final)?;
+            if current.state == TransactionState::Recorded
+                && current.submit_attempted_at_ms.is_none()
+            {
+                anyhow::bail!(
+                    "Submission could not start: {err:#}. Transaction {} is recorded; retry with dobj submit {}",
+                    current.tx_final,
+                    current.tx_final
+                );
+            }
             reporter.transaction_progress(
                 &current,
                 ProofProgressStatus::Running,
                 &format!(
-                    "Relayer submission failed: {err:#}; transaction is {}",
+                    "Relayer submission failed: {err:#}; the daemon will retry while transaction is {}",
                     current.state
                 ),
                 Some(ExecutionStage::Submitting),

@@ -4,7 +4,7 @@ Shared Quint tooling for the repository's executable specifications.
 
 | Contract | Scope | Rust replay |
 | --- | --- | --- |
-| [Driver transactions](../../libs/driver/model/README.md) | Input ownership, recording, submission, settlement, and crash recovery | Planned |
+| [Driver transactions](../../libs/driver/model/README.md) | Input ownership, recording rollback, submission retries, settlement snapshots, and crash recovery | Planned |
 
 ## Requirements
 

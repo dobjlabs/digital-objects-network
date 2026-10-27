@@ -108,8 +108,8 @@ inputs are free again). A relayer job that fails is an annotation
 (`relayerFailure`) on a `submitted` record, not an end: a failed job may still
 have been broadcast, and only the chain decides.
 
-dobjd owns no scheduling policy. A client that wants two proofs in flight and
-submissions batched runs `POST /proof-jobs` and `POST /transactions/submit` itself; the
+Clients choose when to prove and first submit transactions. A client that
+wants two proofs in flight and submissions batched runs `POST /proof-jobs` and `POST /transactions/submit` itself; the
 built-in run is one composition of the same stages. Settlement runs in the
 daemon: a task makes one pass whenever a record is written and every
 `SETTLE_INTERVAL` while any record is open, and `GET /objects` runs the same
@@ -119,12 +119,16 @@ transaction's `txHash`; the file itself carries only what the chain said.
 
 A `recorded` transaction can be deleted until a submission is attempted; after
 that the relayer may hold the payload, so the record stays until the chain
-lands or outruns it. Records survive a daemon restart; proof jobs, runs and
+lands or outruns it. The daemon retries attempted submissions whose acceptance
+was not recorded, with exponential backoff up to 60 seconds between attempts.
+Retries resume after a restart and stop on acceptance, landing, or expiry.
+Transactions that have never been offered to the relayer are not submitted
+automatically. Records survive a daemon restart; proof jobs, runs and
 input holds do not, and nothing on disk depends on them.
 
 ### Runs are non-blocking
 
-`POST /runs` registers the run, kicks off a background worker, and returns a `runId` immediately. The worker proves and records under the run's id, submits, then follows the transaction's record until the chain decides: `succeeded` with the result once it lands, `failed` with the reason if it expires. The objects a run was given stay marked with its id (`heldByRunId`) until then. A relayer refusal is reported in the progress log and leaves the transaction `recorded`; the run keeps following it.
+`POST /runs` registers the run, kicks off a background worker, and returns a `runId` immediately. The worker proves and records under the run's id, submits, then follows the transaction's record until the chain decides: `succeeded` with the result once it lands, `failed` with the reason if it expires. The objects a run was given stay marked with its id (`heldByRunId`) until then. A relayer refusal is reported in the progress log and leaves the transaction `recorded`; the daemon retries submission while the run keeps following it. If submission cannot start (for example, the synchronizer head is unavailable), the run fails with the recorded transaction ID and a `dobj submit` recovery command.
 
 Runs and standalone proof jobs can prove concurrently. Callers control how much work they start according to CPU/GPU and memory capacity. The initial `queued` status means the background worker has not started yet. Input holds still prevent concurrent work from spending the same object.
 
