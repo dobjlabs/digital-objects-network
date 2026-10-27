@@ -31,18 +31,9 @@ a podlang predicate — a declarative rule that defines all valid ways the
 object could have reached its current state. Use `list_classes` and
 `inspect_class` to discover the available classes and how they relate.
 
-**Actions.** Actions are state transitions that consume input objects, generate a ZK proof, and produce output objects. Each action takes seconds to minutes of CPU time for proof generation. Runs and standalone proof jobs can prove concurrently, so start only as many as the machine's CPU/GPU and memory capacity allow. Their initial `queued` status means the background work has not started yet. A daemon restart loses run and job tracking and unfinished proof work; recorded transactions survive. For finer control, `start_proof_job` proves without submitting and `submit_transactions` posts when you choose.
-Use `list_actions` to see what's available and what each action requires.
+**Actions.** Actions are state transitions that consume input objects, generate a ZK proof, and produce output objects. Each action takes seconds to minutes of CPU time for proof generation. Runs and standalone proof jobs can prove concurrently, so start only as many as the machine's CPU/GPU and memory capacity allow. Their initial `queued` status means the background work has not started yet. A daemon restart loses run and job tracking and unfinished proof work; recorded transactions survive. For finer control, `start_proof_job` proves without submitting and `submit_transactions` posts when you choose. Use `list_actions` to see what's available and what each action requires.
 
-**Nullifiers and liveness.** When an action consumes an object, it
-publishes a nullifier (a hash derived from the object's key). This
-prevents double-spending. An object is "live" if its nullifier has not
-been published. Dead objects remain in objects for reference but
-cannot be used as inputs. While a run or proof job is in progress, each
-object it was given as an input reports that id in `heldByRunId`; a run
-keeps it until its transaction lands or expires. An input of a recorded
-or submitted transaction stays `live` on disk but is refused as an input
-until the chain decides; `list_transactions` shows which.
+**Nullifiers and liveness.** When an action consumes an object, it publishes a nullifier (a hash derived from the object's key). This prevents double-spending. An object is "live" if its nullifier has not been published. Dead objects remain in objects for reference but cannot be used as inputs. While a run or proof job is in progress, each object it was given as an input reports that id in `heldByRunId`; a run keeps it until its transaction lands or expires. An input of a recorded or submitted transaction stays `live` on disk but is refused as an input until the chain decides; `list_transactions` shows which.
 
 **State root.** A state root is a hash of all published
 transactions and nullifiers at a given Ethereum block. Actions must be
@@ -67,26 +58,20 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 
 ### Mutation
 
-- `start_run({ action: { pluginName, name }, inputObjectPaths })` — start an action end to end; returns a
-  `runId` immediately (prove, record, submit and follow to the chain run in the background). See
-  "running actions" below.
+- `start_run({ action: { pluginName, name }, inputObjectPaths })` — start an action end to end; returns a `runId` immediately (prove, record, submit and follow to the chain run in the background). See "running actions" below.
 - `get_run({ run_id })` — poll a run's status, result/error, and progress log.
 - `list_runs({ active_only? })` — the runs the daemon still holds, oldest
   first; use it to find a run whose `runId` you no longer have.
 
 ### Stages
 
-- `start_proof_job({ action, inputObjectPaths, args? })` — prove and record a
-  transaction without submitting it; returns a `jobId` immediately.
+- `start_proof_job({ action, inputObjectPaths, args? })` — prove and record a transaction without submitting it; returns a `jobId` immediately.
 - `get_proof_job({ job_id, wait_ms? })` — the job's state; `done` carries `txFinal`.
 - `list_proof_jobs({ active_only? })` — the proof jobs the daemon still holds.
 - `submit_transactions({ txFinals })` — post recorded transactions to the relayer.
-- `list_transactions()` — every transaction record on disk: `recorded`,
-  `submitted`, `landed` or `expired`. Survives a daemon restart.
-- `get_transaction({ tx_final, wait_ms? })` — one record; with `wait_ms`,
-  held until it lands or expires (capped by the daemon; call again while open).
-- `delete_transaction({ tx_final })` — abandon a recorded transaction that
-  was never offered to the relayer.
+- `list_transactions()` — every transaction record on disk: `recorded`, `submitted`, `landed` or `expired`. Survives a daemon restart.
+- `get_transaction({ tx_final, wait_ms? })` — one record; with `wait_ms`, held until it lands or expires (capped by the daemon; call again while open).
+- `delete_transaction({ tx_final })` — abandon a recorded transaction that was never offered to the relayer.
 
 ### Configuration
 
@@ -103,33 +88,20 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 
 ## Running actions
 
-`start_run` does not block. It returns immediately with a `runId` and
-`status: queued`; proof generation and the commit run in the background
-(seconds to minutes).
+`start_run` does not block. It returns immediately with a `runId` and `status: queued`; proof generation and the commit run in the background (seconds to minutes).
 
-The `args` field is optional caller data. An action's listed argument names
-do not imply those values are required; defaults depend on the plugin.
+The `args` field is optional caller data. An action's listed argument names do not imply those values are required; defaults depend on the plugin.
 
 To wait for the result, poll `get_run({ run_id })` until `status` is terminal:
 
 - `succeeded` → the transaction landed; read `result` (grounding root, output files, the input files it spent)
 - `failed` → read `error` (a proof or input error, or the transaction expired without landing)
 
-The returned state also carries the ordered `progress` log, so you can show
-the user which step a run is on while it's still `generateProof` or
-`committing` (which covers shrinking, recording, submitting and waiting for the
-chain). Poll each `runId` independently.
+The returned state also carries the ordered `progress` log, so you can show the user which step a run is on while it's still `generateProof` or `committing` (which covers shrinking, recording, submitting and waiting for the chain). Poll each `runId` independently.
 
-To separate proving from submitting, use `start_proof_job`, then `get_proof_job` with
-`wait_ms` until it is `done`, then `submit_transactions` with its `txFinal`
-when ready, and `get_transaction` with `wait_ms` until it is `landed` or
-`expired`.
+To separate proving from submitting, use `start_proof_job`, then `get_proof_job` with `wait_ms` until it is `done`, then `submit_transactions` with its `txFinal` when ready, and `get_transaction` with `wait_ms` until it is `landed` or `expired`.
 
-Run state also includes `elapsedMs` and ordered `stageTimings`: mining,
-statement building, layout solving, ZK proving, shrinking, recording,
-submission, and waiting for settlement. Progress entries identify their `stage` when available.
-The active timing advances when the state is read; terminal durations are
-fixed. These are elapsed measurements, without percentages or ETAs.
+Run state also includes `elapsedMs` and ordered `stageTimings`: mining, statement building, layout solving, ZK proving, shrinking, recording, submission, and waiting for settlement. Progress entries identify their `stage` when available. The active timing advances when the state is read; terminal durations are fixed. These are elapsed measurements, without percentages or ETAs.
 
 Pass `inputObjectPaths` explicitly (one per the action's required input
 classes, in order); resolve them from `list_objects` / `check_feasibility`

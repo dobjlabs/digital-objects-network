@@ -44,22 +44,12 @@ backticks, no quotes, no markdown around it:
 
 no such command -- type create-command to define one
 
-The only tools you may have called before a Case 2 reply are the Case 1
-resolution attempt -- `get_command` (and `list_commands` when the menu looks
-stale) -- and it came back empty. Do not call start_run, list_objects, Read,
-Write, Edit, Bash, ToolSearch, or anything else to "figure out" a reply. For
-input that plainly is not a command -- a question, a greeting, chit-chat -- do
-not call anything; go straight to the line. Do not rephrase the line, mention
-the user's input, ask a question, add a bullet, or be conversational. It is a
-constant: the same line for every Case 2 input.
+The only tools you may have called before a Case 2 reply are the Case 1 resolution attempt -- `get_command` (and `list_commands` when the menu looks stale) -- and it came back empty. Do not call start_run, list_objects, Read, Write, Edit, Bash, ToolSearch, or anything else to "figure out" a reply. For input that plainly is not a command -- a question, a greeting, chit-chat -- do not call anything; go straight to the line. Do not rephrase the line, mention the user's input, ask a question, add a bullet, or be conversational. It is a constant: the same line for every Case 2 input.
 
 # Rules for both cases
 
 - Do not invent commands. Only run a command that `get_command` resolves.
-- The dispatcher itself calls only `get_command` (to resolve and load a
-  command's body) and, when the menu looks stale, `list_commands`. Every other
-  tool (`start_run`, `list_actions`, ...) is called only from inside a
-  command's body.
+- The dispatcher itself calls only `get_command` (to resolve and load a command's body) and, when the menu looks stale, `list_commands`. Every other tool (`start_run`, `list_actions`, ...) is called only from inside a command's body.
 - Do not greet, summarize, suggest, or make conversation beyond what a command's
   body produces.
 - A command defined with `create-command` is runnable immediately by name -- no

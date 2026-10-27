@@ -71,15 +71,7 @@ All routes return JSON unless noted; errors come back as
 
 ### Discarding objects is unsafe
 
-`POST /objects/{file_name}/discard_unsafe` moves an unspent object's file
-straight into `~/.dobj/objects/.discarded/`, whatever its status (`live`,
-`pending`, or `unknown`) and even while a run holds it, and returns the
-object's summary from before the move. Spent (`nullified`) objects are left
-alone and come back as `404`. It is an escape hatch for clients that have decided an object is
-stale, such as an `unknown` output left by a crash before its transaction
-was recorded, not an object-state transition. An output of a recorded
-transaction needs no discarding: `DELETE /transactions/{tx_final}` removes
-it with the record, and settlement removes it when the transaction expires.
+`POST /objects/{file_name}/discard_unsafe` moves an unspent object's file straight into `~/.dobj/objects/.discarded/`, whatever its status (`live`, `pending`, or `unknown`) and even while a run holds it, and returns the object's summary from before the move. Spent (`nullified`) objects are left alone and come back as `404`. It is an escape hatch for clients that have decided an object is stale, such as an `unknown` output left by a crash before its transaction was recorded, not an object-state transition. An output of a recorded transaction needs no discarding: `DELETE /transactions/{tx_final}` removes it with the record, and settlement removes it when the transaction expires.
 
 None of the guarantees dobjd otherwise keeps about object state are promised
 for it:
@@ -94,53 +86,11 @@ A missing or spent object is a `404`.
 
 ### Transactions
 
-An action goes through four stages, each its own driver call: `prove` (hold
-the inputs, fetch the grounding witness, prove, shrink), `record` (write the
-outputs as `unknown`, the payload and the record under
-`~/.dobj/transactions/<txFinal>/`), `submit` (post the payload to the relayer)
-and `settle` (query membership for attempted transactions and check only
-head-based expiry for never-submitted records). The record is the durable state: `recorded` (proved, not yet posted),
-`submitted` (the relayer holds a job; `relayerJobId`, and `txHash` once
-broadcast), then `landed` (outputs `live`, inputs `nullified`) or `expired`
-(the synchronizer head is more than `MAX_STATE_ROOT_AGE_BLOCKS` past the
-grounding block, so it can never land; the output files are removed and the
-inputs are free again). A relayer job that fails is an annotation
-(`relayerFailure`) on a `submitted` record, not an end: a failed job may still
-have been broadcast, and only the chain decides.
+An action goes through four stages, each its own driver call: `prove` (hold the inputs, fetch the grounding witness, prove, shrink), `record` (write the outputs as `unknown`, the payload and the record under `~/.dobj/transactions/<txFinal>/`), `submit` (post the payload to the relayer) and `settle` (query membership for attempted transactions and check only head-based expiry for never-submitted records). The record is the durable state: `recorded` (proved, not yet posted), `submitted` (the relayer holds a job; `relayerJobId`, and `txHash` once broadcast), then `landed` (outputs `live`, inputs `nullified`) or `expired` (the synchronizer head is more than `MAX_STATE_ROOT_AGE_BLOCKS` past the grounding block, so it can never land; the output files are removed and the inputs are free again). A relayer job that fails is an annotation (`relayerFailure`) on a `submitted` record, not an end: a failed job may still have been broadcast, and only the chain decides.
 
-Clients choose when to prove and first submit transactions. A client that
-wants two proofs in flight and submissions batched runs `POST /proof-jobs` and `POST /transactions/submit` itself; the
-built-in run is one composition of the same stages. Settlement runs in the
-daemon: a task wakes when transaction state changes. While any submission is
-unresolved it repeats every 1.5 seconds; when only never-submitted records are
-open it checks the head every 30 seconds. Submission failures wake the task
-so retry handling starts promptly. A transaction that acquires a submission
-attempt during a head-only query waits for the next membership pass before
-settlement can decide its outcome. `GET /objects` still reconciles every object
-file before listing, so explicit inventory refreshes can query membership even
-when no transaction has been submitted. An object listing shows an
-`unknown` output of a `submitted` transaction as `pending`, with the
-transaction's `txHash`. Object files also retain their known creation hash, so it stays available after the transaction record is pruned.
-A separate worker checks landed records without a hash every 30 seconds during
-retention. It uses the relayer's batch lookup by `txFinal`, even when the original
-submission acknowledgement and job ID were lost, and copies recovered hashes to
-output files. These requests run outside the settlement lock. Missing hashes or
-relayer failures leave the transaction landed and do not extend retention.
+Clients choose when to prove and first submit transactions. A client that wants two proofs in flight and submissions batched runs `POST /proof-jobs` and `POST /transactions/submit` itself; the built-in run is one composition of the same stages. Settlement runs in the daemon: a task wakes when transaction state changes. While any submission is unresolved it repeats every 1.5 seconds; when only never-submitted records are open it checks the head every 30 seconds. Submission failures wake the task so retry handling starts promptly. A transaction that acquires a submission attempt during a head-only query waits for the next membership pass before settlement can decide its outcome. `GET /objects` still reconciles every object file before listing, so explicit inventory refreshes can query membership even when no transaction has been submitted. An object listing shows an `unknown` output of a `submitted` transaction as `pending`, with the transaction's `txHash`. Object files also retain their known creation hash, so it stays available after the transaction record is pruned. A separate worker checks landed records without a hash every 30 seconds during retention. It uses the relayer's batch lookup by `txFinal`, even when the original submission acknowledgement and job ID were lost, and copies recovered hashes to output files. These requests run outside the settlement lock. Missing hashes or relayer failures leave the transaction landed and do not extend retention.
 
-A `recorded` transaction can be deleted until a submission is attempted; after
-that the relayer may hold the payload, so the record stays until the chain
-lands or outruns it. The daemon retries attempted submissions whose acceptance
-was not recorded, with exponential backoff up to 60 seconds between attempts.
-Retries resume after a restart and stop on acceptance, landing, or expiry.
-At most four retries run concurrently, outside the settlement lock, so slow
-submission requests do not hold up inventory refreshes or other settlement passes.
-Overlapping submissions for one `txFinal` wait for the in-flight call and
-reuse its accepted job. Calls for other transactions proceed independently.
-A failed request releases the submission lock while retaining the durable
-attempt flag, so retry remains possible and deletion stays guarded.
-Transactions that have never been offered to the relayer are not submitted
-automatically. Records survive a daemon restart; proof jobs, runs and
-input holds do not, and nothing on disk depends on them.
+A `recorded` transaction can be deleted until a submission is attempted; after that the relayer may hold the payload, so the record stays until the chain lands or outruns it. The daemon retries attempted submissions whose acceptance was not recorded, with exponential backoff up to 60 seconds between attempts. Retries resume after a restart and stop on acceptance, landing, or expiry. At most four retries run concurrently, outside the settlement lock, so slow submission requests do not hold up inventory refreshes or other settlement passes. Overlapping submissions for one `txFinal` wait for the in-flight call and reuse its accepted job. Calls for other transactions proceed independently. A failed request releases the submission lock while retaining the durable attempt flag, so retry remains possible and deletion stays guarded. Transactions that have never been offered to the relayer are not submitted automatically. Records survive a daemon restart; proof jobs, runs and input holds do not, and nothing on disk depends on them.
 
 Completed (`landed` or `expired`) records and payloads are retained for ten minutes after settlement, then pruned. The daemon finishes local file reconciliation and copies known creation hashes to outputs before pruning. Successful local reconciliation is cached in memory during retention, and rechecked after a restart, whenever the record changes, and before pruning. Metadata read/write failures defer pruning. Cleanup continues when synchronizer requests fail, and never-submitted transactions retain their 30-second polling interval during an outage. Open records are never pruned. A later `GET /transactions/{txFinal}` returns 404 once its receipt has been removed.
 
@@ -155,63 +105,31 @@ Runs and standalone proof jobs can prove concurrently. Callers control how much 
 The worker records the run's status, ordered progress log, and terminal
 result/error in an in-memory registry. Follow a run either way:
 
-- **Poll** `GET /runs/{run_id}` for the current state (the
-  disconnect-recovery path — a client that lost its connection re-reads the
-  outcome here).
-- **Stream** `GET /runs/{run_id}/events`, which replays the buffered
-  progress (honoring `Last-Event-ID` on reconnect) then tails live events
-  until the run is terminal.
+- **Poll** `GET /runs/{run_id}` for the current state (the disconnect-recovery path — a client that lost its connection re-reads the outcome here).
+- **Stream** `GET /runs/{run_id}/events`, which replays the buffered progress (honoring `Last-Event-ID` on reconnect) then tails live events until the run is terminal.
 
-Run snapshots include monotonic `elapsedMs` and ordered `stageTimings`
-intervals (`stage`, `status`, `startedAtMs`, `elapsedMs`). Local work separates
-module loading, action/statement building, proof-of-work mining, layout
-solving, ZK proving, and shrinking. Commit work separates file writes,
-submission, and waiting for settlement. The settlement interval includes
-relayer processing, chain inclusion, and synchronization. Mining interrupts
-building; a resumed building interval gets
-its own entry, so durations do not overlap. A supplied mining key skips the
-search interval, while solving and proving still run.
+Run snapshots include monotonic `elapsedMs` and ordered `stageTimings` intervals (`stage`, `status`, `startedAtMs`, `elapsedMs`). Local work separates module loading, action/statement building, proof-of-work mining, layout solving, ZK proving, and shrinking. Commit work separates file writes, submission, and waiting for settlement. The settlement interval includes relayer processing, chain inclusion, and synchronization. Mining interrupts building; a resumed building interval gets its own entry, so durations do not overlap. A supplied mining key skips the search interval, while solving and proving still run.
 
-The active interval's elapsed time advances on each snapshot; completed
-intervals and total time freeze when the run finishes. Errors and worker
-panics mark the active interval failed. Progress events include `stage`
-when available and total `elapsedMs` at the event, shared by HTTP SSE and
-MCP run reads. These are elapsed measurements, with no percentage or ETA.
+The active interval's elapsed time advances on each snapshot; completed intervals and total time freeze when the run finishes. Errors and worker panics mark the active interval failed. Progress events include `stage` when available and total `elapsedMs` at the event, shared by HTTP SSE and MCP run reads. These are elapsed measurements, with no percentage or ETA.
 
-Each accepted `POST` mints a fresh `runId`; clients don't choose it. Terminal
-runs and proof jobs are retained for a short TTL then reaped; both are
-in-memory only, and the transaction records they produced are on disk.
+Each accepted `POST` mints a fresh `runId`; clients don't choose it. Terminal runs and proof jobs are retained for a short TTL then reaped; both are in-memory only, and the transaction records they produced are on disk.
 
 ### Events
 
-`GET /events` is one stream of every state change, each event numbered by
-`seq` (also the SSE `id`), so a client that sees a gap knows to re-read:
+`GET /events` is one stream of every state change, each event numbered by `seq` (also the SSE `id`), so a client that sees a gap knows to re-read:
 
 - `run-action-progress`: a run's progress log entry.
 - `proof-job`: a proof job's state, on every change.
-- `transaction`: a transaction record, on every change (recorded, submitted,
-  tx hash known, relayer failure, landed, expired).
+- `transaction`: a transaction record, on every change (recorded, submitted, tx hash known, relayer failure, landed, expired).
 - `transaction-deleted`: `{ txFinal }`.
-- `object`: an object's summary, whenever its status, tx hash or holder
-  changes (a hold taken or released, a record written, a settlement pass).
-- `object-removed`: `{ fileName }`, an output of an expired or deleted
-  transaction, or a discarded object.
+- `object`: an object's summary, whenever its status, tx hash or holder changes (a hold taken or released, a record written, a settlement pass).
+- `object-removed`: `{ fileName }`, an output of an expired or deleted transaction, or a discarded object.
 
-A client can keep its object list current from `object` and `object-removed`
-alone, re-listing only when its stream reconnects.
+A client can keep its object list current from `object` and `object-removed` alone, re-listing only when its stream reconnects.
 
 ## MCP integration
 
-The `mcp` module ([`src/mcp.rs`](src/mcp.rs)) is the glue between this crate
-and [`mcp/`](../../interfaces/mcp). `DobjdOps` implements `DobjOps` against the same
-`Arc<Driver>`, registries and event hub the HTTP routes use, so `start_run` starts a
-run (returning a `runId`) and `get_run` polls it — an MCP-driven action is the
-same run object the browser UI / `dobj` CLI can follow, and its
-progress fans out over the shared SSE hub in real time. The stage tools
-(`start_proof_job`, `get_proof_job`, `submit_transactions`, `get_transaction`, ...)
-mirror `/proof-jobs`, `/transactions/submit` and `/transactions`; their `wait_ms` is
-capped below MCP clients' tool-call limits, so a held call answers with the
-current state and the agent calls again.
+The `mcp` module ([`src/mcp.rs`](src/mcp.rs)) is the glue between this crate and [`mcp/`](../../interfaces/mcp). `DobjdOps` implements `DobjOps` against the same `Arc<Driver>`, registries and event hub the HTTP routes use, so `start_run` starts a run (returning a `runId`) and `get_run` polls it — an MCP-driven action is the same run object the browser UI / `dobj` CLI can follow, and its progress fans out over the shared SSE hub in real time. The stage tools (`start_proof_job`, `get_proof_job`, `submit_transactions`, `get_transaction`, ...) mirror `/proof-jobs`, `/transactions/submit` and `/transactions`; their `wait_ms` is capped below MCP clients' tool-call limits, so a held call answers with the current state and the agent calls again.
 
 ## Hardware requirements
 

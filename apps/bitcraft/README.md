@@ -46,16 +46,7 @@ Quit Bitcraft and stop the local backend stack before running `just reset`. Rese
 
 `scripts/prepare.py` builds the exact binaries, checks the plugin manifest with `pexe build --check`, and stages them under `src-tauri/binaries` and `src-tauri/runtime`. It verifies that the daemon embeds this checkout's UI before staging it. If the compiled UI is stale, it cleans and rebuilds only the daemon package; preparation fails if the rebuilt UI still differs. It generates `src-tauri/tauri.bundle.conf.json`; those outputs are ignored by Git. Run it with `--version VERSION` for a release and `--target TRIPLE` for cross-compilation. The plugin builder runs on the native host even for a cross-compiled package.
 
-`just bitcraft-dev` and `just bitcraft-dev-local` use `prepare.py --dev`.
-Development preparation selects binaries from the root workspace, matching the
-feature unification used by `just dev-local`, and omits `--target` to reuse
-native release artifacts. The launcher binaries use their desktop workspace's
-native debug artifacts, matching the desktop dev profile. Staged filenames keep
-the native target suffix. The first build with these settings may compile
-dependencies; later launches reuse them. Different versions, profiles and
-host/build dependencies can still require separate compilations. Installer
-preparation keeps its target-specific release builds; `--dev` supports only
-the native host target.
+`just bitcraft-dev` and `just bitcraft-dev-local` use `prepare.py --dev`. Development preparation selects binaries from the root workspace, matching the feature unification used by `just dev-local`, and omits `--target` to reuse native release artifacts. The launcher binaries use their desktop workspace's native debug artifacts, matching the desktop dev profile. Staged filenames keep the native target suffix. The first build with these settings may compile dependencies; later launches reuse them. Different versions, profiles and host/build dependencies can still require separate compilations. Installer preparation keeps its target-specific release builds; `--dev` supports only the native host target.
 
 The daemon bundles runtime Markdown files alongside other UI assets. Only the named contributor docs `AGENTS.md`, `CLAUDE.md`, and `BITCRAFT_SPECIFIC_RULES.md` are excluded.
 
@@ -136,44 +127,13 @@ bitcraft-dobj --home /path/to/bitcraft-data objects
 bitcraft-dobj-mcp-proxy --home /path/to/bitcraft-data
 ```
 
-Choose **Claude** or **Codex** in the game's toolbar to open the installed
-desktop app with the Bitcraft home directory selected and a player prompt
-prefilled. Claude opens its Code session using `claude://code/new` with
-`folder` and `q`; Codex opens a local workspace using `codex://new` with
-`path` and `prompt`. The user sends the prefilled prompt; Claude also asks
-them to confirm the folder. These links require an installed desktop app
-that supports them. The buttons appear only inside the Bitcraft desktop app.
+Choose **Claude** or **Codex** in the game's toolbar to open the installed desktop app with the Bitcraft home directory selected and a player prompt prefilled. Claude opens its Code session using `claude://code/new` with `folder` and `q`; Codex opens a local workspace using `codex://new` with `path` and `prompt`. The user sends the prefilled prompt; Claude also asks them to confirm the folder. These links require an installed desktop app that supports them. The buttons appear only inside the Bitcraft desktop app.
 
-The Codex button uses the familiar ChatGPT/OpenAI logo. Before handing off,
-Bitcraft checks the registered URL handler using NSWorkspace on macOS,
-Windows Launcher URI support on Windows, and GIO application associations
-on Linux. Launching runs off the UI thread. If no app is registered or the
-launch fails, Bitcraft opens **Play with agents...** with the error and a
-copyable prompt. The same guide is available from the app and tray menus
-for other desktop agents or CLI tools. It uses the game's fonts, colors and
-form styling, and works before the game daemon is ready. A registered
-handler does not establish that an older app supports every deep-link
-parameter.
+The Codex button uses the familiar ChatGPT/OpenAI logo. Before handing off, Bitcraft checks the registered URL handler using NSWorkspace on macOS, Windows Launcher URI support on Windows, and GIO application associations on Linux. Launching runs off the UI thread. If no app is registered or the launch fails, Bitcraft opens **Play with agents...** with the error and a copyable prompt. The same guide is available from the app and tray menus for other desktop agents or CLI tools. It uses the game's fonts, colors and form styling, and works before the game daemon is ready. A registered handler does not establish that an older app supports every deep-link parameter.
 
-The prompt points to the bundled `runtime/skills/bitcraft-play/SKILL.md`
-and installed CLI. The selected directory is the app's actual home,
-including custom homes and `.dev/bitcraft-local`. The wrappers search the
-working directory and its ancestors for `connection.json`, then fall back
-to `~/.bitcraft`; explicit `--home` and `BITCRAFT_HOME` take precedence.
-Invalid or stale discovered connections fail rather than silently choosing
-another game. Commands run from the selected home need no `--home` argument.
-No checkout or permanent agent configuration is needed. Packaging includes
-the player skill alongside the runtime resources.
+The prompt points to the bundled `runtime/skills/bitcraft-play/SKILL.md` and installed CLI. The selected directory is the app's actual home, including custom homes and `.dev/bitcraft-local`. The wrappers search the working directory and its ancestors for `connection.json`, then fall back to `~/.bitcraft`; explicit `--home` and `BITCRAFT_HOME` take precedence. Invalid or stale discovered connections fail rather than silently choosing another game. Commands run from the selected home need no `--home` argument. No checkout or permanent agent configuration is needed. Packaging includes the player skill alongside the runtime resources.
 
-The skill leads with CLI discovery and long-running shell commands. The
-CLI exposes inventory fields, recipe outputs and arguments, and `runs
-list/show/wait` for recovering an interrupted connection without another
-submission. `run --json` and `runs wait --json` return the final run state on
-stdout, progress on stderr, and nonzero exit status for a failed run.
-For agents without local shell access, enable MCP explicitly with
-`bitcraft-dobj settings set --mcp on` and configure the agent to connect to
-`http://127.0.0.1:7728/mcp`. The toolbar buttons do not enable MCP or change
-the agent's configuration.
+The skill leads with CLI discovery and long-running shell commands. The CLI exposes inventory fields, recipe outputs and arguments, and `runs list/show/wait` for recovering an interrupted connection without another submission. `run --json` and `runs wait --json` return the final run state on stdout, progress on stderr, and nonzero exit status for a failed run. For agents without local shell access, enable MCP explicitly with `bitcraft-dobj settings set --mcp on` and configure the agent to connect to `http://127.0.0.1:7728/mcp`. The toolbar buttons do not enable MCP or change the agent's configuration.
 
 MCP clients can launch the proxy with no port arguments once MCP is enabled in the running app. `--home PATH` must precede tool arguments. Help/version work without a running app. Endpoint overrides are rejected, as are the CLI's standalone `start`, `stop`, `status`, `logs`, `ui`, and `update` commands, whose pid-file and installation assumptions do not match the desktop host. Manage the daemon through Bitcraft. `bitcraft-pexe` remains the packaging tool; it is not a connection-aware wrapper.
 

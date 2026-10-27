@@ -101,8 +101,7 @@ debug. Unit tests use `MockProver`; real-proof tests are `#[ignore]`-gated.
 Before committing, run `cargo fmt` and `cargo clippy --tests --examples`. Keep
 code and comments ASCII-only (no em-dashes or other non-ASCII characters).
 
-See [the model tooling README](devtools/models/README.md) for individual checks
-and the distinction between specification checks and Rust replay adapters.
+See [the model tooling README](devtools/models/README.md) for individual checks and the distinction between specification checks and Rust replay adapters.
 
 ## Reset
 

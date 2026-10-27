@@ -536,10 +536,7 @@ pub enum ExecutionStage {
     Shrinking,
     WritingFiles,
     Submitting,
-    AwaitingTransaction,
-    AwaitingConfirmation,
     AwaitingSynchronization,
-    Finalizing,
 }
 
 impl ExecutionStage {
@@ -554,10 +551,7 @@ impl ExecutionStage {
             Self::Shrinking => "Shrinking proof",
             Self::WritingFiles => "Writing output files",
             Self::Submitting => "Submitting proof to relayer",
-            Self::AwaitingTransaction => "Waiting for transaction hash",
-            Self::AwaitingConfirmation => "Waiting for transaction confirmation",
             Self::AwaitingSynchronization => "Waiting for synchronizer",
-            Self::Finalizing => "Finalizing local object state",
         }
     }
 }

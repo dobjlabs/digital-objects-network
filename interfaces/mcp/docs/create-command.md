@@ -33,12 +33,8 @@ Tools the command will call (discover exact shapes by calling them):
 | `get_state_root` / `read_settings` / `get_objects_dir`           | chain head / config / objects path                                       |
 | `read_doc(name)`                                                 | reference docs (`read_doc("list")` for the index)                        |
 
-- Qualified action names: `start_run`'s `action` is `{pluginName, name}`. Take
-  `pluginName` from `list_actions` -- do not guess it (it is the plugin's name,
-  not the MCP server name).
-- Running an action is async: `start_run` returns a `runId`; poll
-  `get_run({ run_id: <runId> })` until `succeeded`/`failed`, and read produced
-  objects from the run `result`.
+- Qualified action names: `start_run`'s `action` is `{pluginName, name}`. Take `pluginName` from `list_actions` -- do not guess it (it is the plugin's name, not the MCP server name).
+- Running an action is async: `start_run` returns a `runId`; poll `get_run({ run_id: <runId> })` until `succeeded`/`failed`, and read produced objects from the run `result`.
 - Files: objects are JSON at `~/.dobj/objects/*.dobj`; this command's files live
   at `~/.dobj/commands/<name>/`.
 - For body templates (interactive-picker, argument-based, multi-step planner,

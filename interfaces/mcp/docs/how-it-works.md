@@ -45,6 +45,4 @@ the outputs become live while the inputs become nullified.
 
 ## Action arguments
 
-An action's `args` list names caller-supplied values the script can read.
-Defaults depend on the plugin. Send values in `run_action.args`, using
-POD2 JSON values, or omit them to use the plugin's defaults.
+An action's `args` list names caller-supplied values the script can read. Defaults depend on the plugin. Send values in `run_action.args`, using POD2 JSON values, or omit them to use the plugin's defaults.

@@ -24,29 +24,13 @@ It is intentionally a library, not a daemon and not a CLI.
 - importing an external `.dobj` (one not produced by this driver) — validates
   class identity + on-chain grounding, then files it under a canonical name
   derived from its commitment
-- the stages of a transaction, each one call so a caller can schedule them
-  separately:
-  - `prove`: takes holds on the inputs, refusing any that is held by another
-    proof or spent by a transaction awaiting the chain, fetches the grounding
-    witness, runs the action and shrinks the proof. Writes nothing; the holds
-    live in the returned value.
-  - `record`: writes the outputs as `unknown`, the payload, then the record,
-    whose file is the commit point. Refuses an input another record spends and
-    an output file that already exists. Releases the holds either way.
-  - `submit`: posts a recorded payload to the relayer, refusing a grounding the
-    synchronizer has aged out. Overlapping calls for the same `txFinal` wait on
-    a shared per-transaction lock and reread the record after acquiring it.
-    Accepted submissions return the existing job; failed calls release the lock
-    for retry. Different transactions can submit concurrently.
-  - `delete_transaction`: removes a recorded transaction that was never
-    offered to the relayer, with its output files.
-  - `settle`: query membership for transactions with a submission attempt,
-    using that response's head for expiry. Never-submitted records need only
-    a head check; mixed passes reuse the membership head. Mark records landed
-    or expired and update object files. A submission that starts during a
-    head-only query waits for a membership query before any terminal decision.
-  - `execute`: `prove`, `record` and `submit` in one call. Landing is reported
-    by settlement.
+- the stages of a transaction, each one call so a caller can schedule them separately:
+  - `prove`: takes holds on the inputs, refusing any that is held by another proof or spent by a transaction awaiting the chain, fetches the grounding witness, runs the action and shrinks the proof. Writes nothing; the holds live in the returned value.
+  - `record`: writes the outputs as `unknown`, the payload, then the record, whose file is the commit point. Refuses an input another record spends and an output file that already exists. Releases the holds either way.
+  - `submit`: posts a recorded payload to the relayer, refusing a grounding the synchronizer has aged out. Overlapping calls for the same `txFinal` wait on a shared per-transaction lock and reread the record after acquiring it. Accepted submissions return the existing job; failed calls release the lock for retry. Different transactions can submit concurrently.
+  - `delete_transaction`: removes a recorded transaction that was never offered to the relayer, with its output files.
+  - `settle`: query membership for transactions with a submission attempt, using that response's head for expiry. Never-submitted records need only a head check; mixed passes reuse the membership head. Mark records landed or expired and update object files. A submission that starts during a head-only query waits for a membership query before any terminal decision.
+  - `execute`: `prove`, `record` and `submit` in one call. Landing is reported by settlement.
 
 Because the API is blocking, GUI callers should run it on a worker thread, for example with `spawn_blocking`.
 
@@ -68,8 +52,8 @@ Core read APIs:
 - `load_settings()`
 - `save_settings()`
 - `list_objects(query)`
-- `read_object(selector)`
-- `read_object_file(path)`
+- `read_object(path)`
+- `read_object_raw(path)`
 - `sync_objects(query)`
 - `list_actions(query)`
 - `list_classes()`
@@ -88,24 +72,19 @@ Transaction APIs:
 - `submit(tx_final)`
 - `delete_transaction(tx_final)`
 - `settle()`, or `fetch_relayer_jobs()` then `settle_with_relayer_jobs(relayer_jobs)` to poll the relayer outside the caller's own locks
-- `list_transactions()`, `get_transaction(tx_final)`, `held_inputs()`
-- `execute(input)`, `execute_with_reporter(input, reporter)`
+- `list_transactions()`, `get_transaction(tx_final)`
+- `prune_transactions(current_time_ms)`, `backfill_transaction_hashes()`
+- `execute(input)`
 
 Important public types are defined in [`src/types.rs`](src/types.rs):
 
 - `DriverPaths`
-- `DriverSettings`
-- `ObjectSelector`
 - `ObjectQuery`
 - `ActionQuery`
-- `ObjectSummary`
-- `ObjectDetail`
-- `ActionSummary`
-- `ClassSummary`
-- `CheckActionReport`
 - `ExecuteActionInput`
-- `ExecuteActionResult`
-- `ExecutionReporter`
+- `ExecutionReporter`, `ExecutionStepContext`, `NoopExecutionReporter`
+
+The transaction stage types (`ProvedTransaction`, `DeletedTransaction`, `SettleOutcome`, `SyncedObjects`, `PrunedTransactions`, `RelayerJobs`) are in [`src/pipeline.rs`](src/pipeline.rs). Settings, summaries and transaction records (`DriverSettings`, `ObjectSummary`, `ActionSummary`, `ClassSummary`, `CheckActionReport`, `TransactionRecord`) come from the `wire-types` crate.
 
 ## Defaults
 
@@ -187,12 +166,12 @@ fn main() -> anyhow::Result<()> {
     let report = driver.check_action(&action)?;
     println!("feasible: {}", report.feasible);
 
-    let result = driver.execute(ExecuteActionInput {
+    let record = driver.execute(ExecuteActionInput {
         action,
         input_objects: vec!["craft-basics__log_....dobj".to_string()],
         args: Default::default(),
     })?;
-    println!("submitted as relayer job {}", result.relayer_job_id);
+    println!("transaction {} is {}", record.tx_final, record.state);
 
     // Later, as often as wanted: settle marks the transaction landed or
     // expired and moves the object files.

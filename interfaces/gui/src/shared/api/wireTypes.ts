@@ -11,10 +11,7 @@ export type ExecutionStage =
   | "shrinking"
   | "writingFiles"
   | "submitting"
-  | "awaitingTransaction"
-  | "awaitingConfirmation"
-  | "awaitingSynchronization"
-  | "finalizing";
+  | "awaitingSynchronization";
 
 export interface RunStageTiming {
   stage: ExecutionStage;
