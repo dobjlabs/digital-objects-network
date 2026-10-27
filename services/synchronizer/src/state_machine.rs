@@ -183,22 +183,13 @@ impl StateMachine {
         block_number: u64,
     ) -> Result<Option<String>> {
         let Some(&state_root_block) = state.recent_state_roots.get(&payload.state_root) else {
-            warn!(
-                slot,
-                block_number,
-                "Blob proof state_root not found in recent state root history; rejecting"
-            );
             return Ok(Some(
                 "Blob proof state_root not found in recent state root history".to_string(),
             ));
         };
         let age = block_number as i64 - state_root_block;
         if age > MAX_STATE_ROOT_AGE_BLOCKS {
-            warn!(
-                slot,
-                block_number, state_root_block, age, "Blob proof state_root is too old; rejecting"
-            );
-            return Ok(Some("Blob proof state_root is too old".to_string()));
+            return Ok(Some(format!("Blob proof state_root is too old: {age} blocks (state root at block {state_root_block}")));
         }
 
         // Pre-check created objects and nullifiers before mutating anything, so a
@@ -206,17 +197,9 @@ impl StateMachine {
         let mut payload_created = HashSet::with_capacity(payload.created.len());
         for obj in &payload.created {
             if !payload_created.insert(*obj) {
-                warn!(
-                    slot,
-                    block_number, "Duplicate created object within payload; rejecting"
-                );
                 return Ok(Some("Duplicate created object within payload".to_string()));
             }
             if self.already_created(state, prior_indices, obj)? {
-                warn!(
-                    slot,
-                    block_number, "Created object already exists (creation collision); rejecting"
-                );
                 return Ok(Some(
                     "Created object already exists (creation collision)".to_string(),
                 ));
@@ -226,14 +209,9 @@ impl StateMachine {
         let mut payload_nullifiers = HashSet::with_capacity(payload.nullifiers.len());
         for nullifier in &payload.nullifiers {
             if !payload_nullifiers.insert(*nullifier) {
-                warn!(
-                    slot,
-                    block_number, "Duplicate nullifier within payload; rejecting"
-                );
                 return Ok(Some("Duplicate nullifier within payload".to_string()));
             }
             if state.nullifiers.contains(&Value::from(*nullifier))? {
-                warn!(slot, block_number, "Duplicate nullifier; rejecting");
                 return Ok(Some("Duplicate nullifier".to_string()));
             }
         }
@@ -321,7 +299,16 @@ impl StateMachine {
                     .with_context(|| {
                         format!("applying blob at slot {slot}, blob_index {blob_index}")
                     })?;
-                blob_status.error = rejection;
+                if let Some(error) = rejection {
+                    warn!(
+                        slot,
+                        block_number = block.number,
+                        blob_index,
+                        tx_hash = target_tx.status.tx_hash.to_string(),
+                        "rejected blob: {error}"
+                    );
+                    blob_status.error = Some(error);
+                }
             }
         }
 
