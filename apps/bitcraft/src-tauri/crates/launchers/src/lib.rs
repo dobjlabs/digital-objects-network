@@ -59,7 +59,7 @@ fn discover_home(directory: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Connection {
     pub format_version: u32,

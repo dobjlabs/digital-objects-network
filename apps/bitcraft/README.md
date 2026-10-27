@@ -137,6 +137,62 @@ The skill leads with CLI discovery and long-running shell commands. The CLI expo
 
 MCP clients can launch the proxy with no port arguments once MCP is enabled in the running app. `--home PATH` must precede tool arguments. Help/version work without a running app. Endpoint overrides are rejected, as are the CLI's standalone `start`, `stop`, `status`, `logs`, `ui`, and `update` commands, whose pid-file and installation assumptions do not match the desktop host. Manage the daemon through Bitcraft. `bitcraft-pexe` remains the packaging tool; it is not a connection-aware wrapper.
 
+## Discord Rich Presence
+
+The native host can share Bitcraft activity with the Discord desktop client
+over local IPC. Sharing is off by default. Turn it on with **Share activity
+on Discord** in the Bitcraft app menu or tray menu. The preference is stored
+in `<home>/desktop.json`, separate from daemon settings, and follows
+`--home` and `BITCRAFT_HOME`. Turning it off clears presence immediately;
+quitting clears presence before stopping the daemon. Closing to the tray
+keeps presence active. Shell-only launches never connect to Discord.
+
+Presence shows the current Bitcraft action (or a summary for concurrent
+jobs), active job count, and elapsed session time, with links to the website
+and community Discord. It does not publish inventory, Bit balances, object
+contents, file paths, or errors. Discord's own activity-sharing settings
+control who can see it.
+
+To activate this integration for development or a release:
+
+1. Create a **Bitcraft** application in the
+   [Discord Developer Portal](https://discord.com/developers/applications).
+   No bot user, bot token, client secret, or OAuth redirect is needed.
+2. Copy its numeric **Application ID** from General Information.
+3. In the application's Rich Presence art assets, upload
+   `src-tauri/icons/icon.png` with the asset key **bitcraft**. Set the
+   application icon as well.
+4. Set `BITCRAFT_DISCORD_APPLICATION_ID` to that ID when building the Tauri
+   host, including release builds. For a local launch, for example:
+
+   ```sh
+   BITCRAFT_DISCORD_APPLICATION_ID=YOUR_NUMERIC_APPLICATION_ID just bitcraft-dev
+   ```
+
+   The ID is public and is embedded at compile time. The same environment
+   variable can override it at runtime. Without a valid ID, the sharing menu
+   item is disabled and no Discord connection is attempted.
+5. Run the Discord desktop app and enable sharing in Bitcraft's menu. Check
+   the activity card on your Discord profile and verify disabling sharing
+   removes it. A browser-only Discord session cannot receive local IPC.
+
+The host reads `/runs?status=active` every five seconds while sharing and
+Discord are connected, verifying the managed daemon's identity before each
+snapshot. Activity changes are coalesced to at most one update every 15
+seconds; unchanged payloads are not resent. The start timestamp stays fixed
+so Discord advances the timer itself. This interval is an application policy,
+not a claim about Discord's current rate limit. IPC operations time out,
+reconnections back off to once per minute, and RPC retry delays are honored.
+Presence failures do not stop the game. No Discord account linking or hosted
+service is required.
+
+The transport uses Discord's documented
+[RPC over IPC protocol](https://docs.discord.com/developers/topics/rpc), with
+Unix sockets on macOS/Linux and named pipes on Windows. Tests simulate the
+handshake, activity acknowledgements, ping/pong, errors, and clearing without
+a Discord account. A real profile display still requires the application
+setup above and a native smoke check on each supported OS.
+
 ## Releases and updates
 
 The repository's `Release` workflow builds Bitcraft installers alongside the standalone Digital Objects artifacts for each `vMAJOR.MINOR.PATCH[-rc.N | -alpha.N | -beta.N]` tag. It calls `Release Bitcraft`, which builds macOS Apple Silicon and Intel DMGs, a Windows x86_64 per-user NSIS installer, and a Linux x86_64 AppImage. Product versions are derived from the tag; packaged runtime manifests are checked against that version, target, and source commit. Manual releases check out the requested tag rather than the workflow's selected branch. All packages upload to the same draft GitHub release, so standalone installers and update checks continue to find their expected artifacts through the repository's latest release.

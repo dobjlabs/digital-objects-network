@@ -12,11 +12,12 @@ use anyhow::Result;
 use clap::Parser;
 use tauri::{
     Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent,
-    menu::{Menu, MenuItem, Submenu},
+    menu::{CheckMenuItem, Menu, MenuItem, Submenu},
     tray::TrayIconBuilder,
 };
 
 mod agents;
+mod discord;
 mod onboarding;
 mod runtime;
 
@@ -35,6 +36,9 @@ struct Args {
 
 struct Desktop {
     home: PathBuf,
+    discord: discord::Presence,
+    discord_menu_items: Mutex<Vec<CheckMenuItem<tauri::Wry>>>,
+    discord_available: bool,
     runtime: Mutex<Option<Arc<runtime::Runtime>>>,
     message: Mutex<String>,
     tray_available: AtomicBool,
@@ -89,6 +93,15 @@ fn run_menu_action(app: &tauri::AppHandle, id: &str) {
                 eprintln!("Could not open agent guide: {error:#}");
             }
         }
+        "discord-presence" => {
+            let desktop = app.state::<Desktop>();
+            if let Err(error) = desktop.discord.set_enabled(!desktop.discord.enabled()) {
+                eprintln!("Could not save Discord sharing preference: {error}");
+            }
+            for item in desktop.discord_menu_items.lock().unwrap().iter() {
+                let _ = item.set_checked(desktop.discord.enabled());
+            }
+        }
         "quit" => app.exit(0),
         _ => {}
     }
@@ -97,6 +110,20 @@ fn run_menu_action(app: &tauri::AppHandle, id: &str) {
 fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let open = MenuItem::with_id(app, "open", "Open Bitcraft", true, None::<&str>)?;
     let close = MenuItem::with_id(app, "close", "Close Window", true, Some("CmdOrCtrl+W"))?;
+    let desktop = app.state::<Desktop>();
+    let discord = CheckMenuItem::with_id(
+        app,
+        "discord-presence",
+        "Share activity on Discord",
+        desktop.discord_available,
+        desktop.discord.enabled(),
+        None::<&str>,
+    )?;
+    desktop
+        .discord_menu_items
+        .lock()
+        .unwrap()
+        .push(discord.clone());
     let quit = MenuItem::with_id(app, "quit", "Quit Bitcraft", true, Some("CmdOrCtrl+Q"))?;
     let agents = MenuItem::with_id(
         app,
@@ -105,7 +132,7 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         true,
         None::<&str>,
     )?;
-    Menu::with_items(app, &[&open, &agents, &close, &quit])
+    Menu::with_items(app, &[&open, &agents, &close, &discord, &quit])
 }
 
 fn is_daemon_url(url: &tauri::Url) -> bool {
@@ -234,8 +261,12 @@ fn watch_tray(app: tauri::AppHandle) {
 fn main() -> Result<()> {
     let args = Args::parse();
     let home = bitcraft_launchers::resolve_home(args.home)?;
+    let discord = discord::Presence::new(&home);
     let desktop = Desktop {
         home: home.clone(),
+        discord_available: !args.no_runtime && discord.available(),
+        discord,
+        discord_menu_items: Mutex::new(Vec::new()),
         runtime: Mutex::new(None),
         message: Mutex::new(if args.no_runtime {
             "Desktop shell only. Start without --no-runtime to launch the game.".into()
@@ -355,6 +386,7 @@ fn main() -> Result<()> {
                             *handle.state::<Desktop>().runtime.lock().unwrap() = Some(runtime.clone());
                             match runtime.wait_until_ready().await {
                                 Ok(()) => {
+                                    handle.state::<Desktop>().discord.start(runtime.connection());
                                     if let Some(window) = handle.get_webview_window("main") {
                                         let _ = window.navigate(format!("http://127.0.0.1:{}/bitcraft/", runtime::HTTP_PORT).parse().unwrap());
                                     }
@@ -378,6 +410,7 @@ fn main() -> Result<()> {
         .build(tauri::generate_context!())?;
     app.run(|app, event| match event {
         RunEvent::Exit => {
+            app.state::<Desktop>().discord.stop();
             if let Some(runtime) = app.state::<Desktop>().runtime.lock().unwrap().take() {
                 let _ = runtime.stop();
             }

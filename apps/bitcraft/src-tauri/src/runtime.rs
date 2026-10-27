@@ -98,6 +98,10 @@ fn wait_for_port(port: u16, timeout: Duration) -> Result<()> {
 }
 
 impl Runtime {
+    pub fn connection(&self) -> Connection {
+        self.connection.clone()
+    }
+
     pub fn launch(home: &Path, resources: &Path, binary: &Path) -> Result<Self> {
         let release: Release = serde_json::from_slice(&fs::read(resources.join("release.json"))?)?;
         let state_root = home.to_path_buf();
