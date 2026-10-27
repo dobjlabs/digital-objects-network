@@ -6,7 +6,7 @@ use eth_clients::{
         types::{Block, BlockAndRoot, BlockHeader, BlockId, ExecutionPayloadRef, KzgCommitment},
         BeaconClient,
     },
-    common::{fetch_once_available, ClientError},
+    common::{fetch_once_available, ClientError, Inconsistent},
     execution,
 };
 
@@ -186,11 +186,15 @@ impl Node {
         .await?;
 
         if blobs.len() != versioned_hashes.len() {
-            return Err(anyhow!(
-                "Fetched {} blobs, but got {}",
-                versioned_hashes.len(),
-                blobs.len()
-            ));
+            return Err(Inconsistent {
+                what,
+                reason: format!(
+                    "requested {} blobs, got {}",
+                    versioned_hashes.len(),
+                    blobs.len()
+                ),
+            }
+            .into());
         }
         debug!(
             slot,
