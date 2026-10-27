@@ -17,6 +17,10 @@ Settings each open their window once, and a later click focuses it. These
 windows load this same page in a mode of their own and run none of the
 main window's startup.
 
+The outer page fills the window with scrolling and overscroll disabled,
+including on the desktop startup screen. Scrollable content stays within
+its inventory, jobs, details or secondary-view panel.
+
 Settings (`?page=settings`) shows the synchronizer and relayer addresses
 from dobjd's `GET /settings` in read-only fields; they cannot be edited yet.
 
@@ -31,7 +35,21 @@ window: the inventory's Total Bit Value beside an icon, then "General" (the
 value and the live object total) and "Live objects" (a count per class)
 sections, which can be collapsed. Both inventory views apply `object` and `object-removed` events from dobjd's `/events` stream, including changes made by other clients. They read inventory and transaction snapshots on load, stream connection or reconnection, sequence gaps, and window focus. Changes received during a snapshot read are reapplied to its result. Recorded transactions settle in the daemon and need no UI polling; pending or unknown objects with no open local transaction record are reconciled every 10 seconds.
 
-Actions using independent inputs can run concurrently, including actions with no inputs. Selected inputs must be live and unheld. The page reserves inputs while the start request is pending and until the run finishes; daemon holds also cover work started in another window or client. Each job keeps its replayable run stream and reads the run's authoritative state without reloading inventory on progress.
+Actions using independent inputs can run concurrently, including actions with no inputs. Selected inputs must be live and unheld. The page reserves inputs while the start request is pending and until the action finishes; daemon holds also cover work started in another window or client.
+
+Jobs discovers work from every client through `/events`. A run, proof job and
+transaction describing the same action share one row, linked by run/proof-job
+IDs, transaction ownership and `txFinal`. Recipe names and shared owner labels
+do not group independent actions. Run-backed jobs retain their replayable run
+stream; separately proved actions show "Ready to submit" until submission and
+remain active through settlement. Details include proof/transaction IDs, input
+and output paths, status, errors and available progress. Retained runs and proof
+jobs are read on load, stream open/reopen, sequence gaps and window focus.
+Open transaction records recover activity after a daemon restart. Historical
+transactions without retained activity are left out of Jobs. An unfinished
+proof lost on restart shows an error unless its transaction survived; that
+transaction continues through settlement. Inventory is not re-read for each
+progress event.
 
 Recipe Info is loaded as
 `?page=recipebook`: it shows only the action list and details, and runs none

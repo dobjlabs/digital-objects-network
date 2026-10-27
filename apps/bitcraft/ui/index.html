@@ -45,6 +45,8 @@
   html, body {
     height: 100%;
     margin: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
   }
   body {
     background: var(--bg);
@@ -891,6 +893,10 @@
     return className.pluginName === PLUGIN_NAME && className.name === "Pocketknife";
   }
 
+  function activityInScope(action) {
+    return action?.pluginName === PLUGIN_NAME;
+  }
+
   function pocketknifeIcon() {
     return Presentation.classInfo({ pluginName: PLUGIN_NAME, name: "Pocketknife" }).icon;
   }
@@ -908,7 +914,8 @@
     } catch {
       return;
     }
-    const run = runs.find((candidate) => candidate.runId === runId);
+    if (!runId) return;
+    const run = runs.find((candidate) => candidate.runId === runId || candidate.transaction?.owner === runId);
     if (run) run.showInJobs = false;
   }
 
@@ -995,7 +1002,7 @@
       return;
     }
     startupPocketknifeActive = true;
-    const activeRun = runs.find((run) => isRunInProgress(run) && (
+    const activeRun = runs.find((run) => (run.runId || run.proofJob && !["done", "failed"].includes(run.proofJob.status)) && isRunInProgress(run) && (
       run.action.action.name === "CraftPocketknife"
       || run.action.totalOutputs?.some((output) => isPocketknife(output.class))
     ));
@@ -1180,9 +1187,13 @@
   let inventory = null;
   let pluginActions = [];
   let objectsDirPath = "";
-  // Runs started from this page, newest first. A selected run is always the
-  // only selection: selecting one clears the object selection.
+  // One displayed job per action, including work started by other clients.
+  // Selecting a job clears the object selection.
   let runs = [];
+  const discoveringRuns = new Map();
+  const discoveringTransactions = new Map();
+  let restoringActivity = null;
+  let activityEventsDuringRestore = null;
   let nextRunClientId = 1;
   let selectedRunId = null;
   const rowsByFileName = new Map();
@@ -1578,7 +1589,7 @@
   }
 
   function isRunInProgress(run) {
-    if (run.requestError !== null) {
+    if (run.requestError !== null && !run.transaction) {
       return false;
     }
     const status = run.state?.status;
@@ -1592,6 +1603,12 @@
       inputFileNames,
       runId: null,
       state: null,
+      runSnapshot: null,
+      proofJob: null,
+      proofProgress: [],
+      transaction: null,
+      transactionDeleted: false,
+      mergedInto: null,
       requestError: null,
       transportError: null,
       eventSource: null,
@@ -1610,6 +1627,208 @@
     };
   }
 
+  function canonicalActivity(run) {
+    while (run.mergedInto) run = run.mergedInto;
+    return run;
+  }
+
+  function activityAction(action) {
+    return pluginActions.find((candidate) => qualifiedClassName(candidate.action) === qualifiedClassName(action))
+      ?? { action };
+  }
+
+  // Owner labels alone are not identities: several direct driver actions can
+  // share one. Link an owner only to a known run or proof-job ID.
+  function activityFor(action, inputs, { runId, jobId, txFinal, owner } = {}, preferred = null) {
+    const matches = runs.filter((run) =>
+      runId && (run.runId === runId || run.transaction?.owner === runId)
+      || jobId && (run.proofJob?.jobId === jobId || run.transaction?.owner === jobId)
+      || txFinal && (run.transaction?.txFinal === txFinal || run.proofJob?.txFinal === txFinal)
+      || owner && (run.runId === owner || run.proofJob?.jobId === owner));
+    const run = preferred ? canonicalActivity(preferred) : matches[0] ?? newRun(activityAction(action), inputs);
+    if (!runs.includes(run)) runs.unshift(run);
+    for (const other of matches) {
+      if (other === run) continue;
+      other.eventSource?.close();
+      run.runId ??= other.runId;
+      run.runSnapshot ??= other.runSnapshot;
+      run.proofJob ??= other.proofJob;
+      run.proofProgress.push(...other.proofProgress);
+      run.transaction ??= other.transaction;
+      run.transactionDeleted ||= other.transactionDeleted;
+      run.showInJobs &&= other.showInJobs;
+      run.onUpdate ??= other.onUpdate;
+      run.clientStartedAt = Math.min(run.clientStartedAt, other.clientStartedAt);
+      if (selectedRunId === other.id) selectedRunId = run.id;
+      if (startupPocketknifeRun === other) startupPocketknifeRun = run;
+      other.mergedInto = run;
+      runs = runs.filter((candidate) => candidate !== other);
+    }
+    run.runId ??= runId ?? null;
+    run.action = activityAction(action);
+    run.inputFileNames = inputs.map((path) => path.split(/[\\/]/).at(-1));
+    return run;
+  }
+
+  function transactionProgress(record) {
+    return [
+      [record.recordedAtMs, "Transaction recorded", "running"],
+      [record.submitAttemptedAtMs, "Submission attempted", "running"],
+      [record.submittedAtMs, "Waiting for confirmation", "running"],
+      [record.settledAtMs, record.state === "landed" ? "Transaction landed" : record.reason ?? "Transaction expired",
+        record.state === "landed" ? "done" : "failed"],
+    ].filter(([atMs]) => atMs != null).map(([atMs, message, status]) => ({
+      atMs, message, status, phase: "commit", outputFiles: record.outputFiles,
+    }));
+  }
+
+  function updateActivityState(run) {
+    const proof = run.proofJob;
+    const record = run.transaction;
+    const state = { status: "queued", progress: [], error: null, result: null, ...run.runSnapshot };
+    if (!run.runSnapshot && proof) {
+      Object.assign(state, {
+        status: proof.status === "failed" ? "failed" : ["recording", "done"].includes(proof.status) ? "committing"
+          : proof.status === "queued" ? "queued" : "generateProof",
+        createdAtMs: proof.createdAtMs, startedAtMs: proof.startedAtMs,
+        finishedAtMs: proof.status === "failed" ? proof.finishedAtMs : null,
+        error: proof.error, inputObjectPaths: proof.inputObjectPaths,
+        progress: run.proofProgress,
+      });
+    }
+    if (record) {
+      const terminal = ["landed", "expired"].includes(record.state);
+      Object.assign(state, {
+        status: record.state === "landed" ? "succeeded" : record.state === "expired" ? "failed" : "committing",
+        createdAtMs: state.createdAtMs ?? record.recordedAtMs,
+        finishedAtMs: terminal ? record.settledAtMs : null,
+        inputObjectPaths: record.inputFiles,
+        error: record.state === "expired" ? record.reason ?? "Transaction expired without landing" : null,
+        result: record.state === "landed" ? {
+          oldRoot: record.groundingRoot, inputFiles: record.inputFiles, outputFiles: record.outputFiles,
+        } : null,
+      });
+      if (!run.runSnapshot) state.progress = [...run.proofProgress, ...transactionProgress(record)]
+        .sort((left, right) => left.atMs - right.atMs);
+      else if (terminal && !["succeeded", "failed"].includes(run.runSnapshot.status)) {
+        state.progress = [...state.progress, ...transactionProgress(record)
+          .filter((event) => event.atMs === record.settledAtMs)];
+      }
+    }
+    if (run.transactionDeleted) {
+      state.status = "failed";
+      state.error = "Transaction was deleted before submission";
+      state.finishedAtMs ??= run.clientEndedAt ?? Date.now();
+    }
+    run.state = state;
+    run.clientEndedAt = ["succeeded", "failed"].includes(state.status)
+      ? state.finishedAtMs ?? run.clientEndedAt ?? Date.now() : null;
+    if (["succeeded", "failed"].includes(state.status)) run.eventSource?.close();
+    hideRestoredStartupRun();
+  }
+
+  function trackRun(state, preferred = null) {
+    const run = activityFor(state.action, state.inputObjectPaths ?? [], { runId: state.runId }, preferred);
+    const previous = run.runSnapshot;
+    const rank = { queued: 0, generateProof: 1, committing: 2, succeeded: 3, failed: 3 };
+    if (!previous || rank[state.status] >= rank[previous.status]
+      && (state.progress?.length ?? 0) >= (previous.progress?.length ?? 0)) {
+      run.runSnapshot = state;
+    }
+    run.requestError = null;
+    updateActivityState(run);
+    return run;
+  }
+
+  function trackProofJob(proof) {
+    let run = activityFor(proof.action, proof.inputObjectPaths ?? [], { jobId: proof.jobId, txFinal: proof.txFinal });
+    const rank = { queued: 0, proving: 1, recording: 2, done: 3, failed: 3 };
+    if (!run.proofJob || rank[proof.status] >= rank[run.proofJob.status]) {
+      if (proof.message && (proof.message !== run.proofJob?.message || proof.status !== run.proofJob?.status)) {
+        run.proofProgress.push({
+          phase: ["recording", "done"].includes(proof.status) ? "commit" : "generateProof",
+          status: proof.status === "failed" ? "failed" : proof.status === "done" ? "done" : "running",
+          message: proof.message, atMs: proof.finishedAtMs ?? Date.now(),
+        });
+      }
+      run.proofJob = proof;
+    }
+    run.requestError = null;
+    updateActivityState(run);
+    if (proof.txFinal && !run.transaction && !run.transactionDeleted) {
+      const record = inventory?.records().find((record) => record.txFinal === proof.txFinal);
+      if (record) run = trackTransaction(record);
+      else discoverTransaction(proof.txFinal);
+    }
+    if (run.runSnapshot) followRun(run);
+    return run;
+  }
+
+  function trackTransaction(record, create = true) {
+    if (!create && !["recorded", "submitted"].includes(record.state)
+      && !runs.some((run) => run.transaction?.txFinal === record.txFinal || run.proofJob?.txFinal === record.txFinal
+        || run.runId === record.owner || run.proofJob?.jobId === record.owner)) return;
+    const run = activityFor(record.action, record.inputFiles, { txFinal: record.txFinal, owner: record.owner });
+    const rank = { recorded: 0, submitted: 1, landed: 2, expired: 2 };
+    if (!run.transaction || rank[record.state] > rank[run.transaction.state]
+      || record.state === run.transaction.state) run.transaction = record;
+    run.requestError = null;
+    updateActivityState(run);
+    if (run.runSnapshot) followRun(run);
+    return run;
+  }
+
+  function refreshActivity(run) {
+    showSelection();
+    run?.onUpdate?.(run);
+  }
+
+  function discoverRun(runId) {
+    if (discoveringRuns.has(runId)) return discoveringRuns.get(runId);
+    const request = fetchJson(`/runs/${encodeURIComponent(runId)}`).then((state) => {
+      if (!activityInScope(state.action)) return;
+      const run = trackRun(state);
+      followRun(run);
+      refreshActivity(run);
+    }).catch((error) => console.warn("Could not discover run:", error))
+      .finally(() => discoveringRuns.delete(runId));
+    discoveringRuns.set(runId, request);
+    return request;
+  }
+
+  function discoverTransaction(txFinal) {
+    if (discoveringTransactions.has(txFinal)) return discoveringTransactions.get(txFinal);
+    const request = fetchJson(`/transactions/${encodeURIComponent(txFinal)}`).then((record) => {
+      inventory.accept({ type: "transaction", ...record });
+    }).catch((error) => {
+      if (error.status === 404) activityEvent({ type: "transaction-deleted", txFinal });
+      else console.warn("Could not discover transaction:", error);
+    }).finally(() => discoveringTransactions.delete(txFinal));
+    discoveringTransactions.set(txFinal, request);
+    return request;
+  }
+
+  function activityEvent(event) {
+    if (!["run-action-progress", "proof-job", "transaction", "transaction-deleted"].includes(event.type)) return;
+    activityEventsDuringRestore?.push(event);
+    let run;
+    if (event.type === "run-action-progress") {
+      run = runs.find((run) => run.runId === event.runId);
+      if (!run) discoverRun(event.runId);
+    } else if (event.type === "proof-job" && activityInScope(event.action)) {
+      run = trackProofJob(event);
+    } else if (event.type === "transaction" && activityInScope(event.action)) {
+      run = trackTransaction(event);
+    } else if (event.type === "transaction-deleted") {
+      run = runs.find((run) => run.transaction?.txFinal === event.txFinal || run.proofJob?.txFinal === event.txFinal);
+      if (run) {
+        run.transactionDeleted = true;
+        updateActivityState(run);
+      }
+    }
+    if (run && event.type !== "run-action-progress") refreshActivity(run);
+  }
+
   function inputRun(fileName) {
     return runs.find((run) => isRunInProgress(run) && run.inputFileNames.includes(fileName));
   }
@@ -1625,7 +1844,7 @@
   async function startRun(action, fileNames, { showInJobs = true, onUpdate = null } = {}) {
     if (!inputsAvailable(fileNames)) return null;
     const inputFileNames = assignInputSlots(action, fileNames).map((object) => object.fileName);
-    const run = newRun(action, inputFileNames);
+    let run = newRun(action, inputFileNames);
     run.showInJobs = showInJobs;
     run.onUpdate = onUpdate;
     runs.unshift(run);
@@ -1636,8 +1855,7 @@
       const accepted = await postJson("/runs", {
         input: { action: action.action, inputObjectPaths: inputFileNames },
       });
-      run.runId = accepted.runId;
-      run.state = { status: accepted.status, progress: [], createdAtMs: accepted.createdAtMs };
+      run = trackRun({ ...accepted, action: action.action, inputObjectPaths: inputFileNames, progress: [] }, run);
       run.onUpdate?.(run);
       followRun(run);
     } catch (error) {
@@ -1653,6 +1871,8 @@
   // The terminal status is not an event: it arrives through the re-read
   // prompted by dobjd closing the stream once the run has finished.
   function followRun(run) {
+    run = canonicalActivity(run);
+    if (!run.runId || run.eventSource || ["succeeded", "failed"].includes(run.runSnapshot?.status)) return;
     const runPath = `/runs/${encodeURIComponent(run.runId)}`;
     let source = null;
     try {
@@ -1663,9 +1883,11 @@
     run.eventSource = source;
 
     const readState = async () => {
+      run = canonicalActivity(run);
       if (!isRunInProgress(run)) return;
       try {
-        run.state = await fetchJson(runPath);
+        const state = await fetchJson(runPath);
+        run = trackRun(state, canonicalActivity(run));
         run.transportError = null;
       } catch (error) {
         if (error.status !== 404) {
@@ -1673,7 +1895,13 @@
           run.onUpdate?.(run);
           return;
         }
-        run.requestError = "dobjd no longer has this run.";
+        source?.close();
+        if (run.transaction || run.proofJob) {
+          run.runSnapshot = null;
+          updateActivityState(run);
+        } else {
+          run.requestError = "dobjd no longer has this run.";
+        }
       }
       if (!isRunInProgress(run)) {
         run.clientEndedAt ??= Date.now();
@@ -1735,35 +1963,54 @@
     return `${Math.floor(hours / 24)}d ago`;
   }
 
-  // Rebuilds the job list from the runs dobjd still has in
-  // progress, so a reload does not lose them. Runs that finished before the
-  // page loaded are left out, as are runs this page already tracks.
+  // Recover retained activity, including actions that finished during a
+  // disconnect. Events received during the reads supersede their snapshots.
   async function restoreRuns() {
-    let retainedRuns;
-    try {
-      retainedRuns = await fetchJson("/runs?status=active");
-    } catch (error) {
-      console.warn("Could not list runs:", error);
-      return false;
-    }
-    for (const state of retainedRuns) {
-      const alreadyTracked = runs.some((run) => run.runId === state.runId);
-      if (state.action.pluginName !== PLUGIN_NAME || alreadyTracked) {
-        continue;
+    if (restoringActivity) return restoringActivity;
+    const events = [];
+    const knownRuns = new Set(runs.map((run) => run.runId).filter(Boolean));
+    const knownProofs = new Set(runs.map((run) => run.proofJob?.jobId).filter(Boolean));
+    activityEventsDuringRestore = events;
+    restoringActivity = (async () => {
+      try {
+        const [retainedRuns, proofJobs] = await Promise.all([fetchJson("/runs"), fetchJson("/proof-jobs")]);
+        for (const state of retainedRuns) {
+          if (!activityInScope(state.action)) continue;
+          const run = trackRun(state);
+          followRun(run);
+        }
+        for (const proof of proofJobs) {
+          if (activityInScope(proof.action)) trackProofJob(proof);
+        }
+        for (const run of runs) {
+          if (knownRuns.has(run.runId) && !retainedRuns.some((state) => state.runId === run.runId)
+            && !events.some((event) => event.runId === run.runId) && isRunInProgress(run)) {
+            run.eventSource?.close();
+            run.runSnapshot = null;
+            if (!run.transaction && !run.proofJob) run.requestError = "dobjd no longer has this run.";
+            updateActivityState(run);
+          }
+          if (knownProofs.has(run.proofJob?.jobId) && !proofJobs.some((proof) => proof.jobId === run.proofJob.jobId)
+            && !events.some((event) => event.jobId === run.proofJob.jobId)
+            && !run.transaction && !run.runSnapshot && isRunInProgress(run)) {
+            run.requestError = "dobjd no longer has this proof job.";
+          }
+          if (run.requestError) {
+            run.clientEndedAt ??= Date.now();
+            run.onUpdate?.(run);
+          }
+        }
+        return true;
+      } catch (error) {
+        console.warn("Could not restore activity:", error);
+        return false;
+      } finally {
+        activityEventsDuringRestore = null;
+        for (const event of events) activityEvent(event);
+        showSelection();
       }
-      const action = pluginActions.find(
-        (candidate) => qualifiedClassName(candidate.action) === qualifiedClassName(state.action),
-      ) ?? { action: state.action };
-      const run = newRun(action, state.inputObjectPaths ?? []);
-      run.runId = state.runId;
-      run.state = state;
-      runs.unshift(run);
-      if (isRunInProgress(run)) {
-        followRun(run);
-      }
-    }
-    renderRuns();
-    return true;
+    })().finally(() => { restoringActivity = null; });
+    return restoringActivity;
   }
 
   setInterval(() => {
@@ -1845,7 +2092,7 @@
       run.elapsedElement = document.createElement("span");
       run.elapsedElement.textContent = elapsedText(run);
       runDetail.append(
-        ` ${run.runId === null ? "Job" : `Job ${run.runId.slice(0, 4)}`} \u00b7 `,
+        ` ${activityId(run) === null ? "Job" : `Job ${activityId(run).slice(0, 4)}`} \u00b7 `,
         run.elapsedElement,
       );
       run.finishedAgoElement = null;
@@ -2074,14 +2321,13 @@
 
   // Buffer changes during a snapshot read so its older response cannot
   // overwrite events received while the request was in flight.
-  function watchInventory(onChange, { onError = () => {}, onReconnect = () => {} } = {}) {
+  function watchInventory(onChange, { onError = () => {}, onReconnect = () => {}, onActivity = () => {} } = {}) {
     let objects = new Map();
     let transactions = new Map();
     let buffered = null;
     let reading = null;
     let readAgain = false;
     let lastSeq = null;
-    let opened = false;
     let poll = null;
     const source = new EventSource(`${DOBJD_URL}/events`);
     const values = () => [...objects.values()];
@@ -2118,9 +2364,13 @@
       }
     };
     const accept = (event) => {
-      if (!["object", "object-removed", "transaction", "transaction-deleted"].includes(event.type)) return;
+      if (!["object", "object-removed", "transaction", "transaction-deleted"].includes(event.type)) {
+        onActivity(event);
+        return;
+      }
       buffered?.push(event);
       apply(event);
+      onActivity(event);
       notify();
     };
     async function reload() {
@@ -2156,17 +2406,15 @@
       const gap = lastSeq !== null && event.seq !== lastSeq + 1;
       lastSeq = event.seq;
       accept(event);
-      if (gap) reconcile();
+      if (gap) reconcile().then(onReconnect);
     };
     // The initial snapshot may precede the connection, so the first open
     // needs reconciliation too. Later opens also cover daemon restarts.
     source.onopen = () => {
       lastSeq = null;
-      reconcile();
-      if (opened) onReconnect();
-      opened = true;
+      reconcile().then(onReconnect);
     };
-    window.addEventListener("focus", reconcile);
+    window.addEventListener("focus", () => { reconcile().then(onReconnect); });
     window.addEventListener("beforeunload", () => {
       source.close();
       clearInterval(poll);
@@ -2400,7 +2648,19 @@
   }
 
   function runStatus(run) {
-    return run.requestError !== null ? "failed" : run.state?.status;
+    if (run.requestError !== null && !run.transaction) return "failed";
+    if (!run.runId && !run.transactionDeleted) {
+      if (run.transaction?.state === "submitted") return "Waiting for confirmation";
+      if (run.transaction?.state === "recorded") {
+        return run.transaction.submitAttemptedAtMs == null ? "Ready to submit" : "Submission outcome unknown";
+      }
+      if (!run.transaction && run.proofJob?.status === "done") return "Ready to submit";
+    }
+    return run.state?.status;
+  }
+
+  function activityId(run) {
+    return run.runId ?? run.proofJob?.jobId ?? run.transaction?.txFinal ?? null;
   }
 
   function formatTimestamp(milliseconds) {
@@ -2410,6 +2670,7 @@
   // Spent inputs move into the hidden `.nullified/` folder once the run has
   // succeeded and its nullifiers are on-chain.
   function inputFilePath(run, fileName) {
+    fileName = fileName.split(/[\\/]/).at(-1);
     const spent = run.state?.status === "succeeded"
       && (run.state.result?.inputFiles ?? []).includes(fileName);
     return `${objectsDirPath}/${spent ? ".nullified/" : ""}${fileName}`;
@@ -2418,6 +2679,7 @@
   // The result names the outputs once the run succeeds; before that, the
   // commit phase's progress events report them as they are written.
   function runOutputFiles(run) {
+    if (run.transaction) return run.transaction.outputFiles;
     if (run.state?.result) {
       return run.state.result.outputFiles;
     }
@@ -2451,7 +2713,7 @@
 
     const title = document.createElement("div");
     title.className = "details-title";
-    title.textContent = run.runId === null ? "Job" : `Job ${run.runId}`;
+    title.textContent = activityId(run) === null ? "Job" : `Job ${activityId(run)}`;
 
     const meta = document.createElement("div");
     meta.className = "details-meta";
@@ -2467,6 +2729,16 @@
       formatTimestamp(run.state?.createdAtMs || run.clientStartedAt),
     );
     run.detailsElapsedElement = appendFieldRow(properties, "duration", elapsedText(run));
+    if (run.proofJob) appendFieldRow(properties, "proof job", run.proofJob.jobId);
+    if (run.transaction) {
+      appendFieldRow(properties, "transaction", run.transaction.txFinal);
+      appendFieldRow(properties, "transaction state", run.transaction.state);
+      if (run.transaction.txHash) appendFieldRow(properties, "transaction hash", run.transaction.txHash);
+      if (run.transaction.relayerFailure) appendFieldRow(properties, "relayer error", run.transaction.relayerFailure);
+    }
+    if (run.runSnapshot?.error && run.runSnapshot.error !== run.state?.error) {
+      appendFieldRow(properties, "run error", run.runSnapshot.error);
+    }
     const result = run.state?.result;
     if (result) {
       appendFieldRow(properties, "grounding root", result.oldRoot);
@@ -2910,9 +3182,8 @@
     try {
       inventory ??= watchInventory(showObjects, {
         onError: startupInventoryError,
-        onReconnect: () => {
-          if (!runs.some((run) => run.runId === null && !run.requestError)) restoreRuns();
-        },
+        onReconnect: restoreRuns,
+        onActivity: activityEvent,
       });
       const [objectsDir, , actions, welcome] = await Promise.all([
         fetchJson("/objects/dir"),
@@ -3132,6 +3403,17 @@
   // the page or its shown state changed; nothing flashes on the first load,
   // or for changes made while the setup screen covers the list.
   function showObjects(objects) {
+    const records = inventory?.records() ?? [];
+    for (const record of records) {
+      if (activityInScope(record.action)) trackTransaction(record, false);
+    }
+    for (const run of runs) {
+      if (run.transaction && ["recorded", "submitted"].includes(run.transaction.state)
+        && !records.some((record) => record.txFinal === run.transaction.txFinal)) {
+        run.transactionDeleted = true;
+        updateActivityState(run);
+      }
+    }
     const heldObjects = objects
       .filter((object) => object.class.pluginName === PLUGIN_NAME)
       .sort((left, right) => left.fileName.localeCompare(right.fileName));

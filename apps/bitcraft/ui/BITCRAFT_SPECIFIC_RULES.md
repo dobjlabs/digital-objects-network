@@ -36,19 +36,20 @@ that block should be plugin-agnostic.
 - **Generic behavior:** list every installed plugin's actions.
 - **Why:** same scope as the object list.
 
-### Only bitcraft runs are restored on page load
+### Only bitcraft activity appears in Jobs
 
-- **Where:** `PLUGIN_NAME`, applied in `restoreRuns()` to the result of
-  `GET /runs?status=active`.
-- **Generic behavior:** restore every run dobjd has in progress, whichever
-  plugin's action it runs (runs can also be started by the CLI or an MCP
-  agent).
+- **Where:** `activityInScope()`, applied to retained `/runs`, `/proof-jobs`,
+  open transaction records and activity arriving on `/events`.
+- **Generic behavior:** show actions for every plugin, including work started
+  by the CLI, MCP or another window. A run, proof job and transaction linked
+  by IDs describe one action and share one row; independent actions stay
+  separate. Retained completed work also appears when recovering missed events.
 - **Why:** same scope as the object list.
 
 ## Startup pocketknife
 
-- **Where:** `ensureStartupPocketknife()`, called by `load()` after active
-  runs have been restored successfully.
+- **Where:** `ensureStartupPocketknife()`, called by `load()` after retained
+  activity has been restored successfully.
 - **What:** if no live `bitcraft::Pocketknife` exists, start
   `bitcraft::CraftPocketknife` with no inputs. Live knives, including knives
   held by a run, count as existing. An active crafting run or another active
@@ -101,8 +102,11 @@ that block should be plugin-agnostic.
   opens.
 - **Jobs:** automatic startup runs are tracked but omitted from Jobs.
   Remember their run ID in session storage so reloading the page keeps
-  them hidden. Manual pocketknife jobs, including restored jobs without
-  that marker, remain visible. The Jobs pane is hidden when no visible
+  them hidden, including when only their owned transaction remains.
+  Manual pocketknife jobs, including externally started proofs and
+  restored transactions without that marker, remain visible. A proof
+  already creating a pocketknife suppresses another automatic craft.
+  The Jobs pane is hidden when no visible
   jobs exist; starting a manual job reveals it.
 - **Failures:** show the cause with "Try again" and "Copy error" controls
   if setup fails, active runs cannot be read, the synchronizer cannot be

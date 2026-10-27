@@ -26,9 +26,9 @@ const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(setImm
 
 async function page(context, options = {}) {
   const backend = {
-    objects: [], transactions: [], submissions: [], actions: [recipe()], states: new Map(), posts: [], discards: [],
+    objects: [], transactions: [], proofJobs: new Map(), submissions: [], actions: [recipe()], states: new Map(), posts: [], discards: [],
     inventoryError: false, listError: false, runError: false, postError: false, syncError: false,
-    inventoryReads: 0, runGate: null, ...options,
+    inventoryReads: 0, runReads: 0, runGate: null, ...options,
   };
   const timers = new Map();
   const holds = new Map();
@@ -91,6 +91,16 @@ async function page(context, options = {}) {
           return respond(snapshot, backend.inventoryError ? 503 : 200);
         }
         if (parsed.pathname === "/transactions") return respond(backend.transactions, backend.transactionError ? 503 : 200);
+        if (parsed.pathname === "/proof-jobs") {
+          const snapshot = copy([...backend.proofJobs.values()]);
+          if (backend.activityGate) await backend.activityGate;
+          return respond(snapshot, backend.proofJobError ? 503 : 200);
+        }
+        const transactionPath = parsed.pathname.match(/^\/transactions\/([^/]+)$/);
+        if (transactionPath && !init.method) {
+          const record = backend.transactions.find((record) => record.txFinal === decodeURIComponent(transactionPath[1]));
+          return respond(record ?? { error: "Unknown transaction" }, record ? 200 : 404);
+        }
         if (parsed.pathname === "/transactions/submit") {
           backend.submissions.push(JSON.parse(init.body).txFinals);
           if (backend.submitError) return respond({}, 503);
@@ -123,9 +133,13 @@ async function page(context, options = {}) {
           return respond({ runId, status: "queued", createdAtMs: 1000 });
         }
         if (parsed.pathname === "/runs") {
-          return respond([...backend.states.values()].filter((run) => !["succeeded", "failed"].includes(run.status)), backend.listError ? 503 : 200);
+          const snapshot = copy([...backend.states.values()]
+            .filter((run) => parsed.searchParams.get("status") !== "active" || !["succeeded", "failed"].includes(run.status)));
+          if (backend.activityGate) await backend.activityGate;
+          return respond(snapshot, backend.listError ? 503 : 200);
         }
         if (parsed.pathname.startsWith("/runs/")) {
+          backend.runReads++;
           if (backend.daemonDown) throw new TypeError("Failed to fetch");
           // Read before waiting, so a held read answers with the state it saw.
           const run = backend.states.get(decodeURIComponent(parsed.pathname.split("/").at(-1)));
@@ -162,6 +176,10 @@ async function page(context, options = {}) {
   let nextSeq = 1;
   let publishedObjects = copy(backend.objects);
   const event = async (payload, seq = nextSeq++) => {
+    if (payload.type === "proof-job") {
+      const { type, ...job } = payload;
+      backend.proofJobs.set(job.jobId, copy(job));
+    }
     if (payload.type === "object") {
       backend.objects = backend.objects.filter((object) => object.fileName !== payload.fileName);
       const { type, ...object } = payload;
@@ -876,6 +894,297 @@ const transaction = (state = "submitted", extra = {}) => ({
   inputFiles: [], outputFiles: ["pocketknife.dobj"], ...extra,
 });
 const inventoryStream = (ui) => ui.sources.find((source) => source.url === "http://127.0.0.1:7727/events");
+const proofJob = (jobId, status = "proving", extra = {}) => ({
+  jobId, action: qname("GatherWood"), inputObjectPaths: [], status,
+  createdAtMs: 1000, startedAtMs: 1001, message: status, ...extra,
+});
+
+test("external runs appear live, including a run already finished when its first event is read", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  ui.backend.states.set("external", state("external", "generateProof", { action: qname("GatherWood") }));
+  await ui.event({ type: "run-action-progress", runId: "external", phase: "generateProof", status: "running" });
+  assert.equal(ui.jobs().length, 1);
+  assert.match(ui.jobs()[0].textContent, /GatherWood/);
+  const streams = () => ui.sources.filter((source) => !source.closed && source.url.endsWith("/runs/external/events"));
+  assert.equal(streams().length, 1);
+  await ui.event({ type: "run-action-progress", runId: "external", phase: "generateProof", status: "running" });
+  assert.equal(ui.jobs().length, 1);
+  assert.equal(streams().length, 1);
+  ui.backend.states.set("fast", state("fast", "succeeded", {
+    action: qname("GatherWood"), result: { inputFiles: [], outputFiles: [] }, finishedAtMs: 1100,
+  }));
+  await ui.event({ type: "run-action-progress", runId: "fast", phase: "commit", status: "done" });
+  assert.equal(ui.jobs().length, 2);
+  assert.match(ui.jobs()[0].textContent, /succeeded/);
+  assert.equal(ui.sources.some((source) => source.url.endsWith("/runs/fast/events")), false);
+});
+
+test("concurrent first events share one run lookup", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  ui.backend.states.set("external", state("external", "generateProof"));
+  let release;
+  ui.backend.runGate = new Promise((resolve) => { release = resolve; });
+  const reads = ui.backend.runReads;
+  for (let i = 0; i < 5; i++) {
+    await ui.event({ type: "run-action-progress", runId: "external", phase: "generateProof", status: "running" });
+  }
+  assert.equal(ui.backend.runReads, reads + 1);
+  ui.backend.runGate = null;
+  release();
+  await flush();
+  assert.equal(ui.jobs().length, 1);
+});
+
+test("separate proving, recording and submission remain one selected job through confirmation", async (context) => {
+  const ui = await page(context, { objects: [knife(), wood("wood.dobj")] });
+  const proof = (status, extra) => proofJob("proof-1", status, { inputObjectPaths: ["wood.dobj"], ...extra });
+  const record = (status, extra) => transaction(status, {
+    owner: "proof-1", action: qname("GatherWood"), inputFiles: ["wood.dobj"], outputFiles: ["output.dobj"],
+    recordedAtMs: 2000, ...extra,
+  });
+  await ui.event({ type: "proof-job", ...proof("proving") });
+  assert.equal(ui.jobs().length, 1);
+  ui.jobs()[0].dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  assert.equal(ui.dom.window.inputsAvailable(["wood.dobj"]), false);
+  await ui.event({ type: "transaction", ...record("recorded") });
+  await ui.event({ type: "proof-job", ...proof("done", { txFinal: "0xabc", finishedAtMs: 2001 }) });
+  assert.equal(ui.jobs().length, 1);
+  assert.match(ui.jobs()[0].textContent, /Ready to submit/);
+  assert.equal(ui.jobs()[0].classList.contains("selected"), true);
+  const details = () => ui.document.querySelector("#details-body").textContent;
+  assert.match(details(), /proof-1/);
+  assert.match(details(), /0xabc/);
+  assert.match(details(), /objects\/output\.dobj/);
+  await ui.event({ type: "transaction", ...record("submitted", { submitAttemptedAtMs: 3000, submittedAtMs: 3001 }) });
+  assert.equal(ui.jobs().length, 1);
+  assert.match(details(), /submitted/);
+  assert.equal(ui.jobs()[0].classList.contains("in-progress"), true);
+  await ui.event({ type: "transaction", ...record("landed", { settledAtMs: 4000, groundingRoot: "root", txHash: "eth-hash" }) });
+  assert.equal(ui.jobs().length, 1);
+  assert.match(ui.jobs()[0].textContent, /succeeded/);
+  assert.match(details(), /eth-hash/);
+  assert.match(details(), /\.nullified\/wood\.dobj/);
+  assert.equal(ui.jobs()[0].classList.contains("in-progress"), false);
+  await ui.event({ type: "proof-job", ...proof("done", { txFinal: "0xabc", finishedAtMs: 2001 }) });
+  await ui.event({ type: "transaction", ...record("recorded") });
+  assert.match(ui.jobs()[0].textContent, /succeeded/, "late proof or record snapshots cannot undo settlement");
+});
+
+test("transaction-first activity coalesces when its proof job arrives", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  await ui.event({ type: "transaction", ...transaction("submitted", { owner: "proof-1" }) });
+  assert.equal(ui.jobs().length, 1);
+  ui.jobs()[0].dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  await ui.event({ type: "proof-job", ...proofJob("proof-1", "done", {
+    action: qname("CraftPocketknife"), txFinal: "0xabc", finishedAtMs: 2000,
+  }) });
+  assert.equal(ui.jobs().length, 1);
+  assert.equal(ui.jobs()[0].classList.contains("selected"), true);
+  assert.match(ui.document.querySelector("#details-body").textContent, /proof-1/);
+});
+
+test("a run and proof job linked to the same transaction merge without losing selection", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  await ui.event({ type: "proof-job", ...proofJob("proof-1") });
+  ui.jobs()[0].dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  ui.backend.states.set("external", state("external", "committing", { action: qname("GatherWood") }));
+  await ui.event({ type: "run-action-progress", runId: "external", phase: "commit", status: "running" });
+  await ui.event({ type: "transaction", ...transaction("submitted", { owner: "external", action: qname("GatherWood") }) });
+  assert.equal(ui.jobs().length, 2, "there is no shared identity until the proof reports its transaction");
+  await ui.event({ type: "proof-job", ...proofJob("proof-1", "done", { txFinal: "0xabc" }) });
+  assert.equal(ui.jobs().length, 1);
+  assert.equal(ui.jobs()[0].classList.contains("selected"), true);
+  assert.equal(ui.sources.filter((source) => !source.closed && source.url.endsWith("/runs/external/events")).length, 1,
+    "the merged job keeps following its run");
+  ui.backend.states.set("external", state("external", "committing", {
+    action: qname("GatherWood"), progress: [{ atMs: 2000, phase: "commit", status: "running", message: "New run progress" }],
+  }));
+  await ui.emit("external");
+  assert.match(ui.document.querySelector(".run-log tr").textContent, /New run progress/);
+  await ui.event({ type: "transaction", ...transaction("landed", {
+    owner: "external", action: qname("GatherWood"), settledAtMs: 3000,
+  }) });
+  assert.match(ui.jobs()[0].textContent, /succeeded/);
+  assert.match(ui.document.querySelector(".run-log tr").textContent, /Transaction landed/);
+  assert.equal(ui.sources.filter((source) => !source.closed && source.url.endsWith("/runs/external/events")).length, 0,
+    "settlement closes the follower even before the terminal run snapshot arrives");
+});
+
+test("a local POST response merges activity discovered before it returned", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  let release;
+  ui.backend.postGate = new Promise((resolve) => { release = resolve; });
+  const started = ui.dom.window.startRun(recipe(), []);
+  await flush();
+  ui.jobs()[0].dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  await ui.event({ type: "run-action-progress", runId: "run-1", phase: "generateProof", status: "running" });
+  ui.backend.postGate = null;
+  release();
+  await started;
+  await flush();
+  assert.equal(ui.jobs().length, 1);
+  assert.equal(ui.jobs()[0].classList.contains("selected"), true);
+  assert.equal(ui.sources.filter((source) => !source.closed && source.url.endsWith("/runs/run-1/events")).length, 1);
+});
+
+test("independent actions are not merged by recipe or by a shared driver owner label", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  for (const jobId of ["proof-1", "proof-2"]) await ui.event({ type: "proof-job", ...proofJob(jobId) });
+  for (const txFinal of ["tx-1", "tx-2"]) {
+    await ui.event({ type: "transaction", ...transaction("submitted", { owner: "execute", txFinal, action: qname("GatherWood") }) });
+  }
+  assert.equal(ui.jobs().length, 4);
+});
+
+test("recovery coalesces retained proofs and transactions and keeps unmarked external jobs visible", async (context) => {
+  const ui = await page(context, {
+    objects: [knife()], transactions: [transaction("submitted", { owner: "proof-1", action: qname("GatherWood") })],
+    proofJobs: new Map([["proof-1", proofJob("proof-1", "done", { txFinal: "0xabc", finishedAtMs: 2000 })]]),
+  });
+  assert.equal(ui.jobs().length, 1);
+  assert.match(ui.jobs()[0].textContent, /GatherWood/);
+  await ui.event({ type: "transaction", ...transaction("landed", { owner: "proof-1", action: qname("GatherWood"), settledAtMs: 3000 }) });
+  assert.equal(ui.jobs().length, 1);
+  assert.match(ui.jobs()[0].textContent, /succeeded/);
+});
+
+test("a recovered automatic starter transaction stays hidden by its owner's saved run ID", async (context) => {
+  const ui = await page(context, {
+    objects: [knife("pending")], transactions: [transaction()], startupRunId: "lost-run",
+  });
+  assert.equal(ui.jobs().length, 0);
+  assert.equal(ui.backend.posts.length, 0);
+  await ui.event({ type: "transaction", ...transaction("landed", { settledAtMs: 3000 }) });
+  await ui.event({ type: "object", ...knife() });
+  assert.equal(ui.app.hidden, false);
+  assert.equal(ui.jobs().length, 0);
+});
+
+test("failure to restore proof jobs prevents duplicate starter creation", async (context) => {
+  const ui = await page(context, { proofJobError: true });
+  assert.equal(ui.backend.posts.length, 0);
+  assert.match(ui.document.querySelector("#startup-error").textContent, /Could not check active jobs/);
+});
+
+test("reconnect and sequence gaps discover activity missed while disconnected", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  await ui.event({ type: "object", ...knife() }, 1);
+  ui.backend.proofJobs.set("missed-proof", proofJob("missed-proof"));
+  await ui.event({ type: "object", ...knife() }, 3);
+  assert.equal(ui.jobs().length, 1);
+  ui.backend.states.set("finished", state("finished", "succeeded", { action: qname("GatherWood"), finishedAtMs: 3000 }));
+  inventoryStream(ui).onopen();
+  await flush();
+  assert.equal(ui.jobs().length, 2);
+  assert.match(ui.jobs().find((row) => row.textContent.includes("fini")).textContent, /succeeded/);
+});
+
+test("proof events received during recovery supersede the older snapshot", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  ui.backend.proofJobs.set("proof-1", proofJob("proof-1", "recording", { message: "Old progress" }));
+  let release;
+  ui.backend.activityGate = new Promise((resolve) => { release = resolve; });
+  inventoryStream(ui).onopen();
+  await flush();
+  await ui.event({ type: "proof-job", ...proofJob("proof-1", "recording", { message: "New progress" }) });
+  ui.backend.activityGate = null;
+  release();
+  await flush();
+  assert.equal(ui.jobs().length, 1);
+  ui.jobs()[0].dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  assert.match(ui.document.querySelector(".run-log tr").textContent, /New progress/);
+});
+
+test("proof failure and transaction deletion end jobs and release local input reservations", async (context) => {
+  const ui = await page(context, { objects: [knife(), wood("wood.dobj")] });
+  await ui.event({ type: "proof-job", ...proofJob("proof-1", "failed", { error: "Mining failed", finishedAtMs: 2000 }) });
+  assert.equal(ui.jobs()[0].classList.contains("failed"), true);
+  ui.jobs()[0].dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  assert.match(ui.document.querySelector("#details-body").textContent, /Mining failed/);
+  await ui.event({ type: "transaction", ...transaction("recorded", { owner: "proof-2", inputFiles: ["wood.dobj"] }) });
+  assert.equal(ui.dom.window.inputsAvailable(["wood.dobj"]), false);
+  await ui.event({ type: "transaction-deleted", txFinal: "0xabc" });
+  assert.equal(ui.jobs().length, 2);
+  assert.equal(ui.jobs().every((row) => row.classList.contains("failed")), true);
+  assert.equal(ui.dom.window.inputsAvailable(["wood.dobj"]), true);
+});
+
+test("a deleted transaction's completed duration stays fixed on later inventory events", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  let now = Date.now();
+  ui.dom.window.Date.now = () => now;
+  await ui.event({ type: "transaction", ...transaction("recorded", { recordedAtMs: now - 1000 }) });
+  ui.jobs()[0].dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  await ui.event({ type: "transaction-deleted", txFinal: "0xabc" });
+  const duration = () => [...ui.document.querySelector("#details-body .field-table").rows]
+    .find((row) => row.cells[0].textContent === "duration").cells[1].textContent;
+  assert.equal(duration(), "1s");
+  now += 60000;
+  await ui.event({ type: "object", ...knife() });
+  assert.equal(duration(), "1s");
+});
+
+test("a lost run keeps following its durable transaction", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  ui.backend.states.set("external", state("external", "committing"));
+  await ui.event({ type: "run-action-progress", runId: "external", phase: "commit", status: "running" });
+  await ui.event({ type: "transaction", ...transaction("submitted", { owner: "external" }) });
+  ui.backend.states.delete("external");
+  await ui.dropStream("external");
+  assert.equal(ui.jobs()[0].classList.contains("in-progress"), true);
+  await ui.event({ type: "transaction", ...transaction("landed", { owner: "external", settledAtMs: 3000 }) });
+  assert.match(ui.jobs()[0].textContent, /succeeded/);
+  assert.equal(ui.jobs().length, 1);
+});
+
+test("recovery ends unfinished proofs lost on daemon restart and follows any surviving transaction", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  await ui.event({ type: "proof-job", ...proofJob("lost-proof") });
+  await ui.event({ type: "proof-job", ...proofJob("recorded-proof") });
+  ui.backend.proofJobs.clear();
+  ui.backend.transactions = [transaction("submitted", { owner: "recorded-proof", action: qname("GatherWood") })];
+  inventoryStream(ui).onopen();
+  await flush();
+  assert.equal(ui.jobs().length, 2);
+  const lost = ui.jobs().find((row) => row.textContent.includes("lost"));
+  assert.equal(lost.classList.contains("failed"), true);
+  lost.dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  assert.match(ui.document.querySelector("#details-body").textContent, /no longer has this proof job/);
+  assert.equal(ui.jobs().find((row) => row.textContent.includes("reco")).classList.contains("in-progress"), true);
+});
+
+test("expiry ends a separately proved action and older submission events cannot reopen it", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  await ui.event({ type: "transaction", ...transaction("submitted", { owner: "proof-1" }) });
+  await ui.event({ type: "proof-job", ...proofJob("proof-1", "done", { action: qname("CraftPocketknife"), txFinal: "0xabc" }) });
+  await ui.event({ type: "transaction", ...transaction("expired", { owner: "proof-1", reason: "Grounding aged out", settledAtMs: 3000 }) });
+  assert.equal(ui.jobs().length, 1);
+  assert.equal(ui.jobs()[0].classList.contains("failed"), true);
+  ui.jobs()[0].dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  assert.match(ui.document.querySelector("#details-body").textContent, /Grounding aged out/);
+  await ui.event({ type: "transaction", ...transaction("submitted", { owner: "proof-1" }) });
+  assert.equal(ui.jobs()[0].classList.contains("failed"), true);
+});
+
+test("external input paths use the managed object's basename in selection and details", async (context) => {
+  const ui = await page(context, { objects: [knife(), wood("wood.dobj")] });
+  await ui.event({ type: "proof-job", ...proofJob("proof-1", "proving", { inputObjectPaths: ["/external/path/wood.dobj"] }) });
+  assert.equal(ui.dom.window.inputsAvailable(["wood.dobj"]), false);
+  ui.jobs()[0].dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  const details = ui.document.querySelector("#details-body").textContent;
+  assert.match(details, /\/Users\/player\/\.bitcraft\/objects\/wood\.dobj/);
+  assert.doesNotMatch(details, /objects\/\/external/);
+});
+
+test("other plugins' activity stays out of Bitcraft Jobs", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  const action = qname("GatherWood", "other");
+  ui.backend.states.set("other-run", state("other-run", "generateProof", { action }));
+  await ui.event({ type: "run-action-progress", runId: "other-run", phase: "generateProof", status: "running" });
+  await ui.event({ type: "proof-job", ...proofJob("other-proof", "proving", { action }) });
+  await ui.event({ type: "transaction", ...transaction("submitted", { action }) });
+  assert.equal(ui.jobs().length, 0);
+});
 
 test("independent runs overlap, including no-input actions, while local inputs are reserved before POST returns", async (context) => {
   const craft = { ...recipe("CraftStick"), totalInputs: [{ class: qname("Wood") }] };
@@ -986,7 +1295,7 @@ for (const status of ["submitted", "recorded"]) {
     const ui = await page(context, { objects: [knife("pending")], transactions: [transaction(status)] });
     assert.equal(ui.backend.posts.length, 0);
     assert.deepEqual(ui.backend.discards, []);
-    assert.equal(ui.jobs().length, 0);
+    assert.equal(ui.jobs().length, 1, "the externally started transaction appears in Jobs");
     assert.equal(ui.progress(), 2);
     assert.match(ui.title(), /Waiting for confirmation/);
     assert.equal(ui.backend.submissions.length, status === "recorded" ? 1 : 0);
