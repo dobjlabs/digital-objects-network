@@ -1257,6 +1257,15 @@
   // inventory in bits.
   const SUMMARY_ICON_CLASS = "Bit";
 
+  // The order Recipe Info lists the classes in: the starter tool, the
+  // resources and what they make, then the tools, machines and buckets.
+  // Classes not listed follow, by name.
+  const REFERENCE_CLASS_ORDER = [
+    "Pocketknife", "Wood", "Stone", "Iron", "Bit", "Stick",
+    "WoodAxe", "StoneAxe", "IronAxe", "Quarry", "MiningDrill",
+    "BucketOfWood", "BucketOfStone", "BucketOfIron",
+  ];
+
   // The game's website, opened in the player's browser from the top bar.
   const BITCRAFT_SITE_URL = "https://bitcraft.sh/";
   // The game's Discord server, opened the same way.
@@ -2796,7 +2805,7 @@
         Presentation.load(),
       ]);
       showReference(
-        classes.filter((entry) => entry.class.pluginName === PLUGIN_NAME),
+        classes.filter((entry) => entry.class.pluginName === PLUGIN_NAME).sort(compareReferenceClasses),
         actions.filter((action) => action.action.pluginName === PLUGIN_NAME),
       );
     } catch (error) {
@@ -2824,6 +2833,14 @@
       url.searchParams.set(REFERENCE_PARAMS[selectedReference.kind], selectedReference.name);
     }
     history.replaceState(null, "", url);
+  }
+
+  function compareReferenceClasses(left, right) {
+    const rank = (entry) => {
+      const position = REFERENCE_CLASS_ORDER.indexOf(entry.class.name);
+      return position === -1 ? REFERENCE_CLASS_ORDER.length : position;
+    };
+    return rank(left) - rank(right) || left.class.name.localeCompare(right.class.name);
   }
 
   function showReference(classes, actions) {

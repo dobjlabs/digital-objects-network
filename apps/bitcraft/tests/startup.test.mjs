@@ -942,6 +942,28 @@ test("resting on an object row shows its BIT value after a quarter second", asyn
   assert.equal(tooltip.hidden, true, "the welcome guide has no value");
 });
 
+test("Recipe Info lists the classes in game order, then any others by name", async (context) => {
+  const names = ["Bit", "BucketOfIron", "BucketOfStone", "BucketOfWood", "Gem", "Iron", "IronAxe",
+    "MiningDrill", "Ore", "Pocketknife", "Quarry", "Stick", "Stone", "StoneAxe", "Wood", "WoodAxe"];
+  const ui = await page(context, {
+    url: "http://127.0.0.1:7727/bitcraft/?page=recipebook",
+    classes: names.map((name) => ({
+      class: qname(name), hash: "0x", description: "-", liveCount: 0,
+      producedBy: [], consumedBy: [], predicateSource: "",
+    })),
+  });
+  const listed = [...ui.document.querySelectorAll("#recipe-list > li")]
+    .map((row) => (row.querySelector(".row-text > div") ?? row).textContent);
+  assert.deepEqual(listed.slice(0, listed.indexOf("Actions")), [
+    "Classes",
+    "bitcraft::Pocketknife", "bitcraft::Wood", "bitcraft::Stone", "bitcraft::Iron", "bitcraft::Bit",
+    "bitcraft::Stick", "bitcraft::WoodAxe", "bitcraft::StoneAxe", "bitcraft::IronAxe",
+    "bitcraft::Quarry", "bitcraft::MiningDrill",
+    "bitcraft::BucketOfWood", "bitcraft::BucketOfStone", "bitcraft::BucketOfIron",
+    "bitcraft::Gem", "bitcraft::Ore",
+  ]);
+});
+
 test("the summary icon opens the Inventory Summary in one window", async (context) => {
   const ui = await page(context, { objects: [knife()] });
   const opened = [];

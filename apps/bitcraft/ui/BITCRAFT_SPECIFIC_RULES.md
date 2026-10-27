@@ -36,6 +36,17 @@ that block should be plugin-agnostic.
 - **Generic behavior:** list every installed plugin's classes and actions.
 - **Why:** same scope as the object list.
 
+### Recipe Info lists the classes in game order
+
+- **Where:** `REFERENCE_CLASS_ORDER`, applied in `loadReferenceWindow()`
+  through `compareReferenceClasses()`.
+- **What:** Pocketknife, Wood, Stone, Iron, Bit, Stick, WoodAxe, StoneAxe,
+  IronAxe, Quarry, MiningDrill, BucketOfWood, BucketOfStone, BucketOfIron.
+  Classes not listed follow, by name.
+- **Generic behavior:** the order `GET /classes` reports, which is by name.
+- **Why:** the starter tool, the resources and what they make, then the
+  tools, machines and buckets, roughly in the order a player meets them.
+
 ### Only bitcraft activity appears in Jobs
 
 - **Where:** `activityInScope()`, applied to retained `/runs`, `/proof-jobs`, open transaction records and activity arriving on `/events`.
