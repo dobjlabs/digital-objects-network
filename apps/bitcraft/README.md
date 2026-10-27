@@ -46,6 +46,17 @@ Quit Bitcraft and stop the local backend stack before running `just reset`. Rese
 
 `scripts/prepare.py` builds the exact binaries, checks the plugin manifest with `pexe build --check`, and stages them under `src-tauri/binaries` and `src-tauri/runtime`. It verifies that the daemon embeds this checkout's UI before staging it. If the compiled UI is stale, it cleans and rebuilds only the daemon package; preparation fails if the rebuilt UI still differs. It generates `src-tauri/tauri.bundle.conf.json`; those outputs are ignored by Git. Run it with `--version VERSION` for a release and `--target TRIPLE` for cross-compilation. The plugin builder runs on the native host even for a cross-compiled package.
 
+`just bitcraft-dev` and `just bitcraft-dev-local` use `prepare.py --dev`.
+Development preparation selects binaries from the root workspace, matching the
+feature unification used by `just dev-local`, and omits `--target` to reuse
+native release artifacts. The launcher binaries use their desktop workspace's
+native debug artifacts, matching the desktop dev profile. Staged filenames keep
+the native target suffix. The first build with these settings may compile
+dependencies; later launches reuse them. Different versions, profiles and
+host/build dependencies can still require separate compilations. Installer
+preparation keeps its target-specific release builds; `--dev` supports only
+the native host target.
+
 The daemon bundles runtime Markdown files alongside other UI assets. Only the named contributor docs `AGENTS.md`, `CLAUDE.md`, and `BITCRAFT_SPECIFIC_RULES.md` are excluded.
 
 The startup screen covers cryptography preparation, starter pocketknife
