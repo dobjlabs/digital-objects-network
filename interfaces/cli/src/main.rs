@@ -148,7 +148,7 @@ enum Cmd {
         #[arg(value_name = "TXFINAL", required = true)]
         tx_finals: Vec<String>,
     },
-    /// List every transaction record: recorded, submitted, landed or expired.
+    /// List open and recently completed transaction records.
     Transactions,
     /// Show a transaction record; with --wait, wait until it lands or expires.
     InspectTransaction {

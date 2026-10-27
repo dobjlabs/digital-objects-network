@@ -259,6 +259,7 @@ mod tests {
             content_hash: spendable.obj.commitment(),
             class: wire_types::QualifiedName::new("craft-basics", "Log"),
             status: FileStatus::Live,
+            tx_hash: None,
             obj: spendable.obj,
             tx_final,
         }

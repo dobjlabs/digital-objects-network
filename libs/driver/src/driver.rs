@@ -604,7 +604,9 @@ impl Driver {
                 .map(|c| c.emoji.clone())
                 .unwrap_or_else(|| "📦".to_string()),
             status,
-            tx_hash: record.and_then(|record| record.tx_hash.clone()),
+            tx_hash: record
+                .and_then(|record| record.tx_hash.clone())
+                .or_else(|| entry.record.tx_hash.clone()),
             description: class_info.as_ref().map(|c| c.description.clone()),
             fields: entry.record.fields_map(),
             held_by_run_id,

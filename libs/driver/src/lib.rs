@@ -23,7 +23,8 @@ pub use crate::error::DriverError;
 pub use crate::object_record::{FileStatus, ObjectRecord, parse_object_record_file};
 pub use crate::pexe_catalog::PexeCatalog;
 pub use crate::pipeline::{
-    DeletedTransaction, ProvedOutput, ProvedTransaction, SettleOutcome, SyncedObjects, now_ms,
+    DeletedTransaction, ProvedOutput, ProvedTransaction, PrunedTransactions, SettleOutcome,
+    SyncedObjects, TRANSACTION_RETENTION_MS, now_ms,
 };
 pub use crate::types::{
     ActionQuery, DriverPaths, ExecuteActionInput, ExecutionReporter, ExecutionStepContext,

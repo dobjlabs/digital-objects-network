@@ -2619,12 +2619,12 @@
       } else if (event.type === "transaction") {
         const { type, seq, ...record } = event;
         transactions.set(record.txFinal, record);
-      } else if (event.type === "transaction-deleted") {
+      } else if (["transaction-deleted", "transaction-pruned"].includes(event.type)) {
         transactions.delete(event.txFinal);
       }
     };
     const accept = (event) => {
-      if (!["object", "object-removed", "transaction", "transaction-deleted"].includes(event.type)) {
+      if (!["object", "object-removed", "transaction", "transaction-deleted", "transaction-pruned"].includes(event.type)) {
         onActivity(event);
         return;
       }

@@ -32,6 +32,8 @@ pub struct ObjectRecord {
     /// the same bare class name stay distinguishable.
     pub class: QualifiedName,
     pub status: FileStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tx_hash: Option<String>,
     /// Object payload dictionary
     pub obj: Dictionary,
     /// Producing transaction's commitment; identifies its local record, if any.

@@ -76,7 +76,9 @@ Open transaction records recover activity after a daemon restart. Historical
 transactions without retained activity are left out of Jobs. An unfinished
 proof lost on restart shows an error unless its transaction survived; that
 transaction continues through settlement. Inventory is not re-read for each
-progress event.
+progress event. Completed transaction receipts are pruned after ten minutes;
+`transaction-pruned` removes them from the inventory's transaction snapshot
+without changing completed Jobs to failures.
 
 Recipe Info is loaded as
 `?page=recipebook`: it shows only a list of classes, then actions, with the

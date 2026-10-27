@@ -19,6 +19,10 @@ pub enum Event {
     TransactionDeleted {
         tx_final: String,
     },
+    #[serde(rename_all = "camelCase")]
+    TransactionPruned {
+        tx_final: String,
+    },
     Object(ObjectSummary),
     /// A file removed by expiry, transaction deletion, or discard.
     #[serde(rename_all = "camelCase")]

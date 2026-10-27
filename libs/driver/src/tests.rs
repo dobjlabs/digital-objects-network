@@ -103,6 +103,7 @@ fn fixture(file_name: &str) -> Fixture {
         content_hash: spendable.obj.commitment(),
         class: craft_basics("Log"),
         status: FileStatus::Live,
+        tx_hash: None,
         obj: spendable.obj,
         tx_final: tx_hash(&source_tx),
     };
@@ -789,6 +790,7 @@ fn record_refuses_an_output_file_that_exists() {
         content_hash: proved.outputs[0].obj.commitment(),
         class: proved.outputs[0].class.clone(),
         status: FileStatus::Unknown,
+        tx_hash: None,
         obj: proved.outputs[0].obj.clone(),
         tx_final: Hash::default(),
     };
@@ -1045,6 +1047,7 @@ fn make_importable_log() -> (String, Hash, Hash) {
         content_hash: commitment,
         class: craft_basics("Log"),
         status: FileStatus::Live,
+        tx_hash: None,
         obj: spendable.obj,
         tx_final: outputs.tx.dict().commitment(),
     };
@@ -1405,4 +1408,144 @@ fn record_rolls_back_outputs_and_payload_when_persistence_fails() {
             .prove(fx.input("CraftWood"), "run-2", &NoopExecutionReporter)
             .unwrap();
     }
+}
+
+#[test]
+fn landed_objects_keep_creation_hashes_after_transaction_pruning_and_restart() {
+    let fx = fixture("log_1.dobj");
+    let mut input = fx.stored(&fx.input_file);
+    input.tx_hash = Some("original-creation".to_string());
+    write_object_file(&fx.paths, &input, &fx.input_file).unwrap();
+    let record = fx.driver.execute(fx.input("CraftWood")).unwrap();
+    fx.land(&record);
+    fx.relayer.lock().unwrap().tx_hash = Some("landed-creation".to_string());
+    let landed = fx.driver.settle().unwrap().records.remove(0);
+    let cleanup_at = landed.settled_at_ms.unwrap() + crate::TRANSACTION_RETENTION_MS;
+    let retained = fx.driver.prune_transactions(cleanup_at - 1).unwrap();
+    assert!(retained.tx_finals.is_empty());
+    assert_eq!(retained.next_cleanup_at_ms, Some(cleanup_at));
+    assert!(fx.paths.transactions_dir.join(&landed.tx_final).is_dir());
+
+    let pruned = fx.driver.prune_transactions(cleanup_at).unwrap();
+    assert_eq!(pruned.tx_finals, vec![landed.tx_final.clone()]);
+    assert_eq!(pruned.next_cleanup_at_ms, None);
+    assert!(!fx.paths.transactions_dir.join(&landed.tx_final).exists());
+    assert_eq!(
+        fx.stored(&fx.input_file).tx_hash.as_deref(),
+        Some("original-creation")
+    );
+    let restarted = Driver::open(fx.paths.clone(), fx.driver.deps.clone()).unwrap();
+    assert!(restarted.list_transactions().unwrap().is_empty());
+    for file in &record.output_files {
+        let stored = fx.stored(file);
+        assert_eq!(stored.status, FileStatus::Live);
+        assert_eq!(stored.tx_hash.as_deref(), Some("landed-creation"));
+        let summary = restarted.read_object(std::path::Path::new(file)).unwrap();
+        assert_eq!(summary.tx_hash, stored.tx_hash);
+    }
+}
+
+#[test]
+fn pruning_never_removes_open_transactions_or_their_reservations() {
+    for submit in [false, true] {
+        let fx = fixture("log_1.dobj");
+        let proved = fx
+            .driver
+            .prove(fx.input("CraftWood"), "run", &NoopExecutionReporter)
+            .unwrap();
+        let record = fx.driver.record(proved).unwrap();
+        if submit {
+            fx.driver.submit(&tx_final_of(&record)).unwrap();
+        }
+        let outcome = fx
+            .driver
+            .prune_transactions(record.recorded_at_ms + crate::TRANSACTION_RETENTION_MS * 10)
+            .unwrap();
+        assert!(outcome.tx_finals.is_empty());
+        assert!(crate::transactions::read_payload(&fx.paths, &tx_final_of(&record)).is_ok());
+        assert!(
+            fx.driver
+                .get_transaction(&tx_final_of(&record))
+                .unwrap()
+                .is_open()
+        );
+        assert_eq!(
+            fx.summary(&fx.input_file).held_by_run_id.as_deref(),
+            Some("run")
+        );
+    }
+}
+
+#[test]
+fn expired_transactions_are_pruned_after_outputs_are_removed() {
+    let fx = fixture("log_1.dobj");
+    let record = fx.driver.execute(fx.input("CraftWood")).unwrap();
+    fx.advance_head_to(record.grounding_block + MAX_STATE_ROOT_AGE_BLOCKS + 1);
+    let expired = fx.driver.settle().unwrap().records.remove(0);
+    let cleanup_at = expired.settled_at_ms.unwrap() + crate::TRANSACTION_RETENTION_MS;
+    assert!(
+        fx.driver
+            .prune_transactions(cleanup_at - 1)
+            .unwrap()
+            .tx_finals
+            .is_empty()
+    );
+    assert_eq!(
+        fx.driver.prune_transactions(cleanup_at).unwrap().tx_finals,
+        vec![expired.tx_final]
+    );
+    assert_eq!(fx.summary(&fx.input_file).held_by_run_id, None);
+    assert_eq!(fx.stored(&fx.input_file).status, FileStatus::Live);
+    for file in &record.output_files {
+        assert!(!fx.paths.objects_dir.join(file).exists());
+    }
+}
+
+#[test]
+fn pruning_repairs_committed_settlement_after_restart_and_retains_unreadable_outputs() {
+    let fx = fixture("log_1.dobj");
+    let mut record = fx.driver.execute(fx.input("CraftWood")).unwrap();
+    record.state = TransactionState::Landed;
+    record.settled_at_ms = Some(1);
+    record.tx_hash = Some("creation".to_string());
+    crate::transactions::write_record(&fx.paths, &record).unwrap();
+    let file = &record.output_files[0];
+    let output = fx.stored(file);
+    std::fs::write(fx.paths.objects_dir.join(file), "broken JSON").unwrap();
+    let restarted = Driver::open(fx.paths.clone(), fx.driver.deps.clone()).unwrap();
+    let cleanup_at = 1 + crate::TRANSACTION_RETENTION_MS;
+    let retained = restarted.prune_transactions(cleanup_at).unwrap();
+    assert!(retained.tx_finals.is_empty());
+    assert!(retained.next_cleanup_at_ms.is_some());
+    assert!(restarted.get_transaction(&tx_final_of(&record)).is_ok());
+    write_object_file(&fx.paths, &output, file).unwrap();
+    assert_eq!(
+        restarted.prune_transactions(cleanup_at).unwrap().tx_finals,
+        vec![record.tx_final]
+    );
+    assert_eq!(fx.stored(&fx.input_file).status, FileStatus::Nullified);
+    for file in &record.output_files {
+        assert_eq!(fx.stored(file).status, FileStatus::Live);
+        assert_eq!(fx.stored(file).tx_hash.as_deref(), Some("creation"));
+    }
+}
+
+#[test]
+fn object_hash_metadata_is_optional_and_survives_import() {
+    let (json, commitment, _) = make_importable_log();
+    let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert!(value.get("txHash").is_none());
+    let legacy: ObjectRecord = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(legacy.tx_hash, None);
+    value["txHash"] = serde_json::json!("creation");
+    let (driver, _) = import_driver(HashSet::from([commitment]), HashSet::new(), false);
+    let summary = driver.import_object(&value.to_string()).unwrap();
+    assert_eq!(summary.tx_hash.as_deref(), Some("creation"));
+    assert_eq!(
+        driver
+            .read_object(std::path::Path::new(&summary.file_name))
+            .unwrap()
+            .tx_hash,
+        summary.tx_hash
+    );
 }

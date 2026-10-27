@@ -66,6 +66,11 @@ impl Settler {
             }
             outcome.records.push(record);
         }
+        let pruned = self.driver.prune_transactions(driver::now_ms())?;
+        outcome.pruned_tx_finals = pruned.tx_finals;
+        outcome.next_cleanup_at_ms = pruned.next_cleanup_at_ms;
+        outcome.objects.extend(pruned.objects);
+        outcome.removed_files.extend(pruned.removed_files);
         self.publish(&outcome);
         Ok(outcome)
     }
@@ -98,37 +103,52 @@ impl Settler {
         for object in &outcome.objects {
             self.events.publish(Event::Object(object.clone()));
         }
+        for tx_final in &outcome.pruned_tx_finals {
+            self.events.publish(Event::TransactionPruned {
+                tx_final: tx_final.clone(),
+            });
+        }
     }
 
     /// Settle while transactions remain open; otherwise wait for a wake signal.
     pub async fn run_loop(self: Arc<Self>) {
         loop {
             let settler = self.clone();
-            let open_records = match tokio::task::spawn_blocking(move || settler.pass()).await {
+            let delay = match tokio::task::spawn_blocking(move || settler.pass()).await {
                 Ok(Ok(outcome)) => {
                     if !outcome.records.is_empty() {
                         tracing::info!(changed = outcome.records.len(), "settlement pass");
                     }
-                    outcome.open_records
+                    next_pass_delay(&outcome, driver::now_ms())
                 }
                 Ok(Err(err)) => {
                     tracing::warn!("settlement pass failed: {err:#}");
-                    1
+                    Some(SETTLE_INTERVAL)
                 }
                 Err(err) => {
                     tracing::error!("settlement pass panicked: {err}");
-                    1
+                    Some(SETTLE_INTERVAL)
                 }
             };
-            if open_records == 0 {
+            if let Some(delay) = delay {
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {}
+                    _ = self.wake.notified() => {}
+                }
+            } else {
                 self.wake.notified().await;
-                continue;
-            }
-            tokio::select! {
-                _ = tokio::time::sleep(SETTLE_INTERVAL) => {}
-                _ = self.wake.notified() => {}
             }
         }
+    }
+}
+
+fn next_pass_delay(outcome: &SettleOutcome, current_time_ms: u64) -> Option<Duration> {
+    if outcome.open_records > 0 {
+        Some(SETTLE_INTERVAL)
+    } else {
+        outcome
+            .next_cleanup_at_ms
+            .map(|deadline| Duration::from_millis(deadline.saturating_sub(current_time_ms).max(1)))
     }
 }
 
@@ -210,6 +230,60 @@ mod tests {
         );
         record.submit_attempted_at_ms = Some(1);
         record
+    }
+
+    #[test]
+    fn idle_cleanup_prunes_receipts_with_a_distinct_event() {
+        use driver::{DriverDeps, DriverPaths, Hash};
+        let home = tempfile::tempdir().unwrap();
+        let paths = DriverPaths::from_dobj_root(home.path());
+        let key = payload::encode_hash_hex(&Hash::default());
+        let mut record = record(&key);
+        record.state = TransactionState::Expired;
+        let settled_at = driver::now_ms();
+        record.settled_at_ms = Some(settled_at);
+        let directory = paths.transactions_dir.join(&key);
+        std::fs::create_dir_all(&directory).unwrap();
+        let record_path = directory.join(driver::paths::RECORD_FILE);
+        std::fs::write(&record_path, serde_json::to_vec(&record).unwrap()).unwrap();
+        std::fs::write(directory.join(driver::paths::PAYLOAD_FILE), b"proof").unwrap();
+        let driver =
+            Arc::new(Driver::open(paths.clone(), DriverDeps::load(&paths).unwrap()).unwrap());
+        let events = EventHub::new();
+        let mut updates = events.subscribe();
+        let settler = Settler::new(driver, events);
+        let retained = settler.pass().unwrap();
+        assert_eq!(retained.open_records, 0);
+        assert_eq!(
+            retained.next_cleanup_at_ms,
+            Some(settled_at + driver::TRANSACTION_RETENTION_MS)
+        );
+        assert!(retained.pruned_tx_finals.is_empty());
+        record.settled_at_ms = Some(1);
+        std::fs::write(&record_path, serde_json::to_vec(&record).unwrap()).unwrap();
+        assert_eq!(settler.pass().unwrap().pruned_tx_finals, vec![key.clone()]);
+        assert!(!directory.exists());
+        assert!(
+            matches!(updates.try_recv().unwrap().event, Event::TransactionPruned { tx_final } if tx_final == key)
+        );
+    }
+
+    #[test]
+    fn idle_settler_wakes_for_retention_deadline() {
+        let mut outcome = SettleOutcome::default();
+        assert_eq!(next_pass_delay(&outcome, 1000), None);
+        outcome.next_cleanup_at_ms = Some(6000);
+        assert_eq!(
+            next_pass_delay(&outcome, 1000),
+            Some(Duration::from_secs(5))
+        );
+        outcome.open_records = 1;
+        assert_eq!(next_pass_delay(&outcome, 1000), Some(SETTLE_INTERVAL));
+        outcome.open_records = 0;
+        assert_eq!(
+            next_pass_delay(&outcome, 7000),
+            Some(Duration::from_millis(1))
+        );
     }
 
     #[test]

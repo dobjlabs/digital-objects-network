@@ -74,6 +74,7 @@ module transactions {
     | RecordFailed({ id: int, failure: RecordFailure, outputsWritten: Set[int] })
     | Crash({ id: int, phase: CrashPhase })
     | Delete({ tx: int })
+    | Prune({ tx: int })
     | Submit({ tx: int, result: SubmissionResult })
     | Retry({ tx: int, result: SubmissionResult })
     | RelayerBroadcast({ tx: int })
@@ -110,6 +111,7 @@ module transactions {
   var strays: Set[int]                      // Output names left by a crash before a record exists.
   var previousObjects: int -> ObjectFile    // File view before the most recent action.
   var previousRecords: int -> Record
+  var prunedRecords: int -> Record
 
   // Derived views and updates
   //
@@ -190,7 +192,7 @@ module transactions {
   // environment and deletion/crash history. Actions save the previous file view
   // separately so status changes can be checked after every step.
   action unchangedEnvironment = all { chain' = chain, relayer' = relayer }
-  action unchangedGhosts = all { deleted' = deleted, strays' = strays }
+  action unchangedGhosts = all { deleted' = deleted, strays' = strays, prunedRecords' = prunedRecords }
 
   pure val noSettlement: SettlementSnapshot = {
     pending: false,
@@ -220,6 +222,7 @@ module transactions {
     strays' = Set(),
     previousObjects' = genesisObjects.mapBy(basename => { status: Live, tx: 0 }),
     previousRecords' = Map(),
+    prunedRecords' = Map(),
   }
 
   // Proving and recording
@@ -355,6 +358,7 @@ module transactions {
     },
     chain' = chain,
     deleted' = deleted,
+    prunedRecords' = prunedRecords,
     previousObjects' = node.objects,
     previousRecords' = node.records,
   }
@@ -374,6 +378,23 @@ module transactions {
     },
     unchangedEnvironment,
     deleted' = deleted.union(Set(tx)),
+    strays' = strays,
+    prunedRecords' = prunedRecords,
+    previousObjects' = node.objects,
+    previousRecords' = node.records,
+  }
+
+  action prune(tx: int): bool = all {
+    node.records.keys().contains(tx),
+    not(isOpen(node.records.get(tx).state)),
+    command' = Prune({ tx: tx }),
+    node' = { ...node,
+      payloads: node.payloads.exclude(Set(tx)),
+      records: without(node.records, Set(tx)),
+    },
+    prunedRecords' = prunedRecords.put(tx, node.records.get(tx)),
+    unchangedEnvironment,
+    deleted' = deleted,
     strays' = strays,
     previousObjects' = node.objects,
     previousRecords' = node.records,
@@ -577,6 +598,7 @@ module transactions {
       recordFailed(id, failure, written),
       crash(id, phase),
       delete(id),
+      prune(id),
       submitWith(id, false, result),
       submitWith(id, true, result),
       relayerBroadcast(id),
@@ -615,8 +637,11 @@ module transactions {
 
   // A terminal decision must agree with actual inclusion. Open records may
   // lag the chain until settlement observes them, but Expired can never land.
-  val recordsMatchChain = node.records.keys().forall(tx => {
-    val record = node.records.get(tx)
+  val settledHistory = node.records.keys().union(prunedRecords.keys()).mapBy(tx =>
+    if (node.records.keys().contains(tx)) node.records.get(tx) else prunedRecords.get(tx))
+
+  val recordsMatchChain = settledHistory.keys().forall(tx => {
+    val record = settledHistory.get(tx)
     match record.state {
       | Landed => chain.landed.contains(tx)
       | Expired => not(chain.landed.contains(tx))
@@ -626,8 +651,8 @@ module transactions {
 
   // Declaring a transaction Landed must also reconcile its files. Its outputs
   // may later be spent, so they can be Live or Nullified; its inputs are spent.
-  val landedRecordsSettled = node.records.keys().forall(tx => {
-    val record = node.records.get(tx)
+  val landedRecordsSettled = settledHistory.keys().forall(tx => {
+    val record = settledHistory.get(tx)
     record.state != Landed or all {
       record.outputs.forall(basename =>
         node.objects.keys().contains(basename) and
@@ -641,9 +666,9 @@ module transactions {
 
   // An expired transaction retains no unconfirmed output file of its own.
   // A later transaction may reuse a removed filename without violating this rule.
-  val expiredOutputsRemoved = node.records.keys().forall(tx =>
-    node.records.get(tx).state != Expired or
-      ownedUnknownOutputs(node.objects, node.records.get(tx), tx).size() == 0)
+  val expiredOutputsRemoved = settledHistory.keys().forall(tx =>
+    settledHistory.get(tx).state != Expired or
+      ownedUnknownOutputs(node.objects, settledHistory.get(tx), tx).size() == 0)
 
   // Normally every Unknown file has an open producing record. Crash leftovers
   // are the explicit exception; they confer no input ownership.
@@ -673,10 +698,11 @@ module transactions {
 
   val submissionAttemptsPersist = previousRecords.keys()
     .filter(tx => previousRecords.get(tx).attempted)
-    .forall(tx => node.records.keys().contains(tx) and node.records.get(tx).attempted)
+    .forall(tx => if (node.records.keys().contains(tx)) node.records.get(tx).attempted
+      else prunedRecords.keys().contains(tx) and not(isOpen(previousRecords.get(tx).state)))
 
   val relayerPayloadsWereAttempted = relayer.keys().forall(tx =>
-    node.records.keys().contains(tx) and node.records.get(tx).attempted)
+    settledHistory.keys().contains(tx) and settledHistory.get(tx).attempted)
 
   val submittedRecordsWereAttempted = node.records.keys().forall(tx =>
     node.records.get(tx).state != Submitted or node.records.get(tx).attempted)
@@ -707,6 +733,17 @@ module transactions {
     | _ => true
   }
 
+  val pruningPreservesObjects = match command {
+    | Prune(receipt) => all {
+        previousRecords.keys().contains(receipt.tx),
+        not(isOpen(previousRecords.get(receipt.tx).state)),
+        node.objects == previousObjects,
+        node.records == without(previousRecords, Set(receipt.tx)),
+        not(node.payloads.contains(receipt.tx)),
+      }
+    | _ => true
+  }
+
   // Single entry point for the simulator's invariant checks and scenario tests.
   val safety = all {
     disjointOpenInputs,
@@ -726,5 +763,6 @@ module transactions {
     automaticRetriesRequireAttempt,
     recordingFailuresCleanUp,
     settlementOnlyUpdatesQueriedRecords,
+    pruningPreservesObjects,
   }
 }

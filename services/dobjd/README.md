@@ -64,7 +64,7 @@ All routes return JSON unless noted; errors come back as
 | `GET`  | `/proof-jobs`                       | retained proof jobs, oldest first (`?status=active`: unfinished) |
 | `GET`  | `/proof-jobs/{job_id}`              | job state; `?wait=true&timeoutMs=` holds until it is done or failed |
 | `POST` | `/transactions/submit`                  | `submit` each of `{ "txFinals": [...] }`, returns their records |
-| `GET`  | `/transactions`                 | `list_transactions`: every record on disk, oldest first      |
+| `GET`  | `/transactions`                 | `list_transactions`: open and recently completed records, oldest first      |
 | `GET`  | `/transactions/{tx_final}`      | `get_transaction`; `?wait=true&timeoutMs=` holds until landed or expired |
 | `DELETE` | `/transactions/{tx_final}`    | `delete_transaction`: abandon a recorded transaction never offered to the relayer |
 | `GET`  | `/events`                       | every state change (SSE), numbered by `seq`                  |
@@ -115,7 +115,7 @@ daemon: a task makes one pass whenever a record is written and every
 `SETTLE_INTERVAL` while any record is open, and `GET /objects` runs the same
 pass extended to every object file before listing. An object listing shows an
 `unknown` output of a `submitted` transaction as `pending`, with the
-transaction's `txHash`; the file itself carries only what the chain said.
+transaction's `txHash`. Object files also retain their known creation hash, so it stays available after the transaction record is pruned.
 
 A `recorded` transaction can be deleted until a submission is attempted; after
 that the relayer may hold the payload, so the record stays until the chain
@@ -125,6 +125,10 @@ Retries resume after a restart and stop on acceptance, landing, or expiry.
 Transactions that have never been offered to the relayer are not submitted
 automatically. Records survive a daemon restart; proof jobs, runs and
 input holds do not, and nothing on disk depends on them.
+
+Completed (`landed` or `expired`) records and payloads are retained for ten minutes after settlement, then pruned. The daemon finishes local file reconciliation and copies known creation hashes to outputs before pruning. Metadata read/write failures defer pruning. Open records are never pruned. A later `GET /transactions/{txFinal}` returns 404 once its receipt has been removed.
+
+The event stream publishes `transaction-pruned` with `txFinal` when retention ends. This removes the receipt from client snapshots while preserving a completed job's outcome. `transaction-deleted` continues to mean an unsubmitted transaction was explicitly abandoned.
 
 ### Runs are non-blocking
 

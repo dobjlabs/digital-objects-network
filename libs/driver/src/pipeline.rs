@@ -78,6 +78,18 @@ pub struct SettleOutcome {
     /// Output files of expired transactions, removed by this pass.
     pub removed_files: Vec<String>,
     pub open_records: usize,
+    pub pruned_tx_finals: Vec<String>,
+    pub next_cleanup_at_ms: Option<u64>,
+}
+
+pub const TRANSACTION_RETENTION_MS: u64 = 600_000;
+
+#[derive(Debug, Clone, Default)]
+pub struct PrunedTransactions {
+    pub tx_finals: Vec<String>,
+    pub objects: Vec<ObjectSummary>,
+    pub removed_files: Vec<String>,
+    pub next_cleanup_at_ms: Option<u64>,
 }
 
 /// Settlement changes and the resulting object listing.
@@ -283,6 +295,7 @@ impl Driver {
                     content_hash: output.obj.commitment(),
                     class: output.class.clone(),
                     status: FileStatus::Unknown,
+                    tx_hash: None,
                     obj: output.obj.clone(),
                     tx_final: proved.tx_final,
                 };
@@ -533,21 +546,31 @@ impl Driver {
         outcome.open_records = records.iter().filter(|record| record.is_open()).count();
 
         let mut entries = load_object_files(&self.paths)?;
+        let record_index = RecordIndex::new(&records);
         let mut changed_files = HashSet::new();
         for entry in entries.iter_mut() {
             let commitment = entry.record.obj.commitment();
             let nullifier = object_nullifier_hash(&entry.record.obj).ok();
             let status = match entry.record.status {
-                FileStatus::Nullified => continue,
+                FileStatus::Nullified => FileStatus::Nullified,
                 _ if nullifier.is_some_and(|n| membership.on_chain_nullifiers.contains(&n)) => {
                     FileStatus::Nullified
                 }
                 FileStatus::Unknown if membership.created_objects.contains(&commitment) => {
                     FileStatus::Live
                 }
-                _ => continue,
+                status => status,
             };
+            let tx_hash = record_index
+                .by_tx_final
+                .get(&entry.record.tx_final)
+                .and_then(|record| record.tx_hash.clone())
+                .or_else(|| entry.record.tx_hash.clone());
+            if entry.record.status == status && entry.record.tx_hash == tx_hash {
+                continue;
+            }
             entry.record.status = status;
+            entry.record.tx_hash = tx_hash;
             write_object_file(&self.paths, &entry.record, &entry.file_name)?;
             changed_files.insert(entry.file_name.clone());
         }
@@ -575,6 +598,122 @@ impl Driver {
             Vec::new()
         };
         Ok((outcome, listing))
+    }
+
+    pub fn prune_transactions(&self, current_time_ms: u64) -> Result<PrunedTransactions> {
+        let _store = self.store_lock.lock().expect("store lock poisoned");
+        let records = load_records(&self.paths)?;
+        let mut outcome = PrunedTransactions::default();
+        let mut changed_files = HashSet::new();
+        for record in records.iter().filter(|record| record.state.is_terminal()) {
+            if let Err(err) =
+                self.persist_settled_objects(record, &mut changed_files, &mut outcome.removed_files)
+            {
+                log::warn!("retaining transaction {}: {err:#}", record.tx_final);
+                let retry_at = current_time_ms.saturating_add(60_000);
+                outcome.next_cleanup_at_ms = Some(
+                    outcome
+                        .next_cleanup_at_ms
+                        .map_or(retry_at, |next| next.min(retry_at)),
+                );
+                continue;
+            }
+            let cleanup_at = record
+                .settled_at_ms
+                .unwrap_or(record.recorded_at_ms)
+                .saturating_add(TRANSACTION_RETENTION_MS);
+            if current_time_ms >= cleanup_at {
+                match remove_transaction(&self.paths, &record_tx_final(record)?) {
+                    Ok(()) => outcome.tx_finals.push(record.tx_final.clone()),
+                    Err(err) => {
+                        log::warn!("could not prune transaction {}: {err:#}", record.tx_final);
+                        let retry_at = current_time_ms.saturating_add(60_000);
+                        outcome.next_cleanup_at_ms = Some(
+                            outcome
+                                .next_cleanup_at_ms
+                                .map_or(retry_at, |next| next.min(retry_at)),
+                        );
+                    }
+                }
+            } else {
+                outcome.next_cleanup_at_ms = Some(
+                    outcome
+                        .next_cleanup_at_ms
+                        .map_or(cleanup_at, |next| next.min(cleanup_at)),
+                );
+            }
+        }
+        if !changed_files.is_empty() {
+            let remaining = records
+                .into_iter()
+                .filter(|record| !outcome.tx_finals.contains(&record.tx_final))
+                .collect::<Vec<_>>();
+            outcome.objects = self.summaries(
+                load_object_files(&self.paths)?
+                    .iter()
+                    .filter(|entry| changed_files.contains(&entry.file_name)),
+                &remaining,
+            );
+        }
+        Ok(outcome)
+    }
+
+    fn persist_settled_objects(
+        &self,
+        record: &TransactionRecord,
+        changed_files: &mut HashSet<String>,
+        removed_files: &mut Vec<String>,
+    ) -> Result<()> {
+        if record.state == TransactionState::Expired {
+            for file_name in &record.output_files {
+                let path = self.paths.objects_dir.join(file_name);
+                if path.try_exists()? {
+                    crate::object_record::parse_object_record_file(&path)?;
+                }
+            }
+            removed_files.extend(self.remove_unknown_outputs(record)?);
+            return Ok(());
+        }
+        let producing_tx_final = record_tx_final(record)?;
+        for (files, output) in [(&record.input_files, false), (&record.output_files, true)] {
+            for file_name in files {
+                let live_path = self.paths.objects_dir.join(file_name);
+                let nullified_path = self.paths.nullified_objects_dir.join(file_name);
+                let path = if live_path.try_exists()? {
+                    live_path
+                } else {
+                    nullified_path
+                };
+                if !path.try_exists()? {
+                    continue;
+                }
+                let mut stored = crate::object_record::parse_object_record_file(&path)?;
+                if output && stored.tx_final != producing_tx_final {
+                    continue;
+                }
+                let mut changed = false;
+                if output {
+                    if stored.status == FileStatus::Unknown {
+                        stored.status = FileStatus::Live;
+                        changed = true;
+                    }
+                    if let Some(tx_hash) = &record.tx_hash
+                        && stored.tx_hash.as_ref() != Some(tx_hash)
+                    {
+                        stored.tx_hash = Some(tx_hash.clone());
+                        changed = true;
+                    }
+                } else if stored.status != FileStatus::Nullified {
+                    stored.status = FileStatus::Nullified;
+                    changed = true;
+                }
+                if changed {
+                    write_object_file(&self.paths, &stored, file_name)?;
+                    changed_files.insert(file_name.clone());
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn list_transactions(&self) -> Result<Vec<TransactionRecord>> {

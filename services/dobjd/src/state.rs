@@ -158,6 +158,9 @@ pub fn transaction_event(tx_final: &str, event: &Event) -> Result<Option<Transac
         Event::TransactionDeleted { tx_final: deleted } if deleted == tx_final => {
             anyhow::bail!("transaction {tx_final} was deleted")
         }
+        Event::TransactionPruned { tx_final: pruned } if pruned == tx_final => {
+            anyhow::bail!("transaction {tx_final} is no longer retained")
+        }
         _ => Ok(None),
     }
 }

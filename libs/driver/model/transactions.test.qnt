@@ -408,4 +408,42 @@ module transactions_tests {
   run concurrentSettlementQueriesAreRefusedTest = init
     .then(querySettlement).then(querySettlement).fail()
 
+
+  run landedReceiptPruningPreservesObjectsAcrossRestartTest = init
+    .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1)).then(submit(1))
+    .then(chainLand(1)).then(settle).then(prune(1)).then(restart)
+    .expect(all {
+      node.records == Map(),
+      node.payloads == Set(),
+      node.objects.get(3) == { status: Live, tx: 1 },
+      node.objects.get(1).status == Nullified,
+      prunedRecords.get(1).state == Landed,
+      safety,
+    })
+    .then(startProofWith(2, Set(3), Set(4))).then(finishProof(2)).then(submit(2))
+    .then(chainLand(2)).then(settle)
+    .expect(all { node.objects.get(3).status == Nullified, safety })
+
+  run expiredReceiptPruningKeepsInputAvailableTest = init
+    .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1)).then(submit(1))
+    .then(chainAdvance).then(chainAdvance).then(chainAdvance).then(settle).then(prune(1))
+    .expect(all {
+      node.records == Map(),
+      node.payloads == Set(),
+      node.objects.keys() == Set(1, 2),
+      freeLiveObjects == Set(1, 2),
+      prunedRecords.get(1).state == Expired,
+      safety,
+    })
+    .then(startProofWith(2, Set(1), Set(3))).then(finishProof(2))
+    .expect(all { node.records.get(2).state == Recorded, safety })
+
+  run pruningRefusesRecordedTransactionTest = init
+    .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1))
+    .then(prune(1)).fail()
+
+  run pruningRefusesSubmittedTransactionTest = init
+    .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1)).then(submit(1))
+    .then(prune(1)).fail()
+
 }

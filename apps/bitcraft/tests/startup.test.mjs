@@ -197,7 +197,7 @@ async function page(context, options = {}) {
       backend.transactions = backend.transactions.filter((record) => record.txFinal !== payload.txFinal);
       const { type, ...record } = payload;
       backend.transactions.push(copy(record));
-    } else if (payload.type === "transaction-deleted") {
+    } else if (["transaction-deleted", "transaction-pruned"].includes(payload.type)) {
       backend.transactions = backend.transactions.filter((record) => record.txFinal !== payload.txFinal);
     }
     for (const source of sources.filter((source) => !source.closed && source.url === "http://127.0.0.1:7727/events")) {
@@ -1681,4 +1681,17 @@ test("completed job details use spent input paths and the grounding root from th
   assert.match(details, /\.nullified\/wood\.dobj/);
   assert.match(details, /grounding root0xgrounding/);
   assert.doesNotMatch(details, /new root/);
+});
+
+
+test("pruning a completed transaction preserves its successful job", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  await ui.event({ type: "transaction", ...transaction("submitted", { owner: "external", action: qname("GatherWood") }) });
+  await ui.event({ type: "transaction", ...transaction("landed", { owner: "external", action: qname("GatherWood"), settledAtMs: 3000 }) });
+  assert.equal(ui.jobs().length, 1);
+  assert.match(ui.jobs()[0].textContent, /succeeded/);
+  await ui.event({ type: "transaction-pruned", txFinal: "0xabc" });
+  assert.equal(ui.backend.transactions.length, 0);
+  assert.match(ui.jobs()[0].textContent, /succeeded/);
+  assert.equal(ui.jobs()[0].classList.contains("failed"), false);
 });

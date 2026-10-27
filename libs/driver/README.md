@@ -140,9 +140,11 @@ The driver depends on traits, not the HTTP implementations directly:
 
 ## Storage Model
 
-An object file says only what the chain has said about the object: `unknown`, `live` or `nullified`. The parser and serializer live in [`src/object_record.rs`](src/object_record.rs), and filesystem placement logic lives in [`src/object_store.rs`](src/object_store.rs). Whether an output is awaiting a transaction (`pending` in listings) and its Ethereum tx hash are read from the transaction records when objects are listed, so each fact has one source.
+An object file says only what the chain has said about the object: `unknown`, `live` or `nullified`. The parser and serializer live in [`src/object_record.rs`](src/object_record.rs), and filesystem placement logic lives in [`src/object_store.rs`](src/object_store.rs). Whether an output is awaiting a transaction (`pending` in listings) is derived from its open transaction record. An optional `txHash` is stored in the object file and survives transaction-record pruning. Listings prefer a transaction record's newer hash while it is retained, and fall back to the file's hash. Spending an input preserves its original creation hash.
 
 Each proved transaction has a directory under `~/.dobj/transactions/<txFinal>/` holding `payload.bin`, the protocol artifact that goes to the relayer, and `record.json`, the record served by dobjd. The record is written last, by rename, so a crash mid-write leaves at most inert output files and a directory without a record, which the driver ignores. Input holds are in memory only; a restart loses every proof in progress and nothing on disk depends on them.
+
+`prune_transactions` repairs settled object files from durable terminal records before removing records and payloads ten minutes after settlement. Open transactions remain durable. Unreadable files or failed metadata writes defer pruning for retry; cleanup does not discard the evidence needed to finish local reconciliation. The daemon schedules the next cleanup deadline even when no transactions are open. Pruning keeps object files and their hashes and removes only the completed transaction directory.
 
 Live objects are stored in:
 

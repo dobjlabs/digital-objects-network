@@ -424,7 +424,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "List every transaction record on disk, oldest first: recorded (proved, not yet posted), submitted (at the relayer), landed or expired. Records survive a daemon restart; use this to recover work after one."
+        description = "List retained transaction records, oldest first: recorded (proved, not yet posted), submitted (at the relayer), and landed or expired within the last ten minutes. Open records survive a daemon restart; use this to recover unfinished work."
     )]
     fn list_transactions(&self) -> Result<Json<TransactionList>, String> {
         self.ops

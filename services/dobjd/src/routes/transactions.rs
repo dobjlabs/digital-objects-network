@@ -27,7 +27,7 @@ pub async fn submit(
     Ok(Json(records))
 }
 
-/// `GET /transactions`: every record on disk, oldest first.
+/// `GET /transactions`: open and recently completed records, oldest first.
 pub async fn list(State(state): State<AppState>) -> ApiResult<Json<Vec<TransactionRecord>>> {
     let driver = state.services.driver.clone();
     let records = tokio::task::spawn_blocking(move || driver.list_transactions())
