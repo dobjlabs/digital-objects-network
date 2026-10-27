@@ -333,6 +333,11 @@ reset:
         *) rm -rf "$blobs" && echo "removed archiver blobs: $blobs" ;;
     esac
 
+# Install pinned Quint tools and check the protocol models.
+models:
+    pnpm --dir devtools/models install --frozen-lockfile --ignore-scripts
+    pnpm --dir devtools/models check
+
 # Run all tests (except ignored)
 test:
     cargo test --workspace --release

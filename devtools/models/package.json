@@ -1,0 +1,15 @@
+{
+  "name": "service-models",
+  "private": true,
+  "scripts": {
+    "typecheck:driver": "quint typecheck ../../libs/driver/model/transactions.qnt && quint typecheck ../../libs/driver/model/transactions.test.qnt",
+    "test:driver": "quint test ../../libs/driver/model/transactions.test.qnt --seed=20261026",
+    "simulate:driver": "quint run ../../libs/driver/model/transactions.qnt --invariant=safety --max-samples=10000 --max-steps=60 --seed=20261026 --verbosity=1",
+    "check:driver": "pnpm run typecheck:driver && pnpm run test:driver && pnpm run simulate:driver",
+    "check": "pnpm run check:driver"
+  },
+  "devDependencies": {
+    "@informalsystems/quint": "0.33.0"
+  },
+  "packageManager": "pnpm@10.34.8"
+}
