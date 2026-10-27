@@ -37,9 +37,11 @@ It is intentionally a library, not a daemon and not a CLI.
     synchronizer has aged out. Idempotent.
   - `delete_transaction`: removes a recorded transaction that was never
     offered to the relayer, with its output files.
-  - `settle`: one pass over every open record, reading membership and the head
-    block from one synchronizer snapshot and the relayer's job status, then
-    marking records `landed` or `expired` and moving object files accordingly.
+  - `settle`: query membership for transactions with a submission attempt,
+    using that response's head for expiry. Never-submitted records need only
+    a head check; mixed passes reuse the membership head. Mark records landed
+    or expired and update object files. A submission that starts during a
+    head-only query waits for a membership query before any terminal decision.
   - `execute`: `prove`, `record` and `submit` in one call. Landing is reported
     by settlement.
 

@@ -126,7 +126,7 @@ State isolation between the two modes runs all the way through the driver: `dev-
 
 `dobjd` is the **single owner of `Arc<Driver>`** in the running system. Browser, MCP, and CLI clients all talk to it over HTTP/SSE.
 
-A transaction goes through the driver in stages, each one call: `prove` (hold inputs -> fetch grounding witness -> re-parse plugin script through SDK -> drive `txlib::TxBuilder` -> produce `(tx_pod, obj_pods)` -> shrink), `record` (write outputs as `unknown`, the payload and the record under `~/.dobj/transactions/<txFinal>/`), `submit` (post to the relayer) and `settle` (one membership query for every open record, then mark records `landed` or `expired` and move object files). `Driver::execute` composes the first three; nothing in the driver waits on the network.
+A transaction goes through the driver in stages, each one call: `prove` (hold inputs -> fetch grounding witness -> re-parse plugin script through SDK -> drive `txlib::TxBuilder` -> produce `(tx_pod, obj_pods)` -> shrink), `record` (write outputs as `unknown`, the payload and the record under `~/.dobj/transactions/<txFinal>/`), `submit` (post to the relayer) and `settle` (membership queries for attempted transactions and head-only expiry checks for never-submitted records, then mark records `landed` or `expired` and move object files). `Driver::execute` composes the first three; nothing in the driver waits on the network.
 
 ## Key entry points
 

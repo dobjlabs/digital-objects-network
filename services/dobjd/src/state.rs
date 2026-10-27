@@ -74,7 +74,11 @@ impl Services {
     }
 
     pub fn submit_transaction(&self, tx_final: &Hash) -> Result<TransactionRecord> {
-        let record = self.driver.submit(tx_final)?;
+        let submission = self.driver.submit(tx_final);
+        if submission.is_err() {
+            self.settler.wake();
+        }
+        let record = submission?;
         self.announce_transaction(&record);
         Ok(record)
     }

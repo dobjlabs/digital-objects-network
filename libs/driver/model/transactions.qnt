@@ -45,6 +45,7 @@ module transactions {
   type SettlementSnapshot = {
     pending: bool,
     transactions: Set[int],
+    membershipTransactions: Set[int],
     chain: Chain,
     relayer: int -> RelayerJob,
   }
@@ -82,7 +83,7 @@ module transactions {
     | ChainLand({ tx: int })
     | ChainAdvance
     | QuerySettlement
-    | ApplySettlement({ transactions: Set[int] })
+    | ApplySettlement({ transactions: Set[int], membershipTransactions: Set[int] })
     | Restart
 
   // Exploration bounds
@@ -118,6 +119,9 @@ module transactions {
   // These definitions express the ownership rules used by the actions below.
 
   pure def isOpen(state: RecordState): bool = state == Recorded or state == Submitted
+
+  pure def needsMembership(record: Record): bool =
+    isOpen(record.state) and (record.attempted or record.state == Submitted)
 
   // Removing keys creates a new map; entries outside the removal set survive.
   pure def without(entries: int -> a, removed: Set[int]): int -> a =
@@ -197,6 +201,7 @@ module transactions {
   pure val noSettlement: SettlementSnapshot = {
     pending: false,
     transactions: Set(),
+    membershipTransactions: Set(),
     chain: { head: 0, created: Set(), nullifiers: Set(), landed: Set() },
     relayer: Map(),
   }
@@ -507,12 +512,14 @@ module transactions {
 
   pure def captureSettlement(localNode: Node, currentChain: Chain, relayerJobs: int -> RelayerJob): SettlementSnapshot = {
     val transactions = localNode.records.keys().filter(tx => isOpen(localNode.records.get(tx).state))
-    val commitments = transactions.map(tx => localNode.records.get(tx).outputs).flatten().union(localNode.objects.keys())
-    val nullifiers = transactions.map(tx => localNode.records.get(tx).inputs).flatten().union(localNode.objects.keys())
+    val membershipTransactions = transactions.filter(tx => needsMembership(localNode.records.get(tx)))
+    val commitments = membershipTransactions.map(tx => localNode.records.get(tx).outputs).flatten().union(localNode.objects.keys())
+    val nullifiers = membershipTransactions.map(tx => localNode.records.get(tx).inputs).flatten().union(localNode.objects.keys())
     val submittedTransactions = transactions.filter(tx => localNode.records.get(tx).state == Submitted).intersect(relayerJobs.keys())
     {
       pending: true,
       transactions: transactions,
+      membershipTransactions: membershipTransactions,
       chain: { ...currentChain, created: currentChain.created.intersect(commitments), nullifiers: currentChain.nullifiers.intersect(nullifiers) },
       relayer: submittedTransactions.mapBy(tx => relayerJobs.get(tx)),
     }
@@ -523,9 +530,13 @@ module transactions {
       val record = localNode.records.get(tx)
       val atRelayer = snapshot.relayer.keys().contains(tx)
       if (not(snapshot.transactions.contains(tx))) record
-      else settleRecord(record, snapshot.chain,
-        if (atRelayer) snapshot.relayer.get(tx).broadcast else record.broadcast,
-        if (atRelayer) snapshot.relayer.get(tx).failed else record.relayerFailed)
+      else if (snapshot.membershipTransactions.contains(tx))
+        settleRecord(record, snapshot.chain,
+          if (atRelayer) snapshot.relayer.get(tx).broadcast else record.broadcast,
+          if (atRelayer) snapshot.relayer.get(tx).failed else record.relayerFailed)
+      else if (needsMembership(record)) record
+      else if (snapshot.chain.head - record.grounding > maxAge) { ...record, state: Expired }
+      else record
     })
     val expiredOutputs = settledRecords.keys()
       .filter(tx => settledRecords.get(tx).state == Expired)
@@ -552,7 +563,10 @@ module transactions {
 
   action applySettlement = all {
     node.settlement.pending,
-    command' = ApplySettlement({ transactions: node.settlement.transactions }),
+    command' = ApplySettlement({
+      transactions: node.settlement.transactions,
+      membershipTransactions: node.settlement.membershipTransactions,
+    }),
     node' = settledNode(node, node.settlement),
     unchangedEnvironment,
     unchangedGhosts,
@@ -562,7 +576,10 @@ module transactions {
 
   action settle = all {
     not(node.settlement.pending),
-    command' = ApplySettlement({ transactions: openRecords }),
+    command' = ApplySettlement({
+      transactions: openRecords,
+      membershipTransactions: openRecords.filter(tx => needsMembership(node.records.get(tx))),
+    }),
     node' = settledNode(node, captureSettlement(node, chain, relayer)),
     unchangedEnvironment,
     unchangedGhosts,
@@ -733,6 +750,13 @@ module transactions {
     | _ => true
   }
 
+  val headOnlyQueriesPreserveConcurrentAttempts = match command {
+    | ApplySettlement(snapshot) => previousRecords.keys().exclude(snapshot.membershipTransactions)
+        .filter(tx => needsMembership(previousRecords.get(tx)))
+        .forall(tx => node.records.keys().contains(tx) and node.records.get(tx) == previousRecords.get(tx))
+    | _ => true
+  }
+
   val pruningPreservesObjects = match command {
     | Prune(receipt) => all {
         previousRecords.keys().contains(receipt.tx),
@@ -764,5 +788,6 @@ module transactions {
     recordingFailuresCleanUp,
     settlementOnlyUpdatesQueriedRecords,
     pruningPreservesObjects,
+    headOnlyQueriesPreserveConcurrentAttempts,
   }
 }

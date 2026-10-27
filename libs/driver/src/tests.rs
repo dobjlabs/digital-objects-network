@@ -306,6 +306,11 @@ struct MockChain {
     nullifiers: HashSet<Hash>,
     head_block: i64,
     fail_membership: bool,
+    fail_head: bool,
+    head_requests: usize,
+    membership_requests: usize,
+    queried_commitments: HashSet<Hash>,
+    on_head: Option<Box<dyn FnOnce() + Send>>,
     on_membership: Option<Box<dyn FnOnce() + Send>>,
 }
 
@@ -317,10 +322,21 @@ struct MockSynchronizer {
 
 impl SynchronizerClient for MockSynchronizer {
     fn fetch_head(&self, _sync_api_url: &str) -> Result<SynchronizerHead> {
-        Ok(SynchronizerHead {
+        let mut chain = self.chain.lock().unwrap();
+        chain.head_requests += 1;
+        if chain.fail_head {
+            return Err(anyhow!("synchronizer head unavailable"));
+        }
+        let head = SynchronizerHead {
             state_root: state_header(&self.state).hash(),
-            block_number: self.chain.lock().unwrap().head_block,
-        })
+            block_number: chain.head_block,
+        };
+        let on_head = chain.on_head.take();
+        drop(chain);
+        if let Some(on_head) = on_head {
+            on_head();
+        }
+        Ok(head)
     }
 
     fn fetch_grounding_witness(
@@ -346,6 +362,8 @@ impl SynchronizerClient for MockSynchronizer {
         nullifiers: &[Hash],
     ) -> Result<SynchronizerMembership> {
         let mut chain = self.chain.lock().unwrap();
+        chain.membership_requests += 1;
+        chain.queried_commitments = object_commitments.iter().copied().collect();
         if chain.fail_membership {
             return Err(anyhow!("synchronizer unreachable"));
         }
@@ -1547,5 +1565,131 @@ fn object_hash_metadata_is_optional_and_survives_import() {
             .unwrap()
             .tx_hash,
         summary.tx_hash
+    );
+}
+
+#[test]
+fn unattempted_records_use_only_head_checks_and_expire_safely() {
+    let fx = fixture("log_1.dobj");
+    let proved = fx
+        .driver
+        .prove(fx.input("CraftWood"), "staged", &NoopExecutionReporter)
+        .unwrap();
+    let record = fx.driver.record(proved).unwrap();
+    fx.chain.lock().unwrap().fail_membership = true;
+    fx.advance_head_to(record.grounding_block + MAX_STATE_ROOT_AGE_BLOCKS);
+    let outcome = fx.driver.settle().unwrap();
+    assert!(outcome.records.is_empty());
+    assert_eq!(outcome.open_records, 1);
+    assert_eq!(outcome.unattempted_records, 1);
+    assert_eq!(fx.chain.lock().unwrap().head_requests, 1);
+    assert_eq!(fx.chain.lock().unwrap().membership_requests, 0);
+    assert_eq!(
+        fx.summary(&fx.input_file).held_by_run_id.as_deref(),
+        Some("staged")
+    );
+    fx.advance_head_to(record.grounding_block + MAX_STATE_ROOT_AGE_BLOCKS + 1);
+    fx.chain.lock().unwrap().fail_head = true;
+    assert!(fx.driver.settle().is_err());
+    assert_eq!(
+        fx.driver
+            .get_transaction(&tx_final_of(&record))
+            .unwrap()
+            .state,
+        TransactionState::Recorded
+    );
+    fx.chain.lock().unwrap().fail_head = false;
+    let outcome = fx.driver.settle().unwrap();
+    assert_eq!(outcome.records[0].state, TransactionState::Expired);
+    assert_eq!(outcome.unattempted_records, 0);
+    assert_eq!(fx.chain.lock().unwrap().membership_requests, 0);
+    assert_eq!(fx.summary(&fx.input_file).held_by_run_id, None);
+    for file in &record.output_files {
+        assert!(!fx.paths.objects_dir.join(file).exists());
+    }
+}
+
+#[test]
+fn attempted_records_without_acknowledgement_still_query_membership() {
+    let fx = fixture("log_1.dobj");
+    fx.relayer.lock().unwrap().fail_submit = true;
+    assert!(fx.driver.execute(fx.input("CraftWood")).is_err());
+    let record = fx.driver.list_transactions().unwrap().remove(0);
+    fx.land(&record);
+    fx.advance_head_to(record.grounding_block + MAX_STATE_ROOT_AGE_BLOCKS + 1);
+    let outcome = fx.driver.settle().unwrap();
+    assert_eq!(outcome.records[0].state, TransactionState::Landed);
+    assert_eq!(fx.chain.lock().unwrap().membership_requests, 1);
+    assert_eq!(outcome.unattempted_records, 0);
+}
+
+#[test]
+fn mixed_settlement_queries_only_attempted_transaction_effects() {
+    let fx = fixture("log_1.dobj");
+    let submitted = fx.driver.execute(fx.input("CraftWood")).unwrap();
+    let proved = fx
+        .driver
+        .prove(
+            ExecuteActionInput {
+                action: craft_basics("FindLog"),
+                input_objects: vec![],
+                args: Default::default(),
+            },
+            "staged",
+            &NoopExecutionReporter,
+        )
+        .unwrap();
+    let staged = fx.driver.record(proved).unwrap();
+    fx.chain.lock().unwrap().head_requests = 0;
+    let outcome = fx.driver.settle().unwrap();
+    assert_eq!(outcome.open_records, 2);
+    assert_eq!(outcome.unattempted_records, 1);
+    let chain = fx.chain.lock().unwrap();
+    assert_eq!(chain.membership_requests, 1);
+    assert_eq!(chain.head_requests, 0);
+    assert_eq!(
+        chain.queried_commitments,
+        crate::transactions::decode_hashes(&submitted.created)
+            .unwrap()
+            .into_iter()
+            .collect()
+    );
+    assert!(
+        crate::transactions::decode_hashes(&staged.created)
+            .unwrap()
+            .iter()
+            .all(|hash| !chain.queried_commitments.contains(hash))
+    );
+}
+
+#[test]
+fn submission_started_during_head_query_waits_for_membership_before_expiry() {
+    let fx = fixture("log_1.dobj");
+    let proved = fx
+        .driver
+        .prove(fx.input("CraftWood"), "staged", &NoopExecutionReporter)
+        .unwrap();
+    let record = fx.driver.record(proved).unwrap();
+    fx.advance_head_to(record.grounding_block + MAX_STATE_ROOT_AGE_BLOCKS + 1);
+    let paths = fx.paths.clone();
+    let mut submitted = record.clone();
+    submitted.state = TransactionState::Submitted;
+    submitted.submit_attempted_at_ms = Some(1);
+    submitted.relayer_job_id = Some("job-1".to_string());
+    fx.chain.lock().unwrap().on_head = Some(Box::new(move || {
+        crate::transactions::write_record(&paths, &submitted).unwrap();
+    }));
+    fx.land(&record);
+    let outcome = fx.driver.settle().unwrap();
+    assert!(outcome.records.is_empty());
+    assert_eq!(outcome.open_records, 1);
+    assert_eq!(outcome.unattempted_records, 0);
+    assert_eq!(fx.chain.lock().unwrap().membership_requests, 0);
+    for file in &record.output_files {
+        assert!(fx.paths.objects_dir.join(file).exists());
+    }
+    assert_eq!(
+        fx.driver.settle().unwrap().records[0].state,
+        TransactionState::Landed
     );
 }

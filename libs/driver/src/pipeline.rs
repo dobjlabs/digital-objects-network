@@ -78,6 +78,7 @@ pub struct SettleOutcome {
     /// Output files of expired transactions, removed by this pass.
     pub removed_files: Vec<String>,
     pub open_records: usize,
+    pub unattempted_records: usize,
     pub pruned_tx_finals: Vec<String>,
     pub next_cleanup_at_ms: Option<u64>,
 }
@@ -441,9 +442,14 @@ impl Driver {
             .filter(|record| record.is_open())
             .map(|record| record.tx_final.clone())
             .collect::<HashSet<_>>();
+        let queried_membership = records
+            .iter()
+            .filter(|record| record.needs_membership())
+            .map(|record| record.tx_final.clone())
+            .collect::<HashSet<_>>();
         let mut commitments = HashSet::new();
         let mut nullifiers = HashSet::new();
-        for record in records.iter().filter(|record| record.is_open()) {
+        for record in records.iter().filter(|record| record.needs_membership()) {
             commitments.extend(decode_hashes(&record.created)?);
             nullifiers.extend(decode_hashes(&record.nullifiers)?);
         }
@@ -455,9 +461,35 @@ impl Driver {
                 }
             }
         }
-        if commitments.is_empty() && nullifiers.is_empty() {
+        let membership = if !commitments.is_empty()
+            || !nullifiers.is_empty()
+            || !queried_membership.is_empty()
+        {
+            Some(self.deps.synchronizer.fetch_membership_with_nullifiers(
+                &settings.synchronizer_api_url,
+                &commitments.into_iter().collect::<Vec<_>>(),
+                &nullifiers.into_iter().collect::<Vec<_>>(),
+            )?)
+        } else {
+            None
+        };
+        let expiry_block = match membership.as_ref() {
+            Some(membership) => Some(membership.block_number),
+            None if !queried_transactions.is_empty() => Some(
+                self.deps
+                    .synchronizer
+                    .fetch_head(&settings.synchronizer_api_url)?
+                    .block_number,
+            ),
+            None => None,
+        };
+        let Some(expiry_block) = expiry_block else {
             let outcome = SettleOutcome {
                 open_records: records.iter().filter(|record| record.is_open()).count(),
+                unattempted_records: records
+                    .iter()
+                    .filter(|record| record.is_open() && !record.needs_membership())
+                    .count(),
                 ..SettleOutcome::default()
             };
             let listing = if all_objects {
@@ -466,13 +498,8 @@ impl Driver {
                 Vec::new()
             };
             return Ok((outcome, listing));
-        }
+        };
 
-        let membership = self.deps.synchronizer.fetch_membership_with_nullifiers(
-            &settings.synchronizer_api_url,
-            &commitments.into_iter().collect::<Vec<_>>(),
-            &nullifiers.into_iter().collect::<Vec<_>>(),
-        )?;
         let mut relayer_jobs = HashMap::new();
         for record in &records {
             let Some(job_id) = record
@@ -502,6 +529,12 @@ impl Driver {
             .iter_mut()
             .filter(|record| record.is_open() && queried_transactions.contains(&record.tx_final))
         {
+            let record_membership = membership
+                .as_ref()
+                .filter(|_| queried_membership.contains(&record.tx_final));
+            if record.needs_membership() && record_membership.is_none() {
+                continue;
+            }
             let before = record.clone();
             if let Some(job) = relayer_jobs.get(&record.tx_final) {
                 if job.tx_hash.is_some() {
@@ -515,24 +548,28 @@ impl Driver {
                     );
                 }
             }
-            let created = decode_hashes(&record.created)?;
-            let spent = decode_hashes(&record.nullifiers)?;
-            let landed = created
-                .iter()
-                .all(|commitment| membership.created_objects.contains(commitment))
-                && spent
+            let landed = if let Some(membership) = record_membership {
+                let created = decode_hashes(&record.created)?;
+                let spent = decode_hashes(&record.nullifiers)?;
+                created
                     .iter()
-                    .all(|nullifier| membership.on_chain_nullifiers.contains(nullifier));
+                    .all(|commitment| membership.created_objects.contains(commitment))
+                    && spent
+                        .iter()
+                        .all(|nullifier| membership.on_chain_nullifiers.contains(nullifier))
+            } else {
+                false
+            };
             if landed {
                 record.state = TransactionState::Landed;
                 record.settled_at_ms = Some(settled_at_ms);
-            } else if grounding_aged_out(membership.block_number, record.grounding_block) {
+            } else if grounding_aged_out(expiry_block, record.grounding_block) {
                 record.state = TransactionState::Expired;
                 record.reason = Some(format!(
                     "grounding block {} is more than {} blocks behind the synchronizer head {}",
                     record.grounding_block,
                     txlib::MAX_STATE_ROOT_AGE_BLOCKS,
-                    membership.block_number
+                    expiry_block
                 ));
                 record.settled_at_ms = Some(settled_at_ms);
                 let removed = self.remove_unknown_outputs(record)?;
@@ -544,6 +581,10 @@ impl Driver {
             }
         }
         outcome.open_records = records.iter().filter(|record| record.is_open()).count();
+        outcome.unattempted_records = records
+            .iter()
+            .filter(|record| record.is_open() && !record.needs_membership())
+            .count();
 
         let mut entries = load_object_files(&self.paths)?;
         let record_index = RecordIndex::new(&records);
@@ -553,10 +594,17 @@ impl Driver {
             let nullifier = object_nullifier_hash(&entry.record.obj).ok();
             let status = match entry.record.status {
                 FileStatus::Nullified => FileStatus::Nullified,
-                _ if nullifier.is_some_and(|n| membership.on_chain_nullifiers.contains(&n)) => {
+                _ if membership.as_ref().is_some_and(|membership| {
+                    nullifier.is_some_and(|n| membership.on_chain_nullifiers.contains(&n))
+                }) =>
+                {
                     FileStatus::Nullified
                 }
-                FileStatus::Unknown if membership.created_objects.contains(&commitment) => {
+                FileStatus::Unknown
+                    if membership.as_ref().is_some_and(|membership| {
+                        membership.created_objects.contains(&commitment)
+                    }) =>
+                {
                     FileStatus::Live
                 }
                 status => status,

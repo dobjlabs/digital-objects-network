@@ -133,4 +133,9 @@ impl TransactionRecord {
     pub fn is_open(&self) -> bool {
         !self.state.is_terminal()
     }
+
+    pub fn needs_membership(&self) -> bool {
+        self.is_open()
+            && (self.submit_attempted_at_ms.is_some() || self.state == TransactionState::Submitted)
+    }
 }

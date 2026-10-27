@@ -98,8 +98,8 @@ An action goes through four stages, each its own driver call: `prove` (hold
 the inputs, fetch the grounding witness, prove, shrink), `record` (write the
 outputs as `unknown`, the payload and the record under
 `~/.dobj/transactions/<txFinal>/`), `submit` (post the payload to the relayer)
-and `settle` (read the synchronizer's membership for every open record and
-decide). The record is the durable state: `recorded` (proved, not yet posted),
+and `settle` (query membership for attempted transactions and check only
+head-based expiry for never-submitted records). The record is the durable state: `recorded` (proved, not yet posted),
 `submitted` (the relayer holds a job; `relayerJobId`, and `txHash` once
 broadcast), then `landed` (outputs `live`, inputs `nullified`) or `expired`
 (the synchronizer head is more than `MAX_STATE_ROOT_AGE_BLOCKS` past the
@@ -111,9 +111,14 @@ have been broadcast, and only the chain decides.
 Clients choose when to prove and first submit transactions. A client that
 wants two proofs in flight and submissions batched runs `POST /proof-jobs` and `POST /transactions/submit` itself; the
 built-in run is one composition of the same stages. Settlement runs in the
-daemon: a task makes one pass whenever a record is written and every
-`SETTLE_INTERVAL` while any record is open, and `GET /objects` runs the same
-pass extended to every object file before listing. An object listing shows an
+daemon: a task wakes when transaction state changes. While any submission is
+unresolved it repeats every 1.5 seconds; when only never-submitted records are
+open it checks the head every 30 seconds. Submission failures wake the task
+so retry handling starts promptly. A transaction that acquires a submission
+attempt during a head-only query waits for the next membership pass before
+settlement can decide its outcome. `GET /objects` still reconciles every object
+file before listing, so explicit inventory refreshes can query membership even
+when no transaction has been submitted. An object listing shows an
 `unknown` output of a `submitted` transaction as `pending`, with the
 transaction's `txHash`. Object files also retain their known creation hash, so it stays available after the transaction record is pruned.
 

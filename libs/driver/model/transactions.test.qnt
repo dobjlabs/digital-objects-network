@@ -446,4 +446,37 @@ module transactions_tests {
     .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1)).then(submit(1))
     .then(prune(1)).fail()
 
+
+  run mixedQueriesRequestMembershipOnlyForAttemptedRecordsTest = init
+    .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1)).then(submit(1))
+    .then(startProofWith(2, Set(2), Set(4))).then(finishProof(2)).then(querySettlement)
+    .expect(all {
+      node.settlement.transactions == Set(1, 2),
+      node.settlement.membershipTransactions == Set(1),
+      safety,
+    })
+    .then(applySettlement)
+    .expect(all { node.records.get(1).state == Submitted, node.records.get(2).state == Recorded, safety })
+
+  run headOnlySnapshotWaitsForMembershipAfterConcurrentSubmissionTest = init
+    .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1)).then(querySettlement)
+    .expect(node.settlement.membershipTransactions == Set())
+    .then(submitWith(1, false, ResponseLost)).then(chainLand(1))
+    .then(chainAdvance).then(chainAdvance).then(chainAdvance).then(applySettlement)
+    .expect(all {
+      node.records.get(1).state == Recorded,
+      node.records.get(1).attempted,
+      node.objects.get(3).status == Unknown,
+      safety,
+    })
+    .then(settle)
+    .expect(all { node.records.get(1).state == Landed, node.objects.get(3).status == Live, safety })
+
+  run headOnlyQueryExpiresAnUntouchedRecordTest = init
+    .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1))
+    .then(chainAdvance).then(chainAdvance).then(chainAdvance).then(querySettlement)
+    .expect(node.settlement.membershipTransactions == Set())
+    .then(applySettlement)
+    .expect(all { node.records.get(1).state == Expired, node.objects.keys() == Set(1, 2), safety })
+
 }

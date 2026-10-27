@@ -13,8 +13,9 @@ use wire_types::transactions::{TransactionRecord, TransactionState};
 
 use crate::events::{Event, EventHub};
 
-/// Interval between settlement passes while transactions remain open.
+/// Interval between settlement passes while submissions remain unresolved.
 pub const SETTLE_INTERVAL: Duration = Duration::from_millis(1500);
+pub const UNATTEMPTED_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 
 pub struct Settler {
     driver: Arc<Driver>,
@@ -143,8 +144,10 @@ impl Settler {
 }
 
 fn next_pass_delay(outcome: &SettleOutcome, current_time_ms: u64) -> Option<Duration> {
-    if outcome.open_records > 0 {
+    if outcome.open_records > outcome.unattempted_records {
         Some(SETTLE_INTERVAL)
+    } else if outcome.open_records > 0 {
+        Some(UNATTEMPTED_CHECK_INTERVAL)
     } else {
         outcome
             .next_cleanup_at_ms
@@ -284,6 +287,41 @@ mod tests {
             next_pass_delay(&outcome, 7000),
             Some(Duration::from_millis(1))
         );
+    }
+
+    #[test]
+    fn submission_errors_wake_the_settler() {
+        use driver::{DriverDeps, DriverPaths, Hash};
+        use futures_util::FutureExt;
+        let home = tempfile::tempdir().unwrap();
+        let paths = DriverPaths::from_dobj_root(home.path());
+        let driver =
+            Arc::new(Driver::open(paths.clone(), DriverDeps::load(&paths).unwrap()).unwrap());
+        let events = EventHub::new();
+        let services = crate::state::Services {
+            settler: Arc::new(Settler::new(driver.clone(), events.clone())),
+            driver,
+            events,
+            runs: crate::runs::RunRegistry::default(),
+            proof_jobs: crate::proof_jobs::ProofJobRegistry::default(),
+        };
+        assert!(services.submit_transaction(&Hash::default()).is_err());
+        assert!(services.settler.wake.notified().now_or_never().is_some());
+    }
+
+    #[test]
+    fn staged_transactions_poll_slowly_until_submission_is_attempted() {
+        let mut outcome = SettleOutcome {
+            open_records: 2,
+            unattempted_records: 2,
+            ..Default::default()
+        };
+        assert_eq!(
+            next_pass_delay(&outcome, 0),
+            Some(UNATTEMPTED_CHECK_INTERVAL)
+        );
+        outcome.unattempted_records = 1;
+        assert_eq!(next_pass_delay(&outcome, 0), Some(SETTLE_INTERVAL));
     }
 
     #[test]
