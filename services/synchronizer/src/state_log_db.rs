@@ -11,8 +11,11 @@ use sqlx::{
 use crate::{
     container_db::{db_bytes_to_hash, hash_to_db_bytes},
     don_state::{DonState, ExecutionBlock, StateMetadata, StateRoots},
-    state_machine::DerivedSlot,
+    state_machine::{DerivedSlot, TxStatus},
 };
+
+/// Longest error message stored in `tx_statuses`, in characters.
+const MAX_STORED_ERROR_CHARS: usize = 256;
 
 /// A state loaded from Postgres with the slot whose execution block it was derived at.
 #[derive(Debug, Clone, Copy)]
@@ -137,6 +140,26 @@ impl StateLogDb {
             CREATE INDEX IF NOT EXISTS created_index_slot_idx
                 ON created_index(slot)
             "#,
+            // One row per blob of each target transaction of a committed slot.
+            r#"
+            CREATE TABLE IF NOT EXISTS tx_statuses (
+                slot INTEGER NOT NULL REFERENCES slots(slot) ON DELETE CASCADE,
+                tx_hash BYTEA NOT NULL,
+                tx_blob_index INTEGER NOT NULL,
+                tx_final BYTEA NULL,
+                error TEXT NULL,
+                PRIMARY KEY (tx_hash, tx_blob_index)
+            )
+            "#,
+            r#"
+            CREATE INDEX IF NOT EXISTS tx_statuses_slot_idx
+                ON tx_statuses(slot)
+            "#,
+            r#"
+            CREATE INDEX IF NOT EXISTS tx_statuses_tx_final_idx
+                ON tx_statuses(tx_final)
+                WHERE tx_final IS NOT NULL
+            "#,
         ];
 
         for stmt in statements {
@@ -242,8 +265,8 @@ impl StateLogDb {
     }
 
     /// Commit one new slot as the new highest slot, writing
-    /// its created-index rows in the same transaction so the index is always
-    /// consistent with the committed state.
+    /// its created-index rows and the statuses of its target transactions' blobs in the same
+    /// transaction so both are always consistent with the committed state.
     ///
     /// Duplicate slot inserts are treated as logic bugs and must fail loudly.
     pub async fn commit_slot(
@@ -251,6 +274,7 @@ impl StateLogDb {
         slot: u32,
         block_root: Option<B256>,
         derived: Option<&DerivedSlot>,
+        tx_statuses: &[TxStatus],
     ) -> Result<()> {
         let state = derived.map(|derived| &derived.state);
         let mut tx = self.pool.begin().await?;
@@ -304,6 +328,28 @@ impl StateLogDb {
             .with_context(|| {
                 format!("inserting created_index row for {commitment:#} at slot {slot}")
             })?;
+        }
+
+        for tx_status in tx_statuses {
+            for (tx_blob_index, blob_status) in tx_status.blobs.iter().enumerate() {
+                sqlx::query(
+                    "INSERT INTO tx_statuses(slot, tx_hash, tx_blob_index, tx_final, error) \
+                     VALUES ($1, $2, $3, $4, $5)",
+                )
+                .bind(slot as i32)
+                .bind(tx_status.tx_hash.as_slice().to_vec())
+                .bind(tx_blob_index as i32)
+                .bind(blob_status.tx_final.map(hash_to_db_bytes))
+                .bind(blob_status.error.as_deref().map(cap_error))
+                .execute(&mut *tx)
+                .await
+                .with_context(|| {
+                    format!(
+                        "inserting tx_statuses row for tx {} blob {tx_blob_index} at slot {slot}",
+                        tx_status.tx_hash
+                    )
+                })?;
+            }
         }
 
         tx.commit().await?;
@@ -408,6 +454,16 @@ impl StateLogDb {
             })
             .collect()
     }
+}
+
+/// Truncate `error` to `MAX_STORED_ERROR_CHARS`, ending a truncated one with "...".
+fn cap_error(error: &str) -> String {
+    if error.chars().count() <= MAX_STORED_ERROR_CHARS {
+        return error.to_string();
+    }
+    let mut capped: String = error.chars().take(MAX_STORED_ERROR_CHARS - 3).collect();
+    capped.push_str("...");
+    capped
 }
 
 fn db_bytes_to_b256(bytes: &[u8]) -> Result<B256> {
@@ -546,6 +602,17 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_cap_error() {
+        let short = "x".repeat(MAX_STORED_ERROR_CHARS);
+        assert_eq!(cap_error(&short), short);
+
+        let long = "\u{e9}".repeat(MAX_STORED_ERROR_CHARS + 1);
+        let capped = cap_error(&long);
+        assert_eq!(capped.chars().count(), MAX_STORED_ERROR_CHARS);
+        assert!(capped.ends_with("..."));
+    }
+
     #[tokio::test]
     #[ignore = "requires local postgres"]
     async fn test_empty_database_has_no_head() -> Result<()> {
@@ -564,7 +631,7 @@ mod tests {
         let (db_name, db_url, admin_url) = test_urls();
         create_db(&db_name, &admin_url).await?;
         let state_log = StateLogDb::connect(&db_url, 5).await?;
-        state_log.commit_slot(5, None, None).await?;
+        state_log.commit_slot(5, None, None, &[]).await?;
 
         assert!(StateLogDb::connect(&db_url, 5).await.is_ok());
         assert!(StateLogDb::connect(&db_url, 4).await.is_err());
@@ -580,7 +647,7 @@ mod tests {
         let state = unique_state(7, 100);
 
         state_log
-            .commit_slot(10, None, Some(&derived(state)))
+            .commit_slot(10, None, Some(&derived(state)), &[])
             .await?;
 
         let head = state_log
@@ -600,13 +667,13 @@ mod tests {
         let (state_log, db_name, admin_url) = fresh_state_log().await?;
         let state = unique_state(7, 100);
         state_log
-            .commit_slot(10, None, Some(&derived(state)))
+            .commit_slot(10, None, Some(&derived(state)), &[])
             .await?;
         // Later slots without an execution block derive no state.
         state_log
-            .commit_slot(11, Some(B256::repeat_byte(11)), None)
+            .commit_slot(11, Some(B256::repeat_byte(11)), None, &[])
             .await?;
-        state_log.commit_slot(12, None, None).await?;
+        state_log.commit_slot(12, None, None, &[]).await?;
 
         let head = state_log
             .slot_state_at_head()
@@ -628,11 +695,11 @@ mod tests {
         let state2 = unique_state(8, 200);
 
         state_log
-            .commit_slot(10, None, Some(&derived(state1)))
+            .commit_slot(10, None, Some(&derived(state1)), &[])
             .await?;
 
         let err = state_log
-            .commit_slot(10, None, Some(&derived(state2)))
+            .commit_slot(10, None, Some(&derived(state2)), &[])
             .await
             .unwrap_err();
         assert!(
@@ -650,10 +717,14 @@ mod tests {
     async fn test_recent_state_roots_query() -> Result<()> {
         let (state_log, db_name, admin_url) = fresh_state_log().await?;
         let h1 = unique_state(5, 10);
-        state_log.commit_slot(1, None, Some(&derived(h1))).await?;
+        state_log
+            .commit_slot(1, None, Some(&derived(h1)), &[])
+            .await?;
 
         let h2 = unique_state(9, 20);
-        state_log.commit_slot(2, None, Some(&derived(h2))).await?;
+        state_log
+            .commit_slot(2, None, Some(&derived(h2)), &[])
+            .await?;
 
         let recent = state_log.recent_state_roots(6).await?;
         assert_eq!(recent, vec![(h2.metadata.state_root, 9)]);
@@ -667,10 +738,14 @@ mod tests {
     async fn test_rollback_rewinds_latest_slot_and_state() -> Result<()> {
         let (state_log, db_name, admin_url) = fresh_state_log().await?;
         let h1 = unique_state(1, 10);
-        state_log.commit_slot(1, None, Some(&derived(h1))).await?;
+        state_log
+            .commit_slot(1, None, Some(&derived(h1)), &[])
+            .await?;
 
         let h2 = unique_state(2, 20);
-        state_log.commit_slot(2, None, Some(&derived(h2))).await?;
+        state_log
+            .commit_slot(2, None, Some(&derived(h2)), &[])
+            .await?;
 
         state_log.rollback_to_slot(1).await?;
 
@@ -701,6 +776,7 @@ mod tests {
                     state: h1,
                     created_added: HashMap::from([(a, 1)]),
                 }),
+                &[],
             )
             .await?;
         let h2 = unique_state(2, 20);
@@ -712,6 +788,7 @@ mod tests {
                     state: h2,
                     created_added: HashMap::from([(b, 2)]),
                 }),
+                &[],
             )
             .await?;
 
