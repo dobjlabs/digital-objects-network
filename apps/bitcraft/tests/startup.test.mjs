@@ -605,7 +605,7 @@ test("the right-hand buttons open the site and Settings; Discord does nothing ye
   ui.document.querySelector("#about-button").click();
   ui.document.querySelector("#settings-button").click();
   assert.deepEqual(opened, [
-    { url: "https://bitcraft.digiobjects.net/", name: "_blank" },
+    { url: "https://bitcraft.sh/", name: "_blank" },
     { url: "http://127.0.0.1:7727/bitcraft/?page=settings", name: "bitcraft-settings" },
   ]);
 });
