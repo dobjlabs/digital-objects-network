@@ -58,7 +58,7 @@ async fn run() -> Result<()> {
     let driver = Arc::new(Driver::open_default()?);
     let web_access = web_access::WebAccess::new(port);
     let events = events::EventHub::new();
-    let runs = RunRegistry::new(max_concurrent_proofs_from_env()?);
+    let runs = RunRegistry::default();
     let settler = Arc::new(Settler::new(driver.clone(), events.clone()));
     let services = Services {
         driver: driver.clone(),
@@ -134,19 +134,6 @@ fn http_port_from_env() -> Result<u16> {
             .with_context(|| format!("invalid DOBJD_PORT={value:?}")),
         Err(std::env::VarError::NotPresent) => Ok(DEFAULT_HTTP_PORT),
         Err(err) => Err(anyhow!("invalid DOBJD_PORT env: {err}")),
-    }
-}
-
-/// Read the run proof limit from `DOBJD_MAX_PROOFS`; default to one.
-fn max_concurrent_proofs_from_env() -> Result<usize> {
-    match std::env::var("DOBJD_MAX_PROOFS") {
-        Ok(value) => value
-            .parse::<usize>()
-            .ok()
-            .filter(|count| *count >= 1)
-            .with_context(|| format!("invalid DOBJD_MAX_PROOFS={value:?}, expected a count >= 1")),
-        Err(std::env::VarError::NotPresent) => Ok(runs::DEFAULT_MAX_CONCURRENT_PROOFS),
-        Err(err) => Err(anyhow!("invalid DOBJD_MAX_PROOFS env: {err}")),
     }
 }
 
