@@ -124,7 +124,7 @@ impl StateMachine {
                         continue;
                     }
                     Ok(None) => "Blob did not contain a valid TxFinalized proof".to_string(),
-                    Err(err) => format!("Failed to parse/verify TxFinalized payload: {err}"),
+                    Err(err) => format!("Failed to parse/verify TxFinalized payload: {err:#}"),
                 };
                 warn!(
                     slot,
@@ -145,7 +145,10 @@ impl StateMachine {
     }
 
     /// Validate one already-parsed payload against the in-progress slot state and
-    /// apply it, or skip it (fail-soft) on a grounding or duplicate violation.
+    /// apply it, or reject it (fail-soft) on a grounding or duplicate violation.
+    ///
+    /// Returns `Ok(None)` when the payload was applied, `Ok(Some(reason))` when it was
+    /// rejected and left the state untouched, and `Err` on a failure that must abort the slot.
     ///
     /// Validation order:
     /// 1. `payload.state_root` must exist in the recent state root window
@@ -293,8 +296,8 @@ impl StateMachine {
                         slot,
                         block_number = block.number,
                         blob_index,
-                        tx_hash = target_tx.status.tx_hash.to_string(),
-                        "rejected blob: {error}"
+                        tx_hash = ?target_tx.status.tx_hash,
+                        "Rejected blob: {error}"
                     );
                     blob_status.error = Some(error);
                 }

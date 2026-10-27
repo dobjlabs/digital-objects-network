@@ -11,7 +11,6 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use hex::FromHex;
 use pod2::middleware::Hash;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -298,7 +297,7 @@ async fn get_tx_status_by_tx_final(
     State(app_state): State<AppState>,
     Path(tx_final): Path<String>,
 ) -> Result<Json<TxStatusResponse>, (StatusCode, String)> {
-    let parsed_tx_final = Hash::from_hex(tx_final.strip_prefix("0x").unwrap_or(&tx_final))
+    let parsed_tx_final = payload::decode_hash_hex(&tx_final)
         .map_err(|err| (StatusCode::BAD_REQUEST, format!("invalid tx_final: {err}")))?;
     let blob = app_state
         .state_log
