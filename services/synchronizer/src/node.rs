@@ -353,29 +353,27 @@ impl Node {
                     .iter()
                     .position(|(vh0, _)| vh0 == vh)
                     .expect("vh exists");
-                match payload::blob::decode_simple_blob(blobs[vh].inner()) {
-                    Ok(bytes) => {
-                        blob_payloads.push(Some((blob_index as u32, bytes)));
-                        blob_statuses.push(BlobStatus::default());
-                        info!(
-                            slot,
-                            blob_index = blob_index,
-                            tx_hash = ?tx.tx_hash,
-                            "Decoded target blob"
-                        );
-                    }
+                let bytes = match payload::blob::decode_simple_blob(blobs[vh].inner()) {
+                    Ok(bytes) => bytes,
                     Err(err) => {
-                        let msg = format!(
-                            "Invalid byte encoding in blob at slot {slot}, blob_index {blob_index}: {err}"
-                        );
-                        warn!("{}", msg);
+                        let error = format!("Invalid byte encoding: {err}");
+                        warn!(slot, blob_index, tx_hash = ?tx.tx_hash, "Skipped blob: {error}");
                         blob_payloads.push(None);
                         blob_statuses.push(BlobStatus {
-                            error: Some(msg),
+                            error: Some(error),
                             ..Default::default()
                         });
+                        continue;
                     }
-                }
+                };
+                blob_payloads.push(Some((blob_index as u32, bytes)));
+                blob_statuses.push(BlobStatus::default());
+                info!(
+                    slot,
+                    blob_index = blob_index,
+                    tx_hash = ?tx.tx_hash,
+                    "Decoded target blob"
+                );
             }
             target_txs.push(TargetTx {
                 blobs: blob_payloads,

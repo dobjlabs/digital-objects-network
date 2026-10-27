@@ -117,35 +117,24 @@ impl StateMachine {
                     parsed.push(None);
                     continue;
                 };
-                match self.proof_parser.parse_blob(&bytes) {
+                let error = match self.proof_parser.parse_blob(&bytes) {
                     Ok(Some(payload)) => {
                         blob_status.tx_final = Some(payload.tx_final);
                         parsed.push(Some((blob_index, payload)));
+                        continue;
                     }
-                    Ok(None) => {
-                        blob_status.error =
-                            Some("Blob did not contain a valid TxFinalized proof".to_string());
-                        parsed.push(None);
-                        info!(
-                            slot,
-                            block_number,
-                            blob_index,
-                            "Blob did not contain a valid TxFinalized proof; skipping"
-                        );
-                    }
-                    Err(err) => {
-                        blob_status.error =
-                            Some(format!("Failed to parse/verify TxFinalized payload: {err}"));
-                        parsed.push(None);
-                        warn!(
-                            slot,
-                            block_number,
-                            blob_index,
-                            ?err,
-                            "Failed to parse/verify TxFinalized payload; skipping blob"
-                        );
-                    }
-                }
+                    Ok(None) => "Blob did not contain a valid TxFinalized proof".to_string(),
+                    Err(err) => format!("Failed to parse/verify TxFinalized payload: {err}"),
+                };
+                warn!(
+                    slot,
+                    block_number,
+                    blob_index,
+                    tx_hash = ?status.tx_hash,
+                    "Skipped blob: {error}"
+                );
+                blob_status.error = Some(error);
+                parsed.push(None);
             }
             txs_parsed.push(TargetTx {
                 blobs: parsed,
