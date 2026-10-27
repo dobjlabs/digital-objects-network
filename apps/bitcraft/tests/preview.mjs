@@ -122,6 +122,7 @@ const server = createServer(async (request, response) => {
     if (path === "/objects/dir") return reply(response, { path: "Bitcraft / objects" });
     if (path === "/objects/unspent") return reply(response, objectsFor(session));
     if (path === "/transactions") return reply(response, transactionsFor(session));
+    if (path === "/proof-jobs") return reply(response, []);
     if (path === "/events") {
       response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store" });
       response.write(": connected\n\n");
@@ -143,7 +144,8 @@ const server = createServer(async (request, response) => {
       return reply(response, { runId: run.runId, createdAtMs: run.createdAtMs, status: "queued" });
     }
     if (path === "/runs") {
-      return reply(response, session.runs.map(runState).filter((state) => !["failed", "succeeded"].includes(state.status)));
+      return reply(response, session.runs.map(runState).filter((state) =>
+        url.searchParams.get("status") !== "active" || !["failed", "succeeded"].includes(state.status)));
     }
     const runPath = path.match(/^\/runs\/([^/]+)(\/events)?$/);
     const run = runPath && session.runs.find((run) => run.runId === runPath[1]);
