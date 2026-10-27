@@ -74,7 +74,7 @@ impl StateMachine {
 
     /// Parse and verify each blob as a `TxFinalized` payload, keeping the per-transaction blob
     /// positions: a blob that is absent or does not parse becomes `None`. Records each parsed
-    /// blob's `tx_final`, and each failure, in `txs_status`.
+    /// blob's `tx_final`, and each failure, in `tx_statuses`.
     ///
     /// Fail-soft: malformed or unverifiable blobs are logged and skipped, never
     /// aborting the slot. Verification happens here once so the parsed payloads
@@ -87,7 +87,7 @@ impl StateMachine {
         txs_blob_payloads: &[TxBlobs<Vec<u8>>],
         slot: u32,
         block_number: u64,
-        txs_status: &mut [TxStatus],
+        tx_statuses: &mut [TxStatus],
     ) -> Vec<TxBlobs<Payload>> {
         let mut txs_parsed = Vec::with_capacity(txs_blob_payloads.len());
         for (tx_idx, blob_payloads) in txs_blob_payloads.iter().enumerate() {
@@ -97,7 +97,7 @@ impl StateMachine {
                     parsed.push(None);
                     continue;
                 };
-                let blob_status = &mut txs_status[tx_idx].blobs[blob_position];
+                let blob_status = &mut tx_statuses[tx_idx].blobs[blob_position];
                 match self.proof_parser.parse_blob(bytes) {
                     Ok(Some(payload)) => {
                         blob_status.tx_final = Some(payload.tx_final);
@@ -274,7 +274,7 @@ impl StateMachine {
         block: ExecutionBlock,
         txs_payloads: &[TxBlobs<Payload>],
         prior_indices: &HashMap<Hash, i64>,
-        txs_status: &mut [TxStatus],
+        tx_statuses: &mut [TxStatus],
     ) -> Result<DerivedSlot> {
         let base_roots = base_state.map_or(StateRoots::empty(), |state| state.roots);
         let base_state_root_count = base_state.map_or(0, |state| state.metadata.state_root_count);
@@ -300,7 +300,7 @@ impl StateMachine {
                     .with_context(|| {
                         format!("applying blob at slot {slot}, blob_index {blob_index}")
                     })?;
-                txs_status[tx_idx].blobs[blob_position].error = rejection;
+                tx_statuses[tx_idx].blobs[blob_position].error = rejection;
             }
         }
 
@@ -425,11 +425,16 @@ mod tests {
         prior_indices: &HashMap<Hash, i64>,
     ) -> DerivedSlot {
         let txs_blob_payloads = [blobs.iter().cloned().map(Some).collect::<Vec<_>>()];
-        let mut txs_status = [TxStatus {
+        let mut tx_statuses = [TxStatus {
             blobs: blobs.iter().map(|_| BlobStatus::default()).collect(),
             ..Default::default()
         }];
-        let parsed = sm.parse_blobs(&txs_blob_payloads, slot, block_meta.number, &mut txs_status);
+        let parsed = sm.parse_blobs(
+            &txs_blob_payloads,
+            slot,
+            block_meta.number,
+            &mut tx_statuses,
+        );
         sm.derive_slot_state(
             base_state,
             recent_state_roots,
@@ -437,7 +442,7 @@ mod tests {
             block_meta,
             &parsed,
             prior_indices,
-            &mut txs_status,
+            &mut tx_statuses,
         )
         .unwrap()
     }

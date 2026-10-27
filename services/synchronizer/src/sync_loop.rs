@@ -238,7 +238,7 @@ async fn handle_missing_slot(node: &Node, slot: u32) -> Result<MissingSlotAction
         slot,
         block_root: None,
         derived: None,
-        txs_status: Vec::new(),
+        tx_statuses: Vec::new(),
     })
     .await?;
     Ok(MissingSlotAction::Applied)

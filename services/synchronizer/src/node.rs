@@ -53,7 +53,7 @@ pub(crate) struct SlotContext {
     txs_blob_payloads: Vec<TxBlobs<Vec<u8>>>,
     /// Status of each target transaction of `payload`, in the same order as
     /// `txs_blob_payloads`.
-    txs_status: Vec<TxStatus>,
+    tx_statuses: Vec<TxStatus>,
 }
 
 /// An execution payload that becomes canonical with a slot's block, together with the beacon
@@ -79,7 +79,7 @@ pub struct ProcessedSlot {
     /// `None` when no execution block became canonical with the slot.
     pub derived: Option<DerivedSlot>,
     /// Status of each target transaction of the slot's execution block.
-    pub txs_status: Vec<TxStatus>,
+    pub tx_statuses: Vec<TxStatus>,
 }
 
 impl Node {
@@ -320,7 +320,7 @@ impl Node {
         &self,
         slot: u32,
         payload: &CanonicalPayload,
-        txs_status: &mut [TxStatus],
+        tx_statuses: &mut [TxStatus],
     ) -> Result<Vec<TxBlobs<Vec<u8>>>> {
         if payload.target_blob_txs.is_empty() {
             debug!(
@@ -370,7 +370,7 @@ impl Node {
                             "Invalid byte encoding in blob at slot {slot}, blob_index {blob_index}: {err}"
                         );
                         warn!("{}", msg);
-                        txs_status[tx_idx].blobs[blob_position].error = Some(msg);
+                        tx_statuses[tx_idx].blobs[blob_position].error = Some(msg);
                         blob_payloads.push(None);
                     }
                 }
@@ -392,9 +392,9 @@ impl Node {
         let payload = self
             .canonical_payload(beacon_block_header, beacon_block, prev_block)
             .await?;
-        let (txs_blob_payloads, txs_status) = match &payload {
+        let (txs_blob_payloads, tx_statuses) = match &payload {
             Some(payload) => {
-                let mut txs_status: Vec<_> = payload
+                let mut tx_statuses: Vec<_> = payload
                     .target_blob_txs
                     .iter()
                     .map(|tx| TxStatus {
@@ -407,9 +407,9 @@ impl Node {
                     })
                     .collect();
                 let txs_blob_payloads = self
-                    .fetch_target_blobs(slot, payload, &mut txs_status)
+                    .fetch_target_blobs(slot, payload, &mut tx_statuses)
                     .await?;
-                (txs_blob_payloads, txs_status)
+                (txs_blob_payloads, tx_statuses)
             }
             None => (Vec::new(), Vec::new()),
         };
@@ -418,7 +418,7 @@ impl Node {
             beacon_block_root: beacon_block_header.root,
             payload,
             txs_blob_payloads,
-            txs_status,
+            tx_statuses,
         })
     }
 
@@ -437,11 +437,11 @@ impl Node {
         slot: u32,
         block: ExecutionBlock,
         txs_blob_payloads: &[TxBlobs<Vec<u8>>],
-        txs_status: &mut [TxStatus],
+        tx_statuses: &mut [TxStatus],
     ) -> Result<DerivedSlot> {
         let txs_parsed =
             self.state_machine
-                .parse_blobs(txs_blob_payloads, slot, block.number, txs_status);
+                .parse_blobs(txs_blob_payloads, slot, block.number, tx_statuses);
         let candidates: Vec<Hash> = txs_parsed
             .iter()
             .flatten()
@@ -456,14 +456,14 @@ impl Node {
             block,
             &txs_parsed,
             &prior_indices,
-            txs_status,
+            tx_statuses,
         )
     }
 
     /// Derive the slot from a fetched `SlotContext` against the committed state. Reads the
     /// sync database but makes no network calls.
     pub(crate) async fn derive_from_context(&self, slot_ctx: SlotContext) -> Result<ProcessedSlot> {
-        let mut txs_status = slot_ctx.txs_status;
+        let mut tx_statuses = slot_ctx.tx_statuses;
         let Some(payload) = slot_ctx.payload else {
             info!(
                 slot = slot_ctx.slot,
@@ -473,7 +473,7 @@ impl Node {
                 slot: slot_ctx.slot,
                 block_root: Some(slot_ctx.beacon_block_root),
                 derived: None,
-                txs_status,
+                tx_statuses,
             });
         };
         let base_state = self.state_log.don_state_at_head().await?;
@@ -511,7 +511,7 @@ impl Node {
                 slot_ctx.slot,
                 payload.execution_block,
                 &slot_ctx.txs_blob_payloads,
-                &mut txs_status,
+                &mut tx_statuses,
             )
             .await?;
 
@@ -519,7 +519,7 @@ impl Node {
             slot: slot_ctx.slot,
             block_root: Some(slot_ctx.beacon_block_root),
             derived: Some(derived),
-            txs_status,
+            tx_statuses,
         })
     }
 
