@@ -99,7 +99,13 @@ async function page(context, options = {}) {
           return respond(object);
         }
         if (parsed.pathname === "/settings") return respond(backend.settings ?? {});
+        const raw = parsed.pathname.match(/^\/objects\/([^/]+)\/raw$/);
+        if (raw) {
+          const object = backend.objects.find((candidate) => candidate.fileName === decodeURIComponent(raw[1]));
+          return { ok: Boolean(object), status: object ? 200 : 404, text: async () => JSON.stringify(object) };
+        }
         if (parsed.pathname === "/actions") return respond(backend.actions);
+        if (parsed.pathname === "/classes") return respond(backend.classes ?? []);
         if (parsed.pathname === "/actions/run") {
           const input = JSON.parse(init.body).input;
           backend.posts.push(input);
@@ -193,27 +199,28 @@ test("first launch waits for proof, confirmation, and a live knife, then reveals
   assert.equal(ui.app.inert, true);
   assert.equal(ui.document.querySelector("#status-bar").closest("[hidden], [inert]"), null,
     "the status bar shows under the setup screen");
-  assert.match(ui.title(), /Creating your first pocketknife/);
-  assert.equal(ui.progress(), 1);
-  assert.equal(ui.document.querySelector("#startup-progress-label").textContent, "Step 2 of 3");
-  assert.match(ui.document.querySelector("#startup-progress").getAttribute("aria-valuetext"), /Step 2 of 3.*Creating your first pocketknife/);
+  assert.match(ui.title(), /Loading cryptography engine/);
+  assert.equal(ui.progress(), 2);
+  assert.equal(ui.document.querySelector("#startup-progress-label").hidden, true, "no step number while setup works");
+  assert.equal(ui.document.querySelector("#startup-description").hidden, true, "no description while setup works");
+  assert.match(ui.document.querySelector("#startup-progress").getAttribute("aria-valuetext"), /Step 3 of 4.*Loading cryptography engine/);
   assert.equal(ui.jobs().length, 0);
   await ui.publish("run-1", "generateProof");
-  assert.equal(ui.progress(), 1, "starting proof generation does not complete a milestone");
+  assert.equal(ui.progress(), 2, "starting proof generation does not complete a milestone");
   ui.backend.objects = [knife("pending")];
   await ui.publish("run-1", "committing");
-  assert.match(ui.title(), /Waiting for confirmation/);
-  assert.equal(ui.document.querySelector("#startup-progress-label").textContent, "Step 3 of 3");
-  assert.match(ui.document.querySelector("#startup-progress").getAttribute("aria-valuetext"), /Step 3 of 3.*Waiting for confirmation/);
-  assert.equal(ui.progress(), 2);
+  assert.match(ui.title(), /Connecting to Bitcraft network/);
+  assert.equal(ui.document.querySelector("#startup-progress-label").hidden, true);
+  assert.match(ui.document.querySelector("#startup-progress").getAttribute("aria-valuetext"), /Step 4 of 4.*Connecting to Bitcraft network/);
+  assert.equal(ui.progress(), 3);
   assert.equal(ui.app.hidden, true);
   await ui.publish("run-1", "succeeded");
   assert.equal(ui.sources[0].closed, true, "the stream closing delivers the terminal state");
   assert.equal(ui.splash.hidden, false, "terminal success alone does not make the knife usable");
-  assert.equal(ui.progress(), 2, "confirmation requires a live knife");
+  assert.equal(ui.progress(), 3, "confirmation requires a live knife");
   await ui.complete();
   assert.equal(ui.splash.hidden, true);
-  assert.equal(ui.progress(), 3);
+  assert.equal(ui.progress(), 4);
   assert.equal(ui.app.hidden, false);
   assert.equal(ui.app.inert, false);
   assert.equal(ui.jobs().length, 0);
@@ -227,31 +234,31 @@ test("first launch waits for proof, confirmation, and a live knife, then reveals
 test("each startup step stays up for its minimum time, even when the work behind it is done", async (context) => {
   const ui = await page(context, { holdSteps: true });
   assert.equal(ui.backend.posts.length, 1, "the work goes ahead while a step is held");
-  assert.match(ui.title(), /Opening Bitcraft/);
-  assert.equal(ui.progress(), 0);
+  assert.match(ui.title(), /Loading inventory/);
+  assert.equal(ui.progress(), 1);
   assert.equal(ui.holds.size, 1);
   assert.equal([...ui.holds.values()][0].delay, 1000);
   await ui.elapse();
-  assert.match(ui.title(), /Creating your first pocketknife/);
-  assert.equal(ui.progress(), 1);
+  assert.match(ui.title(), /Loading cryptography engine/);
+  assert.equal(ui.progress(), 2);
   ui.backend.objects = [knife("pending")];
   await ui.publish("run-1", "committing");
-  assert.match(ui.title(), /Creating your first pocketknife/, "confirmation waits for the proof step's minimum");
+  assert.match(ui.title(), /Loading cryptography engine/, "confirmation waits for the proof step's minimum");
   await ui.elapse();
-  assert.match(ui.title(), /Waiting for confirmation/);
-  assert.equal(ui.progress(), 2);
+  assert.match(ui.title(), /Connecting to Bitcraft network/);
+  assert.equal(ui.progress(), 3);
   await ui.complete();
   assert.equal(ui.splash.hidden, false, "the inventory waits for the confirmation step's minimum");
   assert.equal(ui.app.hidden, true);
   await ui.elapse();
   assert.equal(ui.splash.hidden, true);
   assert.equal(ui.app.hidden, false);
-  assert.equal(ui.progress(), 3);
+  assert.equal(ui.progress(), 4);
 });
 
 test("a held startup step skips steps the startup did not reach", async (context) => {
   const ui = await page(context, { holdSteps: true, objects: [knife()] });
-  assert.match(ui.title(), /Opening Bitcraft/);
+  assert.match(ui.title(), /Loading inventory/);
   assert.equal(ui.app.hidden, true, "an existing knife still shows the first step for its minimum");
   await ui.elapse();
   assert.equal(ui.app.hidden, false);
@@ -261,34 +268,30 @@ test("a held startup step skips steps the startup did not reach", async (context
 test("errors and retries replace a held startup step at once", async (context) => {
   const ui = await page(context, { holdSteps: true, inventoryError: true });
   assert.match(ui.title(), /could not finish setup/, "an error on the step on display is not held back");
-  assert.equal(ui.progress(), 0);
+  assert.equal(ui.progress(), 1);
   ui.backend.inventoryError = false;
   await ui.retry();
-  assert.match(ui.title(), /Opening Bitcraft/);
+  assert.match(ui.title(), /Loading inventory/);
   assert.equal(ui.holds.size, 1, "retry restarts the first step's minimum");
   await ui.elapse();
-  assert.match(ui.title(), /Creating your first pocketknife/);
+  assert.match(ui.title(), /Loading cryptography engine/);
   await ui.publish("run-1", "failed", { error: "Proof failed" });
   assert.match(ui.document.querySelector("#startup-error").textContent, /Proof failed/);
   assert.equal(ui.document.querySelector("#startup-actions").hidden, false);
   await ui.retry();
-  assert.match(ui.title(), /Opening Bitcraft/, "retry goes back to the first step without waiting");
-  assert.equal(ui.progress(), 0);
+  assert.match(ui.title(), /Loading inventory/, "retry goes back to the first step without waiting");
+  assert.equal(ui.progress(), 1);
 });
 
-test("the pocketknife steps show the pocketknife's icon from the presentation pack", async (context) => {
-  const ui = await page(context, {
-    presentation: {
-      "index.json": { packs: ["bitcraft/pack.json"] },
-      "bitcraft/pack.json": { format: 1, plugin: "bitcraft", classes: { Pocketknife: { icon: "assets/pocketknife.png" } } },
-    },
-  });
-  const icon = ui.document.querySelector("#startup-class-icon");
-  assert.match(ui.title(), /Creating your first pocketknife/);
-  assert.equal(icon.hidden, false);
-  assert.equal(icon.src, "http://127.0.0.1:7727/bitcraft/presentation/bitcraft/assets/pocketknife.png");
+test("every startup step shows the Bitcraft logo", async (context) => {
+  const ui = await page(context);
+  const logos = () => [...ui.document.querySelectorAll("#startup-screen img")].map((image) => image.src);
+  const logo = ["http://127.0.0.1:7727/bitcraft/assets/bitcraft-logo.png"];
+  assert.match(ui.title(), /Loading cryptography engine/);
+  assert.deepEqual(logos(), logo);
   await ui.publish("run-1", "failed", { error: "Proof failed" });
-  assert.equal(icon.hidden, true, "the setup error shows a blank page");
+  assert.match(ui.title(), /could not finish setup/);
+  assert.deepEqual(logos(), logo);
 });
 
 test("an existing live knife opens inventory immediately, including a held knife", async (context) => {
@@ -303,8 +306,8 @@ for (const status of ["pending", "unknown"]) {
     const ui = await page(context, { objects: [knife(status)] });
     assert.deepEqual(ui.backend.discards, ["pocketknife.dobj"]);
     assert.equal(ui.backend.posts.length, 1);
-    assert.match(ui.title(), /Creating your first pocketknife/);
-    assert.equal(ui.progress(), 1, "the discarded knife does not count as a completed proof");
+    assert.match(ui.title(), /Loading cryptography engine/);
+    assert.equal(ui.progress(), 2, "the discarded knife does not count as a completed proof");
     assert.equal(ui.document.querySelectorAll(".object-row").length, 1, "only the guide is listed");
     await ui.complete();
     assert.equal(ui.app.hidden, false);
@@ -316,7 +319,7 @@ test("a stale knife is kept when the synchronizer cannot be reached", async (con
   const ui = await page(context, { objects: [knife("pending")], syncError: true });
   assert.deepEqual(ui.backend.discards, []);
   assert.equal(ui.backend.posts.length, 0);
-  assert.match(ui.document.querySelector("#startup-error").textContent, /Could not check your pocketknife on the network/);
+  assert.match(ui.document.querySelector("#startup-error").textContent, /Could not reach the Bitcraft network/);
   assert.equal(ui.document.querySelector("#startup-actions").hidden, false);
   ui.backend.syncError = false;
   ui.backend.objects = [knife()];
@@ -333,7 +336,7 @@ for (const status of ["queued", "generateProof", "committing"]) {
     assert.equal(ui.backend.posts.length, 0);
     assert.equal(ui.jobs().length, 0);
     assert.equal(ui.app.hidden, true);
-    assert.equal(ui.progress(), status === "committing" ? 2 : 1);
+    assert.equal(ui.progress(), status === "committing" ? 3 : 2);
     await ui.complete("resumed");
     assert.equal(ui.app.hidden, false);
     assert.equal(ui.jobs().length, 0);
@@ -349,7 +352,7 @@ test("objects that change after setup still flash", async (context) => {
   ui.backend.objects = [knife(), knife("pending", { fileName: "second-knife.dobj" })];
   await ui.publish("run-1", "committing");
   assert.deepEqual(
-    [...ui.document.querySelectorAll(".object-row.flashing")].map((row) => row.title),
+    [...ui.document.querySelectorAll(".object-row.flashing")].map((row) => row.dataset.fileName),
     ["second-knife.dobj"],
   );
 });
@@ -395,8 +398,8 @@ test("POST failure offers retry but no way into inventory", async (context) => {
     [...ui.document.querySelectorAll("#startup-actions button")].map((button) => button.textContent),
     ["Try again", "Copy error"],
   );
-  assert.match(ui.document.querySelector("#startup-description").textContent, /opens once you have a starter pocketknife/);
-  assert.equal(ui.progress(), 1);
+  assert.match(ui.document.querySelector("#startup-description").textContent, /opens once setup finishes/);
+  assert.equal(ui.progress(), 2);
   ui.backend.postError = false;
   await ui.retry();
   assert.equal(ui.backend.posts.length, 2);
@@ -429,13 +432,13 @@ test("inventory lookup failure has a recoverable setup screen", async (context) 
   const ui = await page(context, { inventoryError: true });
   assert.equal(ui.backend.posts.length, 0);
   assert.equal(ui.document.querySelector("#startup-actions").hidden, false);
-  assert.equal(ui.progress(), 0, "a failed inventory read does not complete preparation");
+  assert.equal(ui.progress(), 1, "a failed inventory read does not complete preparation");
   assert.equal(ui.document.querySelector("#startup-error").textContent, "/objects/unspent: HTTP 503",
     "an HTTP error is shown as it is, since dobjd answered");
   ui.backend.inventoryError = false;
   await ui.retry();
   assert.equal(ui.backend.posts.length, 1);
-  assert.equal(ui.progress(), 1);
+  assert.equal(ui.progress(), 2);
 });
 
 for (const status of ["pending", "unknown"]) {
@@ -449,7 +452,7 @@ for (const status of ["pending", "unknown"]) {
     await ui.retry();
     assert.deepEqual(ui.backend.discards, ["pocketknife.dobj"]);
     assert.equal(ui.backend.posts.length, 2);
-    assert.match(ui.title(), /Creating your first pocketknife/);
+    assert.match(ui.title(), /Loading cryptography engine/);
     await ui.complete("run-2");
     assert.equal(ui.app.hidden, false);
   });
@@ -462,23 +465,26 @@ test("a failed commit retains its completed proof milestone and retry checks pro
     error: "Submission failed",
     progress: [{ phase: "generateProof", status: "done", message: "Proof generation complete" }],
   });
-  assert.equal(ui.progress(), 2, "a missed committing event still preserves the completed proof");
-  assert.equal(ui.document.querySelector("#startup-progress-label").textContent, "Step 3 of 3");
+  assert.equal(ui.progress(), 3, "a missed committing event still preserves the completed proof");
+  const label = ui.document.querySelector("#startup-progress-label");
+  assert.equal(label.hidden, false, "an error says where setup stopped");
+  assert.equal(label.textContent, "Stopped at step 4 of 4");
+  assert.equal(ui.document.querySelector("#startup-description").hidden, false);
   assert.match(ui.document.querySelector("#startup-progress").getAttribute("aria-valuetext"), /could not finish setup/);
   assert.equal(ui.document.querySelector("#startup-actions").hidden, false);
   await ui.tick();
-  assert.equal(ui.progress(), 2);
+  assert.equal(ui.progress(), 3);
   await ui.retry();
   assert.equal(ui.backend.posts.length, 2);
-  assert.equal(ui.progress(), 1, "the new attempt has not completed its proof");
+  assert.equal(ui.progress(), 2, "the new attempt has not completed its proof");
 });
 
 test("a missing recipe gives an explanation and retry picks up the installed recipe", async (context) => {
   const ui = await page(context, { actions: [] });
   assert.equal(ui.backend.posts.length, 0);
-  assert.match(ui.document.querySelector("#startup-error").textContent, /recipe is unavailable/);
+  assert.match(ui.document.querySelector("#startup-error").textContent, /A recipe Bitcraft needs to start is unavailable/);
   assert.equal(ui.app.hidden, true);
-  assert.equal(ui.progress(), 1);
+  assert.equal(ui.progress(), 2);
   ui.backend.actions = [recipe()];
   await ui.retry();
   assert.equal(ui.backend.posts.length, 1);
@@ -495,7 +501,7 @@ test("a failed progress read clears on the next stream event", async (context) =
   assert.match(ui.document.querySelector("#startup-error").textContent, /Could not check progress: .*HTTP 503/);
   ui.backend.runError = false;
   await ui.publish("run-1", "committing");
-  assert.match(ui.title(), /Waiting for confirmation/);
+  assert.match(ui.title(), /Connecting to Bitcraft network/);
   assert.equal(ui.document.querySelector("#startup-actions").hidden, true);
   await ui.complete();
   assert.equal(ui.app.hidden, false);
@@ -562,7 +568,7 @@ test("an active mutation that outputs a pocketknife prevents duplicate crafting"
     states: new Map([["gather", state("gather", "committing", { action: qname("GatherWood") })]]),
   });
   assert.equal(ui.backend.posts.length, 0);
-  assert.match(ui.title(), /Waiting for confirmation/);
+  assert.match(ui.title(), /Connecting to Bitcraft network/);
   await ui.complete("gather");
   assert.equal(ui.app.hidden, false);
   assert.equal(ui.jobs().length, 1);
@@ -617,6 +623,243 @@ test("the Recipe Info window shows only recipes and runs no startup", async (con
   assert.equal(new URL(ui.dom.window.location.href).searchParams.get("action"), "bitcraft::GatherWood");
 });
 
+test("Recipe Info lists classes, then actions, and shows a class's details and source", async (context) => {
+  const wood = {
+    class: qname("Wood"), hash: "0xwood", description: "Logs.", liveCount: 0,
+    producedBy: [qname("GatherWood"), qname("Missing")], consumedBy: [qname("CraftPocketknife")],
+    predicateSource: "IsWood(state, chain) = OR(\n  IsWoodFromGatherWood(state, chain)\n)",
+  };
+  const other = { ...wood, class: qname("Log", "another-plugin"), producedBy: [], consumedBy: [] };
+  const ui = await page(context, {
+    url: "http://127.0.0.1:7727/bitcraft/?page=recipebook&class=bitcraft::Wood",
+    classes: [wood, other],
+    actions: [recipe(), { ...recipe("GatherWood"), predicateSource: "GatherWood(io, private: wood) = AND(\n  Equal(io, wood)\n)" }],
+  });
+  const { document } = ui;
+  assert.deepEqual([...document.querySelectorAll("#recipe-list > li")]
+    .map((row) => (row.querySelector(".row-text > div") ?? row).textContent),
+  ["Classes", "bitcraft::Wood", "Actions", "bitcraft::CraftPocketknife", "bitcraft::GatherWood"],
+  "another plugin's class is left out");
+  assert.equal(document.querySelector(".recipe-row.selected .reference-summary").textContent, "Logs.");
+  const details = document.querySelector("#recipe-details-body");
+  assert.equal(details.querySelector(".details-title").textContent, "bitcraft::Wood");
+  assert.equal(details.querySelector(".details-meta").textContent, "object class");
+  assert.equal(details.querySelector(".description-text").textContent, "Logs.");
+  assert.deepEqual([...details.querySelectorAll(".reference-link")].map((link) => link.textContent),
+    ["bitcraft::GatherWood", "bitcraft::Missing", "bitcraft::CraftPocketknife"]);
+  const source = [...details.querySelectorAll("details.collapsible-section")]
+    .find((section) => section.querySelector("summary").textContent === "Class Source");
+  assert.equal(source.open, false);
+  assert.equal(source.querySelector("pre").textContent, [
+    "IsWood(",
+    "  state,",
+    "  chain",
+    ") = OR(",
+    "  IsWoodFromGatherWood(state, chain)",
+    ")",
+    "",
+    "// bitcraft::GatherWood",
+    "GatherWood(",
+    "  io,",
+    "private:",
+    "  wood",
+    ") = AND(",
+    "  Equal(io, wood)",
+    ")",
+    "",
+    "// bitcraft::Missing",
+    "// Source not available.",
+  ].join("\n"));
+
+  details.querySelector(".reference-link").click();
+  const address = new URL(ui.dom.window.location.href).searchParams;
+  assert.equal(address.get("action"), "bitcraft::GatherWood");
+  assert.equal(address.get("class"), null);
+  assert.equal(document.querySelector("#recipe-details-body .details-title").textContent, "bitcraft::GatherWood");
+  assert.equal(document.querySelector(".recipe-row.selected .action-name").textContent, "bitcraft::GatherWood");
+});
+
+test("class and action names in the main window's details open them in Recipe Info", async (context) => {
+  const ui = await page(context, {
+    objects: [knife(), { ...knife(), fileName: "second.dobj" }],
+    states: new Map([["job-1", state("job-1", "generateProof", { action: qname("GatherWood") })]]),
+  });
+  const { document } = ui;
+  const press = (element, init = {}) =>
+    element.dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true, ...init }));
+  const opened = [];
+  let referenceWindow = null;
+  ui.dom.window.open = (url, name) => {
+    opened.push({ url: String(url), name });
+    referenceWindow = {
+      closed: false, focused: 0, shown: [], canShow: true, location: { href: String(url) },
+      focus() { this.focused++; },
+      showReferenceEntry(entry) { this.shown.push(entry); return this.canShow; },
+    };
+    return referenceWindow;
+  };
+  const reference = "http://127.0.0.1:7727/bitcraft/?page=recipebook";
+
+  press(document.querySelector('.object-row[data-file-name="pocketknife.dobj"]'));
+  const classLink = document.querySelector("#details-body .class-link");
+  assert.equal(classLink.textContent, "bitcraft::Pocketknife");
+  classLink.click();
+  assert.deepEqual(opened, [{ url: `${reference}&class=bitcraft%3A%3APocketknife`, name: "bitcraft-recipe-info" }]);
+
+  press(document.querySelector('.object-row[data-file-name="second.dobj"]'), { ctrlKey: true });
+  assert.equal(document.querySelectorAll("#details-body .class-link").length, 2, "each selected object's class links");
+  document.querySelectorAll("#details-body .class-link")[1].click();
+  assert.equal(opened.length, 1, "an open Recipe Info window is reused");
+  assert.deepEqual(copy(referenceWindow.shown), [{ kind: "class", name: "bitcraft::Pocketknife" }]);
+  assert.equal(referenceWindow.focused, 1);
+
+  press(ui.jobs()[0]);
+  const actionLink = document.querySelector("#details-body .action-link");
+  assert.equal(actionLink.textContent, "bitcraft::GatherWood");
+  referenceWindow.canShow = false;
+  actionLink.click();
+  assert.equal(opened.length, 1);
+  assert.equal(referenceWindow.location.href, `${reference}&action=bitcraft%3A%3AGatherWood`,
+    "a window that cannot select the entry yet is sent to its address");
+  assert.equal(referenceWindow.focused, 2);
+});
+
+test("Recipe Info links an action's classes to their details", async (context) => {
+  const pocketknife = {
+    class: qname("Pocketknife"), hash: "0xknife", description: "-", liveCount: 0,
+    producedBy: [qname("CraftPocketknife")], consumedBy: [], predicateSource: "",
+  };
+  const ui = await page(context, {
+    url: "http://127.0.0.1:7727/bitcraft/?page=recipebook&action=bitcraft::CraftPocketknife",
+    classes: [pocketknife],
+  });
+  const { document } = ui;
+  const classLink = document.querySelector("#recipe-details-body .class-link");
+  assert.equal(classLink.textContent, "bitcraft::Pocketknife");
+  classLink.click();
+  assert.equal(new URL(ui.dom.window.location.href).searchParams.get("class"), "bitcraft::Pocketknife");
+  assert.equal(document.querySelector("#recipe-details-body .details-title").textContent, "bitcraft::Pocketknife");
+  assert.equal(document.querySelector(".recipe-row.selected").textContent.startsWith("bitcraft::Pocketknife"), true);
+  document.querySelector("#recipe-details-body .action-link").click();
+  assert.equal(document.querySelector("#recipe-details-body .details-title").textContent, "bitcraft::CraftPocketknife");
+});
+
+test("Recipe Info lists summaries and shows where each class and action is defined", async (context) => {
+  const pexe = "/Users/player/.bitcraft/actions/bitcraft.pexe";
+  const wood = {
+    class: qname("Wood"), hash: "0xwood", description: "-", liveCount: 0,
+    producedBy: [], consumedBy: [], predicateSource: "",
+  };
+  const ui = await page(context, {
+    url: "http://127.0.0.1:7727/bitcraft/?page=recipebook&action=bitcraft::CraftPocketknife",
+    classes: [wood],
+    actions: [{ ...recipe(), sourcePath: pexe, description: "Make a knife." }, { ...recipe("GatherWood"), sourcePath: pexe }],
+  });
+  const { document } = ui;
+  assert.deepEqual([...document.querySelectorAll(".reference-summary")].map((line) => line.textContent),
+    ["object class", "Make a knife.", "executable action"]);
+  const definedIn = () => [...document.querySelectorAll("#recipe-details-body .field-table th")]
+    .find((header) => header.textContent === "defined in").nextElementSibling.textContent;
+  assert.equal(definedIn(), pexe);
+  document.querySelectorAll(".recipe-row")[0].dispatchEvent(
+    new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  assert.equal(document.querySelector("#recipe-details-body .details-title").textContent, "bitcraft::Wood");
+  assert.equal(definedIn(), pexe, "a class shows its plugin's file");
+});
+
+test("an object's details leave out its hashes and say when it has no properties", async (context) => {
+  const axe = {
+    fileName: "axe.dobj", class: qname("WoodAxe"), status: "live", contentHash: "0xcontent", classHash: "0xclass",
+    fields: { kvs: [["key", { Raw: "secret" }], ["durability", { Int: "60" }]] },
+  };
+  const ui = await page(context, { objects: [{ ...knife(), contentHash: "0xcontent", classHash: "0xclass" }, axe] });
+  const { document } = ui;
+  const select = (fileName) => document.querySelector(`.object-row[data-file-name="${fileName}"]`)
+    .dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  const labels = () => [...document.querySelectorAll("#details-body .field-table th")].map((header) => header.textContent);
+
+  select("pocketknife.dobj");
+  assert.deepEqual(labels(), ["stable_identifier", "key"]);
+  assert.equal(document.querySelector("#details-body .empty-note").textContent, "No properties to show.");
+
+  select("axe.dobj");
+  assert.deepEqual(labels(), ["stable_identifier", "key", "durability"]);
+  assert.equal(document.querySelector("#details-body .empty-note"), null);
+});
+
+test("View raw opens a window titled with the file's name that shows its stored text", async (context) => {
+  const main = await page(context, { objects: [knife()] });
+  main.document.querySelector('.object-row[data-file-name="pocketknife.dobj"]')
+    .dispatchEvent(new main.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  const link = [...main.document.querySelectorAll("#details-body a")].find((anchor) => anchor.textContent === "View raw");
+  assert.equal(link.href, "http://127.0.0.1:7727/bitcraft/?page=raw&file=pocketknife.dobj");
+  const opened = [];
+  main.dom.window.open = (url, name, features) => {
+    opened.push({ url: String(url), name, features });
+    return null;
+  };
+  link.click();
+  // The test page measures text at 7px a character: "pocketknife.dobj" is
+  // 112px, plus 90px each side.
+  assert.deepEqual(opened, [{ url: link.href, name: "_blank", features: "noopener,popup,width=480,height=420" }],
+    "a short name gets the minimum width");
+  main.document.querySelector('.object-row[data-file-name="pocketknife.dobj"]')
+    .dispatchEvent(new main.dom.window.MouseEvent("dblclick", { bubbles: true }));
+  assert.equal(opened[1].features, "noopener,popup,width=480,height=420");
+  const longName = "bitcraft__miningdrill_e618b29d73604017_d1d8bf5829530d65.dobj";
+  main.backend.objects.push({ ...knife(), fileName: longName });
+  await main.dom.window.reloadObjects();
+  await flush();
+  main.document.querySelector(`.object-row[data-file-name="${longName}"]`)
+    .dispatchEvent(new main.dom.window.MouseEvent("dblclick", { bubbles: true }));
+  assert.equal(opened[2].features, `noopener,popup,width=${longName.length * 7 + 180},height=420`,
+    "a long name widens the window to fit it");
+
+  const ui = await page(context, { url: link.href, objects: [knife()] });
+  const { document } = ui;
+  assert.equal(document.title, "pocketknife.dobj");
+  assert.equal(document.body.classList.contains("secondary-window"), true);
+  assert.equal(document.querySelector("#raw-view").hidden, false);
+  assert.deepEqual(JSON.parse(document.querySelector("#raw-text").textContent), knife());
+  assert.deepEqual(ui.backend.posts, [], "the window runs none of the main window's startup");
+
+  const missing = await page(context, { url: "http://127.0.0.1:7727/bitcraft/?page=raw&file=gone.dobj" });
+  assert.equal(missing.document.querySelector("#raw-text").textContent, "Could not read gone.dobj: HTTP 404");
+});
+
+test("resting on an object row shows its BIT value after a quarter second", async (context) => {
+  const axe = {
+    fileName: "axe.dobj", class: qname("WoodAxe"), status: "live",
+    fields: { kvs: [["durability", { Int: "60" }]] },
+  };
+  const ui = await page(context, { objects: [knife(), axe], holdSteps: true });
+  await ui.elapse();
+  const { document } = ui;
+  const tooltip = document.querySelector("#row-tooltip");
+  const hover = (fileName, type = "mouseenter") => document.querySelector(`.object-row[data-file-name="${fileName}"]`)
+    .dispatchEvent(new ui.dom.window.MouseEvent(type, { clientX: 40, clientY: 60 }));
+  assert.equal(document.querySelector(".object-row").title, "", "no native tooltip competes with it");
+
+  hover("axe.dobj");
+  assert.equal(tooltip.hidden, true, "not at once");
+  assert.deepEqual([...ui.holds.values()].map((hold) => hold.delay), [250]);
+  hover("axe.dobj", "mousemove");
+  await ui.elapse();
+  assert.equal(tooltip.hidden, false);
+  assert.equal(tooltip.textContent, "1.200 BIT", "60% of a new wood axe's 2");
+  assert.equal(tooltip.style.left, "52px");
+  assert.equal(tooltip.style.top, "78px");
+
+  hover("axe.dobj", "mouseleave");
+  assert.equal(tooltip.hidden, true);
+  hover("axe.dobj");
+  hover("axe.dobj", "mouseleave");
+  await ui.elapse();
+  assert.equal(tooltip.hidden, true, "leaving before the delay cancels it");
+  hover("BITCRAFT_WELCOME.md");
+  assert.equal(tooltip.hidden, true, "the welcome guide has no value");
+});
+
 test("the summary icon opens the Inventory Summary in one window", async (context) => {
   const ui = await page(context, { objects: [knife()] });
   const opened = [];
@@ -645,26 +888,36 @@ test("the Inventory Summary counts live objects and refreshes on job events", as
   });
   const { document } = ui;
   const text = (selector) => document.querySelector(selector).textContent;
+  // A row's label, then its values separated by " | ".
   const fields = (section) => [...document.querySelectorAll(`[data-section="${section}"] dt`)]
-    .map((term) => `${term.textContent.trim()} ${term.nextElementSibling.textContent}`);
+    .map((term) => {
+      const values = [];
+      for (let cell = term.nextElementSibling; cell?.tagName === "DD"; cell = cell.nextElementSibling) {
+        values.push(cell.textContent);
+      }
+      return `${term.textContent.trim()} ${values.join(" | ")}`;
+    });
   assert.equal(document.title, "Bitcraft Inventory Summary");
   assert.equal(document.body.classList.contains("secondary-window"), true);
   assert.deepEqual(ui.backend.posts, []);
-  assert.equal(text(".summary-total"), "2 bits");
-  assert.equal(text(".summary-subtitle"), "4 live objects in total");
-  assert.deepEqual(fields("general"), ["Total Bit Value: 2", "Total objects: 4"]);
-  assert.deepEqual(fields("classes"), ["bitcraft::Pocketknife: 1", "bitcraft::Wood: 2"]);
+  assert.equal(text(".summary-total"), "2.000 BIT");
+  assert.equal(document.querySelector(".summary-subtitle"), null, "no object total under the title");
+  assert.equal(document.querySelector('[data-section="general"]'), null, "no General section");
+  const objectsTitle = () => document.querySelector('[data-section="classes"] summary').textContent;
+  assert.equal(objectsTitle(), "Objects (3):", "this plugin's live objects, as listed");
+  assert.deepEqual(fields("classes"), ["bitcraft::Pocketknife: 1 | 0.000 BIT", "bitcraft::Wood: 2 | 2.000 BIT"]);
 
   const polls = () => [...ui.timers.values()].filter((timer) => timer.delay === 10000);
   assert.equal(polls().length, 1, "polls while the stick is pending");
 
-  document.querySelector('[data-section="general"]').open = false;
+  document.querySelector('[data-section="classes"]').open = false;
   ui.backend.objects.push(item("wood-3.dobj", "Wood"));
   const events = ui.sources.find((source) => source.url.endsWith("/events"));
   events.onmessage({ data: "{}" });
   await flush();
-  assert.deepEqual(fields("classes"), ["bitcraft::Pocketknife: 1", "bitcraft::Wood: 3"]);
-  assert.equal(document.querySelector('[data-section="general"]').open, false);
+  assert.deepEqual(fields("classes"), ["bitcraft::Pocketknife: 1 | 0.000 BIT", "bitcraft::Wood: 3 | 3.000 BIT"]);
+  assert.equal(objectsTitle(), "Objects (4):");
+  assert.equal(document.querySelector('[data-section="classes"]').open, false, "a collapsed section stays collapsed");
 
   const reads = ui.backend.inventoryReads;
   events.onopen();
@@ -677,23 +930,25 @@ test("the Inventory Summary counts live objects and refreshes on job events", as
   ui.backend.objects.find((object) => object.fileName === "stick.dobj").status = "live";
   await polls()[0].callback();
   await flush();
-  assert.deepEqual(fields("classes"), ["bitcraft::Pocketknife: 1", "bitcraft::Stick: 1", "bitcraft::Wood: 3"]);
+  assert.deepEqual(fields("classes"), [
+    "bitcraft::Pocketknife: 1 | 0.000 BIT", "bitcraft::Stick: 1 | 0.500 BIT", "bitcraft::Wood: 3 | 3.000 BIT",
+  ]);
   assert.equal(polls().length, 0, "stops polling once everything is live");
 });
 
-test("the right-hand buttons open the site and Settings; Discord does nothing yet", async (context) => {
+test("the right-hand buttons open the site, Discord and Settings", async (context) => {
   const ui = await page(context, { objects: [knife()] });
   const opened = [];
   ui.dom.window.open = (url, name) => {
     opened.push({ url: String(url), name });
     return { closed: false, focus() {} };
   };
-  ui.document.querySelector("#discord-button").click();
-  assert.deepEqual(opened, []);
   ui.document.querySelector("#about-button").click();
+  ui.document.querySelector("#discord-button").click();
   ui.document.querySelector("#settings-button").click();
   assert.deepEqual(opened, [
     { url: "https://bitcraft.sh/", name: "_blank" },
+    { url: "https://discord.gg/cWtZZYrer", name: "_blank" },
     { url: "http://127.0.0.1:7727/bitcraft/?page=settings", name: "bitcraft-settings" },
   ]);
 });
@@ -715,15 +970,46 @@ test("the Settings window shows the connection addresses read-only and runs no s
   assert.equal(field("relayer").readOnly, true);
 });
 
-test("the main window's title carries the Total Bit Value of live objects", async (context) => {
+test("the top bar and the window title show the Inventory Value of live objects", async (context) => {
   const wood = (fileName, status = "live") => ({ fileName, class: qname("Wood"), status, fields: { kvs: [] } });
   const ui = await page(context, { objects: [knife(), wood("wood-1.dobj"), wood("wood-2.dobj"), wood("wood-3.dobj", "pending")] });
-  assert.equal(ui.document.title, "Bitcraft (Total Bit Value: 2)");
+  const value = () => ui.document.querySelector("#inventory-value-amount").textContent;
+  assert.equal(value(), "2.000 BIT");
+  assert.equal(ui.document.querySelector("#inventory-value").textContent.replace(/\s+/g, " ").trim(),
+    "Total Inventory Value: 2.000 BIT");
+  assert.equal(ui.document.title, "Bitcraft (2.000 BIT)");
+  const opened = [];
+  ui.dom.window.open = (url, name) => {
+    opened.push({ url: String(url), name });
+    return { closed: false, focus() {} };
+  };
+  ui.document.querySelector("#inventory-value").click();
+  assert.deepEqual(opened, [{ url: "http://127.0.0.1:7727/bitcraft/?page=summary", name: "bitcraft-inventory-summary" }],
+    "the value opens the Inventory Summary");
   assert.equal(ui.document.querySelector("#objects-footer"), null);
   ui.backend.objects.find((object) => object.fileName === "wood-3.dobj").status = "live";
   await ui.dom.window.reloadObjects();
   await flush();
-  assert.equal(ui.document.title, "Bitcraft (Total Bit Value: 3)");
+  assert.equal(value(), "3.000 BIT");
+  assert.equal(ui.document.title, "Bitcraft (3.000 BIT)");
+});
+
+test("a worn tool is worth the fraction of its durability it has left", async (context) => {
+  const axe = (fileName, name, durability) => ({
+    fileName, class: qname(name), status: "live",
+    fields: { kvs: [["durability", { Int: String(durability) }]] },
+  });
+  const ui = await page(context, {
+    objects: [knife(), axe("wood-axe.dobj", "WoodAxe", 60), axe("stone-axe.dobj", "StoneAxe", 0), axe("iron-axe.dobj", "IronAxe", 100)],
+  });
+  // 60% of a wood axe's 2, nothing for the spent stone axe, all of an iron axe's 9.
+  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "10.200 BIT");
+});
+
+test("the top bar's icons have tooltips", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  assert.deepEqual([...ui.document.querySelectorAll("#top-bar .toolbar-button")].map((button) => button.dataset.tooltip),
+    ["Objects", "Stats", "Reference", "More Info", "Discord", "Settings"]);
 });
 
 const bitcraftPack = {
@@ -744,9 +1030,9 @@ const presentationFiles = (pack) => ({ "index.json": pack.index, "bitcraft/pack.
 test("presentation packs give classes and actions their icons and text", async (context) => {
   const ui = await page(context, { objects: [knife()], presentation: presentationFiles(bitcraftPack) });
   const { document } = ui;
-  const rowIcon = document.querySelector('.object-row[title="pocketknife.dobj"] .icon-tile img');
+  const rowIcon = document.querySelector('.object-row[data-file-name="pocketknife.dobj"] .icon-tile img');
   assert.equal(rowIcon.src, "http://127.0.0.1:7727/bitcraft/presentation/bitcraft/assets/classes/pocketknife.png");
-  document.querySelector('.object-row[title="pocketknife.dobj"]').dispatchEvent(
+  document.querySelector('.object-row[data-file-name="pocketknife.dobj"]').dispatchEvent(
     new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
   const details = document.querySelector("#details-body");
   assert.equal(details.querySelector(".description-summary").textContent, "Your first tool.");
@@ -779,7 +1065,7 @@ for (const [label, files] of [
     const ui = await page(context, { objects: [knife()], presentation: files });
     const { document } = ui;
     assert.equal(ui.app.hidden, false);
-    const row = document.querySelector('.object-row[title="pocketknife.dobj"]');
+    const row = document.querySelector('.object-row[data-file-name="pocketknife.dobj"]');
     assert.equal(row.querySelector(".icon-tile"), null);
     assert.notEqual(row.querySelector("svg"), null);
     row.dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
@@ -816,7 +1102,7 @@ test("the context menu offers only the level-up the tool's level and buckets all
   const { document, dom } = ui;
   const menuFor = () => {
     const rows = ["quarry.dobj", "wood.dobj", "stone.dobj"]
-      .map((fileName) => document.querySelector(`.object-row[title="${fileName}"]`));
+      .map((fileName) => document.querySelector(`.object-row[data-file-name="${fileName}"]`));
     rows[0].dispatchEvent(new dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
     for (const row of rows.slice(1)) {
       row.dispatchEvent(new dom.window.MouseEvent("mousedown", { button: 0, ctrlKey: true, bubbles: true }));

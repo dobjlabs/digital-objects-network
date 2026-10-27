@@ -58,7 +58,7 @@ const server = createServer(async (request, response) => {
       return reply(response, `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Bitcraft startup preview</title><style>body{font:16px/1.6 system-ui;max-width:600px;margin:80px auto;padding:24px;background:#fafafa;color:#1f1f1f}a{color:#6d28d9}li{margin:16px 0}</style>
         <h1>Bitcraft startup preview</h1><p>This preview uses a simulated daemon. It creates no real objects or proofs.</p><ul>
-        <li><a href="/cryptography/">Cryptography preparation screen</a></li>
+        <li><a href="/cryptography/">Desktop shell: preparing artifacts</a></li>
         <li><a href="/first-launch/">First launch</a> &mdash; proof, confirmation, then inventory (about 11 seconds)</li>
         <li><a href="/existing/">Existing inventory</a> &mdash; opens after one second</li>
         <li><a href="/failure/">Setup failure</a> &mdash; error after 5 seconds; retry succeeds</li></ul>`, "text/html; charset=utf-8");

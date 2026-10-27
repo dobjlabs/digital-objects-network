@@ -37,6 +37,7 @@
     --progress-track: #e2e2e2;
     --progress-fill: #0a64d8;
     --button-border: #c4c4c4;
+    --faint-text: #a0a0a0;
     /* Blank strip kept below the last row of a full list, so a click on
        empty space to clear the selection always has a target. */
     --list-trailing-space: 48px;
@@ -60,6 +61,29 @@
     flex-direction: column;
   }
   #inventory-app[hidden], #startup-screen[hidden] { display: none; }
+  /* A file's stored text, in a window of its own: light whatever the
+     system theme, and selectable although the desktop app turns selection
+     off for its pages. */
+  #raw-view {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 12px 14px;
+    background: var(--bg);
+  }
+  #raw-view[hidden] { display: none; }
+  #raw-text {
+    margin: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    cursor: text;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+  #raw-text.error { color: var(--error); }
   /* Windows opened from the top bar show only their own view. */
   body.secondary-window #startup-screen,
   body.secondary-window #inventory-app,
@@ -180,6 +204,15 @@
     white-space: nowrap;
   }
   .summary-fields dd { margin: 0; }
+  /* Counts and values line up on their last digit. */
+  .summary-table { column-gap: 16px; }
+  .summary-table dd {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  /* A row's second value, its total BIT value, sits further from the count. */
+  .summary-table dd + dd { padding-left: 24px; }
   /* Laid out like the details pane: a document icon over a title and muted
      text. The desktop shell's preparation screen copies these values. */
   #startup-screen {
@@ -190,23 +223,12 @@
     background: var(--bg);
   }
   .startup-content { width: min(100%, 360px); text-align: center; }
-  .startup-icon {
-    position: relative;
-    width: 96px;
-    height: 120px;
+  .startup-logo {
+    display: block;
+    width: 128px;
+    height: 128px;
     margin: 0 auto 16px;
   }
-  .startup-icon svg { display: block; }
-  /* The 16px art at 4x, centered across the page below its folded corner. */
-  .startup-icon img {
-    position: absolute;
-    left: 16px;
-    top: 34px;
-    width: 64px;
-    height: 64px;
-    image-rendering: pixelated;
-  }
-  .startup-icon img[hidden] { display: none; }
   #startup-status { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.3; }
   #startup-description { margin: 4px 0 0; color: var(--muted); line-height: 1.5; }
   .startup-progress {
@@ -306,6 +328,73 @@
     cursor: default;
   }
   .toolbar-button:hover { background: var(--toolbar-hover); }
+  /* Shown at once on hover, which a native title tooltip, with its system
+     delay, is not. The first icon's tooltip starts at its left edge so it
+     stays inside the window. */
+  .toolbar-button { position: relative; }
+  /* An object row's tooltip. It follows the pointer and sits outside the
+     object list, which would clip it, so it is placed by the script. */
+  #row-tooltip {
+    position: fixed;
+    z-index: 30;
+    padding: 3px 7px;
+    border-radius: 5px;
+    background: rgba(32, 32, 32, 0.92);
+    color: #fff;
+    font-size: 12px;
+    white-space: pre;
+    pointer-events: none;
+  }
+  #row-tooltip[hidden] { display: none; }
+  .toolbar-button[data-tooltip]:hover::after,
+  .toolbar-button[data-tooltip]:focus-visible::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 50%;
+    z-index: 20;
+    transform: translateX(-50%);
+    padding: 3px 7px;
+    border-radius: 5px;
+    background: rgba(32, 32, 32, 0.92);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 400;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  /* The inventory's value, read like a balance at the top bar's right end.
+     It opens the Inventory Summary. */
+  #inventory-value {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  #inventory-value:hover { background: var(--toolbar-hover); }
+  #inventory-value:active { background: var(--toolbar-pressed); }
+  #inventory-value img {
+    width: 16px;
+    height: 16px;
+    image-rendering: pixelated;
+  }
+  #inventory-value img[hidden] { display: none; }
+  #inventory-value .inventory-value-label {
+    color: var(--muted);
+    font-weight: 400;
+  }
   .toolbar-button:active { background: var(--toolbar-pressed); }
   .toolbar-divider {
     align-self: center;
@@ -489,6 +578,7 @@
   }
   .class-label { white-space: nowrap; }
   .class-label > .icon-tile,
+  .class-label > .action-icon,
   .class-label > svg {
     display: inline-block;
     vertical-align: middle;
@@ -554,7 +644,12 @@
     font-size: 12px;
     color: var(--muted);
   }
-  .details-meta a { color: var(--link); }
+  .details-meta a:not(.reference-link) {
+    color: var(--link);
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .details-meta a:not(.reference-link):hover { text-decoration: underline; }
   .field-table {
     margin-top: 12px;
     border-collapse: collapse;
@@ -581,6 +676,7 @@
     word-break: break-all;
   }
   .hidden-value { cursor: pointer; }
+  .empty-note { margin-top: 8px; color: var(--faint-text); }
   .subsection-title {
     margin-top: 16px;
     padding-bottom: 2px;
@@ -709,37 +805,49 @@
     width: 32px;
     height: 32px;
   }
-  .recipe-path {
+  /* A heading row in the reference list, above its classes or actions. */
+  .reference-group {
+    padding: 10px 10px 4px;
+    border-bottom: 1px solid var(--row-hover);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    user-select: none;
+  }
+  .recipe-icon-slot img.class-icon {
+    width: 32px;
+    height: 32px;
+    image-rendering: pixelated;
+  }
+  .reference-summary {
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
-    /* Puts the ellipsis at the start so the file name stays visible. */
-    direction: rtl;
-    text-align: left;
   }
+  /* Links are underlined only on hover, as in native apps. The pointing
+     hand marks them apart from action names elsewhere, which share their
+     color but are not links. */
+  .reference-link {
+    color: var(--action-name);
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .reference-link.class-link { color: var(--link); }
+  .reference-link:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
   <section id="startup-screen" aria-labelledby="startup-status">
     <div class="startup-content">
-      <div class="startup-icon" aria-hidden="true">
-        <svg width="96" height="120" viewBox="0 0 128 160">
-          <defs>
-            <filter id="startup-icon-shadow" x="-10%" y="-10%" width="120%" height="120%">
-              <feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-color="#000" flood-opacity="0.18"/>
-            </filter>
-          </defs>
-          <path d="M6 4h80l36 36v114H6z" fill="#fff" stroke="#d0d0d0" filter="url(#startup-icon-shadow)"/>
-          <path d="M86 4v28a8 8 0 0 0 8 8h28" fill="#f2f2f2" stroke="#d0d0d0"/>
-        </svg>
-        <img id="startup-class-icon" alt="" hidden>
-      </div>
+      <img class="startup-logo" src="assets/bitcraft-logo.png" alt="" width="128" height="128">
       <div role="status" aria-live="polite" aria-atomic="true">
-        <h1 id="startup-status">Opening Bitcraft...</h1>
-        <p id="startup-description">Getting your inventory ready.</p>
+        <h1 id="startup-status">Loading inventory...</h1>
+        <p id="startup-description" hidden></p>
       </div>
-      <progress id="startup-progress" class="startup-progress" max="3" value="0" aria-label="Startup progress" aria-describedby="startup-progress-label startup-status"></progress>
-      <p id="startup-progress-label">Step 1 of 3</p>
+      <progress id="startup-progress" class="startup-progress" max="4" value="1" aria-label="Startup progress" aria-describedby="startup-status"></progress>
+      <p id="startup-progress-label" hidden></p>
       <p id="startup-error" role="alert" hidden></p>
       <div id="startup-actions" hidden>
         <button type="button" id="startup-retry">Try again</button>
@@ -750,12 +858,12 @@
   </section>
   <div id="inventory-app" hidden inert>
   <nav id="top-bar" aria-label="Bitcraft">
-    <span class="toolbar-button selected" role="img" aria-label="Files" title="Files">
+    <span class="toolbar-button selected" role="img" aria-label="Files" data-tooltip="Objects">
       <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
         <path d="M2.5 5.5a1.5 1.5 0 0 1 1.5-1.5h3.2l1.6 1.8h5.2a1.5 1.5 0 0 1 1.5 1.5v6.2a1.5 1.5 0 0 1-1.5 1.5H4a1.5 1.5 0 0 1-1.5-1.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
       </svg>
     </span>
-    <button type="button" id="summary-button" class="toolbar-button" title="Open Inventory Summary" aria-label="Open Inventory Summary">
+    <button type="button" id="summary-button" class="toolbar-button" data-tooltip="Stats" aria-label="Open Inventory Summary">
       <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
         <g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
           <rect x="3" y="9.5" width="3" height="5.5" rx="0.6"/>
@@ -764,20 +872,20 @@
         </g>
       </svg>
     </button>
-    <button type="button" id="reference-button" class="toolbar-button" title="Open Recipe Info" aria-label="Open Recipe Info">
+    <button type="button" id="reference-button" class="toolbar-button" data-tooltip="Reference" aria-label="Open Recipe Info">
       <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
         <path d="M9 5.2C7.6 4.1 5.5 3.6 2.5 3.8v10c3-.2 5.1.3 6.5 1.4 1.4-1.1 3.5-1.6 6.5-1.4v-10c-3-.2-5.1.3-6.5 1.4zM9 5.2v10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
       </svg>
     </button>
     <span class="toolbar-divider" role="separator"></span>
-    <button type="button" id="about-button" class="toolbar-button" title="About Bitcraft" aria-label="About Bitcraft">
+    <button type="button" id="about-button" class="toolbar-button" data-tooltip="More Info" aria-label="About Bitcraft">
       <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
         <circle cx="9" cy="9" r="6.75" fill="none" stroke="currentColor" stroke-width="1.5"/>
         <path d="M9 8.2v4.3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
         <circle cx="9" cy="5.6" r="1" fill="currentColor"/>
       </svg>
     </button>
-    <button type="button" id="discord-button" class="toolbar-button" title="Discord" aria-label="Discord">
+    <button type="button" id="discord-button" class="toolbar-button" data-tooltip="Discord" aria-label="Discord">
       <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
         <path d="M5.4 4.3c1-.4 1.9-.7 2.8-.8l.4.8a9.6 9.6 0 0 1 .8 0l.4-.8c.9.1 1.8.4 2.8.8 1.6 2.3 2.2 4.7 2 7.2a10 10 0 0 1-3.3 1.7l-.7-1.2-.1-.1A9.5 9.5 0 0 1 9 12.3a9.5 9.5 0 0 1-1.5-.4l-.1.1-.7 1.2a10 10 0 0 1-3.3-1.7c-.2-2.5.4-4.9 2-7.2z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
         <circle cx="7.1" cy="8.9" r="1" fill="currentColor"/>
@@ -785,11 +893,16 @@
       </svg>
     </button>
     <span class="toolbar-divider" role="separator"></span>
-    <button type="button" id="settings-button" class="toolbar-button" title="Open Settings" aria-label="Open Settings">
+    <button type="button" id="settings-button" class="toolbar-button" data-tooltip="Settings" aria-label="Open Settings">
       <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
         <path d="M14.22 7.60 L16.09 7.75 L16.09 10.25 L14.22 10.40 L13.68 11.70 L14.90 13.13 L13.13 14.90 L11.70 13.68 L10.40 14.22 L10.25 16.09 L7.75 16.09 L7.60 14.22 L6.30 13.68 L4.87 14.90 L3.10 13.13 L4.32 11.70 L3.78 10.40 L1.91 10.25 L1.91 7.75 L3.78 7.60 L4.32 6.30 L3.10 4.87 L4.87 3.10 L6.30 4.32 L7.60 3.78 L7.75 1.91 L10.25 1.91 L10.40 3.78 L11.70 4.32 L13.13 3.10 L14.90 4.87 L13.68 6.30Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
         <circle cx="9" cy="9" r="2.3" fill="none" stroke="currentColor" stroke-width="1.3"/>
       </svg>
+    </button>
+    <button type="button" id="inventory-value" title="Open the Inventory Summary">
+      <span class="inventory-value-label">Total Inventory Value:</span>
+      <img id="inventory-value-icon" alt="" hidden>
+      <span id="inventory-value-amount"></span>
     </button>
   </nav>
   <div id="objects-view" class="view">
@@ -811,7 +924,7 @@
   </div>
   <div id="recipebook-view" class="view" hidden>
     <section id="recipe-pane" class="pane">
-      <div class="pane-header">Recipe Info</div>
+      <div class="pane-header">Reference</div>
       <ul id="recipe-list"></ul>
     </section>
     <section id="recipe-details-pane" class="pane">
@@ -820,6 +933,7 @@
     </section>
   </div>
   <div id="summary-view" hidden></div>
+  <div id="raw-view" hidden><pre id="raw-text"></pre></div>
   <div id="settings-view" hidden>
     <h1 class="settings-title">Connections</h1>
     <div class="settings-fields">
@@ -869,6 +983,7 @@
   </svg>
 </template>
 
+<div id="row-tooltip" role="tooltip" hidden></div>
 <script src="presentation.js"></script>
 <script>
   const DOBJD_URL = new URL(
@@ -890,9 +1005,6 @@
     return className.pluginName === PLUGIN_NAME && className.name === "Pocketknife";
   }
 
-  function pocketknifeIcon() {
-    return Presentation.classInfo({ pluginName: PLUGIN_NAME, name: "Pocketknife" }).icon;
-  }
 
   function rememberStartupRun(runId) {
     try {
@@ -921,7 +1033,7 @@
     if (!startupPocketknifeActive) return;
     startupPocketknifeRun = run;
     if ([...objectsByFileName.values()].some((object) => isPocketknife(object.class) && isLive(object))) {
-      setStartupProgress(3);
+      setStartupProgress(4);
       stopStartupPocketknife();
       finishStartup();
       return;
@@ -929,10 +1041,10 @@
     if (run?.state?.status === "committing" || run?.state?.status === "succeeded"
       || run?.state?.progress?.some((event) => event.phase === "generateProof" && event.status === "done")
       || [...objectsByFileName.values()].some((object) => isPocketknife(object.class))) {
-      setStartupProgress(2);
+      setStartupProgress(3);
     }
     if (run?.requestError || run?.state?.status === "failed") {
-      showStartupError(run.requestError ?? run.state.error ?? "Pocketknife creation failed.");
+      showStartupError(run.requestError ?? run.state.error ?? "Setup failed.");
       return;
     }
     if (run?.transportError) {
@@ -940,9 +1052,9 @@
       return;
     }
     if (run?.state?.status === "committing" || run?.state?.status === "succeeded") {
-      showStartup("Waiting for confirmation...", "Your pocketknife is being confirmed by the network. This can take a little while.", pocketknifeIcon());
+      showStartup("Connecting to Bitcraft network...");
     } else {
-      showStartup("Creating your first pocketknife...", "Bitcraft is making a cryptographic proof for your starter tool. You will be ready to gather resources soon.", pocketknifeIcon());
+      showStartup("Loading cryptography engine...");
     }
   }
 
@@ -972,7 +1084,7 @@
     const objects = await fetchJson("/objects/unspent");
     showObjects(objects);
     if (objects.some((object) => isPocketknife(object.class) && isLive(object))) {
-      setStartupProgress(3);
+      setStartupProgress(4);
       finishStartup();
       return;
     }
@@ -993,7 +1105,7 @@
         try {
           await fetchJson("/state-root");
         } catch (error) {
-          throw new Error(`Could not check your pocketknife on the network: ${error.message}`);
+          throw new Error(`Could not reach the Bitcraft network: ${error.message}`);
         }
       }
       for (const knife of staleKnives) {
@@ -1003,7 +1115,7 @@
         showObjects(objects.filter((object) => !staleKnives.includes(object)));
       }
       const action = pluginActions.find((candidate) => candidate.action.name === "CraftPocketknife");
-      if (!action) throw new Error("The starter pocketknife recipe is unavailable. Check that the Bitcraft plugin is installed.");
+      if (!action) throw new Error("A recipe Bitcraft needs to start is unavailable. Check that the Bitcraft plugin is installed.");
       await startRun(action, [], {
         showInJobs: false,
         onUpdate(run) {
@@ -1089,6 +1201,9 @@
     Quarry: [40, 130, 300, 630, 1280, 2570],
     MiningDrill: [135, 420, 975, 2070, 4245, 8580],
   };
+  // Tools that wear out: the `durability` a new one starts with. Such a
+  // tool is worth its Total Bit Value times the fraction of that it has left.
+  const FULL_DURABILITY = { WoodAxe: 100, StoneAxe: 100, IronAxe: 100 };
 
   // The class whose art heads the Inventory Summary window, which totals the
   // inventory in bits.
@@ -1096,6 +1211,8 @@
 
   // The game's website, opened in the player's browser from the top bar.
   const BITCRAFT_SITE_URL = "https://bitcraft.sh/";
+  // The game's Discord server, opened the same way.
+  const BITCRAFT_DISCORD_URL = "https://discord.gg/cWtZZYrer";
 
   // ---- End of bitcraft-specific rules.
 
@@ -1108,15 +1225,18 @@
   const docIconTemplate = document.getElementById("doc-icon");
 
   // `?page=recipebook` loads this page as the Recipe Info window, opened from
-  // the main window's top bar. Its address tracks the selected action, so
-  // `?page=recipebook&action=bitcraft::GatherWood` links to that action.
+  // the main window's top bar. Its address tracks the selected class or
+  // action, so `?page=recipebook&class=bitcraft::Wood` or
+  // `?page=recipebook&action=bitcraft::GatherWood` links to it.
   const PAGE_PARAM = "page";
   const RECIPEBOOK_PAGE = "recipebook";
-  const RECIPE_ACTION_PARAM = "action";
+  const REFERENCE_PARAMS = { class: "class", action: "action" };
   const REFERENCE_WINDOW_NAME = "bitcraft-recipe-info";
+  const REFERENCE_WINDOW_FEATURES = "popup,width=1000,height=720";
   // `?page=summary` loads this page as the Inventory Summary window.
   const SUMMARY_PAGE = "summary";
   const SUMMARY_WINDOW_NAME = "bitcraft-inventory-summary";
+  const SUMMARY_WINDOW_FEATURES = "popup,width=420,height=560";
   const SUMMARY_REFRESH_MS = 10000;
   const initialParams = new URLSearchParams(location.search);
   const isReferenceWindow = initialParams.get(PAGE_PARAM) === RECIPEBOOK_PAGE;
@@ -1125,6 +1245,17 @@
   const SETTINGS_PAGE = "settings";
   const SETTINGS_WINDOW_NAME = "bitcraft-settings";
   const isSettingsWindow = initialParams.get(PAGE_PARAM) === SETTINGS_PAGE;
+  // `?page=raw&file=NAME` loads this page as a window showing a file's
+  // stored text: an object's, or that of a text file served beside this page.
+  const RAW_PAGE = "raw";
+  const RAW_FILE_PARAM = "file";
+  const isRawWindow = initialParams.get(PAGE_PARAM) === RAW_PAGE;
+  // The file window's size, and the title bar's font and the room its window
+  // buttons take on each side of the centered title.
+  const FILE_WINDOW_MIN_WIDTH = 480;
+  const FILE_WINDOW_HEIGHT = 420;
+  const FILE_WINDOW_TITLE_FONT = '600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  const FILE_WINDOW_TITLE_MARGIN = 90;
   // Windows opened from the top bar, by name.
   const openedWindows = new Map();
   const summaryView = document.getElementById("summary-view");
@@ -1133,11 +1264,20 @@
   // Set while the summary polls, which it does only while some object is
   // not yet live.
   let summaryPoll = null;
+  const rowTooltip = document.getElementById("row-tooltip");
+  const ROW_TOOLTIP_DELAY_MS = 250;
+  // Pending while the pointer rests on a row, and the pointer's last event.
+  let rowTooltipTimer = null;
+  let rowTooltipPointer = null;
   const recipeList = document.getElementById("recipe-list");
   const recipeDetailsBody = document.getElementById("recipe-details-body");
   let recipeActions = [];
-  let selectedRecipeName = null;
-  const recipeRowsByName = new Map();
+  let referenceClasses = [];
+  // The selected list entry, `{ kind: "class" | "action", name }` with a
+  // qualified name, or null.
+  let selectedReference = null;
+  // List rows by `referenceKey`.
+  const referenceRows = new Map();
 
   const NOT_AVAILABLE = "n/a";
   const SERVICE_STATUS_INTERVAL_MS = 10000;
@@ -1301,18 +1441,80 @@
     return [subsection("Description"), body];
   }
 
-  // A class's qualified name with its small icon to the left.
-  function classLabel(qualifiedName) {
+  // A class's qualified name with its small icon to the left. A `linked`
+  // name opens the class in Recipe Info.
+  function classLabel(qualifiedName, linked = false) {
     const label = document.createElement("span");
     label.className = "class-label";
-    label.append(smallClassIcon(qualifiedName), qualifiedClassName(qualifiedName));
+    label.append(smallClassIcon(qualifiedName),
+      linked ? referenceLink("class", qualifiedName) : qualifiedClassName(qualifiedName));
     return label;
+  }
+
+  // Recipe Info's address with a class or action selected.
+  function referenceUrl(reference) {
+    const url = new URL(location.href);
+    url.search = new URLSearchParams({
+      [PAGE_PARAM]: RECIPEBOOK_PAGE,
+      [REFERENCE_PARAMS[reference.kind]]: reference.name,
+    }).toString();
+    return url;
+  }
+
+  // A class's or action's name that shows it in Recipe Info: in that window
+  // by selecting it, elsewhere by opening or focusing the window at it.
+  function referenceLink(kind, qualifiedName) {
+    const reference = { kind, name: qualifiedClassName(qualifiedName) };
+    const link = document.createElement("a");
+    link.className = `reference-link ${kind}-link`;
+    link.href = referenceUrl(reference).href;
+    link.textContent = reference.name;
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      if (isReferenceWindow) {
+        showReferenceEntry(reference);
+      } else {
+        openReference(reference);
+      }
+    });
+    return link;
+  }
+
+  // Selects the entry in this Recipe Info window's list. False when the list
+  // does not have it, as before the list has loaded.
+  function showReferenceEntry(reference) {
+    const row = referenceRows.get(referenceKey(reference));
+    if (row === undefined) {
+      return false;
+    }
+    selectReference(reference);
+    row.scrollIntoView({ block: "nearest" });
+    return true;
+  }
+
+  // An open Recipe Info window is asked to select the entry, and is sent to
+  // its address when it cannot.
+  function openReference(reference) {
+    const url = referenceUrl(reference);
+    const opened = openedWindows.get(REFERENCE_WINDOW_NAME);
+    if (opened && !opened.closed) {
+      let shown = false;
+      try {
+        shown = opened.showReferenceEntry(reference) === true;
+      } catch {}
+      if (!shown) {
+        opened.location.href = url.href;
+      }
+      opened.focus();
+      return;
+    }
+    openedWindows.set(REFERENCE_WINDOW_NAME, window.open(url, REFERENCE_WINDOW_NAME, REFERENCE_WINDOW_FEATURES));
   }
 
   function summaryLine(object, leadingParts) {
     return fileSummaryLine(object.fileName, [
       ...leadingParts,
-      object.class ? classLabel(object.class) : NOT_AVAILABLE,
+      object.class ? classLabel(object.class, true) : NOT_AVAILABLE,
       formatFileSize(object.fileSize),
       object.status ?? NOT_AVAILABLE,
     ]);
@@ -1338,9 +1540,11 @@
     }
     const rawLink = document.createElement("a");
     rawLink.href = fileUrl(fileName);
-    rawLink.target = "_blank";
-    rawLink.rel = "noopener";
     rawLink.textContent = "View raw";
+    rawLink.addEventListener("click", (event) => {
+      event.preventDefault();
+      openFileWindow(fileName);
+    });
     line.append(rawLink);
     return line;
   }
@@ -1423,7 +1627,7 @@
         label: fileNames.length === 1 ? "Open" : "Open all",
         onSelect: () => {
           for (const fileName of fileNames) {
-            window.open(fileUrl(fileName), "_blank", "noopener");
+            openFileWindow(fileName);
           }
         },
       });
@@ -1923,15 +2127,12 @@
     const hashTable = document.createElement("table");
     hashTable.className = "field-table";
     appendFieldRow(hashTable, "hash", action.hash || null);
-
-    const source = document.createElement("pre");
-    source.className = "action-source";
-    source.textContent = formatPredicateSource(action.predicateSource);
+    appendFieldRow(hashTable, "defined in", action.sourcePath || null);
 
     const classLines = (slots) => numberedLines(slots.map((slot) => (prefix) => {
       const line = document.createElement("div");
       line.className = "details-meta";
-      line.append(prefix, " \u00b7 ", classLabel(slot.class));
+      line.append(prefix, " \u00b7 ", classLabel(slot.class, true));
       return line;
     }));
 
@@ -1963,13 +2164,41 @@
     if (newOutputs.length > 0) {
       container.append(subsection("Outputs"), outputs);
     }
-    const sourceSection = document.createElement("details");
-    sourceSection.className = "collapsible-section";
-    const sourceTitle = document.createElement("summary");
-    sourceTitle.className = "subsection-title";
-    sourceTitle.textContent = "Action Source";
-    sourceSection.append(sourceTitle, source);
-    container.append(sourceSection);
+    container.append(collapsibleSource("Action Source", formatPredicateSource(action.predicateSource)));
+  }
+
+  // A collapsed section titled `titleText` holding PODlang source.
+  function collapsibleSource(titleText, sourceText) {
+    const section = document.createElement("details");
+    section.className = "collapsible-section";
+    const title = document.createElement("summary");
+    title.className = "subsection-title";
+    title.textContent = titleText;
+    const source = document.createElement("pre");
+    source.className = "action-source";
+    source.textContent = sourceText;
+    section.append(title, source);
+    return section;
+  }
+
+  // The Details pane's icon for a class: the blank page with the class's art
+  // on it, or the blank page alone when it has none.
+  function largeClassIcon(qualifiedName) {
+    const icon = document.createElement("div");
+    icon.className = "details-icon";
+    const page = document.createElement("div");
+    page.className = "large-page-icon";
+    page.append(largeFileIconTemplate.content.cloneNode(true));
+    const classIconPath = Presentation.classInfo(qualifiedName).icon;
+    if (classIconPath) {
+      const classIcon = document.createElement("img");
+      classIcon.className = "large-class-icon";
+      classIcon.src = classIconPath;
+      classIcon.alt = "";
+      page.append(classIcon);
+    }
+    icon.append(page);
+    return icon;
   }
 
   // Probes the synchronizer and relayer dobjd is configured to use. The page
@@ -2056,6 +2285,26 @@
     }
   }
 
+  // The window is titled with the file's name, which the desktop app shows
+  // in its title bar.
+  async function loadRawWindow() {
+    document.body.classList.add("secondary-window");
+    const fileName = initialParams.get(RAW_FILE_PARAM) ?? "";
+    document.title = fileName;
+    document.getElementById("raw-view").hidden = false;
+    const text = document.getElementById("raw-text");
+    try {
+      const response = await fetch(fileName === WELCOME_FILE ? WELCOME_FILE : rawObjectUrl(fileName));
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      text.textContent = await response.text();
+    } catch (error) {
+      text.classList.add("error");
+      text.textContent = `Could not read ${fileName}: ${error.message}`;
+    }
+  }
+
   async function loadSummaryWindow() {
     document.body.classList.add("secondary-window");
     document.title = "Bitcraft Inventory Summary";
@@ -2106,8 +2355,7 @@
     }
   }
 
-  // Counts only live objects. The total covers every plugin's objects; the
-  // value and the per-class counts cover this plugin's.
+  // Counts this plugin's live objects only, the ones the list shows.
   function renderSummary(objects) {
     const liveObjects = objects.filter(isLive);
     const pluginObjects = liveObjects.filter((object) => object.class.pluginName === PLUGIN_NAME);
@@ -2115,11 +2363,11 @@
     const classes = new Map();
     for (const object of pluginObjects) {
       const className = qualifiedClassName(object.class);
-      const entry = classes.get(className) ?? { qualifiedName: object.class, count: 0 };
+      const entry = classes.get(className) ?? { qualifiedName: object.class, count: 0, value: 0 };
       entry.count++;
+      entry.value += totalBitValue(object);
       classes.set(className, entry);
     }
-    const count = (number, noun) => `${number.toLocaleString()} ${noun}${number === 1 ? "" : "s"}`;
     const wasOpen = new Map([...summaryView.querySelectorAll("details[data-section]")]
       .map((section) => [section.dataset.section, section.open]));
 
@@ -2143,15 +2391,13 @@
     title.textContent = "Inventory";
     const total = document.createElement("span");
     total.className = "summary-total";
-    total.textContent = count(totalValue, "bit");
+    total.textContent = formatBitValue(totalValue);
     titleRow.append(title, total);
-    const subtitle = document.createElement("div");
-    subtitle.className = "summary-subtitle";
-    subtitle.textContent = `${count(liveObjects.length, "live object")} in total`;
-    heading.append(titleRow, subtitle);
+    heading.append(titleRow);
     header.append(iconTile, heading);
 
-    const section = (key, titleText, rows) => {
+    // Each row is a label followed by its values, one column each.
+    const section = (key, titleText, rows, valueColumns = 1) => {
       const details = document.createElement("details");
       details.className = "summary-section";
       details.dataset.section = key;
@@ -2160,122 +2406,182 @@
       summary.textContent = titleText;
       const fields = document.createElement("dl");
       fields.className = "summary-fields";
-      for (const [label, value] of rows) {
+      if (valueColumns > 1) {
+        fields.classList.add("summary-table");
+        fields.style.gridTemplateColumns = `max-content repeat(${valueColumns}, max-content)`;
+      }
+      for (const [label, ...values] of rows) {
         const term = document.createElement("dt");
         term.append(...label);
-        const definition = document.createElement("dd");
-        definition.textContent = value;
-        fields.append(term, definition);
+        fields.append(term);
+        for (const value of values) {
+          const definition = document.createElement("dd");
+          definition.textContent = value;
+          fields.append(definition);
+        }
       }
       details.append(summary, fields);
       return details;
     };
-    const general = section("general", "General:", [
-      [["Total Bit Value:"], formatBitValue(totalValue)],
-      [["Total objects:"], liveObjects.length.toLocaleString()],
-    ]);
     const classNames = [...classes.keys()].sort((left, right) => left.localeCompare(right));
-    const byClass = section("classes", "Live objects:", classNames.map((className) => {
-      const { qualifiedName, count: classCount } = classes.get(className);
-      return [[classLabel(qualifiedName), ":"], classCount.toLocaleString()];
-    }));
+    const byClass = section("classes", `Objects (${pluginObjects.length.toLocaleString()}):`, classNames.map((className) => {
+      const { qualifiedName, count: classCount, value } = classes.get(className);
+      return [[classLabel(qualifiedName), ":"], classCount.toLocaleString(), formatBitValue(value)];
+    }), 2);
     if (classNames.length === 0) {
       const none = document.createElement("p");
       none.className = "summary-subtitle";
-      none.textContent = "No live objects yet.";
+      none.textContent = "No objects yet.";
       byClass.append(none);
     }
-    summaryView.replaceChildren(header, general, byClass);
+    summaryView.replaceChildren(header, byClass);
   }
 
-  // The Recipe Info window loads only the actions; it runs none of the main
-  // window's startup.
+  // The Recipe Info window loads only the classes and actions; it runs none
+  // of the main window's startup.
   async function loadReferenceWindow() {
     document.body.classList.add("secondary-window", "reference-window");
     document.title = "Bitcraft reference";
     document.getElementById("recipebook-view").hidden = false;
     renderRecipeDetails();
     try {
-      const [actions] = await Promise.all([fetchJson("/actions"), Presentation.load()]);
-      showRecipes(actions.filter((action) => action.action.pluginName === PLUGIN_NAME));
+      const [actions, classes] = await Promise.all([
+        fetchJson("/actions"),
+        fetchJson("/classes"),
+        Presentation.load(),
+      ]);
+      showReference(
+        classes.filter((entry) => entry.class.pluginName === PLUGIN_NAME),
+        actions.filter((action) => action.action.pluginName === PLUGIN_NAME),
+      );
     } catch (error) {
       const message = document.createElement("li");
       message.className = "message error";
-      message.textContent = `Could not load recipes: ${error.message}`;
+      message.textContent = `Could not load the reference: ${error.message}`;
       recipeList.replaceChildren(message);
     }
   }
 
+  function referenceKey(reference) {
+    return `${reference.kind}:${reference.name}`;
+  }
+
+  function isSelectedReference(reference) {
+    return selectedReference !== null && referenceKey(selectedReference) === referenceKey(reference);
+  }
+
   function updateAddress() {
     const url = new URL(location.href);
-    if (selectedRecipeName === null) {
-      url.searchParams.delete(RECIPE_ACTION_PARAM);
-    } else {
-      url.searchParams.set(RECIPE_ACTION_PARAM, selectedRecipeName);
+    for (const param of Object.values(REFERENCE_PARAMS)) {
+      url.searchParams.delete(param);
+    }
+    if (selectedReference !== null) {
+      url.searchParams.set(REFERENCE_PARAMS[selectedReference.kind], selectedReference.name);
     }
     history.replaceState(null, "", url);
   }
 
-  function showRecipes(actions) {
+  function showReference(classes, actions) {
+    referenceClasses = classes;
     recipeActions = actions;
-    renderRecipeList();
-    const linkedName = initialParams.get(RECIPE_ACTION_PARAM);
-    const linkedRow = recipeRowsByName.get(linkedName);
-    if (linkedRow !== undefined) {
-      selectRecipe(linkedName);
-      linkedRow.scrollIntoView({ block: "center" });
+    renderReferenceList();
+    for (const [kind, param] of Object.entries(REFERENCE_PARAMS)) {
+      const linked = { kind, name: initialParams.get(param) };
+      const linkedRow = referenceRows.get(referenceKey(linked));
+      if (linkedRow !== undefined) {
+        selectReference(linked);
+        linkedRow.scrollIntoView({ block: "center" });
+        return;
+      }
     }
   }
 
-  function renderRecipeList() {
+  function renderReferenceList() {
     recipeList.replaceChildren();
-    recipeRowsByName.clear();
-    for (const action of recipeActions) {
-      const actionName = qualifiedClassName(action.action);
-      const row = document.createElement("li");
-      row.className = "recipe-row";
-      row.classList.toggle("selected", actionName === selectedRecipeName);
-      row.addEventListener("mousedown", (event) => {
-        if (event.button !== 0 || (IS_MAC && event.ctrlKey)) {
-          return;
-        }
-        const toggleKeyHeld = IS_MAC ? event.metaKey : event.ctrlKey;
-        if (actionName === selectedRecipeName && !toggleKeyHeld) {
-          return;
-        }
-        selectRecipe(actionName === selectedRecipeName ? null : actionName);
-      });
+    referenceRows.clear();
+    const appendGroup = (titleText) => {
+      const heading = document.createElement("li");
+      heading.className = "reference-group";
+      heading.textContent = titleText;
+      recipeList.append(heading);
+    };
 
-      const iconSlot = document.createElement("span");
-      iconSlot.className = "recipe-icon-slot";
-      const icon = actionIcon(action.action, 32);
-      if (icon) {
-        iconSlot.append(icon);
+    if (referenceClasses.length > 0) appendGroup("Classes");
+    for (const entry of referenceClasses) {
+      const info = Presentation.classInfo(entry.class);
+      let icon = null;
+      if (info.icon) {
+        icon = document.createElement("img");
+        icon.className = "class-icon";
+        icon.src = info.icon;
+        icon.alt = "";
       }
+      const name = document.createElement("div");
+      name.textContent = qualifiedClassName(entry.class);
+      const summary = document.createElement("div");
+      summary.className = "action-detail reference-summary";
+      summary.textContent = referenceSummary(info, entry.description, "object class");
+      appendReferenceRow({ kind: "class", name: name.textContent }, icon, name, summary);
+    }
 
+    if (recipeActions.length > 0) appendGroup("Actions");
+    for (const action of recipeActions) {
       const name = document.createElement("div");
       name.className = "action-name";
-      name.textContent = actionName;
-
-      const path = document.createElement("div");
-      path.className = "action-detail recipe-path";
-      path.title = action.sourcePath ?? "";
-      // Marks keep the leading "/" in place under right-to-left layout.
-      path.textContent = `\u200e${action.sourcePath || NOT_AVAILABLE}\u200e`;
-
-      const text = document.createElement("div");
-      text.className = "row-text";
-      text.append(name, path);
-      row.append(iconSlot, text);
-      recipeRowsByName.set(actionName, row);
-      recipeList.append(row);
+      name.textContent = qualifiedClassName(action.action);
+      const summary = document.createElement("div");
+      summary.className = "action-detail reference-summary";
+      summary.textContent = referenceSummary(Presentation.actionInfo(action.action), action.description,
+        "executable action");
+      appendReferenceRow({ kind: "action", name: name.textContent }, actionIcon(action.action, 32), name, summary);
     }
   }
 
-  function selectRecipe(actionName) {
-    selectedRecipeName = actionName;
-    for (const [rowName, row] of recipeRowsByName) {
-      row.classList.toggle("selected", rowName === selectedRecipeName);
+  // A list row's second line: the pack's summary, else the manifest's
+  // description unless it is the "-" placeholder, else `fallback`.
+  function referenceSummary(info, manifestDescription, fallback) {
+    return info.summary
+      ?? (manifestDescription && manifestDescription !== "-" ? manifestDescription : fallback);
+  }
+
+  // Classes and actions come from their plugin's `.pexe`; dobjd reports its
+  // path with each action, not with classes.
+  function pluginSourcePath(pluginName) {
+    return recipeActions.find((action) => action.action.pluginName === pluginName)?.sourcePath || null;
+  }
+
+  function appendReferenceRow(reference, icon, name, detail) {
+    const row = document.createElement("li");
+    row.className = "recipe-row";
+    row.classList.toggle("selected", isSelectedReference(reference));
+    row.addEventListener("mousedown", (event) => {
+      if (event.button !== 0 || (IS_MAC && event.ctrlKey)) {
+        return;
+      }
+      const toggleKeyHeld = IS_MAC ? event.metaKey : event.ctrlKey;
+      const selected = isSelectedReference(reference);
+      if (selected && !toggleKeyHeld) {
+        return;
+      }
+      selectReference(selected ? null : reference);
+    });
+    const iconSlot = document.createElement("span");
+    iconSlot.className = "recipe-icon-slot";
+    if (icon) {
+      iconSlot.append(icon);
+    }
+    const text = document.createElement("div");
+    text.className = "row-text";
+    text.append(name, detail);
+    row.append(iconSlot, text);
+    referenceRows.set(referenceKey(reference), row);
+    recipeList.append(row);
+  }
+
+  function selectReference(reference) {
+    selectedReference = reference;
+    for (const [key, row] of referenceRows) {
+      row.classList.toggle("selected", reference !== null && key === referenceKey(reference));
     }
     updateAddress();
     renderRecipeDetails();
@@ -2283,17 +2589,86 @@
 
   function renderRecipeDetails() {
     recipeDetailsBody.replaceChildren();
-    const action = recipeActions.find(
-      (candidate) => qualifiedClassName(candidate.action) === selectedRecipeName,
-    );
-    if (action === undefined) {
-      const message = document.createElement("div");
-      message.className = "message";
-      message.textContent = "Select an action to view details.";
-      recipeDetailsBody.append(message);
-      return;
+    if (selectedReference?.kind === "class") {
+      const entry = referenceClasses.find(
+        (candidate) => qualifiedClassName(candidate.class) === selectedReference.name,
+      );
+      if (entry !== undefined) {
+        renderClassInfo(entry, recipeDetailsBody);
+        return;
+      }
+    } else if (selectedReference?.kind === "action") {
+      const action = recipeActions.find(
+        (candidate) => qualifiedClassName(candidate.action) === selectedReference.name,
+      );
+      if (action !== undefined) {
+        renderActionInfo(action, recipeDetailsBody);
+        return;
+      }
     }
-    renderActionInfo(action, recipeDetailsBody);
+    const message = document.createElement("div");
+    message.className = "message";
+    message.textContent = "Select a class or action to view details.";
+    recipeDetailsBody.append(message);
+  }
+
+  // A line naming an action, with its icon, that shows the action in
+  // Recipe Info when clicked.
+  function referenceActionLine(qualifiedName) {
+    const line = document.createElement("div");
+    line.className = "class-label";
+    const icon = actionIcon(qualifiedName, 16);
+    if (icon) {
+      line.append(icon);
+    }
+    line.append(referenceLink("action", qualifiedName));
+    return line;
+  }
+
+  // The class's own predicate, an OR over every way to arrive at the class,
+  // then the predicate of each action that outputs it.
+  function classSourceText(entry) {
+    const parts = [formatPredicateSource(entry.predicateSource)];
+    for (const producer of entry.producedBy) {
+      const name = qualifiedClassName(producer);
+      const action = recipeActions.find((candidate) => qualifiedClassName(candidate.action) === name);
+      parts.push(`// ${name}\n${action ? formatPredicateSource(action.predicateSource) : "// Source not available."}`);
+    }
+    return parts.join("\n\n");
+  }
+
+  function renderClassInfo(entry, container) {
+    const title = document.createElement("div");
+    title.className = "details-title";
+    title.textContent = qualifiedClassName(entry.class);
+
+    const meta = document.createElement("div");
+    meta.className = "details-meta";
+    meta.textContent = "object class";
+
+    const hashTable = document.createElement("table");
+    hashTable.className = "field-table";
+    appendFieldRow(hashTable, "hash", entry.hash || null);
+    appendFieldRow(hashTable, "defined in", pluginSourcePath(entry.class.pluginName));
+
+    const actionList = (names) => {
+      const list = document.createElement("div");
+      list.className = "subsection-list";
+      list.append(...names.map(referenceActionLine));
+      if (names.length === 0) {
+        const none = document.createElement("div");
+        none.className = "details-meta";
+        none.textContent = "None";
+        list.append(none);
+      }
+      return list;
+    };
+
+    container.append(largeClassIcon(entry.class), title, meta, hashTable,
+      ...descriptionSection(Presentation.classInfo(entry.class), entry.description),
+      subsection("Output of"), actionList(entry.producedBy),
+      subsection("Input to"), actionList(entry.consumedBy),
+      collapsibleSource("Class Source", classSourceText(entry)));
   }
 
   function formatDuration(milliseconds) {
@@ -2371,9 +2746,10 @@
 
     const meta = document.createElement("div");
     meta.className = "details-meta";
-    meta.textContent = [qualifiedClassName(run.action.action), runStatus(run)]
-      .filter((part) => part)
-      .join(" \u00b7 ");
+    meta.append(referenceLink("action", run.action.action));
+    if (runStatus(run)) {
+      meta.append(` \u00b7 ${runStatus(run)}`);
+    }
 
     const properties = document.createElement("table");
     properties.className = "field-table";
@@ -2468,20 +2844,7 @@
     const [fileName] = selectedFileNames;
     const object = objectsByFileName.get(fileName);
 
-    const icon = document.createElement("div");
-    icon.className = "details-icon";
-    const page = document.createElement("div");
-    page.className = "large-page-icon";
-    page.append(largeFileIconTemplate.content.cloneNode(true));
-    const classIconPath = Presentation.classInfo(object.class).icon;
-    if (classIconPath) {
-      const classIcon = document.createElement("img");
-      classIcon.className = "large-class-icon";
-      classIcon.src = classIconPath;
-      classIcon.alt = "";
-      page.append(classIcon);
-    }
-    icon.append(page);
+    const icon = largeClassIcon(object.class);
 
     const title = document.createElement("div");
     title.className = "details-title";
@@ -2492,8 +2855,6 @@
     const identityTable = document.createElement("table");
     identityTable.className = "field-table";
     appendFieldRow(identityTable, "stable_identifier", fieldValue(object, "stable_identifier"));
-    appendFieldRow(identityTable, "contentHash", object.contentHash);
-    appendFieldRow(identityTable, "classHash", object.classHash || null);
 
     const key = fieldValue(object, "key");
     const keyCell = appendFieldRow(identityTable, "key", key);
@@ -2516,10 +2877,16 @@
         appendFieldRow(propertiesTable, name, displayValue(value));
       }
     }
+    let properties = propertiesTable;
+    if (propertiesTable.rows.length === 0) {
+      properties = document.createElement("div");
+      properties.className = "empty-note";
+      properties.textContent = "No properties to show.";
+    }
 
     const classDescription = descriptionSection(Presentation.classInfo(object.class), null);
     detailsBody.append(icon, title, meta, identityTable, ...classDescription, propertiesTitle,
-      propertiesTable);
+      properties);
   }
 
   // An error with `noResponse` set got no HTTP response from dobjd at all.
@@ -2592,10 +2959,61 @@
     fitObjectNames();
   }
 
+  // The object's Total Bit Value, for its row's tooltip. Empty for a row
+  // that is not an object.
+  function rowTooltipText(fileName) {
+    const object = objectsByFileName.get(fileName);
+    return object?.class ? formatBitValue(totalBitValue(object)) : "";
+  }
+
+  // Shown once the pointer has rested on the row for `ROW_TOOLTIP_DELAY_MS`,
+  // where it then is.
+  function showRowTooltip(fileName, event) {
+    hideRowTooltip();
+    const text = rowTooltipText(fileName);
+    if (text === "") {
+      return;
+    }
+    rowTooltipPointer = event;
+    rowTooltipTimer = setTimeout(() => {
+      rowTooltipTimer = null;
+      rowTooltip.textContent = text;
+      rowTooltip.hidden = false;
+      placeRowTooltip(rowTooltipPointer);
+    }, ROW_TOOLTIP_DELAY_MS);
+  }
+
+  // Below and to the right of the pointer, kept inside the window.
+  function placeRowTooltip(event) {
+    rowTooltipPointer = event;
+    if (rowTooltip.hidden) {
+      return;
+    }
+    const margin = 4;
+    const width = rowTooltip.offsetWidth;
+    const height = rowTooltip.offsetHeight;
+    let left = event.clientX + 12;
+    let top = event.clientY + 18;
+    if (left + width > window.innerWidth - margin) {
+      left = Math.max(margin, window.innerWidth - margin - width);
+    }
+    if (top + height > window.innerHeight - margin) {
+      top = event.clientY - height - 8;
+    }
+    rowTooltip.style.left = `${left}px`;
+    rowTooltip.style.top = `${top}px`;
+  }
+
+  function hideRowTooltip() {
+    clearTimeout(rowTooltipTimer);
+    rowTooltipTimer = null;
+    rowTooltip.hidden = true;
+  }
+
   function appendFileRow(fileName, icon) {
     const row = document.createElement("li");
     row.className = "object-row";
-    row.title = fileName;
+    row.dataset.fileName = fileName;
     row.classList.toggle("selected", selectedFileNames.has(fileName));
     const name = document.createElement("span");
     name.className = "object-name";
@@ -2609,8 +3027,11 @@
       }
     });
     row.addEventListener("dblclick", () => {
-      window.open(fileUrl(fileName), "_blank", "noopener");
+      openFileWindow(fileName);
     });
+    row.addEventListener("mouseenter", (event) => showRowTooltip(fileName, event));
+    row.addEventListener("mousemove", placeRowTooltip);
+    row.addEventListener("mouseleave", hideRowTooltip);
     // As in Finder, a right-click on an unselected row selects only that
     // row; on a selected row it keeps the whole selection.
     row.addEventListener("contextmenu", (event) => {
@@ -2636,8 +3057,25 @@
   }
 
   // Where Open and View raw take a listed file.
+  // Opens the file's text in a window wide enough for its title bar to show
+  // the whole file name: the name measured in the title bar's font, plus
+  // room on each side for the window buttons, as the title is centered.
+  function openFileWindow(fileName) {
+    const context = document.createElement("canvas").getContext("2d");
+    context.font = FILE_WINDOW_TITLE_FONT;
+    const titleWidth = Math.ceil(context.measureText(fileName).width);
+    const width = Math.min(
+      Math.max(FILE_WINDOW_MIN_WIDTH, titleWidth + 2 * FILE_WINDOW_TITLE_MARGIN),
+      screen.availWidth || Infinity,
+    );
+    window.open(fileUrl(fileName), "_blank", `noopener,popup,width=${width},height=${FILE_WINDOW_HEIGHT}`);
+  }
+
+  // The window that shows the file's text.
   function fileUrl(fileName) {
-    return fileName === WELCOME_FILE ? WELCOME_FILE : rawObjectUrl(fileName);
+    const url = new URL(location.href);
+    url.search = new URLSearchParams({ [PAGE_PARAM]: RAW_PAGE, [RAW_FILE_PARAM]: fileName }).toString();
+    return url.href;
   }
 
   // Renders the Markdown subset the welcome guide uses: headings,
@@ -2815,8 +3253,8 @@
 
   async function load() {
     stopStartupPocketknife();
-    setStartupProgress(0);
-    showStartup("Opening Bitcraft...", "Getting your inventory ready.");
+    setStartupProgress(1);
+    showStartup("Loading inventory...");
     showMessage("Loading...", false);
     try {
       const [objectsDir, objects, actions, welcome] = await Promise.all([
@@ -2826,7 +3264,7 @@
         loadUiTextFile(WELCOME_FILE),
         Presentation.load(),
       ]);
-      setStartupProgress(1);
+      setStartupProgress(2);
       welcomeText = welcome;
       welcomeFileSize = welcome === null ? null : new TextEncoder().encode(welcome).length;
       pluginActions = actions.filter((action) => action.action.pluginName === PLUGIN_NAME);
@@ -2844,8 +3282,9 @@
   // Each step of the startup screen stays up at least this long, so a step
   // that finishes quickly is still seen.
   const STARTUP_STEP_MIN_MS = 1000;
-  // Milestones completed, as of the latest startup check.
-  let startupCompleted = 0;
+  // Milestones completed, as of the latest startup check. The desktop
+  // shell's preparation step is done before this page loads.
+  let startupCompleted = 1;
   // The latest screen asked for at each milestone count, from the one on
   // display onwards. A finished screen reveals the inventory.
   const startupScreens = new Map();
@@ -2858,16 +3297,15 @@
     startupCompleted = completed;
   }
 
-  function showStartup(title, description, icon = null) {
-    requestStartupScreen({ completed: startupCompleted, title, description, icon, error: null });
+  function showStartup(title) {
+    requestStartupScreen({ completed: startupCompleted, title, description: null, error: null });
   }
 
   function showStartupError(message) {
     requestStartupScreen({
       completed: startupCompleted,
       title: "Bitcraft could not finish setup",
-      description: "Your inventory opens once you have a starter pocketknife. Try again to continue.",
-      icon: null,
+      description: "Your inventory opens once setup finishes. Try again to continue.",
       error: message,
     });
   }
@@ -2939,10 +3377,8 @@
       status.textContent = screen.title;
       copyStatus.hidden = true;
     }
-    if (detail.textContent !== screen.description) detail.textContent = screen.description;
-    const icon = document.getElementById("startup-class-icon");
-    if (screen.icon && icon.getAttribute("src") !== screen.icon) icon.src = screen.icon;
-    icon.hidden = !screen.icon;
+    detail.textContent = screen.description ?? "";
+    detail.hidden = screen.description === null;
     const error = document.getElementById("startup-error");
     if (screen.error !== null && error.textContent !== screen.error) {
       error.textContent = screen.error;
@@ -2950,14 +3386,19 @@
     }
     error.hidden = screen.error === null;
     document.getElementById("startup-actions").hidden = screen.error === null;
-    updateStartupProgressLabel();
+    updateStartupProgressLabel(screen.error !== null);
   }
 
-  function updateStartupProgressLabel() {
+  // The step number is read out with the heading, and shown only on an
+  // error, as where setup stopped.
+  function updateStartupProgressLabel(stopped) {
     const progress = document.getElementById("startup-progress");
-    const label = `Step ${Math.min(progress.value + 1, progress.max)} of ${progress.max}`;
-    progress.setAttribute("aria-valuetext", `${label}: ${document.getElementById("startup-status").textContent}`);
-    document.getElementById("startup-progress-label").textContent = label;
+    const step = Math.min(progress.value + 1, progress.max);
+    progress.setAttribute("aria-valuetext",
+      `Step ${step} of ${progress.max}: ${document.getElementById("startup-status").textContent}`);
+    const label = document.getElementById("startup-progress-label");
+    label.textContent = `Stopped at step ${step} of ${progress.max}`;
+    label.hidden = !stopped;
   }
 
   document.getElementById("startup-retry").addEventListener("click", load);
@@ -3035,7 +3476,7 @@
   }
 
   function formatBitValue(value) {
-    return Number.isInteger(value) ? String(value) : value.toFixed(1);
+    return `${value.toFixed(3)} BIT`;
   }
 
   // An object whose class has no value listed is worth nothing.
@@ -3046,13 +3487,24 @@
       return valuesByLevel[Number(fieldValue(object, "level")) - 1] ?? 0;
     }
     const contentValue = BUCKET_CONTENT_BIT_VALUES[className] ?? 0;
-    return (TOTAL_BIT_VALUES[className] ?? 0) + contentValue * Number(fieldValue(object, "n") ?? 0);
+    const value = (TOTAL_BIT_VALUES[className] ?? 0) + contentValue * Number(fieldValue(object, "n") ?? 0);
+    const fullDurability = FULL_DURABILITY[className];
+    if (fullDurability === undefined) return value;
+    return value * Number(fieldValue(object, "durability") ?? fullDurability) / fullDurability;
   }
 
-  // The desktop app shows this title in the main window's title bar.
-  function updateWindowTitle() {
+  // Shown in the top bar, and in the window's title, which the desktop app
+  // shows in its title bar.
+  function updateInventoryValue() {
     const totalValue = liveListedObjects().reduce((sum, object) => sum + totalBitValue(object), 0);
-    document.title = `Bitcraft (Total Bit Value: ${formatBitValue(totalValue)})`;
+    document.title = `Bitcraft (${formatBitValue(totalValue)})`;
+    document.getElementById("inventory-value-amount").textContent = formatBitValue(totalValue);
+    const icon = document.getElementById("inventory-value-icon");
+    const iconPath = Presentation.classInfo({ pluginName: PLUGIN_NAME, name: SUMMARY_ICON_CLASS }).icon;
+    if (iconPath && icon.getAttribute("src") !== iconPath) {
+      icon.src = iconPath;
+    }
+    icon.hidden = !iconPath;
   }
 
   // Replaces the object list, keeping the selection of any objects that are
@@ -3079,7 +3531,7 @@
     for (const object of heldObjects) {
       objectsByFileName.set(object.fileName, object);
     }
-    updateWindowTitle();
+    updateInventoryValue();
     for (const fileName of [...selectedFileNames]) {
       if (!isListedFile(fileName)) {
         selectedFileNames.delete(fileName);
@@ -3120,6 +3572,8 @@
 
   // A right-click on empty space clears the selection, so the menu offers
   // the actions that take no inputs.
+  objectList.addEventListener("scroll", hideRowTooltip);
+  objectList.addEventListener("contextmenu", hideRowTooltip);
   objectList.addEventListener("contextmenu", (event) => {
     if (event.target.closest(".object-row") !== null) {
       return;
@@ -3157,8 +3611,8 @@
   new ResizeObserver(() => fitObjectNames()).observe(objectList);
 
   recipeList.addEventListener("mousedown", (event) => {
-    if (event.target === recipeList && isPlainPress(event) && selectedRecipeName !== null) {
-      selectRecipe(null);
+    if (event.target === recipeList && isPlainPress(event) && selectedReference !== null) {
+      selectReference(null);
     }
   });
 
@@ -3168,13 +3622,19 @@
     loadSummaryWindow();
   } else if (isSettingsWindow) {
     loadSettingsWindow();
+  } else if (isRawWindow) {
+    loadRawWindow();
   } else {
     document.getElementById("reference-button").addEventListener("click",
-      () => openPageWindow(RECIPEBOOK_PAGE, REFERENCE_WINDOW_NAME, "popup,width=1000,height=720"));
+      () => openPageWindow(RECIPEBOOK_PAGE, REFERENCE_WINDOW_NAME, REFERENCE_WINDOW_FEATURES));
     document.getElementById("summary-button").addEventListener("click",
-      () => openPageWindow(SUMMARY_PAGE, SUMMARY_WINDOW_NAME, "popup,width=420,height=560"));
+      () => openPageWindow(SUMMARY_PAGE, SUMMARY_WINDOW_NAME, SUMMARY_WINDOW_FEATURES));
+    document.getElementById("inventory-value").addEventListener("click",
+      () => openPageWindow(SUMMARY_PAGE, SUMMARY_WINDOW_NAME, SUMMARY_WINDOW_FEATURES));
     document.getElementById("about-button").addEventListener("click",
       () => window.open(BITCRAFT_SITE_URL, "_blank", "noopener"));
+    document.getElementById("discord-button").addEventListener("click",
+      () => window.open(BITCRAFT_DISCORD_URL, "_blank", "noopener"));
     document.getElementById("settings-button").addEventListener("click",
       () => openPageWindow(SETTINGS_PAGE, SETTINGS_WINDOW_NAME, "popup,width=480,height=200"));
     document.getElementById("bitcraft-version").textContent = BITCRAFT_VERSION;

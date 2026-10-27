@@ -29,12 +29,12 @@ that block should be plugin-agnostic.
   no-input actions, would also show other plugins' no-input actions.
 - **Why:** same scope as the object list.
 
-### Only bitcraft actions are listed in the Recipe Info window
+### Only bitcraft classes and actions are listed in the Recipe Info window
 
-- **Where:** `PLUGIN_NAME`, applied to the result of `GET /actions` in
-  `loadReferenceWindow()`, the same filter `load()` applies to the actions
-  the context menu offers from.
-- **Generic behavior:** list every installed plugin's actions.
+- **Where:** `PLUGIN_NAME`, applied to the results of `GET /classes` and
+  `GET /actions` in `loadReferenceWindow()`, the same filter `load()`
+  applies to the actions the context menu offers from.
+- **Generic behavior:** list every installed plugin's classes and actions.
 - **Why:** same scope as the object list.
 
 ### Only bitcraft runs are restored on page load
@@ -66,26 +66,32 @@ that block should be plugin-agnostic.
   because the inventory falls back to local state when it is unreachable;
   otherwise setup shows an error and keeps the knife.
 - **Startup screen:** keep inventory hidden and inert until a live
-  pocketknife is listed. Show whether Bitcraft is creating the knife or
-  waiting for network confirmation. Existing live knives, including held
-  knives, open the inventory directly once the first step has been up for
-  its minimum (below). The desktop's cryptography startup screen
-  has the same layout, so initial preparation leads into pocketknife setup.
-  Both screens are laid out like the details pane: a centered document
-  icon over a 16px heading and muted description, then the progress bar
-  and step number, in the app's colors (the blue accent of its selection
-  and menus). The pocketknife steps show the pocketknife's icon from the
-  presentation pack on the page; preparation and setup errors show a blank
-  page. The bar counts three completed milestones: cryptography ready,
-  pocketknife proof generated, and network confirmation. Preparation starts
-  at zero in the desktop shell; successful daemon requests complete the
-  first milestone. A committing run, a completed proof event, or an existing
-  knife that has not been discarded completes the second; a live knife completes the third. Progress
-  stays at the last completed milestone during errors; retry starts a fresh
-  check.
-  Show the current step number and describe the work in progress in the
-  heading, rather than labeling the bar with the last completed milestone.
-  Errors replace the activity description while preserving the bar's value.
+  pocketknife is listed. Existing live knives, including held knives, open
+  the inventory directly once the step on display has been up for its
+  minimum (below). Setup runs in four steps, each shown by its heading
+  alone:
+  1. "Preparing artifacts..." on the desktop shell's screen, while dobjd
+     prepares its cryptography (the host can replace the heading with its
+     own message);
+  2. "Loading inventory..." on this page, while it reads the inventory and
+     actions;
+  3. "Loading cryptography engine..." while the starter knife's proof is
+     made;
+  4. "Connecting to Bitcraft network..." while the knife waits for network
+     confirmation.
+  Both screens share one layout, so the shell leads into this page: the
+  Bitcraft logo (the wood axe on a blue folder, the app icon), a 16px
+  heading and the progress bar in the app's blue accent. There is no
+  description or step number while setup works. The bar counts completed
+  steps out of four: the shell shows none done, with a small sliver (0.2 of
+  a step) filled so the bar reads as one, successful daemon requests
+  complete the second, a committing run, a completed proof event, or an
+  existing knife that has not been discarded completes the third, and a
+  live knife the fourth. Progress stays at the last completed step during
+  errors; retry starts a fresh check from step 2.
+  An error replaces the heading with "Bitcraft could not finish setup" and
+  adds a description, "Stopped at step N of 4" under the bar, the error
+  itself, and "Try again" and "Copy error".
   Each step stays up for at least one second, even when its work finishes
   sooner; the work itself is not delayed. The screen then moves one step at
   a time, skipping steps the startup never reached, and opens the inventory
@@ -155,8 +161,8 @@ the selected objects.
 
 ## Cosmetic
 
-- **Page title:** "Bitcraft", which becomes "Bitcraft (Total Bit Value:
-  N)" once the inventory loads (see below).
+- **Page title:** "Bitcraft", which becomes "Bitcraft (N.NNN BIT)" once the
+  inventory loads (see below).
 - **Presentation pack:** class and action icons, summaries and
   descriptions come from the bitcraft presentation pack
   (`../../../examples/bitcraft/presentation/`), which the app ships by
@@ -168,34 +174,48 @@ the selected objects.
     every class name, and at 6x (96x96 CSS px) on the large page icon in a
     single object's Details pane, centered across it and just below its
     folded corner;
-  - action icons at 16x16 in the context menu and jobs list, 32x32 in the
-    Recipe Info list, and 128x128 in Recipe Info's and a job's Details pane;
+  - class icons also at 2x (32x32) in the Recipe Info list, and on the
+    large page icon in Recipe Info's Details pane for a class;
+  - action icons at 16x16 in the context menu, jobs list and a class's
+    action lists in Recipe Info, 32x32 in the Recipe Info list, and
+    128x128 in Recipe Info's and a job's Details pane;
+  - class and action summaries as the second line of each entry in the
+    Recipe Info list (falling back to the manifest's description, then to
+    "object class" or "executable action");
   - a "Description" section (summary and description) in Recipe Info's
     Details pane and, for the object's class, in a single object's Details
     pane.
 - **Generic behavior:** no pack, so plain page icons, no action icons, and
   only the manifest's descriptions.
 
-## Window title, Inventory Summary and status bar
+## Inventory value, Inventory Summary and status bar
 
-The main window's title ("Bitcraft (Total Bit Value: 31)", which the
-desktop app shows in its title bar), the Inventory Summary window opened
+The inventory's value, shown at the right end of the main window's top bar
+("Total Inventory Value:", the `SUMMARY_ICON_CLASS` icon and "31.000 BIT", which
+opens the Inventory Summary) and in its title ("Bitcraft (31.000 BIT)",
+which the desktop app shows in its title bar), the Inventory Summary window
+opened
 from the top bar, and the status bar along the bottom of the page. Three of
 their entries know about bitcraft:
 
 - **Bitcraft version** (status bar): `BITCRAFT_VERSION` ("Alpha 1.0"), a
   fixed string in the page; dobjd and the plugin manifest report no game
   version.
-- **Total Bit Value** (window title and Inventory Summary): the summed value of
-  the live bitcraft objects (pending ones are left out); see below.
+- **Total Inventory Value** (top bar, window title and Inventory Summary):
+  the summed
+  Total Bit Value of the live bitcraft objects (pending ones are left out);
+  see below. The Inventory Summary also shows each class's summed value
+  beside its count, and hovering an object row in the main window shows
+  that object's value in a tooltip.
 - **Inventory Summary icon:** `SUMMARY_ICON_CLASS` (`Bit`), the class whose
   art heads the window, since it totals the inventory in bits.
-- **Website link:** `BITCRAFT_SITE_URL`, opened by the top bar's info
-  icon. Generic behavior: no site link.
-- **Generic behavior:** no version, Total Bit Value or summary icon. The
-  Inventory Summary's live object total and per-class counts are generic:
-  the total covers every plugin's live objects, the per-class counts this
-  plugin's. The other entries
+- **Website and Discord links:** `BITCRAFT_SITE_URL` and
+  `BITCRAFT_DISCORD_URL`, opened in the player's browser by the top bar's
+  info and Discord icons. Generic behavior: no links.
+- **Generic behavior:** no version, Total Inventory Value, per-class values
+  or summary icon. The
+  Inventory Summary's object count and per-class counts are generic: both
+  cover this plugin's live objects. The other entries
   are generic: the synchronizer and relayer statuses and addresses in the
   status bar (the page probes each service's `/healthz` at the URLs
   `GET /settings` reports, every 10 seconds).
@@ -224,10 +244,15 @@ recipe's inputs or outputs change.
 
 A level-up spends full buckets, each worth 1 Iron plus its contents:
 `LevelUpQuarryK` adds 10 + 40 x 2^K, and `LevelUpMiningDrillK` adds
-15 + 135 x 2^K. Wear and rekeying do not change the value: an axe is worth
-what it cost to make whatever its durability, and a `Rekey<Class>` action
-leaves every value field alone. A total that is not whole shows one
-decimal place.
+15 + 135 x 2^K.
+
+Wear lowers the value: an axe is worth its value above times the fraction
+of its durability it has left, out of the 100 a new wood axe starts with
+(`FULL_DURABILITY`; upgrading to a stone or iron axe carries the durability
+over). An axe at 60 durability is worth 60% of a new one, and a spent axe
+nothing. Rekeying does not change the value: a `Rekey<Class>` action leaves
+every value field alone. Values are shown with three decimal places and the
+unit, as in "31.000 BIT".
 
 ## Welcome guide
 
