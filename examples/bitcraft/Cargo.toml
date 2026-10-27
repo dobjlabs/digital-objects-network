@@ -2,6 +2,7 @@
 name = "bitcraft-pexe-gen"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 
 [dependencies]
 strum_macros = "0.28"

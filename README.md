@@ -80,3 +80,7 @@ Each directory has its own README with the details.
 Built on [pod2](https://github.com/0xPARC/pod2) (0xPARC's predicate-of-data
 system) over `plonky2`: proofs are constant-size regardless of input count, and
 the chain sees only opaque commitments.
+
+## License
+
+MIT
