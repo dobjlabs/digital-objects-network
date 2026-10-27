@@ -273,7 +273,7 @@ pub async fn run(
                 .ok_or_else(|| anyhow!("run {run_id} reported success but no result"))?;
             println!("action:   {action}");
             println!("run id:   {run_id}");
-            println!("old root: {}", result.old_root);
+            println!("grounding root: {}", result.old_root);
             if !result.output_files.is_empty() {
                 println!("outputs:");
                 for f in &result.output_files {
@@ -547,8 +547,8 @@ async fn poll_run_to_terminal(client: &DobjdClient, run_id: &str, quiet: bool) -
     }
 }
 
-/// Print daemon events as JSON lines, including their sequence numbers.
-/// Includes activity from every connected client.
+/// Stream dobjd's shared event hub as JSON lines, including activity from
+/// the desktop, browser UI, MCP, and other CLI invocations.
 pub async fn events(client: &DobjdClient) -> Result<()> {
     let url = format!("{}/events", client.base_url());
     let mut es = EventSource::get(&url);

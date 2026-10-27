@@ -33,10 +33,13 @@ object could have reached its current state. Use `list_classes` and
 
 **Actions.** Actions are state transitions that consume input objects,
 generate a ZK proof, and produce output objects. Each action takes
-seconds to minutes of CPU time for proof generation. Start several runs
-at once if the user has work to batch: the daemon queues them behind its
-proof slots and follows each to the chain. For finer control, `start_proof_job`
-proves without submitting and `submit_transactions` posts when you choose.
+seconds to minutes of CPU time for proof generation. Multiple runs can be
+accepted at once. Each waits for an in-memory proof semaphore, reporting
+`queued` until it acquires a permit. The limit is one by default, configurable
+with `DOBJD_MAX_PROOFS`. A run releases its permit after recording, so submission
+and waiting for the chain can overlap with the next proof. Queued runs do not
+survive a daemon restart. For finer control, `start_proof_job` proves without
+submitting and `submit_transactions` posts when you choose.
 Use `list_actions` to see what's available and what each action requires.
 
 **Nullifiers and liveness.** When an action consumes an object, it
@@ -119,9 +122,8 @@ To wait for the result, poll `get_run({ run_id })` until `status` is terminal:
 
 The returned state also carries the ordered `progress` log, so you can show
 the user which step a run is on while it's still `generateProof` or
-`committing` (which covers recording, submitting and waiting for the chain).
-Start several runs and poll each `runId` independently; the daemon proves
-them one at a time by default and follows each to the chain.
+`committing` (which covers shrinking, recording, submitting and waiting for the
+chain). Poll each `runId` independently.
 
 To separate proving from submitting, use `start_proof_job`, then `get_proof_job` with
 `wait_ms` until it is `done`, then `submit_transactions` with its `txFinal`

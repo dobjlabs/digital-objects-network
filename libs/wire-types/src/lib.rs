@@ -307,6 +307,7 @@ pub struct RunActionResult {
     /// `GET /runs/{run_id}` and the scope of its `run-action-progress`
     /// events).
     pub run_id: String,
+    /// Grounding state root against which the transaction was proved.
     pub old_root: String,
     pub output_files: Vec<String>,
     /// The objects the transaction spends; nullified once it lands.
