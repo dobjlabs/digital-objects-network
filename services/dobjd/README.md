@@ -54,16 +54,16 @@ All routes return JSON unless noted; errors come back as
 | `GET`  | `/classes/{name}`               | `get_class`                                                  |
 | `GET`  | `/settings`                     | `load_settings`                                              |
 | `PUT`  | `/settings`                     | `save_settings`                                              |
-| `POST` | `/actions/run`                  | starts a run, returns `202 { runId, status }` (non-blocking) |
-| `GET`  | `/actions/runs`                 | retained runs, oldest first (`?status=active`: in-flight)    |
-| `GET`  | `/actions/runs/{run_id}`        | run status + result/error + progress log (poll)              |
-| `GET`  | `/actions/runs/{run_id}/events` | per-run SSE: replays buffered progress then tails live       |
+| `POST` | `/runs`                  | starts a run, returns `202 { runId, status }` (non-blocking) |
+| `GET`  | `/runs`                 | retained runs, oldest first (`?status=active`: in-flight)    |
+| `GET`  | `/runs/{run_id}`        | run status + result/error + progress log (poll)              |
+| `GET`  | `/runs/{run_id}/events` | per-run SSE: replays buffered progress then tails live       |
 | `GET`  | `/actions/{id}`                 | `get_action`                                                 |
 | `GET`  | `/actions/{id}/feasibility`     | `check_action`                                               |
-| `POST` | `/proofs`                       | starts a proof job (`prove` then `record`), returns `202` with its state; body as `/actions/run`'s `input` |
-| `GET`  | `/proofs`                       | retained proof jobs, oldest first (`?status=active`: unfinished) |
-| `GET`  | `/proofs/{job_id}`              | job state; `?wait=true&timeoutMs=` holds until it is done or failed |
-| `POST` | `/submissions`                  | `submit` each of `{ "txFinals": [...] }`, returns their records |
+| `POST` | `/proof-jobs`                       | starts a proof job (`prove` then `record`), returns `202` with its state; body as `/runs`'s `input` |
+| `GET`  | `/proof-jobs`                       | retained proof jobs, oldest first (`?status=active`: unfinished) |
+| `GET`  | `/proof-jobs/{job_id}`              | job state; `?wait=true&timeoutMs=` holds until it is done or failed |
+| `POST` | `/transactions/submit`                  | `submit` each of `{ "txFinals": [...] }`, returns their records |
 | `GET`  | `/transactions`                 | `list_transactions`: every record on disk, oldest first      |
 | `GET`  | `/transactions/{tx_final}`      | `get_transaction`; `?wait=true&timeoutMs=` holds until landed or expired |
 | `DELETE` | `/transactions/{tx_final}`    | `delete_transaction`: abandon a recorded transaction never offered to the relayer |
@@ -109,7 +109,7 @@ inputs are free again). A relayer job that fails is an annotation
 have been broadcast, and only the chain decides.
 
 dobjd owns no scheduling policy. A client that wants two proofs in flight and
-submissions batched runs `POST /proofs` and `POST /submissions` itself; the
+submissions batched runs `POST /proof-jobs` and `POST /transactions/submit` itself; the
 built-in run is one composition of the same stages. Settlement runs in the
 daemon: a task makes one pass whenever a record is written and every
 `SETTLE_INTERVAL` while any record is open, and `GET /objects` runs the same
@@ -124,7 +124,7 @@ input holds do not, and nothing on disk depends on them.
 
 ### Runs are non-blocking
 
-`POST /actions/run` registers the run, kicks off a background worker, and
+`POST /runs` registers the run, kicks off a background worker, and
 returns a `runId` immediately. The worker waits for a proof permit
 (`DOBJD_MAX_PROOFS`, default `1`: later runs queue as `queued` rather than
 being refused), proves and records under the run's id, submits, then follows
@@ -136,10 +136,10 @@ run keeps following it.
 The worker records the run's status, ordered progress log, and terminal
 result/error in an in-memory registry. Follow a run either way:
 
-- **Poll** `GET /actions/runs/{run_id}` for the current state (the
+- **Poll** `GET /runs/{run_id}` for the current state (the
   disconnect-recovery path — a client that lost its connection re-reads the
   outcome here).
-- **Stream** `GET /actions/runs/{run_id}/events`, which replays the buffered
+- **Stream** `GET /runs/{run_id}/events`, which replays the buffered
   progress (honoring `Last-Event-ID` on reconnect) then tails live events
   until the run is terminal.
 
@@ -169,12 +169,12 @@ alone, re-listing only when its stream reconnects.
 
 The `mcp` module ([`src/mcp.rs`](src/mcp.rs)) is the glue between this crate
 and [`mcp/`](../../interfaces/mcp). `DobjdOps` implements `DobjOps` against the same
-`Arc<Driver>`, registries and event hub the HTTP routes use, so `run_action` starts a
+`Arc<Driver>`, registries and event hub the HTTP routes use, so `start_run` starts a
 run (returning a `runId`) and `get_run` polls it — an MCP-driven action is the
 same run object the browser UI / `dobj` CLI can follow, and its
 progress fans out over the shared SSE hub in real time. The stage tools
-(`start_proof`, `get_proof`, `submit_transactions`, `get_transaction`, ...)
-mirror `/proofs`, `/submissions` and `/transactions`; their `wait_ms` is
+(`start_proof_job`, `get_proof_job`, `submit_transactions`, `get_transaction`, ...)
+mirror `/proof-jobs`, `/transactions/submit` and `/transactions`; their `wait_ms` is
 capped below MCP clients' tool-call limits, so a held call answers with the
 current state and the agent calls again.
 

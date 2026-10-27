@@ -15,25 +15,17 @@ mod classes;
 mod events;
 mod health;
 mod objects;
-mod proofs;
+mod proof_jobs;
 mod settings;
 mod state;
 mod transactions;
 pub mod wait;
 
-/// Build the axum router.
-///
-/// The default UI is mounted at /ui/. API routes
-/// remain at their existing paths for CLI, MCP and third-party clients.
-///
-/// Note: axum routes literal paths (e.g. `/objects/dir`) before
-/// parameterized ones (`/objects/{file_name}`), so the relative order
-/// isn't load-bearing — but the literals are listed first for readability.
+/// HTTP API and bundled UI routes.
 pub fn router(app_state: AppState, access: WebAccess) -> Router {
     Router::new()
         .route("/healthz", get(health::healthz))
         .route("/events", get(events::stream))
-        .route("/actions/runs/{run_id}/events", get(actions::run_events))
         .route("/objects", get(objects::load_objects))
         .route("/state-root", get(state::get_state_root))
         .route("/objects/dir", get(objects::get_objects_dir))
@@ -52,7 +44,9 @@ pub fn router(app_state: AppState, access: WebAccess) -> Router {
             get(settings::get_settings).put(settings::put_settings),
         )
         .route("/actions", get(actions::list_actions))
-        .route("/actions/run", post(actions::run_action))
+        .route("/runs", post(actions::start_run).get(actions::list_runs))
+        .route("/runs/{run_id}", get(actions::get_run))
+        .route("/runs/{run_id}/events", get(actions::run_events))
         // Raw `.pexe` bytes; raise the body cap from axum's 2 MiB default to
         // the pexe limit so larger plugins aren't rejected before the daemon
         // can validate them.
@@ -61,13 +55,11 @@ pub fn router(app_state: AppState, access: WebAccess) -> Router {
             post(actions::install_plugin)
                 .layer(DefaultBodyLimit::max(driver::MAX_PEXE_BYTES as usize)),
         )
-        .route("/actions/runs", get(actions::list_runs))
-        .route("/actions/runs/{run_id}", get(actions::get_run))
         .route("/actions/{id}", get(actions::inspect_action))
         .route("/actions/{id}/feasibility", get(actions::check_feasibility))
-        .route("/proofs", post(proofs::start).get(proofs::list))
-        .route("/proofs/{job_id}", get(proofs::get))
-        .route("/submissions", post(transactions::submit))
+        .route("/proof-jobs", post(proof_jobs::start).get(proof_jobs::list))
+        .route("/proof-jobs/{job_id}", get(proof_jobs::get))
+        .route("/transactions/submit", post(transactions::submit))
         .route("/transactions", get(transactions::list))
         .route(
             "/transactions/{tx_final}",
@@ -85,4 +77,110 @@ pub fn router(app_state: AppState, access: WebAccess) -> Router {
                 .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
                 .on_failure(()),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode},
+    };
+    use driver::{Driver, DriverDeps, DriverPaths};
+    use serde_json::{Value, json};
+    use tower::ServiceExt;
+
+    use crate::{
+        events::EventHub, mcp::McpRuntime, proof_jobs::ProofJobRegistry, runs::RunRegistry,
+        settle::Settler, state::Services,
+    };
+
+    async fn request(app: &Router, method: &str, path: &str, body: Value) -> (StatusCode, Value) {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("host", "127.0.0.1:7717")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    #[tokio::test]
+    async fn resource_routes_accept_work_and_expose_its_lifecycle() {
+        let home = tempfile::tempdir().unwrap();
+        let paths = DriverPaths::from_dobj_root(home.path());
+        let driver =
+            Arc::new(Driver::open(paths.clone(), DriverDeps::load(&paths).unwrap()).unwrap());
+        let events = EventHub::new();
+        let services = Services {
+            settler: Arc::new(Settler::new(driver.clone(), events.clone())),
+            driver,
+            events,
+            runs: RunRegistry::default(),
+            proof_jobs: ProofJobRegistry::default(),
+        };
+        let mcp = Arc::new(McpRuntime::new(
+            services.clone(),
+            "127.0.0.1:7718".to_string(),
+            7717,
+        ));
+        let app = router(AppState::new(services, mcp), WebAccess::new(7717));
+        for path in ["/runs", "/proof-jobs", "/transactions"] {
+            assert_eq!(
+                request(&app, "GET", path, Value::Null).await,
+                (StatusCode::OK, json!([]))
+            );
+        }
+        assert_eq!(
+            request(
+                &app,
+                "POST",
+                "/transactions/submit",
+                json!({"txFinals": []})
+            )
+            .await,
+            (StatusCode::OK, json!([]))
+        );
+
+        let input =
+            json!({"action": {"pluginName": "test", "name": "Missing"}, "inputObjectPaths": []});
+        let (status, job) = request(&app, "POST", "/proof-jobs", input.clone()).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let path = format!(
+            "/proof-jobs/{}?wait=true&timeoutMs=5000",
+            job["jobId"].as_str().unwrap()
+        );
+        let (status, job) = request(&app, "GET", &path, Value::Null).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(job["status"], "failed");
+        assert!(job["error"].as_str().unwrap().contains("unknown action"));
+
+        let (status, run) = request(&app, "POST", "/runs", json!({"input": input})).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let path = format!("/runs/{}", run["runId"].as_str().unwrap());
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let (status, run) = request(&app, "GET", &path, Value::Null).await;
+                assert_eq!(status, StatusCode::OK);
+                if run["status"] == "failed" {
+                    assert!(run["error"].as_str().unwrap().contains("unknown action"));
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
 }

@@ -5,7 +5,7 @@ import {
   loadActions,
   loadObjects,
   listenRunActionProgressForRun,
-  runAction,
+  startRun,
   type ActionArgValues,
   type ActionPayload as Action,
   type ObjectSummaryPayload as ObjectSummary,
@@ -403,7 +403,7 @@ export const useStore = create<AppState>((set, get) => ({
       // commit run on a background worker. Initialize the panel against that
       // id, then subscribe to the run's replayable SSE before polling for the
       // authoritative terminal result.
-      const accepted = await runAction({
+      const accepted = await startRun({
         action,
         inputObjectPaths: inputBindings.map((binding) => binding.objectPath),
         ...(args && Object.keys(args).length > 0 ? { args } : {}),

@@ -8,7 +8,7 @@ import type {
   ObjectRemovedEvent,
   ObjectSummaryPayload,
   RunAccepted,
-  RunActionInput,
+  ActionInput,
   RunActionProgress,
   RunState,
 } from "./wireTypes";
@@ -21,7 +21,7 @@ export type {
   ObjectSummaryPayload,
   QualifiedNamePayload,
   RunAccepted,
-  RunActionInput,
+  ActionInput,
   RunActionProgress,
   RunActionResult,
   RunState,
@@ -113,8 +113,8 @@ export function getStateRoot(): Promise<string> {
 // (runId + status); proof generation + commit happen on a background worker.
 // Follow progress via the per-run SSE stream and read the terminal outcome
 // with `getRun`, so a dropped connection can't lose the result.
-export function runAction(input: RunActionInput): Promise<RunAccepted> {
-  return dobjdFetch("/actions/run", {
+export function startRun(input: ActionInput): Promise<RunAccepted> {
+  return dobjdFetch("/runs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ input }),
@@ -125,7 +125,7 @@ export function runAction(input: RunActionInput): Promise<RunAccepted> {
 // if it fails, and the progress log. Polled to detect completion and to
 // recover the outcome if live progress was missed.
 export function getRun(runId: string): Promise<RunState> {
-  return dobjdFetch(`/actions/runs/${encodeURIComponent(runId)}`).then(
+  return dobjdFetch(`/runs/${encodeURIComponent(runId)}`).then(
     httpJson<RunState>,
   );
 }
@@ -138,8 +138,7 @@ export function importObject(dobj: string): Promise<ObjectSummaryPayload> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ dobj }),
-    // Import does one synchronizer round-trip; allow more than the default
-    // read timeout, but not unbounded like /actions/run.
+    // Allow extra time for the synchronizer request.
     timeoutMs: 30_000,
   }).then(httpJson<ObjectSummaryPayload>);
 }
@@ -167,7 +166,7 @@ export function saveAppSettings(
 // === Event subscriptions ====================================================
 //
 // The global `/events` stream is a firehose used for coarse refresh triggers.
-// The active proof panel follows its own replayable `/actions/runs/{id}/events`
+// The active proof panel follows its own replayable `/runs/{id}/events`
 // stream so it cannot miss early progress emitted before the frontend learned
 // the daemon-assigned run id.
 
@@ -264,7 +263,7 @@ export function listenRunActionProgressForRun(
   handler: (event: RunActionProgress) => void,
 ): UnlistenFn {
   const source = new EventSource(
-    `${HTTP_BASE}/actions/runs/${encodeURIComponent(runId)}/events`,
+    `${HTTP_BASE}/runs/${encodeURIComponent(runId)}/events`,
   );
   let closed = false;
   const close = () => {

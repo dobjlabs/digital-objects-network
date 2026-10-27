@@ -171,13 +171,13 @@ pub struct ListRunsParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetRunParams {
-    /// The `runId` returned by `run_action`.
+    /// The `runId` returned by `start_run`.
     pub run_id: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct GetProofParams {
-    /// The `jobId` returned by `start_proof`.
+pub struct GetProofJobParams {
+    /// The `jobId` returned by `start_proof_job`.
     pub job_id: String,
     /// Maximum wait for job completion, capped by the server. Omit to return immediately.
     #[serde(default)]
@@ -185,7 +185,7 @@ pub struct GetProofParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct ListProofsParams {
+pub struct ListProofJobsParams {
     /// When true, list only jobs that have not finished.
     #[serde(default)]
     pub active_only: bool,
@@ -193,7 +193,7 @@ pub struct ListProofsParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetTransactionParams {
-    /// The transaction's `txFinal`, from `start_proof`'s job or `list_transactions`.
+    /// The transaction's `txFinal`, from `start_proof_job`'s job or `list_transactions`.
     pub tx_final: String,
     /// Maximum wait for landing or expiry, capped by the server. Omit to return immediately.
     #[serde(default)]
@@ -330,23 +330,23 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Start an action end to end. Returns immediately with a runId and status=queued; the run waits for a proof slot, proves, records and submits the transaction, then follows it until it lands on the chain. Poll get_run(runId) until status is succeeded or failed (then read result / error). Several runs may be queued at once. For separate control over proving and submitting, use start_proof and submit_transactions instead. `args` optionally supplies caller data by name in POD2 JSON form, e.g. {\"count\": {\"Int\": \"42\"}, \"label\": \"hello\"}. Scripts read these values with arg(name) inside unsafe blocks. Argument names read during loading are listed on list_actions items. Omitted values are absent; the script chooses any defaults."
+        description = "Start an action end to end. Returns immediately with a runId and status=queued; the run waits for a proof slot, proves, records and submits the transaction, then follows it until it lands on the chain. Poll get_run(runId) until status is succeeded or failed (then read result / error). Several runs may be queued at once. For separate control over proving and submitting, use start_proof_job and submit_transactions instead. `args` optionally supplies caller data by name in POD2 JSON form, e.g. {\"count\": {\"Int\": \"42\"}, \"label\": \"hello\"}. Scripts read these values with arg(name) inside unsafe blocks. Argument names read during loading are listed on list_actions items. Omitted values are absent; the script chooses any defaults."
     )]
-    fn run_action(
+    fn start_run(
         &self,
-        Parameters(params): Parameters<RunActionInput>,
+        Parameters(params): Parameters<ActionInput>,
     ) -> Result<Json<RunAccepted>, String> {
         // Returns as soon as the run is registered + spawned; the heavy work
         // happens on a background task, so this tool call never holds the
         // connection open for the proof.
         self.ops
-            .run_action(params)
+            .start_run(params)
             .map(Json)
             .map_err(|e| e.to_string())
     }
 
     #[tool(
-        description = "Get the current state of a run started by run_action. Returns its status (queued, generateProof, committing, succeeded, failed), the result (grounding root, output files and the input files it spent) once the transaction landed, an error message if it failed or expired, and the ordered progress log. Poll this after run_action."
+        description = "Get the current state of a run started by start_run. Returns its status (queued, generateProof, committing, succeeded, failed), the result (grounding root, output files and the input files it spent) once the transaction landed, an error message if it failed or expired, and the ordered progress log. Poll this after start_run."
     )]
     fn get_run(
         &self,
@@ -372,14 +372,14 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Prove an action without submitting it. Returns immediately with a jobId; the job proves, then records a transaction on disk (status done, txFinal set) whose outputs are held as unknown until it lands. Nothing is posted to the relayer: call submit_transactions when ready, or delete_transaction to abandon it. Proof jobs are not queued behind run_action's proof slot; start as many as the machine should prove at once. Same parameters as run_action."
+        description = "Prove an action without submitting it. Returns immediately with a jobId; the job proves, then records a transaction on disk (status done, txFinal set) whose outputs are held as unknown until it lands. Nothing is posted to the relayer: call submit_transactions when ready, or delete_transaction to abandon it. Proof jobs are not queued behind start_run's proof slot; start as many as the machine should prove at once. Same parameters as start_run."
     )]
-    fn start_proof(
+    fn start_proof_job(
         &self,
-        Parameters(params): Parameters<RunActionInput>,
+        Parameters(params): Parameters<ActionInput>,
     ) -> Result<Json<ProofJobState>, String> {
         self.ops
-            .start_proof(params)
+            .start_proof_job(params)
             .map(Json)
             .map_err(|e| e.to_string())
     }
@@ -387,12 +387,12 @@ impl<T: DobjOps> DobjMcpService<T> {
     #[tool(
         description = "Get a proof job's state: queued, proving, recording, done (txFinal set) or failed (error set). Pass wait_ms to have the daemon hold the call until the job finishes, up to its cap; the answer is the current state either way, so call again while it is not terminal."
     )]
-    fn get_proof(
+    fn get_proof_job(
         &self,
-        Parameters(params): Parameters<GetProofParams>,
+        Parameters(params): Parameters<GetProofJobParams>,
     ) -> Result<Json<ProofJobState>, String> {
         self.ops
-            .get_proof(&params.job_id, params.wait_ms)
+            .get_proof_job(&params.job_id, params.wait_ms)
             .map(Json)
             .map_err(|e| e.to_string())
     }
@@ -400,12 +400,12 @@ impl<T: DobjOps> DobjMcpService<T> {
     #[tool(
         description = "List the proof jobs the daemon still holds, oldest first. Set active_only to list just the unfinished ones. Jobs live in memory; the transactions they recorded are on disk, see list_transactions."
     )]
-    fn list_proofs(
+    fn list_proof_jobs(
         &self,
-        Parameters(params): Parameters<ListProofsParams>,
+        Parameters(params): Parameters<ListProofJobsParams>,
     ) -> Result<Json<ProofJobList>, String> {
         self.ops
-            .list_proofs(params.active_only)
+            .list_proof_jobs(params.active_only)
             .map(|jobs| Json(ProofJobList { jobs }))
             .map_err(|e| e.to_string())
     }
@@ -415,7 +415,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     )]
     fn submit_transactions(
         &self,
-        Parameters(params): Parameters<SubmitRequest>,
+        Parameters(params): Parameters<SubmitTransactionsRequest>,
     ) -> Result<Json<TransactionList>, String> {
         self.ops
             .submit_transactions(params.tx_finals)
@@ -744,7 +744,7 @@ mod tests {
         assert!(tools.contains(&"inspect_object".to_string()));
         assert!(tools.contains(&"inspect_class".to_string()));
         assert!(tools.contains(&"inspect_action".to_string()));
-        assert!(tools.contains(&"run_action".to_string()));
+        assert!(tools.contains(&"start_run".to_string()));
         assert!(tools.contains(&"get_run".to_string()));
         assert!(tools.contains(&"list_runs".to_string()));
         assert!(tools.contains(&"check_feasibility".to_string()));
@@ -760,9 +760,9 @@ mod tests {
         assert!(tools.contains(&"get_command".to_string()));
         assert!(tools.contains(&"invoke_prompt".to_string()));
         for tool in [
-            "start_proof",
-            "get_proof",
-            "list_proofs",
+            "start_proof_job",
+            "get_proof_job",
+            "list_proof_jobs",
             "submit_transactions",
             "list_transactions",
             "get_transaction",
@@ -1033,10 +1033,10 @@ mod tests {
     }
 
     #[test]
-    fn test_run_action_via_handler() {
+    fn test_start_run_via_handler() {
         let service = make_service();
         let Json(accepted) = service
-            .run_action(Parameters(RunActionInput {
+            .start_run(Parameters(ActionInput {
                 action: craft_basics("FindLog"),
                 input_object_paths: vec![],
                 args: Default::default(),

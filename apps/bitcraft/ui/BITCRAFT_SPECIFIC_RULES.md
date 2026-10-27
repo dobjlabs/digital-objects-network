@@ -40,7 +40,7 @@ that block should be plugin-agnostic.
 ### Only bitcraft runs are restored on page load
 
 - **Where:** `PLUGIN_NAME`, applied in `restoreRuns()` to the result of
-  `GET /actions/runs?status=active`.
+  `GET /runs?status=active`.
 - **Generic behavior:** restore every run dobjd has in progress, whichever
   plugin's action it runs (runs can also be started by the CLI or an MCP
   agent).

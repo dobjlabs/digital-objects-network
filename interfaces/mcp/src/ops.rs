@@ -13,18 +13,18 @@ pub trait DobjOps: Send + Sync + 'static {
     fn inspect_action(&self, action: &QualifiedName) -> anyhow::Result<ActionSummary>;
     /// Start a run in the background and return its handle immediately. The
     /// proof + commit pipeline runs asynchronously; follow it with `get_run`.
-    fn run_action(&self, input: RunActionInput) -> anyhow::Result<RunAccepted>;
+    fn start_run(&self, input: ActionInput) -> anyhow::Result<RunAccepted>;
     /// Current state of a previously-started run, by its run id.
     fn get_run(&self, run_id: &str) -> anyhow::Result<RunState>;
     /// Every run the host still holds, oldest first. `active_only` keeps
     /// just the runs that have not succeeded or failed.
     fn list_runs(&self, active_only: bool) -> anyhow::Result<Vec<RunState>>;
     /// Start proving and recording; returns before completion.
-    /// Follow the job with `get_proof`.
-    fn start_proof(&self, input: RunActionInput) -> anyhow::Result<ProofJobState>;
+    /// Follow the job with `get_proof_job`.
+    fn start_proof_job(&self, input: ActionInput) -> anyhow::Result<ProofJobState>;
     /// Read a job's state, optionally waiting up to `wait_ms` for completion.
-    fn get_proof(&self, job_id: &str, wait_ms: Option<u64>) -> anyhow::Result<ProofJobState>;
-    fn list_proofs(&self, active_only: bool) -> anyhow::Result<Vec<ProofJobState>>;
+    fn get_proof_job(&self, job_id: &str, wait_ms: Option<u64>) -> anyhow::Result<ProofJobState>;
+    fn list_proof_jobs(&self, active_only: bool) -> anyhow::Result<Vec<ProofJobState>>;
     /// Post recorded transactions to the relayer; returns their records.
     fn submit_transactions(&self, tx_finals: Vec<String>)
     -> anyhow::Result<Vec<TransactionRecord>>;

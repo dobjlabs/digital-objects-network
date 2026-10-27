@@ -6,9 +6,9 @@ use tracing_subscriber::{EnvFilter, prelude::*};
 
 mod error;
 mod events;
-mod jobs;
 mod mcp;
 mod parent_lifetime;
+mod proof_jobs;
 mod registry;
 mod routes;
 mod runs;
@@ -17,7 +17,7 @@ mod state;
 mod ui;
 mod web_access;
 
-use jobs::JobRegistry;
+use proof_jobs::ProofJobRegistry;
 use runs::RunRegistry;
 use settle::Settler;
 use state::{AppState, Services};
@@ -64,7 +64,7 @@ async fn run() -> Result<()> {
         driver: driver.clone(),
         events,
         runs: runs.clone(),
-        jobs: JobRegistry::default(),
+        proof_jobs: ProofJobRegistry::default(),
         settler: settler.clone(),
     };
 
@@ -114,7 +114,7 @@ async fn run() -> Result<()> {
         loop {
             ticker.tick().await;
             reaper.runs.entries.reap(registry::RETENTION);
-            reaper.jobs.reap(registry::RETENTION);
+            reaper.proof_jobs.reap(registry::RETENTION);
         }
     });
 

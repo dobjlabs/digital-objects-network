@@ -136,7 +136,7 @@ enum Cmd {
         wait: bool,
     },
     /// List retained proof jobs.
-    Proofs {
+    ProofJobs {
         /// List only unfinished jobs.
         #[arg(long)]
         active: bool,
@@ -271,7 +271,7 @@ async fn main() -> Result<()> {
             args,
             wait,
         } => commands::prove(&client, qualified_id, inputs, args, wait, cli.json).await,
-        Cmd::Proofs { active } => commands::proofs(&client, active, cli.json).await,
+        Cmd::ProofJobs { active } => commands::proof_jobs(&client, active, cli.json).await,
         Cmd::Submit { tx_finals } => commands::submit(&client, tx_finals, cli.json).await,
         Cmd::Transactions => commands::transactions(&client, cli.json).await,
         Cmd::InspectTransaction { tx_final, wait } => {

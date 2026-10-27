@@ -11,9 +11,9 @@ use tokio::time::sleep;
 use crate::client::DobjdClient;
 use wire_types::transactions::TransactionRecord;
 use wire_types::{
-    ActionArgValues, ActionSummary, CheckActionReport, ClassRef, ClassSummary, DriverSettings,
-    ImportObjectRequest, ObjectSummary, ObjectsDirInfo, ProofJobState, QualifiedName, RunAccepted,
-    RunActionInput, RunActionRequest, RunState, RunStatus, SubmitRequest,
+    ActionArgValues, ActionInput, ActionSummary, CheckActionReport, ClassRef, ClassSummary,
+    DriverSettings, ImportObjectRequest, ObjectSummary, ObjectsDirInfo, ProofJobState,
+    QualifiedName, RunAccepted, RunState, RunStatus, StartRunRequest, SubmitTransactionsRequest,
 };
 
 const MAX_CONSECUTIVE_RUN_POLL_ERRORS: usize = 5;
@@ -201,9 +201,9 @@ pub async fn run(
     // background worker, and returns the run handle immediately.
     let accepted: RunAccepted = client
         .post_json(
-            "/actions/run",
-            &RunActionRequest {
-                input: RunActionInput {
+            "/runs",
+            &StartRunRequest {
+                input: ActionInput {
                     action: action.clone(),
                     input_object_paths: input_paths,
                     args,
@@ -221,7 +221,7 @@ pub async fn run(
     // endpoint replays from there — so a hiccup mid-run just resumes where it
     // left off. We stop at the first terminal event; the authoritative outcome
     // is read below either way.
-    let events_url = format!("{}/actions/runs/{}/events", client.base_url(), run_id);
+    let events_url = format!("{}/runs/{}/events", client.base_url(), run_id);
     let mut es = EventSource::get(&events_url);
     // Bound consecutive reconnect failures so a genuinely-down daemon falls
     // through to the poll (which surfaces the error) instead of retrying
@@ -311,8 +311,8 @@ pub async fn prove(
     let args = parse_action_args(&raw_args)?;
     let mut job: ProofJobState = client
         .post_json(
-            "/proofs",
-            &RunActionInput {
+            "/proof-jobs",
+            &ActionInput {
                 action,
                 input_object_paths: input_paths,
                 args,
@@ -321,7 +321,10 @@ pub async fn prove(
         .await?;
     if wait {
         while !job.status.is_terminal() {
-            let path = format!("/proofs/{}?wait=true&timeoutMs={WAIT_STEP_MS}", job.job_id);
+            let path = format!(
+                "/proof-jobs/{}?wait=true&timeoutMs={WAIT_STEP_MS}",
+                job.job_id
+            );
             job = client.get_json(&path).await?;
             if let Some(message) = &job.message
                 && !json
@@ -353,11 +356,11 @@ fn print_proof_job(job: &ProofJobState) {
     }
 }
 
-pub async fn proofs(client: &DobjdClient, active: bool, json: bool) -> Result<()> {
+pub async fn proof_jobs(client: &DobjdClient, active: bool, json: bool) -> Result<()> {
     let path = if active {
-        "/proofs?status=active"
+        "/proof-jobs?status=active"
     } else {
-        "/proofs"
+        "/proof-jobs"
     };
     let jobs: Vec<ProofJobState> = client.get_json(path).await?;
     if json {
@@ -382,7 +385,10 @@ pub async fn proofs(client: &DobjdClient, active: bool, json: bool) -> Result<()
 
 pub async fn submit(client: &DobjdClient, tx_finals: Vec<String>, json: bool) -> Result<()> {
     let records: Vec<TransactionRecord> = client
-        .post_json("/submissions", &SubmitRequest { tx_finals })
+        .post_json(
+            "/transactions/submit",
+            &SubmitTransactionsRequest { tx_finals },
+        )
         .await?;
     if json {
         println!("{}", serde_json::to_string_pretty(&records)?);
@@ -507,11 +513,11 @@ fn parse_action_args(raw: &[String]) -> Result<ActionArgValues> {
     Ok(args)
 }
 
-/// Poll `GET /actions/runs/{run_id}` until the run reaches a terminal state,
+/// Poll `GET /runs/{run_id}` until the run reaches a terminal state,
 /// tolerating transient follow-up failures so a brief HTTP hiccup is not
 /// reported as an action failure.
 async fn poll_run_to_terminal(client: &DobjdClient, run_id: &str, quiet: bool) -> Result<RunState> {
-    let path = format!("/actions/runs/{run_id}");
+    let path = format!("/runs/{run_id}");
     let mut consecutive_errors = 0usize;
     loop {
         match client.get_json::<RunState>(&path).await {

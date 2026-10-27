@@ -161,7 +161,7 @@ impl DobjOps for MockDobjOps {
         Ok(action_summary.clone())
     }
 
-    fn run_action(&self, input: RunActionInput) -> anyhow::Result<RunAccepted> {
+    fn start_run(&self, input: ActionInput) -> anyhow::Result<RunAccepted> {
         if !self.actions.iter().any(|a| a.action == input.action) {
             bail!(
                 "unknown action: {}::{}",
@@ -209,7 +209,7 @@ impl DobjOps for MockDobjOps {
         Ok(vec![self.get_run("run-1")?])
     }
 
-    fn start_proof(&self, input: RunActionInput) -> anyhow::Result<ProofJobState> {
+    fn start_proof_job(&self, input: ActionInput) -> anyhow::Result<ProofJobState> {
         if !self.actions.iter().any(|a| a.action == input.action) {
             bail!(
                 "unknown action: {}::{}",
@@ -231,7 +231,7 @@ impl DobjOps for MockDobjOps {
         })
     }
 
-    fn get_proof(&self, job_id: &str, _wait_ms: Option<u64>) -> anyhow::Result<ProofJobState> {
+    fn get_proof_job(&self, job_id: &str, _wait_ms: Option<u64>) -> anyhow::Result<ProofJobState> {
         Ok(ProofJobState {
             job_id: job_id.to_string(),
             action: qname("CraftWood"),
@@ -246,11 +246,11 @@ impl DobjOps for MockDobjOps {
         })
     }
 
-    fn list_proofs(&self, active_only: bool) -> anyhow::Result<Vec<ProofJobState>> {
+    fn list_proof_jobs(&self, active_only: bool) -> anyhow::Result<Vec<ProofJobState>> {
         if active_only {
             return Ok(Vec::new());
         }
-        Ok(vec![self.get_proof("job-1", None)?])
+        Ok(vec![self.get_proof_job("job-1", None)?])
     }
 
     fn submit_transactions(
@@ -702,10 +702,10 @@ mod tests {
     }
 
     #[test]
-    fn test_run_action_success() {
+    fn test_start_run_success() {
         let mock = MockDobjOps::new();
         let accepted = mock
-            .run_action(RunActionInput {
+            .start_run(ActionInput {
                 action: qname("CraftWood"),
                 args: Default::default(),
                 input_object_paths: vec!["craft-basics__log_0xabc1.dobj".to_string()],
@@ -725,14 +725,14 @@ mod tests {
     }
 
     #[test]
-    fn test_run_action_concurrent() {
+    fn test_start_run_concurrent() {
         use std::sync::Arc;
         let mock = Arc::new(MockDobjOps::new());
         let handles: Vec<_> = (0..3)
             .map(|_| {
                 let mock = mock.clone();
                 std::thread::spawn(move || {
-                    mock.run_action(RunActionInput {
+                    mock.start_run(ActionInput {
                         action: qname("FindLog"),
                         args: Default::default(),
                         input_object_paths: vec![],
@@ -748,9 +748,9 @@ mod tests {
     }
 
     #[test]
-    fn test_run_action_unknown() {
+    fn test_start_run_unknown() {
         let mock = MockDobjOps::new();
-        let result = mock.run_action(RunActionInput {
+        let result = mock.start_run(ActionInput {
             action: qname("CraftDiamond"),
             args: Default::default(),
             input_object_paths: vec![],

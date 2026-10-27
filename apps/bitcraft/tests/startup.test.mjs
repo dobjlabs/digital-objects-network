@@ -106,7 +106,7 @@ async function page(context, options = {}) {
         }
         if (parsed.pathname === "/actions") return respond(backend.actions);
         if (parsed.pathname === "/classes") return respond(backend.classes ?? []);
-        if (parsed.pathname === "/actions/run") {
+        if (parsed.pathname === "/runs" && init.method === "POST") {
           const input = JSON.parse(init.body).input;
           backend.posts.push(input);
           if (backend.postError) return respond({}, 503);
@@ -114,10 +114,10 @@ async function page(context, options = {}) {
           backend.states.set(runId, state(runId));
           return respond({ runId, status: "queued", createdAtMs: 1000 });
         }
-        if (parsed.pathname === "/actions/runs") {
+        if (parsed.pathname === "/runs") {
           return respond([...backend.states.values()].filter((run) => !["succeeded", "failed"].includes(run.status)), backend.listError ? 503 : 200);
         }
-        if (parsed.pathname.startsWith("/actions/runs/")) {
+        if (parsed.pathname.startsWith("/runs/")) {
           if (backend.daemonDown) throw new TypeError("Failed to fetch");
           // Read before waiting, so a held read answers with the state it saw.
           const run = backend.states.get(decodeURIComponent(parsed.pathname.split("/").at(-1)));
@@ -147,7 +147,7 @@ async function page(context, options = {}) {
     await flush();
   };
   const openStreams = (runId) => sources.filter((source) => !source.closed
-    && source.url.endsWith(`/actions/runs/${encodeURIComponent(runId)}/events`));
+    && source.url.endsWith(`/runs/${encodeURIComponent(runId)}/events`));
   // A progress event on the run's stream, with no change to its state.
   const emit = async (runId) => {
     for (const source of openStreams(runId)) source.onmessage?.({ data: "{}" });
