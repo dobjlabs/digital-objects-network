@@ -130,14 +130,14 @@ with tempfile.TemporaryDirectory(prefix='bitcraft-desktop-smoke-') as temporary:
             _, layout = menu.GetLayout(0, -1, dbus.Array([], signature='s'))
             manage = find_menu(layout, 'Open Bitcraft')
             quit_id = find_menu(layout, 'Quit Bitcraft')
-            agent_id = find_menu(layout, 'Play with an agent...')
+            agent_id = find_menu(layout, 'Play with agents...')
             assert manage is not None and quit_id is not None and agent_id is not None
             menu.Event(agent_id, 'clicked', dbus.Int32(0, variant_level=1), dbus.UInt32(0))
-            guide = wait_for(lambda: find_window(app.pid, 'Play Bitcraft with an agent'), 'agent guide opens from tray')
+            guide = wait_for(lambda: find_window(app.pid, 'Play with agents'), 'agent guide opens from tray')
             wait_for(lambda: visible(guide), 'agent guide is visible while game stays hidden')
             assert not visible(window)
             close_window(guide)
-            wait_for(lambda: find_window(app.pid, 'Play Bitcraft with an agent') is None, 'agent guide closes instead of hiding to tray')
+            wait_for(lambda: find_window(app.pid, 'Play with agents') is None, 'agent guide closes instead of hiding to tray')
             assert app.poll() is None
             menu.Event(manage, 'clicked', dbus.Int32(0, variant_level=1), dbus.UInt32(0))
             wait_for(lambda: visible(window), 'tray Open restores hidden window')

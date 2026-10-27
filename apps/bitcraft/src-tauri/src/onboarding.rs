@@ -1,64 +1,22 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Serialize;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AgentGuide {
-    prompt: String,
-    skill_path: String,
-    enable_mcp: String,
-    mcp_config: String,
+pub fn prompt(skill: &Path, cli: &Path, home: &Path) -> String {
+    format!(
+        "Help me play the installed Bitcraft game.\n\nFirst read and follow the player skill at:\n{}\n\nThe installed CLI executable is:\n{}\n\nWork in my Bitcraft home directory:\n{}\n\nRun the CLI from this directory or a subdirectory; it discovers the game's connection automatically. Keep Bitcraft open.\n\nStart by checking --help, my current inventory, and available actions, then help me choose a goal and make progress. Use the installed app; no source checkout is needed. You need local filesystem and shell access.\n",
+        skill.display(),
+        cli.display(),
+        home.display(),
+    )
 }
 
-fn quote_argument(value: &str) -> String {
-    #[cfg(target_os = "windows")]
-    let quoted = value.replace('\'', "''");
-    #[cfg(not(target_os = "windows"))]
-    let quoted = value.replace('\'', "'\"'\"'");
-    format!("'{quoted}'")
-}
-
-fn guide(skill: &Path, cli: &Path, home: &Path) -> AgentGuide {
-    let path_text = |path: &Path| serde_json::to_string(&path.to_string_lossy()).unwrap();
-    let prompt = format!(
-        "Help me play the installed Bitcraft game.\n\nFirst read and follow the player skill at:\n{}\n\nThe installed CLI executable is:\n{}\n\nFor every CLI invocation, pass --home {} before the subcommand.\n\nStart by checking --help, my current inventory, and available actions, then help me choose a goal and make progress. Use the installed app; no source checkout is needed. You need local filesystem and shell access.\n",
-        path_text(skill),
-        path_text(cli),
-        path_text(home),
-    );
-    let prefix = if cfg!(target_os = "windows") {
-        "& "
-    } else {
-        ""
-    };
-    let enable_mcp = format!(
-        "{prefix}{} --home {} settings set --mcp on",
-        quote_argument(&cli.to_string_lossy()),
-        quote_argument(&home.to_string_lossy())
-    );
-    AgentGuide {
-        prompt,
-        skill_path: skill.to_string_lossy().into_owned(),
-        enable_mcp,
-        mcp_config: format!(
-            "[mcp_servers.bitcraft]\nurl = \"http://127.0.0.1:{}/mcp\"\nrequired = true\n",
-            crate::runtime::HTTP_PORT + 1
-        ),
-    }
-}
-
-pub fn show(app: &tauri::AppHandle) -> Result<()> {
-    if let Some(window) = app.get_webview_window("agent-guide") {
-        window.show()?;
-        window.set_focus()?;
-        return Ok(());
-    }
+pub fn paths(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf)> {
     let (resources, _) = crate::runtime_paths(app)?;
     let cli = if cfg!(debug_assertions) {
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("binaries")
             .join(format!(
                 "bitcraft-dobj-{}{}",
@@ -68,46 +26,45 @@ pub fn show(app: &tauri::AppHandle) -> Result<()> {
     } else {
         std::env::current_exe()?
             .parent()
-            .unwrap()
+            .context("Cannot locate Bitcraft's installed CLI")?
             .join(format!("bitcraft-dobj{}", std::env::consts::EXE_SUFFIX))
     };
-    let skill = resources.join("skills/bitcraft-play/SKILL.md");
-    let context = guide(&skill, &cli, &app.state::<crate::Desktop>().home);
-    let window =
-        WebviewWindowBuilder::new(app, "agent-guide", WebviewUrl::App("agent.html".into()))
-            .title("Play Bitcraft with an agent")
-            .inner_size(760.0, 700.0)
-            .min_inner_size(560.0, 480.0)
-            .initialization_script(format!(
-                "window.bitcraftAgent = {};",
-                serde_json::to_string(&context)?
-            ))
-            .on_navigation(crate::is_local_app_url)
-            .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
-            .build()?;
-    window.show()?;
-    window.set_focus()?;
-    Ok(())
+    Ok((resources.join("skills/bitcraft-play/SKILL.md"), cli))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Guide<'a> {
+    prompt: String,
+    error: Option<&'a str>,
+}
 
-    #[test]
-    fn copied_prompt_uses_the_selected_installation_and_home() {
-        let context = guide(
-            Path::new("/Custom Apps/Game/skills/SKILL.md"),
-            Path::new("/Custom Apps/Game/bin/cli"),
-            Path::new("/data/Alice's game"),
-        );
-        assert!(context.prompt.contains("/Custom Apps/Game/skills/SKILL.md"));
-        assert!(context.prompt.contains("/Custom Apps/Game/bin/cli"));
-        assert!(context.prompt.contains("--home \"/data/Alice's game\""));
-        #[cfg(not(target_os = "windows"))]
-        assert!(context.enable_mcp.contains("'/data/Alice'\"'\"'s game'"));
-        #[cfg(target_os = "windows")]
-        assert!(context.enable_mcp.contains("'/data/Alice''s game'"));
-        assert!(context.mcp_config.contains("127.0.0.1:7728/mcp"));
-    }
+pub fn show(app: &tauri::AppHandle, error: Option<&str>) -> Result<()> {
+    let (skill, cli) = paths(app)?;
+    let state = app.state::<crate::Desktop>();
+    let guide = Guide {
+        prompt: prompt(&skill, &cli, &state.home),
+        error,
+    };
+    let context = serde_json::to_string(&guide)?;
+    let window = if let Some(window) = app.get_webview_window("agent-guide") {
+        window.eval(format!(
+            "window.bitcraftAgentGuide = {context}; window.dispatchEvent(new Event('bitcraft-agent-guide-updated'));"
+        ))?;
+        window
+    } else {
+        let dev_url = crate::shell_dev_url(app);
+        WebviewWindowBuilder::new(app, "agent-guide", WebviewUrl::App("agent.html".into()))
+            .title("Play with agents")
+            .inner_size(720.0, 660.0)
+            .min_inner_size(560.0, 480.0)
+            .initialization_script(format!("window.bitcraftAgentGuide = {context};"))
+            .on_navigation(move |url| crate::is_local_app_url(url, dev_url.as_ref()))
+            .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
+            .build()?
+    };
+    window.show()?;
+    window.unminimize()?;
+    window.set_focus()?;
+    Ok(())
 }

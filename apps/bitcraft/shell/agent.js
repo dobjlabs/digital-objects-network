@@ -1,11 +1,18 @@
 'use strict';
-const guide = window.bitcraftAgent;
-if (guide) {
-  document.getElementById('prompt').value = guide.prompt;
-  document.getElementById('skill-path').textContent = guide.skillPath;
-  document.getElementById('enable-mcp').textContent = guide.enableMcp;
-  document.getElementById('mcp-config').textContent = guide.mcpConfig;
+
+function showGuide() {
+  const guide = window.bitcraftAgentGuide;
+  const error = document.getElementById('agent-error');
+  error.textContent = guide?.error ?? '';
+  error.hidden = !error.textContent;
+  document.getElementById('prompt').value = guide?.prompt ?? '';
+  document.getElementById('copy').disabled = !guide?.prompt;
+  document.getElementById('copy-status').textContent = '';
 }
+
+window.addEventListener('bitcraft-agent-guide-updated', showGuide);
+showGuide();
+
 document.getElementById('copy').addEventListener('click', async () => {
   const prompt = document.getElementById('prompt');
   const status = document.getElementById('copy-status');

@@ -41,6 +41,7 @@ async function page(context, options = {}) {
     '<meta charset="utf-8"><meta name="dobjd-api-url" content="/">'), {
     url: options.url ?? "http://127.0.0.1:7727/bitcraft/", runScripts: "dangerously", virtualConsole,
     beforeParse(window) {
+      window.bitcraftDesktop = options.desktop ?? false;
       window.TextEncoder = TextEncoder;
       window.ResizeObserver = class { observe() {} };
       window.Element.prototype.scrollIntoView = () => {};
@@ -659,6 +660,32 @@ test("the top bar keeps the files view selected and opens Recipe Info in one win
   assert.equal(opened.length, 2);
 });
 
+test("desktop agent buttons request the selected app without starting game actions", async (context) => {
+  const ui = await page(context, { objects: [knife()], desktop: true });
+  const opened = [];
+  ui.dom.window.open = (url, name, features) => opened.push({ url, name, features });
+  for (const agent of ["claude", "codex"]) {
+    const button = ui.document.getElementById(`${agent}-button`);
+    assert.equal(button.hidden, false);
+    assert.match(button.getAttribute("aria-label"), new RegExp(agent, "i"));
+    button.querySelector("svg").dispatchEvent(new ui.dom.window.MouseEvent("click", { bubbles: true }));
+    button.click();
+  }
+  assert.deepEqual(opened.map(({ url }) => url), [
+    "bitcraft://agent/claude", "bitcraft://agent/claude",
+    "bitcraft://agent/codex", "bitcraft://agent/codex",
+  ]);
+  assert.equal(ui.document.getElementById("agent-divider").hidden, false);
+  assert.equal(ui.backend.posts.length, 0);
+});
+
+test("browser-only pages hide desktop agent controls", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  for (const id of ["claude-button", "codex-button", "agent-divider"]) {
+    assert.equal(ui.document.getElementById(id).hidden, true);
+  }
+});
+
 test("the Recipe Info window shows only recipes and runs no startup", async (context) => {
   const ui = await page(context, {
     url: "http://127.0.0.1:7727/bitcraft/?page=recipebook&action=bitcraft::CraftPocketknife",
@@ -1063,7 +1090,7 @@ test("a worn tool is worth the fraction of its durability it has left", async (c
 
 test("the top bar's icons have tooltips", async (context) => {
   const ui = await page(context, { objects: [knife()] });
-  assert.deepEqual([...ui.document.querySelectorAll("#top-bar .toolbar-button")].map((button) => button.dataset.tooltip),
+  assert.deepEqual([...ui.document.querySelectorAll("#top-bar .toolbar-button:not([hidden])")].map((button) => button.dataset.tooltip),
     ["Objects", "Stats", "Reference", "More Info", "Discord", "Settings"]);
 });
 

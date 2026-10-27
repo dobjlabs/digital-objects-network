@@ -7,7 +7,7 @@ For the desktop app, run `just bitcraft-dev` from the repository root. It prepar
 For standalone browser development, serve this directory with `python3 -m http.server 4170 --bind 127.0.0.1 --directory apps/bitcraft/ui` and open `http://127.0.0.1:4170`. Without the daemon-injected API origin, the page connects to the standalone Digital Objects daemon at `http://127.0.0.1:7717` (MCP uses `7718` when enabled). See [the desktop README](../README.md) for build and bundle commands.
 
 The main window always shows the inventory (the files view). Its top bar
-has three groups of icons, separated by thin dividers, and at its right end
+has four groups of controls, separated by thin dividers, and at its right end
 the inventory's value, read like a balance ("Total Inventory Value:", the Bit
 icon and "N.NNN BIT"),
 which opens the Inventory Summary. The window title repeats the amount:
@@ -16,10 +16,20 @@ views: a
 folder, permanently selected, for the files view; a bar chart that opens
 the Inventory Summary; and an open book that opens Recipe Info. The outside
 links: an info icon and a Discord icon, which open the Bitcraft website
-and its Discord server in the player's browser. Last, a gear that opens
-Settings. Their tooltips read Objects, Stats, Reference, More Info, Discord
-and Settings; they are drawn by the page's CSS (`data-tooltip`), not native
-`title` tooltips, so they appear without the system's hover delay. Recipe Info, the Inventory Summary and
+and its Discord server in the player's browser. Desktop agent buttons
+use monochrome Claude and ChatGPT/OpenAI logo marks, with accessible names and
+tooltips. They open Claude Code or Codex with the game's home directory and a player prompt;
+these controls are hidden in a standalone browser. The host handles their
+`bitcraft://agent/claude` and `bitcraft://agent/codex` requests, constructing
+the external deep links from its own installation and game home paths.
+The app and tray menus also offer "Play with agents...", a native guide
+window backed by `shell/agent.html`. It shares the startup shell's base
+styling and shows the same player prompt as the deep links, with copy
+controls; installation paths are included in the prompt. Missing URL handlers and launch errors
+open this guide with an explanatory message on macOS, Windows and Linux.
+Last, a gear opens Settings. Toolbar tooltips are drawn by the page's
+CSS (`data-tooltip`), so they appear without the system's hover delay.
+Recipe Info, the Inventory Summary and
 Settings each open their window once, and a later click focuses it. These
 windows load this same page in a mode of their own and run none of the
 main window's startup.

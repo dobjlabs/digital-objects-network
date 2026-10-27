@@ -16,6 +16,7 @@ use tauri::{
     tray::TrayIconBuilder,
 };
 
+mod agents;
 mod onboarding;
 mod runtime;
 
@@ -84,7 +85,7 @@ fn run_menu_action(app: &tauri::AppHandle, id: &str) {
         "open" => show_window(app),
         "close" => close_window(app),
         "agent-guide" => {
-            if let Err(error) = onboarding::show(app) {
+            if let Err(error) = onboarding::show(app, None) {
                 eprintln!("Could not open agent guide: {error:#}");
             }
         }
@@ -97,14 +98,14 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let open = MenuItem::with_id(app, "open", "Open Bitcraft", true, None::<&str>)?;
     let close = MenuItem::with_id(app, "close", "Close Window", true, Some("CmdOrCtrl+W"))?;
     let quit = MenuItem::with_id(app, "quit", "Quit Bitcraft", true, Some("CmdOrCtrl+Q"))?;
-    let agent = MenuItem::with_id(
+    let agents = MenuItem::with_id(
         app,
         "agent-guide",
-        "Play with an agent...",
+        "Play with agents...",
         true,
         None::<&str>,
     )?;
-    Menu::with_items(app, &[&open, &agent, &close, &quit])
+    Menu::with_items(app, &[&open, &agents, &close, &quit])
 }
 
 fn is_daemon_url(url: &tauri::Url) -> bool {
@@ -128,13 +129,27 @@ fn show_page_title(window: tauri::WebviewWindow, title: String) {
     let _ = window.set_title(&title);
 }
 
-fn is_local_app_url(url: &tauri::Url) -> bool {
-    url.scheme() == "tauri"
-        || (matches!(url.scheme(), "http" | "https") && url.host_str() == Some("tauri.localhost"))
+fn shell_dev_url(app: &tauri::AppHandle) -> Option<tauri::Url> {
+    if tauri::is_dev() {
+        app.config().build.dev_url.clone()
+    } else {
+        None
+    }
 }
 
-fn allow_navigation(url: &tauri::Url) -> bool {
-    is_daemon_url(url) || is_local_app_url(url)
+fn is_local_app_url(url: &tauri::Url, dev_url: Option<&tauri::Url>) -> bool {
+    url.scheme() == "tauri"
+        || (matches!(url.scheme(), "http" | "https") && url.host_str() == Some("tauri.localhost"))
+        || dev_url.is_some_and(|dev_url| {
+            matches!(url.scheme(), "http" | "https")
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.origin() == dev_url.origin()
+        })
+}
+
+fn allow_navigation(url: &tauri::Url, dev_url: Option<&tauri::Url>) -> bool {
+    is_daemon_url(url) || is_local_app_url(url, dev_url)
 }
 
 fn runtime_paths(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf)> {
@@ -247,16 +262,22 @@ fn main() -> Result<()> {
         .setup(move |app| {
             let new_window_app = app.handle().clone();
             let next_window_number = AtomicUsize::new(1);
+            let dev_url = shell_dev_url(app.handle());
+            let main_dev_url = dev_url.clone();
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("Bitcraft")
                 .on_document_title_changed(show_page_title)
                 .inner_size(1100.0, 760.0)
                 .min_inner_size(720.0, 480.0)
-                .on_navigation(allow_navigation)
+                .on_navigation(move |url| allow_navigation(url, main_dev_url.as_ref()))
                 // Built here rather than by the webview's default, so a window the
                 // page opens keeps the same navigation limits and shows its page's
                 // title.
                 .on_new_window(move |url, features| {
+                    if let Some(agent) = agents::Agent::from_request(&url) {
+                        agents::request(&new_window_app, agent);
+                        return tauri::webview::NewWindowResponse::Deny;
+                    }
                     if is_external_link(&url) {
                         if let Err(error) = tauri_plugin_opener::open_url(url.as_str(), None::<&str>) {
                             eprintln!("Could not open {url} in the browser: {error}");
@@ -267,9 +288,10 @@ fn main() -> Result<()> {
                         return tauri::webview::NewWindowResponse::Deny;
                     }
                     let label = format!("page-{}", next_window_number.fetch_add(1, Ordering::Relaxed));
+                    let dev_url = dev_url.clone();
                     match WebviewWindowBuilder::new(&new_window_app, label, WebviewUrl::External(url))
                         .window_features(features)
-                        .on_navigation(allow_navigation)
+                        .on_navigation(move |url| allow_navigation(url, dev_url.as_ref()))
                         .on_document_title_changed(show_page_title)
                         .build()
                     {
@@ -281,12 +303,12 @@ fn main() -> Result<()> {
                     }
                 })
                 .on_page_load(|window, event| {
-                    if matches!(event.event(), tauri::webview::PageLoadEvent::Finished) && window.url().is_ok_and(|url| url.scheme() == "tauri" || url.host_str() == Some("tauri.localhost")) {
+                    if matches!(event.event(), tauri::webview::PageLoadEvent::Finished) && window.url().is_ok_and(|url| is_local_app_url(&url, shell_dev_url(window.app_handle()).as_ref())) {
                         let message = window.state::<Desktop>().message.lock().unwrap().clone();
                         report(window.app_handle(), &message);
                     }
                 })
-                .initialization_script("document.addEventListener('DOMContentLoaded', () => { const style = document.createElement('style'); style.textContent = 'body { user-select: none; -webkit-user-select: none; } input, textarea, [contenteditable] { user-select: text; -webkit-user-select: text; }'; document.head.appendChild(style); });")
+                .initialization_script("window.bitcraftDesktop = true; document.addEventListener('DOMContentLoaded', () => { const style = document.createElement('style'); style.textContent = 'body { user-select: none; -webkit-user-select: none; } input, textarea, [contenteditable] { user-select: text; -webkit-user-select: text; }'; document.head.appendChild(style); });")
                 .build()?;
             let app_menu = menu(app.handle())?;
             let submenu = Submenu::with_items(app, "Bitcraft", true, &app_menu.items()?.iter().map(|item| item as &dyn tauri::menu::IsMenuItem<tauri::Wry>).collect::<Vec<_>>())?;
@@ -368,7 +390,7 @@ mod tests {
             "http://tauri.localhost/",
             "http://127.0.0.1:7727/bitcraft/",
         ] {
-            assert!(allow_navigation(&url.parse().unwrap()), "{url}");
+            assert!(allow_navigation(&url.parse().unwrap(), None), "{url}");
         }
         for url in [
             "http://127.0.0.1:7717/",
@@ -376,7 +398,7 @@ mod tests {
             "file:///etc/passwd",
             "http://127.0.0.1.example.com:7727/",
         ] {
-            assert!(!allow_navigation(&url.parse().unwrap()), "{url}");
+            assert!(!allow_navigation(&url.parse().unwrap(), None), "{url}");
         }
         assert!(is_daemon_url(
             &"http://127.0.0.1:7727/objects/a.dobj/raw".parse().unwrap()
@@ -384,6 +406,30 @@ mod tests {
         assert!(!is_daemon_url(
             &"tauri://localhost/index.html".parse().unwrap()
         ));
+    }
+
+    #[test]
+    fn shell_navigation_accepts_only_the_configured_development_origin() {
+        let dev_url = "http://127.0.0.1:1430/".parse().unwrap();
+        for url in ["http://127.0.0.1:1430/", "http://127.0.0.1:1430/index.html"] {
+            let url = url.parse().unwrap();
+            assert!(!is_local_app_url(&url, None));
+            assert!(is_local_app_url(&url, Some(&dev_url)));
+            assert!(allow_navigation(&url, Some(&dev_url)));
+        }
+        for url in [
+            "http://127.0.0.1:1431/index.html",
+            "https://127.0.0.1:1430/index.html",
+            "http://127.0.0.1.example.com:1430/index.html",
+            "http://user@127.0.0.1:1430/index.html",
+            "http://127.0.0.1:7727/bitcraft/",
+            "https://example.com/index.html",
+        ] {
+            assert!(
+                !is_local_app_url(&url.parse().unwrap(), Some(&dev_url)),
+                "{url}"
+            );
+        }
     }
 
     #[test]

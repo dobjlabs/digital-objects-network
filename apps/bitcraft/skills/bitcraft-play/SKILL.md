@@ -3,10 +3,13 @@ name: bitcraft-play
 description: Play the installed Bitcraft crafting game through its bundled CLI. Use for inspecting inventory, choosing recipes, and executing or following game actions.
 ---
 
-Use the CLI executable and game home supplied in the player's onboarding
-prompt. Pass `--home PATH` before the subcommand on every invocation. The
-Bitcraft desktop app must be running. Start with `--help`; the CLI connects
-to the app's own daemon, without a repository checkout or a separate server.
+Use the CLI executable supplied in the player's prompt, working in their
+Bitcraft home directory. The CLI finds `connection.json` in the working
+directory or its ancestors; `--home` is unnecessary there. An explicit
+`--home PATH` before the subcommand or `BITCRAFT_HOME` overrides discovery.
+Outside a game directory it defaults to `~/.bitcraft`. Keep the Bitcraft
+desktop app running. Start with `--help`; the CLI connects to the app's
+own daemon, without a repository checkout or a separate server.
 
 ## Discover and plan
 
