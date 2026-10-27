@@ -74,7 +74,9 @@ impl RunEntry {
         }
     }
 
-    /// Append progress while the run is active; reject updates after completion.
+    /// Append a non-terminal progress event and advance the status to match
+    /// its phase. Asserts the run is still in flight -- the worker never emits
+    /// events after the run finishes.
     fn push_progress(&self, progress: RunActionProgress) {
         let mut inner = self.inner.lock().unwrap();
         assert!(
@@ -204,7 +206,9 @@ impl RunRegistry {
     }
 }
 
-/// Publishes progress to the event hub and retains it for polling and replay.
+/// `ExecutionReporter` that fans every step out to both the global `/events`
+/// broadcast (firehose subscribers) and the run's registry entry (which backs
+/// `GET /runs/{id}` and its SSE stream).
 #[derive(Clone)]
 pub struct RunReporter {
     events: EventHub,

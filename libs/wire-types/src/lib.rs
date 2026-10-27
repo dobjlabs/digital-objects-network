@@ -1,7 +1,23 @@
-//! Wire types shared by the driver, daemon, and clients.
-//! Proof and chain dependencies are optional: enable `chain` for relayer
-//! proof responses and synchronizer types. Transaction records use hex
-//! strings for hashes and require no chain dependencies.
+//! Pure-data wire types shared across the driver, dobjd, MCP, and CLI.
+//!
+//! Anything that travels over a process boundary (HTTP body, MCP tool
+//! parameter, SSE event, CLI arg) belongs here -- but only if it has no
+//! logic that depends on ZK proofs or chain state. Keeping this crate
+//! dependency-light is the entire point: `cli` and `mcp` should be able
+//! to use it without compiling pod2/plonky2/rocksdb/sqlx.
+//!
+//! ## Submodules
+//!
+//! - [`relayer`] -- DTOs for the relayer's HTTP API. The status/request
+//!   types are pure serde; the two proof-bearing response types carry pod2
+//!   `Hash` (`tx_final`, `state_root`), so they live behind the
+//!   `chain` feature. The relayer server and the driver enable it.
+//! - [`synchronizer`] -- DTOs for the synchronizer's HTTP API. Every type
+//!   carries pod2 `Hash` values directly, so the whole module lives behind
+//!   the `chain` feature. Only the synchronizer server and the driver speak
+//!   this API, and both enable the feature; `cli` and `mcp` don't.
+//! - [`transactions`] -- Durable transaction records. Hashes are hex strings,
+//!   so these types require no chain dependencies.
 
 pub mod relayer;
 #[cfg(feature = "chain")]

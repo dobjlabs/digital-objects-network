@@ -21,7 +21,13 @@ mod state;
 mod transactions;
 pub mod wait;
 
-/// HTTP API and bundled UI routes.
+/// Build the axum router.
+///
+/// The default UI is mounted at /ui/.
+///
+/// Note: axum routes literal paths (e.g. `/objects/dir`) before
+/// parameterized ones (`/objects/{file_name}`), so the relative order
+/// isn't load-bearing -- but the literals are listed first for readability.
 pub fn router(app_state: AppState, access: WebAccess) -> Router {
     Router::new()
         .route("/healthz", get(health::healthz))
