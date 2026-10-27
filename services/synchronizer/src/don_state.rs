@@ -86,14 +86,19 @@ pub fn state_header(
     )
 }
 
+/// Outcome of one blob of a target transaction during slot derivation.
 #[derive(Debug, Default)]
 pub struct BlobStatus {
-    tx_final: Hash,
-    error: Option<String>,
+    /// `None` until the blob parses as a `TxFinalized` payload.
+    pub tx_final: Option<Hash>,
+    /// Why the blob was skipped or rejected; `None` when it was applied.
+    pub error: Option<String>,
 }
 
+/// Outcome of one target transaction during slot derivation.
 #[derive(Debug, Default)]
 pub struct TxStatus {
     pub tx_hash: B256,
+    /// One entry per blob, in the transaction's blob order.
     pub blobs: Vec<BlobStatus>,
 }

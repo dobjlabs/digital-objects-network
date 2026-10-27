@@ -25,9 +25,9 @@ use pod2::middleware::Hash;
 use tracing::{debug, info, warn};
 
 use crate::config::AppConfig;
-use crate::don_state::{DonState, ExecutionBlock, TxStatus};
+use crate::don_state::{BlobStatus, DonState, ExecutionBlock, TxStatus};
 use crate::state_log_db::StateLogDb;
-use crate::state_machine::{DerivedSlot, StateMachine, MAX_STATE_ROOT_AGE_BLOCKS};
+use crate::state_machine::{DerivedSlot, StateMachine, TxBlobs, MAX_STATE_ROOT_AGE_BLOCKS};
 
 /// Runtime integration layer that connects network inputs (beacon/execution),
 /// pure state derivation (`StateMachine`), and the state log (`StateLogDb`).
@@ -47,9 +47,12 @@ pub(crate) struct SlotContext {
     /// `None` when no payload becomes canonical with this block, which from Gloas on happens
     /// when its bid does not build on the parent's payload (withheld or not revealed in time).
     payload: Option<CanonicalPayload>,
-    /// Decoded target blobs of `payload` of each filtered transaction, each with its index
-    /// among the committing block's blobs.
-    txs_blob_payloads: Vec<Vec<(u32, Vec<u8>)>>,
+    /// Decoded target blobs of `payload` per target transaction, in the transaction's blob
+    /// order, each with its index among the committing block's blobs. `None` for a blob that
+    /// failed to decode.
+    txs_blob_payloads: Vec<TxBlobs<Vec<u8>>>,
+    /// Status of each target transaction of `payload`, in the same order as
+    /// `txs_blob_payloads`.
     txs_status: Vec<TxStatus>,
 }
 
@@ -75,6 +78,7 @@ pub struct ProcessedSlot {
     pub block_root: Option<B256>,
     /// `None` when no execution block became canonical with the slot.
     pub derived: Option<DerivedSlot>,
+    /// Status of each target transaction of the slot's execution block.
     pub txs_status: Vec<TxStatus>,
 }
 
@@ -317,7 +321,7 @@ impl Node {
         slot: u32,
         payload: &CanonicalPayload,
         txs_status: &mut [TxStatus],
-    ) -> Result<Vec<Vec<(u32, Vec<u8>)>>> {
+    ) -> Result<Vec<TxBlobs<Vec<u8>>>> {
         if payload.target_blob_txs.is_empty() {
             debug!(
                 slot,
@@ -345,7 +349,7 @@ impl Node {
         let mut txs_blob_payloads = Vec::new();
         for (tx_idx, tx) in payload.target_blob_txs.iter().enumerate() {
             let mut blob_payloads = Vec::new();
-            for vh in &tx.versioned_hashes {
+            for (blob_position, vh) in tx.versioned_hashes.iter().enumerate() {
                 let blob_index = payload
                     .kzg_blob_commitments
                     .iter()
@@ -353,7 +357,7 @@ impl Node {
                     .expect("vh exists");
                 match payload::blob::decode_simple_blob(blobs[vh].inner()) {
                     Ok(bytes) => {
-                        blob_payloads.push((blob_index as u32, bytes));
+                        blob_payloads.push(Some((blob_index as u32, bytes)));
                         info!(
                             slot,
                             blob_index = blob_index,
@@ -366,7 +370,8 @@ impl Node {
                             "Invalid byte encoding in blob at slot {slot}, blob_index {blob_index}: {err}"
                         );
                         warn!("{}", msg);
-                        txs_status[tx_idx].blob_errors.push((blob_index,msg);
+                        txs_status[tx_idx].blobs[blob_position].error = Some(msg);
+                        blob_payloads.push(None);
                     }
                 }
             }
@@ -394,7 +399,11 @@ impl Node {
                     .iter()
                     .map(|tx| TxStatus {
                         tx_hash: tx.tx_hash,
-                        ..Default::default()
+                        blobs: tx
+                            .versioned_hashes
+                            .iter()
+                            .map(|_| BlobStatus::default())
+                            .collect(),
                     })
                     .collect();
                 let txs_blob_payloads = self
@@ -427,14 +436,15 @@ impl Node {
         recent_state_roots: Vec<(Hash, i64)>,
         slot: u32,
         block: ExecutionBlock,
-        txs_blob_payloads: &[Vec<(u32, Vec<u8>)>],
-        mut txs_status: &mut [TxStatus],
+        txs_blob_payloads: &[TxBlobs<Vec<u8>>],
+        txs_status: &mut [TxStatus],
     ) -> Result<DerivedSlot> {
         let txs_parsed =
             self.state_machine
-                .parse_blobs(txs_blob_payloads, slot, block.number, &mut txs_status);
+                .parse_blobs(txs_blob_payloads, slot, block.number, txs_status);
         let candidates: Vec<Hash> = txs_parsed
             .iter()
+            .flatten()
             .flatten()
             .flat_map(|(_, payload)| payload.created.iter().copied())
             .collect();
@@ -446,7 +456,7 @@ impl Node {
             block,
             &txs_parsed,
             &prior_indices,
-            &mut txs_status,
+            txs_status,
         )
     }
 
