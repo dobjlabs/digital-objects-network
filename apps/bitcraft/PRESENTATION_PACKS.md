@@ -109,6 +109,8 @@ drawing classes or actions.
 
 Hand-write `pack.json`, or generate it. Bitcraft generates its pack with
 `examples/bitcraft/presentation/generate.py`, which draws every action icon
-from class art and a badge, and checks that every class and action in the
-manifest has an entry. Generating keeps families of similar actions
-consistent without putting any rules in the app.
+from class art and a badge, takes the summaries and descriptions from
+hand-written Markdown (`copy/classes.md` and `copy/actions.md`, where one
+entry can cover a family of similar actions), and checks that every class
+and action in the manifest has an entry. Generating keeps families of
+similar actions consistent without putting any rules in the app.

@@ -9,15 +9,17 @@
 | Path | What it is |
 | --- | --- |
 | `pack.json` | The pack. **Generated; do not edit.** |
+| `copy/classes.md`, `copy/actions.md` | Every summary and description. **Hand-written; edit these.** See [Copy](#copy). |
 | `assets/classes/*.png` | Class art, 16x16 RGBA pixel art. Hand-drawn; edit these directly. Also the art drawn on action icons. |
 | `assets/actions/*.svg` | One finished icon per action. **Generated.** |
 | `source/refresh.svg` | Art drawn on the rekey icons only. |
-| `generate.py` | Writes `pack.json` and `assets/actions/`. Holds the class art mapping, the icon rules below and all the text. |
+| `generate.py` | Writes `pack.json` and `assets/actions/` from the copy, the class art and the icon rules below. |
+| `test_generate.py` | Tests for reading the copy, and that `pack.json` and the icons are up to date. |
 
 ## Regenerating
 
-After changing a recipe in `../src/main.rs`, adding a class or action,
-editing art, or changing text in `generate.py`:
+After editing the copy or the art, or changing a recipe in
+`../src/main.rs` or the plugin's classes or actions:
 
 ```sh
 just bitcraft-presentation
@@ -25,13 +27,72 @@ just bitcraft-presentation
 
 That runs `generate.py`, then copies the pack into the Bitcraft UI
 (`apps/bitcraft/scripts/sync_presentation.py`). `just bitcraft-prepare`
-also copies it. `generate.py` reads the class and action names from
-`../manifest.toml`, adds the built-in `Rekey<Class>` action for each class,
-and writes nothing if any of them has no art or text, listing what is
-missing. Commit `pack.json` and `assets/actions/` with the change.
+also copies it. Commit the copy, `pack.json` and `assets/actions/`
+together.
 
-The text quotes recipe amounts (yields, level-up bucket sizes and so on),
-so keep `generate.py` in step with `../src/main.rs`.
+`generate.py` reads the class and action names from `../manifest.toml`,
+adds the built-in `Rekey<Class>` action for each class, and writes nothing
+if any of them has no art, icon rule or copy, or if the copy has a problem,
+listing each with its file and line. `generate.py --check` writes nothing
+and fails if `pack.json` or an icon is not what it would write; CI runs it,
+with `test_generate.py`, so edited copy that was not regenerated is caught.
+
+The copy quotes recipe amounts (yields, level-up bucket sizes and so on),
+and nothing checks prose against the recipes, so update it by hand when
+`../src/main.rs` changes.
+
+## Copy
+
+Every summary and description is hand-written in `copy/classes.md` (one
+entry per class) and `copy/actions.md` (one per action, or per family of
+actions). The copy is written and maintained by Brian; agents do not edit
+it (see `CLAUDE.md`). Each entry is a `##` heading, then paragraphs:
+
+```markdown
+## Wood
+
+A basic building material.
+
+Gathered with a pocketknife or chopped with an axe. Goes into sticks,
+axes, quarries and mining drills.
+```
+
+- **Heading:** the class or action name, exactly as in the manifest.
+  Anything before the first heading (a title, notes) is ignored.
+- **Summary:** the first paragraph, one line in the apps. Lines of a
+  paragraph are joined with spaces, so wrap them however you like.
+- **Description:** every paragraph after the first, kept as separate
+  paragraphs. Optional.
+- No other headings are allowed after the first entry, and a name may have
+  only one entry.
+
+### Families
+
+A heading with `{placeholders}` is a family: it covers every name it fits,
+and its text fills in what each placeholder matched. An entry for a single
+name overrides its family, so one member can say something different.
+
+```markdown
+## LevelUpQuarry{level}
+
+Raise a level {level} quarry to level {level + 1}.
+
+Spends a bucket holding exactly {20 * 2 ** level} wood.
+```
+
+In the text, a field in braces can be:
+
+| Field | Gives, for `LevelUpQuarry3`, `BucketOfWoodAdd10` or `RekeyBucketOfWood` |
+| --- | --- |
+| `{level}` | what the placeholder matched: `3` |
+| `{resource\|lower}` | the match in lower case: `wood` |
+| `{class\|words}` | a CamelCase match as lower-case words: `bucket of wood` |
+| `{level + 1}`, `{20 * 2 ** level}` | whole-number arithmetic on placeholders, with `+ - * ** //`: `4`, `160` |
+| `{{`, `}}` | a literal brace |
+
+A name two families fit is an error: give it an entry of its own. So is an
+entry or family that matches nothing in the manifest, which catches copy
+left behind by a renamed or removed action.
 
 ## Action icons
 
@@ -116,19 +177,19 @@ art.
 | `up` | green ^ | adds to or upgrades a tool |
 | `down` | red v | takes from a tool |
 
-## Where the rules live
+## Where the icon rules live
 
-`ACTION_RULES` in `generate.py` is an ordered list of rules; the first rule
-whose pattern fully matches an action's name decides its art, badge and
-text. `BUILTIN_RULES` does the same for the built-in actions, matched only
-for a class the manifest declares. Each rule returns the art (a class name,
-whose art in `CLASSES` is used, or a path to other art), the badge (`plus`,
-`up`, `down` or none) and the summary and description, filled in from the
-pattern's capture groups, so one rule covers a family of actions.
+`ACTION_ART_RULES` in `generate.py` is an ordered list of rules; the first
+rule whose pattern fully matches an action's name decides its icon's art
+and badge. `BUILTIN_ART_RULES` does the same for the built-in actions,
+matched only for a class the manifest declares. Each rule returns the art
+(a class name, whose art in `CLASS_ART_FILES` is used, or a path to other
+art) and the badge (`plus`, `up`, `down` or none).
 
 ## Adding actions or classes
 
 When `../plugin.rhai` gains actions, decide which category each belongs
 to, then add or extend a rule in `generate.py`, update the tables above,
-and regenerate. A new class also needs its art in `assets/classes/` and an
-entry in `CLASSES`.
+write its copy in `copy/actions.md`, and regenerate. A new class also needs
+its art in `assets/classes/`, an entry in `CLASS_ART_FILES`, and its copy in
+`copy/classes.md`.

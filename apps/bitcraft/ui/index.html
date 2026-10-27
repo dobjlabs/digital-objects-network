@@ -592,9 +592,11 @@
     flex: none;
   }
   .description-summary { font-weight: 500; }
+  /* A description's paragraphs arrive separated by blank lines. */
   .description-text {
     margin-top: 4px;
     color: var(--muted);
+    white-space: pre-line;
   }
   .icon-tile img {
     display: block;
