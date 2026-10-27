@@ -171,6 +171,12 @@ To activate this integration for development or a release:
    BITCRAFT_DISCORD_APPLICATION_ID=YOUR_NUMERIC_APPLICATION_ID just bitcraft-dev
    ```
 
+   For GitHub release builds, create a repository Actions variable named
+   `BITCRAFT_DISCORD_APPLICATION_ID` with that value under **Settings >
+   Secrets and variables > Actions > Variables**. The `Release Bitcraft`
+   workflow supplies it to every installer build, including manual
+   build-only runs. The public Application ID does not need to be a secret.
+
    The ID is public and is embedded at compile time. The same environment
    variable can override it at runtime. Without a valid ID, the sharing menu
    item is disabled and no Discord connection is attempted.
