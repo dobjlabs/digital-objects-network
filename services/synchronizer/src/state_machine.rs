@@ -1,3 +1,4 @@
+use alloy::primitives::B256;
 use anyhow::{Context, Result};
 use payload::{payload::Payload, proof::BlobParser};
 use pod2::middleware::{containers::Array, containers::Set, Hash, Value};
@@ -9,10 +10,25 @@ use tracing::{info, warn};
 
 use crate::{
     container_db::{created_array_holds, ContainerDb},
-    don_state::{
-        state_header, BlobStatus, DonState, ExecutionBlock, StateMetadata, StateRoots, TxStatus,
-    },
+    don_state::{state_header, DonState, ExecutionBlock, StateMetadata, StateRoots},
 };
+
+/// Outcome of one blob of a target transaction during slot derivation.
+#[derive(Debug, Default)]
+pub struct BlobStatus {
+    /// `None` until the blob parses as a `TxFinalized` payload.
+    pub tx_final: Option<Hash>,
+    /// Why the blob was skipped or rejected; `None` when it was applied.
+    pub error: Option<String>,
+}
+
+/// Outcome of one target transaction during slot derivation.
+#[derive(Debug, Default)]
+pub struct TxStatus {
+    pub tx_hash: B256,
+    /// One entry per blob, in the transaction's blob order.
+    pub blobs: Vec<BlobStatus>,
+}
 
 /// A target transaction's blobs at one derivation stage, together with its status.
 pub struct TargetTx<T> {
@@ -385,7 +401,7 @@ mod tests {
         ExecutionBlock {
             number: n,
             timestamp: n * 1000,
-            hash: alloy::primitives::B256::repeat_byte(n as u8),
+            hash: B256::repeat_byte(n as u8),
         }
     }
 

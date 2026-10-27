@@ -25,9 +25,11 @@ use pod2::middleware::Hash;
 use tracing::{debug, info, warn};
 
 use crate::config::AppConfig;
-use crate::don_state::{BlobStatus, DonState, ExecutionBlock, TxStatus};
+use crate::don_state::{DonState, ExecutionBlock};
 use crate::state_log_db::StateLogDb;
-use crate::state_machine::{DerivedSlot, StateMachine, TargetTx, MAX_STATE_ROOT_AGE_BLOCKS};
+use crate::state_machine::{
+    BlobStatus, DerivedSlot, StateMachine, TargetTx, TxStatus, MAX_STATE_ROOT_AGE_BLOCKS,
+};
 
 /// Runtime integration layer that connects network inputs (beacon/execution),
 /// pure state derivation (`StateMachine`), and the state log (`StateLogDb`).
