@@ -14,9 +14,14 @@ use crate::{
     },
 };
 
-/// One target transaction's blobs in its blob order, each with its index among the committing
-/// block's blobs; `None` marks a blob dropped at an earlier stage.
-pub type TxBlobs<T> = Vec<Option<(u32, T)>>;
+/// A target transaction's blobs at one derivation stage, together with its status.
+pub struct TargetTx<T> {
+    /// The blobs in the transaction's blob order, each with its index among the committing
+    /// block's blobs; `None` marks a blob dropped at an earlier stage. Positions match
+    /// `status.blobs`.
+    pub blobs: Vec<Option<(u32, T)>>,
+    pub status: TxStatus,
+}
 
 /// The maximum age of a state root used as grounding for a transaction.
 /// At one block per 12 seconds, this is one hour.
@@ -74,7 +79,7 @@ impl StateMachine {
 
     /// Parse and verify each blob as a `TxFinalized` payload, keeping the per-transaction blob
     /// positions: a blob that is absent or does not parse becomes `None`. Records each parsed
-    /// blob's `tx_final`, and each failure, in `tx_statuses`.
+    /// blob's `tx_final`, and each failure, in its transaction's status.
     ///
     /// Fail-soft: malformed or unverifiable blobs are logged and skipped, never
     /// aborting the slot. Verification happens here once so the parsed payloads
@@ -84,24 +89,22 @@ impl StateMachine {
     /// so the apply pass can attribute a hard error to the right blob.
     pub fn parse_blobs(
         &self,
-        txs_blob_payloads: &[TxBlobs<Vec<u8>>],
+        target_txs: Vec<TargetTx<Vec<u8>>>,
         slot: u32,
         block_number: u64,
-        tx_statuses: &mut [TxStatus],
-    ) -> Vec<TxBlobs<Payload>> {
-        let mut txs_parsed = Vec::with_capacity(txs_blob_payloads.len());
-        for (tx_idx, blob_payloads) in txs_blob_payloads.iter().enumerate() {
-            let mut parsed = Vec::with_capacity(blob_payloads.len());
-            for (blob_position, blob_payload) in blob_payloads.iter().enumerate() {
-                let Some((blob_index, bytes)) = blob_payload else {
+    ) -> Vec<TargetTx<Payload>> {
+        let mut txs_parsed = Vec::with_capacity(target_txs.len());
+        for TargetTx { blobs, mut status } in target_txs {
+            let mut parsed = Vec::with_capacity(blobs.len());
+            for (blob, blob_status) in blobs.into_iter().zip(&mut status.blobs) {
+                let Some((blob_index, bytes)) = blob else {
                     parsed.push(None);
                     continue;
                 };
-                let blob_status = &mut tx_statuses[tx_idx].blobs[blob_position];
-                match self.proof_parser.parse_blob(bytes) {
+                match self.proof_parser.parse_blob(&bytes) {
                     Ok(Some(payload)) => {
                         blob_status.tx_final = Some(payload.tx_final);
-                        parsed.push(Some((*blob_index, payload)));
+                        parsed.push(Some((blob_index, payload)));
                     }
                     Ok(None) => {
                         blob_status.error =
@@ -128,7 +131,10 @@ impl StateMachine {
                     }
                 }
             }
-            txs_parsed.push(parsed);
+            txs_parsed.push(TargetTx {
+                blobs: parsed,
+                status,
+            });
         }
         txs_parsed
     }
@@ -272,9 +278,8 @@ impl StateMachine {
         recent_state_roots: impl IntoIterator<Item = (Hash, i64)>,
         slot: u32,
         block: ExecutionBlock,
-        txs_payloads: &[TxBlobs<Payload>],
+        target_txs: &mut [TargetTx<Payload>],
         prior_indices: &HashMap<Hash, i64>,
-        tx_statuses: &mut [TxStatus],
     ) -> Result<DerivedSlot> {
         let base_roots = base_state.map_or(StateRoots::empty(), |state| state.roots);
         let base_state_root_count = base_state.map_or(0, |state| state.metadata.state_root_count);
@@ -290,8 +295,8 @@ impl StateMachine {
             created_added: HashMap::new(),
         };
 
-        for (tx_idx, payloads) in txs_payloads.iter().enumerate() {
-            for (blob_position, parsed) in payloads.iter().enumerate() {
+        for target_tx in target_txs.iter_mut() {
+            for (parsed, blob_status) in target_tx.blobs.iter().zip(&mut target_tx.status.blobs) {
                 let Some((blob_index, payload)) = parsed else {
                     continue;
                 };
@@ -300,7 +305,7 @@ impl StateMachine {
                     .with_context(|| {
                         format!("applying blob at slot {slot}, blob_index {blob_index}")
                     })?;
-                tx_statuses[tx_idx].blobs[blob_position].error = rejection;
+                blob_status.error = rejection;
             }
         }
 
@@ -408,7 +413,7 @@ mod tests {
     }
 
     fn seed_state_root0(sm: &StateMachine) -> DonState {
-        sm.derive_slot_state(None, [], 0, block_meta(0), &[], &HashMap::new(), &mut [])
+        sm.derive_slot_state(None, [], 0, block_meta(0), &mut [], &HashMap::new())
             .unwrap()
             .state
     }
@@ -424,25 +429,21 @@ mod tests {
         blobs: &[(u32, Vec<u8>)],
         prior_indices: &HashMap<Hash, i64>,
     ) -> DerivedSlot {
-        let txs_blob_payloads = [blobs.iter().cloned().map(Some).collect::<Vec<_>>()];
-        let mut tx_statuses = [TxStatus {
-            blobs: blobs.iter().map(|_| BlobStatus::default()).collect(),
-            ..Default::default()
-        }];
-        let parsed = sm.parse_blobs(
-            &txs_blob_payloads,
-            slot,
-            block_meta.number,
-            &mut tx_statuses,
-        );
+        let target_tx = TargetTx {
+            blobs: blobs.iter().cloned().map(Some).collect(),
+            status: TxStatus {
+                blobs: blobs.iter().map(|_| BlobStatus::default()).collect(),
+                ..Default::default()
+            },
+        };
+        let mut parsed = sm.parse_blobs(vec![target_tx], slot, block_meta.number);
         sm.derive_slot_state(
             base_state,
             recent_state_roots,
             slot,
             block_meta,
-            &parsed,
+            &mut parsed,
             prior_indices,
-            &mut tx_statuses,
         )
         .unwrap()
     }
