@@ -363,9 +363,37 @@
     white-space: nowrap;
     pointer-events: none;
   }
-  #top-bar > .toolbar-button:first-child::after {
-    left: 0;
-    transform: none;
+  /* The inventory's value, read like a balance at the top bar's right end.
+     It opens the Inventory Summary. */
+  #inventory-value {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  #inventory-value:hover { background: var(--toolbar-hover); }
+  #inventory-value:active { background: var(--toolbar-pressed); }
+  #inventory-value img {
+    width: 16px;
+    height: 16px;
+    image-rendering: pixelated;
+  }
+  #inventory-value img[hidden] { display: none; }
+  #inventory-value .inventory-value-label {
+    color: var(--muted);
+    font-weight: 400;
   }
   .toolbar-button:active { background: var(--toolbar-pressed); }
   .toolbar-divider {
@@ -871,6 +899,11 @@
         <circle cx="9" cy="9" r="2.3" fill="none" stroke="currentColor" stroke-width="1.3"/>
       </svg>
     </button>
+    <button type="button" id="inventory-value" title="Open the Inventory Summary">
+      <span class="inventory-value-label">Total Inventory Value:</span>
+      <img id="inventory-value-icon" alt="" hidden>
+      <span id="inventory-value-amount"></span>
+    </button>
   </nav>
   <div id="objects-view" class="view">
     <div id="left-column">
@@ -1203,6 +1236,7 @@
   // `?page=summary` loads this page as the Inventory Summary window.
   const SUMMARY_PAGE = "summary";
   const SUMMARY_WINDOW_NAME = "bitcraft-inventory-summary";
+  const SUMMARY_WINDOW_FEATURES = "popup,width=420,height=560";
   const SUMMARY_REFRESH_MS = 10000;
   const initialParams = new URLSearchParams(location.search);
   const isReferenceWindow = initialParams.get(PAGE_PARAM) === RECIPEBOOK_PAGE;
@@ -2321,8 +2355,7 @@
     }
   }
 
-  // Counts only live objects. The total covers every plugin's objects; the
-  // value and the per-class counts cover this plugin's.
+  // Counts this plugin's live objects only, the ones the list shows.
   function renderSummary(objects) {
     const liveObjects = objects.filter(isLive);
     const pluginObjects = liveObjects.filter((object) => object.class.pluginName === PLUGIN_NAME);
@@ -2335,7 +2368,6 @@
       entry.value += totalBitValue(object);
       classes.set(className, entry);
     }
-    const count = (number, noun) => `${number.toLocaleString()} ${noun}${number === 1 ? "" : "s"}`;
     const wasOpen = new Map([...summaryView.querySelectorAll("details[data-section]")]
       .map((section) => [section.dataset.section, section.open]));
 
@@ -2361,10 +2393,7 @@
     total.className = "summary-total";
     total.textContent = formatBitValue(totalValue);
     titleRow.append(title, total);
-    const subtitle = document.createElement("div");
-    subtitle.className = "summary-subtitle";
-    subtitle.textContent = `${count(liveObjects.length, "live object")} in total`;
-    heading.append(titleRow, subtitle);
+    heading.append(titleRow);
     header.append(iconTile, heading);
 
     // Each row is a label followed by its values, one column each.
@@ -2394,22 +2423,18 @@
       details.append(summary, fields);
       return details;
     };
-    const general = section("general", "General:", [
-      [["Total Inventory Value:"], formatBitValue(totalValue)],
-      [["Total objects:"], liveObjects.length.toLocaleString()],
-    ]);
     const classNames = [...classes.keys()].sort((left, right) => left.localeCompare(right));
-    const byClass = section("classes", "Live objects:", classNames.map((className) => {
+    const byClass = section("classes", `Objects (${pluginObjects.length.toLocaleString()}):`, classNames.map((className) => {
       const { qualifiedName, count: classCount, value } = classes.get(className);
       return [[classLabel(qualifiedName), ":"], classCount.toLocaleString(), formatBitValue(value)];
     }), 2);
     if (classNames.length === 0) {
       const none = document.createElement("p");
       none.className = "summary-subtitle";
-      none.textContent = "No live objects yet.";
+      none.textContent = "No objects yet.";
       byClass.append(none);
     }
-    summaryView.replaceChildren(header, general, byClass);
+    summaryView.replaceChildren(header, byClass);
   }
 
   // The Recipe Info window loads only the classes and actions; it runs none
@@ -3468,10 +3493,18 @@
     return value * Number(fieldValue(object, "durability") ?? fullDurability) / fullDurability;
   }
 
-  // The desktop app shows this title in the main window's title bar.
-  function updateWindowTitle() {
+  // Shown in the top bar, and in the window's title, which the desktop app
+  // shows in its title bar.
+  function updateInventoryValue() {
     const totalValue = liveListedObjects().reduce((sum, object) => sum + totalBitValue(object), 0);
-    document.title = `Bitcraft (Inventory Value: ${formatBitValue(totalValue)})`;
+    document.title = `Bitcraft (${formatBitValue(totalValue)})`;
+    document.getElementById("inventory-value-amount").textContent = formatBitValue(totalValue);
+    const icon = document.getElementById("inventory-value-icon");
+    const iconPath = Presentation.classInfo({ pluginName: PLUGIN_NAME, name: SUMMARY_ICON_CLASS }).icon;
+    if (iconPath && icon.getAttribute("src") !== iconPath) {
+      icon.src = iconPath;
+    }
+    icon.hidden = !iconPath;
   }
 
   // Replaces the object list, keeping the selection of any objects that are
@@ -3498,7 +3531,7 @@
     for (const object of heldObjects) {
       objectsByFileName.set(object.fileName, object);
     }
-    updateWindowTitle();
+    updateInventoryValue();
     for (const fileName of [...selectedFileNames]) {
       if (!isListedFile(fileName)) {
         selectedFileNames.delete(fileName);
@@ -3595,7 +3628,9 @@
     document.getElementById("reference-button").addEventListener("click",
       () => openPageWindow(RECIPEBOOK_PAGE, REFERENCE_WINDOW_NAME, REFERENCE_WINDOW_FEATURES));
     document.getElementById("summary-button").addEventListener("click",
-      () => openPageWindow(SUMMARY_PAGE, SUMMARY_WINDOW_NAME, "popup,width=420,height=560"));
+      () => openPageWindow(SUMMARY_PAGE, SUMMARY_WINDOW_NAME, SUMMARY_WINDOW_FEATURES));
+    document.getElementById("inventory-value").addEventListener("click",
+      () => openPageWindow(SUMMARY_PAGE, SUMMARY_WINDOW_NAME, SUMMARY_WINDOW_FEATURES));
     document.getElementById("about-button").addEventListener("click",
       () => window.open(BITCRAFT_SITE_URL, "_blank", "noopener"));
     document.getElementById("discord-button").addEventListener("click",

@@ -901,20 +901,23 @@ test("the Inventory Summary counts live objects and refreshes on job events", as
   assert.equal(document.body.classList.contains("secondary-window"), true);
   assert.deepEqual(ui.backend.posts, []);
   assert.equal(text(".summary-total"), "2.000 BIT");
-  assert.equal(text(".summary-subtitle"), "4 live objects in total");
-  assert.deepEqual(fields("general"), ["Total Inventory Value: 2.000 BIT", "Total objects: 4"]);
+  assert.equal(document.querySelector(".summary-subtitle"), null, "no object total under the title");
+  assert.equal(document.querySelector('[data-section="general"]'), null, "no General section");
+  const objectsTitle = () => document.querySelector('[data-section="classes"] summary').textContent;
+  assert.equal(objectsTitle(), "Objects (3):", "this plugin's live objects, as listed");
   assert.deepEqual(fields("classes"), ["bitcraft::Pocketknife: 1 | 0.000 BIT", "bitcraft::Wood: 2 | 2.000 BIT"]);
 
   const polls = () => [...ui.timers.values()].filter((timer) => timer.delay === 10000);
   assert.equal(polls().length, 1, "polls while the stick is pending");
 
-  document.querySelector('[data-section="general"]').open = false;
+  document.querySelector('[data-section="classes"]').open = false;
   ui.backend.objects.push(item("wood-3.dobj", "Wood"));
   const events = ui.sources.find((source) => source.url.endsWith("/events"));
   events.onmessage({ data: "{}" });
   await flush();
   assert.deepEqual(fields("classes"), ["bitcraft::Pocketknife: 1 | 0.000 BIT", "bitcraft::Wood: 3 | 3.000 BIT"]);
-  assert.equal(document.querySelector('[data-section="general"]').open, false);
+  assert.equal(objectsTitle(), "Objects (4):");
+  assert.equal(document.querySelector('[data-section="classes"]').open, false, "a collapsed section stays collapsed");
 
   const reads = ui.backend.inventoryReads;
   events.onopen();
@@ -967,15 +970,28 @@ test("the Settings window shows the connection addresses read-only and runs no s
   assert.equal(field("relayer").readOnly, true);
 });
 
-test("the main window's title carries the Total Inventory Value of live objects", async (context) => {
+test("the top bar and the window title show the Inventory Value of live objects", async (context) => {
   const wood = (fileName, status = "live") => ({ fileName, class: qname("Wood"), status, fields: { kvs: [] } });
   const ui = await page(context, { objects: [knife(), wood("wood-1.dobj"), wood("wood-2.dobj"), wood("wood-3.dobj", "pending")] });
-  assert.equal(ui.document.title, "Bitcraft (Inventory Value: 2.000 BIT)");
+  const value = () => ui.document.querySelector("#inventory-value-amount").textContent;
+  assert.equal(value(), "2.000 BIT");
+  assert.equal(ui.document.querySelector("#inventory-value").textContent.replace(/\s+/g, " ").trim(),
+    "Total Inventory Value: 2.000 BIT");
+  assert.equal(ui.document.title, "Bitcraft (2.000 BIT)");
+  const opened = [];
+  ui.dom.window.open = (url, name) => {
+    opened.push({ url: String(url), name });
+    return { closed: false, focus() {} };
+  };
+  ui.document.querySelector("#inventory-value").click();
+  assert.deepEqual(opened, [{ url: "http://127.0.0.1:7727/bitcraft/?page=summary", name: "bitcraft-inventory-summary" }],
+    "the value opens the Inventory Summary");
   assert.equal(ui.document.querySelector("#objects-footer"), null);
   ui.backend.objects.find((object) => object.fileName === "wood-3.dobj").status = "live";
   await ui.dom.window.reloadObjects();
   await flush();
-  assert.equal(ui.document.title, "Bitcraft (Inventory Value: 3.000 BIT)");
+  assert.equal(value(), "3.000 BIT");
+  assert.equal(ui.document.title, "Bitcraft (3.000 BIT)");
 });
 
 test("a worn tool is worth the fraction of its durability it has left", async (context) => {
@@ -987,7 +1003,7 @@ test("a worn tool is worth the fraction of its durability it has left", async (c
     objects: [knife(), axe("wood-axe.dobj", "WoodAxe", 60), axe("stone-axe.dobj", "StoneAxe", 0), axe("iron-axe.dobj", "IronAxe", 100)],
   });
   // 60% of a wood axe's 2, nothing for the spent stone axe, all of an iron axe's 9.
-  assert.equal(ui.document.title, "Bitcraft (Inventory Value: 10.200 BIT)");
+  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "10.200 BIT");
 });
 
 test("the top bar's icons have tooltips", async (context) => {

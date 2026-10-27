@@ -161,8 +161,8 @@ the selected objects.
 
 ## Cosmetic
 
-- **Page title:** "Bitcraft", which becomes "Bitcraft (Inventory Value:
-  N.NNN BIT)" once the inventory loads (see below).
+- **Page title:** "Bitcraft", which becomes "Bitcraft (N.NNN BIT)" once the
+  inventory loads (see below).
 - **Presentation pack:** class and action icons, summaries and
   descriptions come from the bitcraft presentation pack
   (`../../../examples/bitcraft/presentation/`), which the app ships by
@@ -188,18 +188,21 @@ the selected objects.
 - **Generic behavior:** no pack, so plain page icons, no action icons, and
   only the manifest's descriptions.
 
-## Window title, Inventory Summary and status bar
+## Inventory value, Inventory Summary and status bar
 
-The main window's title ("Bitcraft (Inventory Value: 31.000 BIT)", which the
-desktop app shows in its title bar), the Inventory Summary window opened
+The inventory's value, shown at the right end of the main window's top bar
+("Total Inventory Value:", the `SUMMARY_ICON_CLASS` icon and "31.000 BIT", which
+opens the Inventory Summary) and in its title ("Bitcraft (31.000 BIT)",
+which the desktop app shows in its title bar), the Inventory Summary window
+opened
 from the top bar, and the status bar along the bottom of the page. Three of
 their entries know about bitcraft:
 
 - **Bitcraft version** (status bar): `BITCRAFT_VERSION` ("Alpha 1.0"), a
   fixed string in the page; dobjd and the plugin manifest report no game
   version.
-- **Total Inventory Value** (Inventory Summary; "Inventory Value" in the
-  window title): the summed
+- **Total Inventory Value** (top bar, window title and Inventory Summary):
+  the summed
   Total Bit Value of the live bitcraft objects (pending ones are left out);
   see below. The Inventory Summary also shows each class's summed value
   beside its count, and hovering an object row in the main window shows
@@ -211,9 +214,8 @@ their entries know about bitcraft:
   info and Discord icons. Generic behavior: no links.
 - **Generic behavior:** no version, Total Inventory Value, per-class values
   or summary icon. The
-  Inventory Summary's live object total and per-class counts are generic:
-  the total covers every plugin's live objects, the per-class counts this
-  plugin's. The other entries
+  Inventory Summary's object count and per-class counts are generic: both
+  cover this plugin's live objects. The other entries
   are generic: the synchronizer and relayer statuses and addresses in the
   status bar (the page probes each service's `/healthz` at the URLs
   `GET /settings` reports, every 10 seconds).
