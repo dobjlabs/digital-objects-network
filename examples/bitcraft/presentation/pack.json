@@ -8,109 +8,109 @@
     "Wood": {
       "icon": "assets/classes/wood.png",
       "summary": "A basic building material.",
-      "description": "Gathered with a pocketknife or chopped with an axe. Goes into sticks, axes, quarries and mining drills, and can be stored in a bucket of wood."
+      "description": "Requires proof-of-work to produce, as well as a pocketknife or an axe. The cheapest resource--fast to produce, and used as a basic building block to craft various tools and upgrades. Can be converted directly to bits at a rate of 1 bit per wood."
     },
     "Stone": {
       "icon": "assets/classes/stone.png",
-      "summary": "Rock for heavier tools and machines.",
-      "description": "Gathered with a pocketknife or mined with a quarry. Goes into stone axes, quarries and mining drills, and can be stored in a bucket of stone."
+      "summary": "A basic building material.",
+      "description": "Requires proof-of-work to produce, as well as a pocketknife or a quarry. An easy-to-produce resource used as a building block for crafting various tools and upgrades. Can be converted directly to bits at a rate of 2 bits per stone."
     },
     "Iron": {
       "icon": "assets/classes/iron.png",
-      "summary": "The rarest raw resource.",
-      "description": "Gathered with a pocketknife, which takes the most work of any resource, or drilled with a mining drill. Goes into iron axes, buckets and mining drills."
+      "summary": "A basic building material.",
+      "description": "Requires proof-of-work to produce, as well as a pocketknife or a mining drill. Slightly more expensive to produce than wood or stone, and used as an ingredient into higher-level tools and upgrades. Can be converted directly to bits at a rate of 5 bits per iron."
     },
     "Stick": {
       "icon": "assets/classes/stick.png",
-      "summary": "Half a piece of wood.",
-      "description": "Made by splitting wood. Two sticks and a piece of wood make a wood axe."
+      "summary": "A stick.",
+      "description": "Produced from wood. Used for crafting axes."
     },
     "BucketOfWood": {
       "icon": "assets/classes/bucket.png",
-      "summary": "Holds any amount of wood in one item.",
-      "description": "Keeps your inventory short. Full buckets are spent to level up quarries and mining drills."
+      "summary": "Holds a stack of wood.",
+      "description": "Holds any amount of wood. You can add 1, 5, 10, or 50 wood at a time to the bucket. You can remove wood from the bucket so long as the bucket is not empty."
     },
     "BucketOfStone": {
       "icon": "assets/classes/bucket.png",
-      "summary": "Holds any amount of stone in one item.",
-      "description": "Keeps your inventory short. Full buckets are spent to level up quarries and mining drills."
+      "summary": "Holds a stack of stone.",
+      "description": "Holds any amount of stone. You can add 1, 5, 10, or 50 stone at a time to the bucket. You can remove stone from the bucket so long as the bucket is not empty."
     },
     "BucketOfIron": {
       "icon": "assets/classes/bucket.png",
-      "summary": "Holds any amount of iron in one item.",
-      "description": "Keeps your inventory short. Full buckets are spent to level up mining drills."
+      "summary": "Holds a stack of iron.",
+      "description": "Holds any amount of iron. You can add 1, 5, 10, or 50 iron at a time to the bucket. You can remove iron from the bucket so long as the bucket is not empty."
     },
     "Pocketknife": {
       "icon": "assets/classes/pocketknife.png",
-      "summary": "Your first tool.",
-      "description": "Made from nothing. You need one to gather wood, stone and iron, and gathering gives it back, so one lasts forever."
+      "summary": "A basic tool for gathering wood, stone, and iron.",
+      "description": "A basic tool that allows you to gather wood, stone, and iron. Gathers resources very slowly. Infinite durability."
     },
     "WoodAxe": {
       "icon": "assets/classes/wood-axe.png",
-      "summary": "Chops 2 wood per use.",
-      "description": "Starts with 100 durability and loses 1 per use; at 0 it can no longer be used. Can be upgraded to a stone axe."
+      "summary": "A basic axe for chopping wood.",
+      "description": "Chops 2 wood per use, and breaks after 100 uses. Can be upgraded to a stone axe."
     },
     "StoneAxe": {
       "icon": "assets/classes/stone-axe.png",
-      "summary": "Chops 3 wood per use.",
-      "description": "Made by upgrading a wood axe, keeping its durability. Loses 1 durability per use. Can be upgraded to an iron axe."
+      "summary": "A solid axe for chopping wood.",
+      "description": "Chops 3 wood per use, and breaks after 100 uses. Made by upgrading a wood axe with 1 stone. Can be upgraded to an iron axe."
     },
     "IronAxe": {
       "icon": "assets/classes/iron-axe.png",
-      "summary": "Chops 4 wood per use.",
-      "description": "Made by upgrading a stone axe, keeping its durability. Loses 1 durability per use."
+      "summary": "A powerful axe for chopping wood.",
+      "description": "Chops 4 wood per use, and breaks after 100 uses. Made by upgrading a stone axe with 1 iron."
     },
     "Quarry": {
       "icon": "assets/classes/quarry.png",
-      "summary": "Mines stone without wearing out.",
-      "description": "Makes one more stone per use than its level, up to level 6. Level it up with full buckets of wood and stone."
+      "summary": "Mines stone in bulk.",
+      "description": "Requires wood and stone to build or upgrade: 20 wood and 10 stone for a level 1 quarry, with upgrade costs doubling at every level. Mines 2 stone per action at level 1, 3 stone per action at level 2, etc."
     },
     "MiningDrill": {
       "icon": "assets/classes/mining-drill.png",
-      "summary": "Drills iron from wood.",
-      "description": "Spends 5 wood per use and makes one more iron than its level, up to level 6. Level it up with full buckets of wood, stone and iron."
+      "summary": "Mines iron in bulk.",
+      "description": "Requires wood, stone, and iron to build or upgrade: 10 wood, 50 stone, and 5 iron for a level 1 mining drill, with upgrade costs doubling at every level. Mines 2 iron per action at level 1, 3 iron per action at level 2, etc. Consumes 5 wood per mining action."
     },
     "Bit": {
       "icon": "assets/classes/bit.png",
-      "summary": "The game's finest-grained material.",
-      "description": "Made from wood, stone or iron. No recipe uses bits yet."
+      "summary": "The currency of Bitcraft.",
+      "description": "Can be produced from wood, stone, or iron at a rate of 1 bit per wood, 2 bits per stone, or 5 bits per iron."
     }
   },
   "actions": {
     "CraftPocketknife": {
       "icon": "assets/actions/CraftPocketknife.svg",
-      "summary": "Make a pocketknife from nothing.",
-      "description": "Your first tool. It takes no materials, and you need it to gather wood, stone and iron."
+      "summary": "Create a pocketknife. Requires no inputs.",
+      "description": "Create a pocketknife, an infinite-durability tool used for gathering wood, stone, and iron."
     },
     "GatherWood": {
       "icon": "assets/actions/GatherWood.svg",
-      "summary": "Gather 1 wood with your pocketknife.",
-      "description": "Your computer does a little work first. The pocketknife comes back with a fresh key, ready to use again."
+      "summary": "Use a pocketknife to produce 1 wood. (~15 seconds)",
+      "description": "Produce 1 wood using a pocketknife. Requires performing a small amount of proof-of-work hash mining, approximately ~15 seconds on a modern CPU."
     },
     "GatherStone": {
       "icon": "assets/actions/GatherStone.svg",
-      "summary": "Gather 1 stone with your pocketknife.",
-      "description": "Your computer does a moderate amount of work first. The pocketknife comes back with a fresh key, ready to use again."
+      "summary": "Use a pocketknife to produce 1 stone. (~30 seconds)",
+      "description": "Produce 1 stone using a pocketknife. Requires performing a small amount of proof-of-work hash mining, approximately ~30 seconds on a modern CPU."
     },
     "GatherIron": {
       "icon": "assets/actions/GatherIron.svg",
-      "summary": "Gather 1 iron with your pocketknife.",
-      "description": "Your computer does a lot of work first. The pocketknife comes back with a fresh key, ready to use again."
+      "summary": "Use a pocketknife to produce 1 iron. (~60 seconds)",
+      "description": "Produce 1 iron using a pocketknife. Requires performing a small amount of proof-of-work hash mining, approximately ~60 seconds on a modern CPU."
     },
     "CraftBucketOfWood": {
       "icon": "assets/actions/CraftBucketOfWood.svg",
       "summary": "Make an empty bucket for wood from 1 iron.",
-      "description": "A bucket holds any amount of wood in one item. Fill it with the Add actions."
+      "description": "A bucket holds a stack of wood. You can add and remove Wood to it via the appropriate actions."
     },
     "CraftBucketOfStone": {
       "icon": "assets/actions/CraftBucketOfStone.svg",
       "summary": "Make an empty bucket for stone from 1 iron.",
-      "description": "A bucket holds any amount of stone in one item. Fill it with the Add actions."
+      "description": "A bucket holds a stack of stone. You can add and remove Stone to it via the appropriate actions."
     },
     "CraftBucketOfIron": {
       "icon": "assets/actions/CraftBucketOfIron.svg",
       "summary": "Make an empty bucket for iron from 1 iron.",
-      "description": "A bucket holds any amount of iron in one item. Fill it with the Add actions."
+      "description": "A bucket holds a stack of iron. You can add and remove Iron to it via the appropriate actions."
     },
     "BucketOfWoodAdd1": {
       "icon": "assets/actions/BucketOfWoodAdd1.svg",
@@ -189,243 +189,243 @@
     },
     "CraftStick": {
       "icon": "assets/actions/CraftStick.svg",
-      "summary": "Split 1 wood into 2 sticks.",
-      "description": "Sticks go into wood axes."
+      "summary": "Craft 2 sticks from 1 wood.",
+      "description": "Consume 1 wood to produce 2 sticks."
     },
     "CraftWoodAxe": {
       "icon": "assets/actions/CraftWoodAxe.svg",
-      "summary": "Make a wood axe from 1 wood and 2 sticks.",
-      "description": "A new axe has 100 durability and loses 1 per use. It chops 2 wood per use."
+      "summary": "Make a wooden axe from 2 sticks and 1 wood.",
+      "description": "Consumes 2 sticks and 1 wood to create a wooden axe, which chops wood twice as fast as a pocketknife. Axes have 100 durability, meaning that they are destroyed after 100 uses."
     },
     "CraftStoneAxe": {
       "icon": "assets/actions/CraftStoneAxe.svg",
-      "summary": "Upgrade your wood axe with 1 stone.",
-      "description": "Uses up the old axe and keeps its remaining durability. The stone axe chops 3 wood per use."
+      "summary": "Upgrade a wooden axe to a stone axe using 1 stone.",
+      "description": "Consumes a wooden axe and 1 stone to create a stone axe, which chops wood three times as fast as a pocketknife. Axes have 100 durability, meaning that they are destroyed after 100 uses."
     },
     "CraftIronAxe": {
       "icon": "assets/actions/CraftIronAxe.svg",
-      "summary": "Upgrade your stone axe with 1 iron.",
-      "description": "Uses up the old axe and keeps its remaining durability. The iron axe chops 4 wood per use."
+      "summary": "Upgrade a stone axe to an iron axe using 1 iron.",
+      "description": "Consumes a stone axe and 1 iron to create a iron axe, which chops wood four times as fast as a pocketknife. Axes have 100 durability, meaning that they are destroyed after 100 uses."
     },
     "UseWoodAxe": {
       "icon": "assets/actions/UseWoodAxe.svg",
-      "summary": "Chop 2 wood with your wood axe.",
-      "description": "Takes 1 durability; an axe at 0 can no longer be used. Your computer does a little work first."
+      "summary": "Use a wooden axe to produce 2 wood. (~15 seconds)",
+      "description": "Produce 2 wood using a wooden axe. Requires performing a small amount of proof-of-work hash mining, approximately ~15 seconds on a modern CPU. Consumes 1 durability of the axe."
     },
     "UseStoneAxe": {
       "icon": "assets/actions/UseStoneAxe.svg",
-      "summary": "Chop 3 wood with your stone axe.",
-      "description": "Takes 1 durability; an axe at 0 can no longer be used. Your computer does a little work first."
+      "summary": "Use a stone axe to produce 3 wood. (~15 seconds)",
+      "description": "Produce 3 wood using a stone axe. Requires performing a small amount of proof-of-work hash mining, approximately ~15 seconds on a modern CPU. Consumes 1 durability of the axe."
     },
     "UseIronAxe": {
       "icon": "assets/actions/UseIronAxe.svg",
-      "summary": "Chop 4 wood with your iron axe.",
-      "description": "Takes 1 durability; an axe at 0 can no longer be used. Your computer does a little work first."
+      "summary": "Use an iron axe to produce 4 wood. (~15 seconds)",
+      "description": "Produce 4 wood using an iron axe. Requires performing a small amount of proof-of-work hash mining, approximately ~15 seconds on a modern CPU. Consumes 1 durability of the axe."
     },
     "UseQuarry1": {
       "icon": "assets/actions/UseQuarry1.svg",
-      "summary": "Mine 2 stone with a level 1 quarry.",
-      "description": "Only works on a quarry at exactly level 1. Your computer does some work first."
+      "summary": "Use a level 1 quarry to produce 2 stone.",
+      "description": "Produce 2 stone using a quarry. Requires performing a small amount of proof-of-work hash mining, approximately ~30 seconds on a modern CPU."
     },
     "UseMiningDrill1": {
       "icon": "assets/actions/UseMiningDrill1.svg",
-      "summary": "Drill 2 iron from 5 wood with a level 1 mining drill.",
-      "description": "Only works on a mining drill at exactly level 1. Your computer does a lot of work first."
+      "summary": "Use a level 1 mining drill to produce 2 iron.",
+      "description": "Produce 2 iron using a mining drill. Consumes 5 wood, and requires performing a small amount of proof-of-work hash mining, approximately ~60 seconds on a modern CPU."
     },
     "UseQuarry2": {
       "icon": "assets/actions/UseQuarry2.svg",
-      "summary": "Mine 3 stone with a level 2 quarry.",
-      "description": "Only works on a quarry at exactly level 2. Your computer does some work first."
+      "summary": "Use a level 2 quarry to produce 3 stone.",
+      "description": "Produce 3 stone using a quarry. Requires performing a small amount of proof-of-work hash mining, approximately ~30 seconds on a modern CPU."
     },
     "UseMiningDrill2": {
       "icon": "assets/actions/UseMiningDrill2.svg",
-      "summary": "Drill 3 iron from 5 wood with a level 2 mining drill.",
-      "description": "Only works on a mining drill at exactly level 2. Your computer does a lot of work first."
+      "summary": "Use a level 2 mining drill to produce 3 iron.",
+      "description": "Produce 3 iron using a mining drill. Consumes 5 wood, and requires performing a small amount of proof-of-work hash mining, approximately ~60 seconds on a modern CPU."
     },
     "UseQuarry3": {
       "icon": "assets/actions/UseQuarry3.svg",
-      "summary": "Mine 4 stone with a level 3 quarry.",
-      "description": "Only works on a quarry at exactly level 3. Your computer does some work first."
+      "summary": "Use a level 3 quarry to produce 4 stone.",
+      "description": "Produce 4 stone using a quarry. Requires performing a small amount of proof-of-work hash mining, approximately ~30 seconds on a modern CPU."
     },
     "UseMiningDrill3": {
       "icon": "assets/actions/UseMiningDrill3.svg",
-      "summary": "Drill 4 iron from 5 wood with a level 3 mining drill.",
-      "description": "Only works on a mining drill at exactly level 3. Your computer does a lot of work first."
+      "summary": "Use a level 3 mining drill to produce 4 iron.",
+      "description": "Produce 4 iron using a mining drill. Consumes 5 wood, and requires performing a small amount of proof-of-work hash mining, approximately ~60 seconds on a modern CPU."
     },
     "UseQuarry4": {
       "icon": "assets/actions/UseQuarry4.svg",
-      "summary": "Mine 5 stone with a level 4 quarry.",
-      "description": "Only works on a quarry at exactly level 4. Your computer does some work first."
+      "summary": "Use a level 4 quarry to produce 5 stone.",
+      "description": "Produce 5 stone using a quarry. Requires performing a small amount of proof-of-work hash mining, approximately ~30 seconds on a modern CPU."
     },
     "UseMiningDrill4": {
       "icon": "assets/actions/UseMiningDrill4.svg",
-      "summary": "Drill 5 iron from 5 wood with a level 4 mining drill.",
-      "description": "Only works on a mining drill at exactly level 4. Your computer does a lot of work first."
+      "summary": "Use a level 4 mining drill to produce 5 iron.",
+      "description": "Produce 5 iron using a mining drill. Consumes 5 wood, and requires performing a small amount of proof-of-work hash mining, approximately ~60 seconds on a modern CPU."
     },
     "UseQuarry5": {
       "icon": "assets/actions/UseQuarry5.svg",
-      "summary": "Mine 6 stone with a level 5 quarry.",
-      "description": "Only works on a quarry at exactly level 5. Your computer does some work first."
+      "summary": "Use a level 5 quarry to produce 6 stone.",
+      "description": "Produce 6 stone using a quarry. Requires performing a small amount of proof-of-work hash mining, approximately ~30 seconds on a modern CPU."
     },
     "UseMiningDrill5": {
       "icon": "assets/actions/UseMiningDrill5.svg",
-      "summary": "Drill 6 iron from 5 wood with a level 5 mining drill.",
-      "description": "Only works on a mining drill at exactly level 5. Your computer does a lot of work first."
+      "summary": "Use a level 5 mining drill to produce 6 iron.",
+      "description": "Produce 6 iron using a mining drill. Consumes 5 wood, and requires performing a small amount of proof-of-work hash mining, approximately ~60 seconds on a modern CPU."
     },
     "UseQuarry6": {
       "icon": "assets/actions/UseQuarry6.svg",
-      "summary": "Mine 7 stone with a level 6 quarry.",
-      "description": "Only works on a quarry at exactly level 6. Your computer does some work first."
+      "summary": "Use a level 6 quarry to produce 7 stone.",
+      "description": "Produce 7 stone using a quarry. Requires performing a small amount of proof-of-work hash mining, approximately ~30 seconds on a modern CPU."
     },
     "UseMiningDrill6": {
       "icon": "assets/actions/UseMiningDrill6.svg",
-      "summary": "Drill 7 iron from 5 wood with a level 6 mining drill.",
-      "description": "Only works on a mining drill at exactly level 6. Your computer does a lot of work first."
+      "summary": "Use a level 6 mining drill to produce 7 iron.",
+      "description": "Produce 7 iron using a mining drill. Consumes 5 wood, and requires performing a small amount of proof-of-work hash mining, approximately ~60 seconds on a modern CPU."
     },
     "BuildQuarry": {
       "icon": "assets/actions/BuildQuarry.svg",
-      "summary": "Build a level 1 quarry from 20 wood and 10 stone.",
-      "description": "Quarries mine stone without wearing out, and make more at higher levels."
+      "summary": "Make a level 1 quarry using 20 wood and 10 stone.",
+      "description": "A level 1 quarry mines stone twice as fast as a pocketknife. Quarries have infinite durability, and can be upgraded to produce stone even faster."
     },
     "BuildMiningDrill": {
       "icon": "assets/actions/BuildMiningDrill.svg",
-      "summary": "Build a level 1 mining drill from 10 wood, 50 stone and 5 iron.",
-      "description": "Mining drills turn wood into iron without wearing out, and make more at higher levels."
+      "summary": "Make a level 1 mining drill using 10 wood, 50 stone, and 5 iron.",
+      "description": "A level 1 mining drill mines iron twice as fast as a pocketknife. Mining drills have infinite durability, and can be upgraded to produce iron even faster."
     },
     "LevelUpQuarry1": {
       "icon": "assets/actions/LevelUpQuarry1.svg",
-      "summary": "Raise a level 1 quarry to level 2.",
-      "description": "Only works on a quarry at exactly level 1. Spends a bucket holding exactly 40 wood and a bucket holding exactly 20 stone."
+      "summary": "Upgrades a level 1 quarry to level 2.",
+      "description": "Only works on a quarry at exactly level 1. Spends a bucket holding exactly 40 wood and a bucket holding exactly 20 stone. A level 2 quarry mines stone 3 times as fast as a pocketknife."
     },
     "LevelUpMiningDrill1": {
       "icon": "assets/actions/LevelUpMiningDrill1.svg",
-      "summary": "Raise a level 1 mining drill to level 2.",
-      "description": "Only works on a mining drill at exactly level 1. Spends buckets holding exactly 20 wood, 100 stone and 10 iron."
+      "summary": "Upgrades a level 1 mining drill to level 2.",
+      "description": "Only works on a mining drill at exactly level 1. Spends buckets holding exactly 20 wood, 100 stone and 10 iron. A level 2 quarry mines iron 3 times as fast as a pocketknife."
     },
     "LevelUpQuarry2": {
       "icon": "assets/actions/LevelUpQuarry2.svg",
-      "summary": "Raise a level 2 quarry to level 3.",
-      "description": "Only works on a quarry at exactly level 2. Spends a bucket holding exactly 80 wood and a bucket holding exactly 40 stone."
+      "summary": "Upgrades a level 2 quarry to level 3.",
+      "description": "Only works on a quarry at exactly level 2. Spends a bucket holding exactly 80 wood and a bucket holding exactly 40 stone. A level 3 quarry mines stone 4 times as fast as a pocketknife."
     },
     "LevelUpMiningDrill2": {
       "icon": "assets/actions/LevelUpMiningDrill2.svg",
-      "summary": "Raise a level 2 mining drill to level 3.",
-      "description": "Only works on a mining drill at exactly level 2. Spends buckets holding exactly 40 wood, 200 stone and 20 iron."
+      "summary": "Upgrades a level 2 mining drill to level 3.",
+      "description": "Only works on a mining drill at exactly level 2. Spends buckets holding exactly 40 wood, 200 stone and 20 iron. A level 3 quarry mines iron 4 times as fast as a pocketknife."
     },
     "LevelUpQuarry3": {
       "icon": "assets/actions/LevelUpQuarry3.svg",
-      "summary": "Raise a level 3 quarry to level 4.",
-      "description": "Only works on a quarry at exactly level 3. Spends a bucket holding exactly 160 wood and a bucket holding exactly 80 stone."
+      "summary": "Upgrades a level 3 quarry to level 4.",
+      "description": "Only works on a quarry at exactly level 3. Spends a bucket holding exactly 160 wood and a bucket holding exactly 80 stone. A level 4 quarry mines stone 5 times as fast as a pocketknife."
     },
     "LevelUpMiningDrill3": {
       "icon": "assets/actions/LevelUpMiningDrill3.svg",
-      "summary": "Raise a level 3 mining drill to level 4.",
-      "description": "Only works on a mining drill at exactly level 3. Spends buckets holding exactly 80 wood, 400 stone and 40 iron."
+      "summary": "Upgrades a level 3 mining drill to level 4.",
+      "description": "Only works on a mining drill at exactly level 3. Spends buckets holding exactly 80 wood, 400 stone and 40 iron. A level 4 quarry mines iron 5 times as fast as a pocketknife."
     },
     "LevelUpQuarry4": {
       "icon": "assets/actions/LevelUpQuarry4.svg",
-      "summary": "Raise a level 4 quarry to level 5.",
-      "description": "Only works on a quarry at exactly level 4. Spends a bucket holding exactly 320 wood and a bucket holding exactly 160 stone."
+      "summary": "Upgrades a level 4 quarry to level 5.",
+      "description": "Only works on a quarry at exactly level 4. Spends a bucket holding exactly 320 wood and a bucket holding exactly 160 stone. A level 5 quarry mines stone 6 times as fast as a pocketknife."
     },
     "LevelUpMiningDrill4": {
       "icon": "assets/actions/LevelUpMiningDrill4.svg",
-      "summary": "Raise a level 4 mining drill to level 5.",
-      "description": "Only works on a mining drill at exactly level 4. Spends buckets holding exactly 160 wood, 800 stone and 80 iron."
+      "summary": "Upgrades a level 4 mining drill to level 5.",
+      "description": "Only works on a mining drill at exactly level 4. Spends buckets holding exactly 160 wood, 800 stone and 80 iron. A level 5 quarry mines iron 6 times as fast as a pocketknife."
     },
     "LevelUpQuarry5": {
       "icon": "assets/actions/LevelUpQuarry5.svg",
-      "summary": "Raise a level 5 quarry to level 6.",
-      "description": "Only works on a quarry at exactly level 5. Spends a bucket holding exactly 640 wood and a bucket holding exactly 320 stone."
+      "summary": "Upgrades a level 5 quarry to level 6.",
+      "description": "Only works on a quarry at exactly level 5. Spends a bucket holding exactly 640 wood and a bucket holding exactly 320 stone. A level 6 quarry mines stone 7 times as fast as a pocketknife."
     },
     "LevelUpMiningDrill5": {
       "icon": "assets/actions/LevelUpMiningDrill5.svg",
-      "summary": "Raise a level 5 mining drill to level 6.",
-      "description": "Only works on a mining drill at exactly level 5. Spends buckets holding exactly 320 wood, 1600 stone and 160 iron."
+      "summary": "Upgrades a level 5 mining drill to level 6.",
+      "description": "Only works on a mining drill at exactly level 5. Spends buckets holding exactly 320 wood, 1600 stone and 160 iron. A level 6 quarry mines iron 7 times as fast as a pocketknife."
     },
     "BitsFromWood": {
       "icon": "assets/actions/BitsFromWood.svg",
-      "summary": "Turn 1 wood into 1 bit.",
-      "description": "Takes a short, fixed amount of computing time."
+      "summary": "Generate bits from wood.",
+      "description": "Converts 1 wood into 1 bit."
     },
     "BitsFromStone": {
       "icon": "assets/actions/BitsFromStone.svg",
-      "summary": "Turn 1 stone into 2 bits.",
-      "description": "Takes a short, fixed amount of computing time."
+      "summary": "Generate bits from stone.",
+      "description": "Converts 1 stone into 2 bits."
     },
     "BitsFromIron": {
       "icon": "assets/actions/BitsFromIron.svg",
-      "summary": "Turn 1 iron into 5 bits.",
-      "description": "Takes a short, fixed amount of computing time."
+      "summary": "Generate bits from iron.",
+      "description": "Converts 1 iron into 5 bits."
     },
     "RekeyWood": {
       "icon": "assets/actions/RekeyWood.svg",
-      "summary": "Give a wood a fresh key.",
-      "description": "Changes nothing else about it. You won't need this for crafting."
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
     },
     "RekeyStone": {
       "icon": "assets/actions/RekeyStone.svg",
-      "summary": "Give a stone a fresh key.",
-      "description": "Changes nothing else about it. You won't need this for crafting."
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
     },
     "RekeyIron": {
       "icon": "assets/actions/RekeyIron.svg",
-      "summary": "Give a iron a fresh key.",
-      "description": "Changes nothing else about it. You won't need this for crafting."
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
     },
     "RekeyStick": {
       "icon": "assets/actions/RekeyStick.svg",
-      "summary": "Give a stick a fresh key.",
-      "description": "Changes nothing else about it. You won't need this for crafting."
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
     },
     "RekeyBucketOfWood": {
       "icon": "assets/actions/RekeyBucketOfWood.svg",
-      "summary": "Give a bucket of wood a fresh key.",
-      "description": "Changes nothing else about it. You won't need this for crafting."
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
     },
     "RekeyBucketOfStone": {
       "icon": "assets/actions/RekeyBucketOfStone.svg",
-      "summary": "Give a bucket of stone a fresh key.",
-      "description": "Changes nothing else about it. You won't need this for crafting."
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
     },
     "RekeyBucketOfIron": {
       "icon": "assets/actions/RekeyBucketOfIron.svg",
-      "summary": "Give a bucket of iron a fresh key.",
-      "description": "Changes nothing else about it. You won't need this for crafting."
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
     },
     "RekeyPocketknife": {
       "icon": "assets/actions/RekeyPocketknife.svg",
-      "summary": "Give a pocketknife a fresh key.",
-      "description": "Changes nothing else about it. You won't need this for crafting."
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
     },
     "RekeyWoodAxe": {
       "icon": "assets/actions/RekeyWoodAxe.svg",
-      "summary": "Give a wood axe a fresh key.",
-      "description": "Changes nothing else about it. You won't need this for crafting."
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
     },
     "RekeyStoneAxe": {
       "icon": "assets/actions/RekeyStoneAxe.svg",
-      "summary": "Give a stone axe a fresh key.",
-      "description": "Changes nothing else about it. You won't need this for crafting."
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
     },
     "RekeyIronAxe": {
       "icon": "assets/actions/RekeyIronAxe.svg",
-      "summary": "Give a iron axe a fresh key.",
-      "description": "Changes nothing else about it. You won't need this for crafting."
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
     },
     "RekeyQuarry": {
       "icon": "assets/actions/RekeyQuarry.svg",
-      "summary": "Give a quarry a fresh key.",
-      "description": "Changes nothing else about it. You won't need this for crafting."
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
     },
     "RekeyMiningDrill": {
       "icon": "assets/actions/RekeyMiningDrill.svg",
-      "summary": "Give a mining drill a fresh key.",
-      "description": "Changes nothing else about it. You won't need this for crafting."
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
     },
     "RekeyBit": {
       "icon": "assets/actions/RekeyBit.svg",
-      "summary": "Give a bit a fresh key.",
-      "description": "Changes nothing else about it. You won't need this for crafting."
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
     }
   }
 }
