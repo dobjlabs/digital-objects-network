@@ -36,7 +36,7 @@ Produce 1 iron using a pocketknife. Requires performing a small amount of proof-
 
 Make an empty bucket for {resource|lower} from 1 iron.
 
-A bucket holds a stack of {resource|lower}. You can add and remove {resource} to it via the appropriate actions.
+A bucket holds a stack of {resource|lower}. You can add and remove {resource|lower} to it via the appropriate actions.
 
 ## BucketOf{resource}Add{amount}
 
@@ -61,19 +61,19 @@ Consume 1 wood to produce 2 sticks.
 
 Make a wooden axe from 2 sticks and 1 wood.
 
-Consumes 2 sticks and 1 wood to create a wooden axe, which chops wood twice as fast as a pocketknife. Axes have 100 durability, meaning that they are destroyed after 100 uses.
+Consumes 2 sticks and 1 wood to create a wooden axe, which chops wood twice as fast as a pocketknife. Axes start with 100 durability, meaning that they are unusable after 100 uses.
 
 ## CraftStoneAxe
 
 Upgrade a wooden axe to a stone axe using 1 stone.
 
-Consumes a wooden axe and 1 stone to create a stone axe, which chops wood three times as fast as a pocketknife. Axes have 100 durability, meaning that they are destroyed after 100 uses.
+Consumes a wooden axe and 1 stone to create a stone axe, which chops wood three times as fast as a pocketknife. Axes start with 100 durability, meaning that they are unusable after 100 uses.
 
 ## CraftIronAxe
 
 Upgrade a stone axe to an iron axe using 1 iron.
 
-Consumes a stone axe and 1 iron to create a iron axe, which chops wood four times as fast as a pocketknife. Axes have 100 durability, meaning that they are destroyed after 100 uses.
+Consumes a stone axe and 1 iron to create an iron axe, which chops wood four times as fast as a pocketknife. Axes start with 100 durability, meaning that they are unusable after 100 uses.
 
 ## UseWoodAxe
 
@@ -131,7 +131,7 @@ Upgrades a level {level} mining drill to level {level + 1}.
 
 Only works on a mining drill at exactly level {level}. Spends buckets
 holding exactly {10 * 2 ** level} wood, {50 * 2 ** level} stone and {5 * 2
-** level} iron. A level {level + 1} quarry mines iron {level + 2} times as fast as a pocketknife.
+** level} iron. A level {level + 1} mining drill mines iron {level + 2} times as fast as a pocketknife.
 
 ## BitsFromWood
 

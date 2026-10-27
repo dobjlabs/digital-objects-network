@@ -100,17 +100,17 @@
     "CraftBucketOfWood": {
       "icon": "assets/actions/CraftBucketOfWood.svg",
       "summary": "Make an empty bucket for wood from 1 iron.",
-      "description": "A bucket holds a stack of wood. You can add and remove Wood to it via the appropriate actions."
+      "description": "A bucket holds a stack of wood. You can add and remove wood to it via the appropriate actions."
     },
     "CraftBucketOfStone": {
       "icon": "assets/actions/CraftBucketOfStone.svg",
       "summary": "Make an empty bucket for stone from 1 iron.",
-      "description": "A bucket holds a stack of stone. You can add and remove Stone to it via the appropriate actions."
+      "description": "A bucket holds a stack of stone. You can add and remove stone to it via the appropriate actions."
     },
     "CraftBucketOfIron": {
       "icon": "assets/actions/CraftBucketOfIron.svg",
       "summary": "Make an empty bucket for iron from 1 iron.",
-      "description": "A bucket holds a stack of iron. You can add and remove Iron to it via the appropriate actions."
+      "description": "A bucket holds a stack of iron. You can add and remove iron to it via the appropriate actions."
     },
     "BucketOfWoodAdd1": {
       "icon": "assets/actions/BucketOfWoodAdd1.svg",
@@ -195,17 +195,17 @@
     "CraftWoodAxe": {
       "icon": "assets/actions/CraftWoodAxe.svg",
       "summary": "Make a wooden axe from 2 sticks and 1 wood.",
-      "description": "Consumes 2 sticks and 1 wood to create a wooden axe, which chops wood twice as fast as a pocketknife. Axes have 100 durability, meaning that they are destroyed after 100 uses."
+      "description": "Consumes 2 sticks and 1 wood to create a wooden axe, which chops wood twice as fast as a pocketknife. Axes start with 100 durability, meaning that they are unusable after 100 uses."
     },
     "CraftStoneAxe": {
       "icon": "assets/actions/CraftStoneAxe.svg",
       "summary": "Upgrade a wooden axe to a stone axe using 1 stone.",
-      "description": "Consumes a wooden axe and 1 stone to create a stone axe, which chops wood three times as fast as a pocketknife. Axes have 100 durability, meaning that they are destroyed after 100 uses."
+      "description": "Consumes a wooden axe and 1 stone to create a stone axe, which chops wood three times as fast as a pocketknife. Axes start with 100 durability, meaning that they are unusable after 100 uses."
     },
     "CraftIronAxe": {
       "icon": "assets/actions/CraftIronAxe.svg",
       "summary": "Upgrade a stone axe to an iron axe using 1 iron.",
-      "description": "Consumes a stone axe and 1 iron to create a iron axe, which chops wood four times as fast as a pocketknife. Axes have 100 durability, meaning that they are destroyed after 100 uses."
+      "description": "Consumes a stone axe and 1 iron to create an iron axe, which chops wood four times as fast as a pocketknife. Axes start with 100 durability, meaning that they are unusable after 100 uses."
     },
     "UseWoodAxe": {
       "icon": "assets/actions/UseWoodAxe.svg",
@@ -300,7 +300,7 @@
     "LevelUpMiningDrill1": {
       "icon": "assets/actions/LevelUpMiningDrill1.svg",
       "summary": "Upgrades a level 1 mining drill to level 2.",
-      "description": "Only works on a mining drill at exactly level 1. Spends buckets holding exactly 20 wood, 100 stone and 10 iron. A level 2 quarry mines iron 3 times as fast as a pocketknife."
+      "description": "Only works on a mining drill at exactly level 1. Spends buckets holding exactly 20 wood, 100 stone and 10 iron. A level 2 mining drill mines iron 3 times as fast as a pocketknife."
     },
     "LevelUpQuarry2": {
       "icon": "assets/actions/LevelUpQuarry2.svg",
@@ -310,7 +310,7 @@
     "LevelUpMiningDrill2": {
       "icon": "assets/actions/LevelUpMiningDrill2.svg",
       "summary": "Upgrades a level 2 mining drill to level 3.",
-      "description": "Only works on a mining drill at exactly level 2. Spends buckets holding exactly 40 wood, 200 stone and 20 iron. A level 3 quarry mines iron 4 times as fast as a pocketknife."
+      "description": "Only works on a mining drill at exactly level 2. Spends buckets holding exactly 40 wood, 200 stone and 20 iron. A level 3 mining drill mines iron 4 times as fast as a pocketknife."
     },
     "LevelUpQuarry3": {
       "icon": "assets/actions/LevelUpQuarry3.svg",
@@ -320,7 +320,7 @@
     "LevelUpMiningDrill3": {
       "icon": "assets/actions/LevelUpMiningDrill3.svg",
       "summary": "Upgrades a level 3 mining drill to level 4.",
-      "description": "Only works on a mining drill at exactly level 3. Spends buckets holding exactly 80 wood, 400 stone and 40 iron. A level 4 quarry mines iron 5 times as fast as a pocketknife."
+      "description": "Only works on a mining drill at exactly level 3. Spends buckets holding exactly 80 wood, 400 stone and 40 iron. A level 4 mining drill mines iron 5 times as fast as a pocketknife."
     },
     "LevelUpQuarry4": {
       "icon": "assets/actions/LevelUpQuarry4.svg",
@@ -330,7 +330,7 @@
     "LevelUpMiningDrill4": {
       "icon": "assets/actions/LevelUpMiningDrill4.svg",
       "summary": "Upgrades a level 4 mining drill to level 5.",
-      "description": "Only works on a mining drill at exactly level 4. Spends buckets holding exactly 160 wood, 800 stone and 80 iron. A level 5 quarry mines iron 6 times as fast as a pocketknife."
+      "description": "Only works on a mining drill at exactly level 4. Spends buckets holding exactly 160 wood, 800 stone and 80 iron. A level 5 mining drill mines iron 6 times as fast as a pocketknife."
     },
     "LevelUpQuarry5": {
       "icon": "assets/actions/LevelUpQuarry5.svg",
@@ -340,7 +340,7 @@
     "LevelUpMiningDrill5": {
       "icon": "assets/actions/LevelUpMiningDrill5.svg",
       "summary": "Upgrades a level 5 mining drill to level 6.",
-      "description": "Only works on a mining drill at exactly level 5. Spends buckets holding exactly 320 wood, 1600 stone and 160 iron. A level 6 quarry mines iron 7 times as fast as a pocketknife."
+      "description": "Only works on a mining drill at exactly level 5. Spends buckets holding exactly 320 wood, 1600 stone and 160 iron. A level 6 mining drill mines iron 7 times as fast as a pocketknife."
     },
     "BitsFromWood": {
       "icon": "assets/actions/BitsFromWood.svg",
