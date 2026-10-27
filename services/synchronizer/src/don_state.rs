@@ -85,3 +85,13 @@ pub fn state_header(
         prior_state_history_root,
     )
 }
+
+#[derive(Debug, Default)]
+pub struct TxStatus {
+    pub tx_hash: B256,
+    pub tx_final: Option<Hash>,
+    // Errors of a particular blob in the transaction
+    pub blob_errors: Vec<(u32, String)>,
+    // General errors of the transaction
+    pub error: Option<String>,
+}

@@ -9,7 +9,7 @@ use tracing::{info, warn};
 
 use crate::{
     container_db::{created_array_holds, ContainerDb},
-    don_state::{state_header, DonState, ExecutionBlock, StateMetadata, StateRoots},
+    don_state::{state_header, DonState, ExecutionBlock, StateMetadata, StateRoots, TxStatus},
 };
 
 /// The maximum age of a state root used as grounding for a transaction.
@@ -77,30 +77,47 @@ impl StateMachine {
     /// so the apply pass can attribute a hard error to the right blob.
     pub fn parse_blobs(
         &self,
-        blob_payloads: &[(u32, Vec<u8>)],
+        txs_blob_payloads: &[Vec<(u32, Vec<u8>)>],
         slot: u32,
         block_number: u64,
-    ) -> Vec<(u32, Payload)> {
-        let mut parsed = Vec::with_capacity(blob_payloads.len());
-        for (blob_index, bytes) in blob_payloads {
-            match self.proof_parser.parse_blob(bytes) {
-                Ok(Some(payload)) => parsed.push((*blob_index, payload)),
-                Ok(None) => info!(
-                    slot,
-                    block_number,
-                    blob_index,
-                    "Blob did not contain a valid TxFinalized proof; skipping"
-                ),
-                Err(err) => warn!(
-                    slot,
-                    block_number,
-                    blob_index,
-                    ?err,
-                    "Failed to parse/verify TxFinalized payload; skipping blob"
-                ),
+        txs_status: &mut [TxStatus],
+    ) -> Vec<Vec<(u32, Payload)>> {
+        let mut txs_parsed = Vec::with_capacity(txs_blob_payloads.len());
+        for (tx_idx, blob_payloads) in txs_blob_payloads.iter().enumerate() {
+            let mut parsed = Vec::new();
+            for (blob_index, bytes) in blob_payloads {
+                match self.proof_parser.parse_blob(bytes) {
+                    Ok(Some(payload)) => parsed.push((*blob_index, payload)),
+                    Ok(None) => {
+                        txs_status[tx_idx].blob_errors.push((
+                            *blob_index,
+                            format!("Blob did not contain a valid TxFinalized proof"),
+                        ));
+                        info!(
+                            slot,
+                            block_number,
+                            blob_index,
+                            "Blob did not contain a valid TxFinalized proof; skipping"
+                        );
+                    }
+                    Err(err) => {
+                        txs_status[tx_idx].blob_errors.push((
+                            *blob_index,
+                            format!("Failed to parse/verify TxFinalized payload: {err}"),
+                        ));
+                        warn!(
+                            slot,
+                            block_number,
+                            blob_index,
+                            ?err,
+                            "Failed to parse/verify TxFinalized payload; skipping blob"
+                        )
+                    }
+                }
             }
+            txs_parsed.push(parsed);
         }
-        parsed
+        txs_parsed
     }
 
     /// Validate one already-parsed payload against the in-progress slot state and
@@ -129,14 +146,16 @@ impl StateMachine {
         prior_indices: &HashMap<Hash, i64>,
         slot: u32,
         block_number: u64,
-    ) -> Result<()> {
+    ) -> Result<Option<String>> {
         let Some(&state_root_block) = state.recent_state_roots.get(&payload.state_root) else {
             warn!(
                 slot,
                 block_number,
                 "Blob proof state_root not found in recent state root history; rejecting"
             );
-            return Ok(());
+            return Ok(Some(format!(
+                "Blob proof state_root not found in recent state root history"
+            )));
         };
         let age = block_number as i64 - state_root_block;
         if age > MAX_STATE_ROOT_AGE_BLOCKS {
@@ -144,7 +163,7 @@ impl StateMachine {
                 slot,
                 block_number, state_root_block, age, "Blob proof state_root is too old; rejecting"
             );
-            return Ok(());
+            return Ok(Some(format!("Blob proof state_root is too old")));
         }
 
         // Pre-check created objects and nullifiers before mutating anything, so a
@@ -156,14 +175,16 @@ impl StateMachine {
                     slot,
                     block_number, "Duplicate created object within payload; rejecting"
                 );
-                return Ok(());
+                return Ok(Some(format!("Duplicate created object within payload")));
             }
             if self.already_created(state, prior_indices, obj)? {
                 warn!(
                     slot,
                     block_number, "Created object already exists (creation collision); rejecting"
                 );
-                return Ok(());
+                return Ok(Some(format!(
+                    "Created object already exists (creation collision)"
+                )));
             }
         }
 
@@ -174,11 +195,11 @@ impl StateMachine {
                     slot,
                     block_number, "Duplicate nullifier within payload; rejecting"
                 );
-                return Ok(());
+                return Ok(Some(format!("Duplicate nullifier within payload")));
             }
             if state.nullifiers.contains(&Value::from(*nullifier))? {
                 warn!(slot, block_number, "Duplicate nullifier; rejecting");
-                return Ok(());
+                return Ok(Some(format!("Duplicate nullifier")));
             }
         }
 
@@ -202,7 +223,7 @@ impl StateMachine {
             nullifier_count = state.nullifier_count,
             "Validated blob state update in slot derivation"
         );
-        Ok(())
+        Ok(None)
     }
 
     /// Whether `obj` already exists as of the in-progress slot state: it was
@@ -238,8 +259,9 @@ impl StateMachine {
         recent_state_roots: impl IntoIterator<Item = (Hash, i64)>,
         slot: u32,
         block: ExecutionBlock,
-        payloads: &[(u32, Payload)],
+        txs_payloads: &[Vec<(u32, Payload)>],
         prior_indices: &HashMap<Hash, i64>,
+        txs_status: &mut [TxStatus],
     ) -> Result<DerivedSlot> {
         let base_roots = base_state.map_or(StateRoots::empty(), |state| state.roots);
         let base_state_root_count = base_state.map_or(0, |state| state.metadata.state_root_count);
@@ -255,11 +277,17 @@ impl StateMachine {
             created_added: HashMap::new(),
         };
 
-        for (blob_index, payload) in payloads {
-            self.apply_payload(&mut working, payload, prior_indices, slot, block.number)
-                .with_context(|| {
-                    format!("applying blob at slot {slot}, blob_index {blob_index}")
-                })?;
+        for (tx_idx, payloads) in txs_payloads.iter().enumerate() {
+            for (blob_index, payload) in payloads {
+                let status = self
+                    .apply_payload(&mut working, payload, prior_indices, slot, block.number)
+                    .with_context(|| {
+                        format!("applying blob at slot {slot}, blob_index {blob_index}")
+                    })?;
+                if let Some(msg) = status {
+                    txs_status[tx_idx].blob_errors.push((*blob_index, msg));
+                }
+            }
         }
 
         let prior_state_history_root = base_roots.next_state_history;
