@@ -68,10 +68,15 @@ that block should be plugin-agnostic.
 - **Startup screen:** keep inventory hidden and inert until a live
   pocketknife is listed. Show whether Bitcraft is creating the knife or
   waiting for network confirmation. Existing live knives, including held
-  knives, open the inventory directly. The desktop's cryptography startup screen
+  knives, open the inventory directly once the first step has been up for
+  its minimum (below). The desktop's cryptography startup screen
   has the same layout, so initial preparation leads into pocketknife setup.
-  Both screens use a simple centered layout with a progress bar and status
-  text. The bar counts three completed milestones: cryptography ready,
+  Both screens are laid out like the details pane: a centered document
+  icon over a 16px heading and muted description, then the progress bar
+  and step number, in the app's colors (the blue accent of its selection
+  and menus). The pocketknife steps show the pocketknife's icon from the
+  presentation pack on the page; preparation and setup errors show a blank
+  page. The bar counts three completed milestones: cryptography ready,
   pocketknife proof generated, and network confirmation. Preparation starts
   at zero in the desktop shell; successful daemon requests complete the
   first milestone. A committing run, a completed proof event, or an existing
@@ -81,6 +86,11 @@ that block should be plugin-agnostic.
   Show the current step number and describe the work in progress in the
   heading, rather than labeling the bar with the last completed milestone.
   Errors replace the activity description while preserving the bar's value.
+  Each step stays up for at least one second, even when its work finishes
+  sooner; the work itself is not delayed. The screen then moves one step at
+  a time, skipping steps the startup never reached, and opens the inventory
+  only after the last step shown has had its second. Errors and retries are
+  shown at once.
   Steps do not represent time remaining. Keep both screens' appearance in
   step when changing either. Both show the bottom status bar: live on this
   page, and hardcoded on the desktop shell's screen, which runs before
