@@ -1,12 +1,42 @@
-:root { color-scheme: light dark; font: 15px/1.5 system-ui, sans-serif; }
-body { margin: 0; background: light-dark(#f7f8fa, #181a1f); color: light-dark(#20242b, #e8eaee); }
-main { max-width: 760px; margin: auto; padding: 28px; }
-h1 { margin: 0 0 12px; font-size: 28px; }
-label { display: block; font-weight: 600; margin-top: 22px; }
-textarea, pre { box-sizing: border-box; width: 100%; padding: 12px; border: 1px solid #8886; border-radius: 8px; background: light-dark(white, #22252c); color: inherit; font: 13px/1.5 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-textarea { resize: vertical; }
-button { padding: 9px 18px; border: 0; border-radius: 6px; background: #2768d8; color: white; cursor: pointer; font: inherit; }
-#copy-status { margin-left: 10px; }
-.path { font-size: 12px; overflow-wrap: anywhere; opacity: .8; }
-details { margin-top: 26px; border-top: 1px solid #8884; padding-top: 18px; }
-summary { cursor: pointer; font-weight: 600; }
+#agent-guide {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  width: 100%;
+  padding: 18px 20px;
+  text-align: left;
+  overflow-y: auto;
+}
+#agent-guide h1 { margin: 0; font-size: 16px; font-weight: 600; }
+#agent-guide p { margin: 0; line-height: 1.5; }
+#agent-guide .description, .note, #copy-status { color: #6b6b6b; }
+.prompt-section { display: flex; flex-direction: column; gap: 8px; }
+.prompt-section > label { font-weight: 600; }
+textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #d4d4d4;
+  border-radius: 5px;
+  color: #1f1f1f;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  user-select: text;
+  -webkit-user-select: text;
+}
+textarea { min-height: 240px; padding: 10px; resize: vertical; background: #ffffff; }
+.copy-controls { display: flex; align-items: center; gap: 10px; }
+button {
+  padding: 5px 12px;
+  border: 1px solid #c4c4c4;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #1f1f1f;
+  font: inherit;
+}
+button:hover { background: #f0f0f0; }
+button:active { background: #cce4ff; }
+button:focus-visible, textarea:focus-visible { outline: 2px solid #0a64d8; outline-offset: 2px; }
+#agent-error { padding: 10px 12px; border: 1px solid #b00020; border-radius: 5px; color: #b00020; white-space: pre-wrap; user-select: text; -webkit-user-select: text; }
+#agent-error[hidden] { display: none; }

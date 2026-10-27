@@ -40,6 +40,20 @@ pub fn connection_path(home: &Path) -> PathBuf {
     home.join("connection.json")
 }
 
+fn tool_home(explicit: Option<PathBuf>) -> Result<PathBuf> {
+    if explicit.is_some() || std::env::var_os("BITCRAFT_HOME").is_some_and(|path| !path.is_empty())
+    {
+        return resolve_home(explicit);
+    }
+    let directory = std::env::current_dir()?;
+    for ancestor in directory.ancestors() {
+        if connection_path(ancestor).try_exists()? {
+            return Ok(ancestor.to_path_buf());
+        }
+    }
+    resolve_home(None)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Connection {
@@ -99,7 +113,7 @@ impl Connection {
     }
 
     pub fn read(path: &Path) -> Result<Self> {
-        let bytes = fs::read(path).with_context(|| format!("No active Bitcraft connection at {}. Start the Bitcraft app with the same --home first.", path.display()))?;
+        let bytes = fs::read(path).with_context(|| format!("No active Bitcraft connection at {}. Start Bitcraft and run from its home directory, or select it with --home PATH.", path.display()))?;
         let connection: Self =
             serde_json::from_slice(&bytes).context("Invalid Bitcraft connection file")?;
         connection.validate()?;
@@ -277,12 +291,12 @@ pub fn launch(tool: Tool) -> Result<i32> {
             .any(|arg| matches!(arg.to_str(), Some("--help" | "-h")))
         {
             eprintln!(
-                "{} [--home PATH] [tool arguments]\nUses the running Bitcraft app's connection; endpoint overrides and standalone lifecycle commands are unavailable.",
+                "{} [--home PATH] [tool arguments]\nUses --home, BITCRAFT_HOME, a connection.json in the current directory or its ancestors, then ~/.bitcraft. Verifies the running app's identity; endpoint overrides and standalone lifecycle commands are unavailable.",
                 tool.name()
             );
         }
     } else {
-        let connection = Connection::read(&connection_path(&resolve_home(home)?))?;
+        let connection = Connection::read(&connection_path(&tool_home(home)?))?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;

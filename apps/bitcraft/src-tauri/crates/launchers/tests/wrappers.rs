@@ -143,6 +143,77 @@ fn cli_forwards_arguments_and_active_state_and_preserves_exit_status() {
 }
 
 #[test]
+fn tools_discover_the_game_from_the_working_directory_and_descendants() {
+    let package = Package::new();
+    for (name, nested) in [("bitcraft-dobj", false), ("bitcraft-dobj-mcp-proxy", true)] {
+        let home = tempfile::tempdir().unwrap();
+        let directory = if nested {
+            home.path().join("scripts/work")
+        } else {
+            home.path().to_path_buf()
+        };
+        fs::create_dir_all(&directory).unwrap();
+        let (connection, daemon) = daemon(home.path(), "bitcraft-instance");
+        let output = Command::new(package.binary(name))
+            .current_dir(&directory)
+            .env_remove("BITCRAFT_HOME")
+            .arg("objects")
+            .output()
+            .unwrap();
+        daemon.join().unwrap();
+        assert_eq!(output.status.code(), Some(23), "{}", error(&output));
+        let endpoint = if nested {
+            &connection.mcp_url
+        } else {
+            &connection.http_url
+        };
+        assert!(
+            String::from_utf8(output.stdout)
+                .unwrap()
+                .starts_with(&format!("--url\n{endpoint}\n"))
+        );
+    }
+}
+
+#[test]
+fn environment_home_overrides_working_directory_discovery() {
+    let package = Package::new();
+    let home = tempfile::tempdir().unwrap();
+    let other_home = tempfile::tempdir().unwrap();
+    fs::write(connection_path(other_home.path()), b"invalid connection").unwrap();
+    let (connection, daemon) = daemon(home.path(), "bitcraft-instance");
+    let output = Command::new(package.binary("bitcraft-dobj"))
+        .current_dir(other_home.path())
+        .env("BITCRAFT_HOME", home.path())
+        .arg("objects")
+        .output()
+        .unwrap();
+    daemon.join().unwrap();
+    assert_eq!(output.status.code(), Some(23), "{}", error(&output));
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .starts_with(&format!("--url\n{}\n", connection.http_url))
+    );
+}
+
+#[test]
+fn invalid_discovered_connections_fail_without_starting_the_tool() {
+    let package = Package::new();
+    let home = tempfile::tempdir().unwrap();
+    fs::write(connection_path(home.path()), b"invalid connection").unwrap();
+    let output = Command::new(package.binary("bitcraft-dobj"))
+        .current_dir(home.path())
+        .env_remove("BITCRAFT_HOME")
+        .arg("objects")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(error(&output).contains("Invalid Bitcraft connection file"));
+}
+
+#[test]
 fn proxy_preserves_stdio_and_child_exit_status() {
     let package = Package::new();
     let home = tempfile::tempdir().unwrap();
