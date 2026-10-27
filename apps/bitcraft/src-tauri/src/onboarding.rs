@@ -4,13 +4,17 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
+/// The player prompt, edited as Markdown in `apps/bitcraft/AGENT_PROMPT.md`
+/// and built into the app. `{skill}`, `{cli}` and `{home}` in it stand for
+/// the installed player skill, the installed CLI and the game's home
+/// directory.
+const PROMPT_TEMPLATE: &str = include_str!("../../AGENT_PROMPT.md");
+
 pub fn prompt(skill: &Path, cli: &Path, home: &Path) -> String {
-    format!(
-        "Help me play the installed Bitcraft game.\n\nFirst read and follow the player skill at:\n{}\n\nThe installed CLI executable is:\n{}\n\nWork in my Bitcraft home directory:\n{}\n\nRun the CLI from this directory or a subdirectory; it discovers the game's connection automatically. Keep Bitcraft open.\n\nStart by checking --help, my current inventory, and available actions, then help me choose a goal and make progress. Use the installed app; no source checkout is needed. You need local filesystem and shell access.\n",
-        skill.display(),
-        cli.display(),
-        home.display(),
-    )
+    PROMPT_TEMPLATE
+        .replace("{skill}", &skill.display().to_string())
+        .replace("{cli}", &cli.display().to_string())
+        .replace("{home}", &home.display().to_string())
 }
 
 pub fn paths(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf)> {
@@ -67,4 +71,34 @@ pub fn show(app: &tauri::AppHandle, error: Option<&str>) -> Result<()> {
     window.unminimize()?;
     window.set_focus()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_prompt_fills_in_every_placeholder_from_the_template() {
+        for placeholder in ["{skill}", "{cli}", "{home}"] {
+            assert!(
+                PROMPT_TEMPLATE.contains(placeholder),
+                "{placeholder} is unused"
+            );
+        }
+        let prompt = prompt(
+            Path::new("/skills/SKILL.md"),
+            Path::new("/bin/bitcraft-dobj"),
+            Path::new("/home/player/.bitcraft"),
+        );
+        for path in [
+            "/skills/SKILL.md",
+            "/bin/bitcraft-dobj",
+            "/home/player/.bitcraft",
+        ] {
+            assert!(prompt.contains(path), "{path} is missing");
+        }
+        assert!(
+            !prompt.contains("{skill}") && !prompt.contains("{cli}") && !prompt.contains("{home}")
+        );
+    }
 }
