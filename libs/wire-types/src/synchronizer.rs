@@ -26,6 +26,29 @@ pub struct SyncProgressResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Outcome of one blob of a target Ethereum transaction in a committed slot.
+pub struct TxBlobStatus {
+    /// Ethereum transaction that carried the blob.
+    pub tx_hash: B256,
+    /// Position of the blob within its Ethereum transaction.
+    pub tx_blob_index: u32,
+    /// `TxFinalized` commitment of the blob's proof; `None` when the blob did not parse.
+    pub tx_final: Option<Hash>,
+    /// Why the blob was skipped or rejected; `None` when it was applied.
+    pub error: Option<String>,
+    /// Execution block that included the transaction.
+    pub block_number: i64,
+    /// Hash of the execution block that included the transaction.
+    pub block_hash: B256,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Blob statuses returned by the transaction status queries.
+pub struct TxStatusResponse {
+    pub blobs: Vec<TxBlobStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Summary of a state derived at one execution block, exposed to clients.
 pub struct StateHeadResponse {
     /// Slot whose execution block the state was derived at.

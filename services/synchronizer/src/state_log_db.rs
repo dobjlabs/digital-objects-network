@@ -7,12 +7,22 @@ use sqlx::{
     postgres::{PgPoolOptions, PgRow},
     Executor, PgExecutor, PgPool, Row,
 };
+use wire_types::synchronizer::TxBlobStatus;
 
 use crate::{
     container_db::{db_bytes_to_hash, hash_to_db_bytes},
     don_state::{DonState, ExecutionBlock, StateMetadata, StateRoots},
     state_machine::{DerivedSlot, TxStatus},
 };
+
+const TX_BLOB_STATUS_COLUMNS: &str = r#"
+    tx_statuses.tx_hash,
+    tx_statuses.tx_blob_index,
+    tx_statuses.tx_final,
+    tx_statuses.error,
+    slots.el_block_number,
+    slots.el_block_hash
+"#;
 
 /// Longest error message stored in `tx_statuses`, in characters.
 const MAX_STORED_ERROR_CHARS: usize = 256;
@@ -241,6 +251,38 @@ impl StateLogDb {
         row.as_ref().map(decode_slot_state_row).transpose()
     }
 
+    /// Return the statuses of the blobs of Ethereum transaction `tx_hash`, in blob order; empty
+    /// when no committed slot holds it.
+    pub async fn tx_statuses_by_tx_hash(&self, tx_hash: B256) -> Result<Vec<TxBlobStatus>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {TX_BLOB_STATUS_COLUMNS} \
+             FROM tx_statuses JOIN slots USING (slot) \
+             WHERE tx_statuses.tx_hash = $1 \
+             ORDER BY tx_statuses.tx_blob_index"
+        ))
+        .bind(tx_hash.as_slice().to_vec())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(decode_tx_blob_status_row).collect()
+    }
+
+    /// Return the status of the DON transaction `tx_final`: the blob that applied it, or else
+    /// the latest blob that was rejected; `None` when no committed blob carries it.
+    pub async fn tx_status_by_tx_final(&self, tx_final: Hash) -> Result<Option<TxBlobStatus>> {
+        let row = sqlx::query(&format!(
+            "SELECT {TX_BLOB_STATUS_COLUMNS} \
+             FROM tx_statuses JOIN slots USING (slot) \
+             WHERE tx_statuses.tx_final = $1 \
+             ORDER BY tx_statuses.error IS NOT NULL, slot DESC, \
+                      tx_statuses.tx_hash, tx_statuses.tx_blob_index \
+             LIMIT 1"
+        ))
+        .bind(hash_to_db_bytes(tx_final))
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(decode_tx_blob_status_row).transpose()
+    }
+
     /// Return the beacon block root for a committed slot, `None` when it has none or is not
     /// committed.
     pub async fn slot_root(&self, slot: u32) -> Result<Option<B256>> {
@@ -454,6 +496,21 @@ impl StateLogDb {
             })
             .collect()
     }
+}
+
+fn decode_tx_blob_status_row(row: &PgRow) -> Result<TxBlobStatus> {
+    Ok(TxBlobStatus {
+        tx_hash: db_bytes_to_b256(&row.get::<Vec<u8>, _>("tx_hash"))?,
+        tx_blob_index: row.get::<i32, _>("tx_blob_index") as u32,
+        tx_final: row
+            .get::<Option<Vec<u8>>, _>("tx_final")
+            .as_deref()
+            .map(db_bytes_to_hash)
+            .transpose()?,
+        error: row.get("error"),
+        block_number: row.get("el_block_number"),
+        block_hash: db_bytes_to_b256(&row.get::<Vec<u8>, _>("el_block_hash"))?,
+    })
 }
 
 /// Truncate `error` to `MAX_STORED_ERROR_CHARS`, ending a truncated one with "...".
