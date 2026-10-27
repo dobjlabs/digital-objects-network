@@ -92,6 +92,4 @@ pub struct TxStatus {
     pub tx_final: Option<Hash>,
     // Errors of a particular blob in the transaction
     pub blob_errors: Vec<(u32, String)>,
-    // General errors of the transaction
-    pub error: Option<String>,
 }
