@@ -2,6 +2,7 @@
 name = "wire-types"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 
 # Pure-data types that cross process boundaries (HTTP body, MCP tool
 # param, SSE event, CLI arg). No logic that needs ZK / chain access —

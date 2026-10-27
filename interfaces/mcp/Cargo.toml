@@ -2,6 +2,7 @@
 name = "dobj-mcp"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 
 [dependencies]
 rmcp = { version = "1.2.0", features = [
