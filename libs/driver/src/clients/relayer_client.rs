@@ -1,7 +1,11 @@
 use anyhow::{Result, anyhow};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use payload::blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES;
-use wire_types::relayer::{JobStatusResponse, SubmitProofRequest, SubmitProofResponse};
+use pod2::middleware::Hash;
+use wire_types::relayer::{
+    JobStatusResponse, SubmitProofRequest, SubmitProofResponse, TxHashesByTxFinalRequest,
+    TxHashesByTxFinalResponse,
+};
 
 pub trait RelayerClient: Send + Sync {
     fn submit_proof(
@@ -11,6 +15,11 @@ pub trait RelayerClient: Send + Sync {
         client_ref: Option<String>,
     ) -> Result<SubmitProofResponse>;
     fn fetch_job_status(&self, relayer_api_url: &str, job_id: &str) -> Result<JobStatusResponse>;
+    fn fetch_tx_hashes(
+        &self,
+        relayer_api_url: &str,
+        tx_finals: &[Hash],
+    ) -> Result<TxHashesByTxFinalResponse>;
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +42,24 @@ impl HttpRelayerClient {
 }
 
 impl RelayerClient for HttpRelayerClient {
+    fn fetch_tx_hashes(
+        &self,
+        relayer_api_url: &str,
+        tx_finals: &[Hash],
+    ) -> Result<TxHashesByTxFinalResponse> {
+        let endpoint = format!(
+            "{}/api/v1/proofs/tx-hashes",
+            relayer_api_url.trim_end_matches('/')
+        );
+        super::send_json_request(
+            self.client.post(&endpoint).json(&TxHashesByTxFinalRequest {
+                tx_finals: tx_finals.to_vec(),
+            }),
+            &endpoint,
+            "relayer transaction hashes response",
+        )
+    }
+
     fn fetch_job_status(&self, relayer_api_url: &str, job_id: &str) -> Result<JobStatusResponse> {
         let endpoint = format!(
             "{}/api/v1/proofs/{job_id}",

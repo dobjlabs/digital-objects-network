@@ -121,6 +121,11 @@ file before listing, so explicit inventory refreshes can query membership even
 when no transaction has been submitted. An object listing shows an
 `unknown` output of a `submitted` transaction as `pending`, with the
 transaction's `txHash`. Object files also retain their known creation hash, so it stays available after the transaction record is pruned.
+A separate worker checks landed records without a hash every 30 seconds during
+retention. It uses the relayer's batch lookup by `txFinal`, even when the original
+submission acknowledgement and job ID were lost, and copies recovered hashes to
+output files. These requests run outside the settlement lock. Missing hashes or
+relayer failures leave the transaction landed and do not extend retention.
 
 A `recorded` transaction can be deleted until a submission is attempted; after
 that the relayer may hold the payload, so the record stays until the chain

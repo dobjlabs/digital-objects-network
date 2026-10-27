@@ -650,6 +650,62 @@ impl Driver {
         Ok((outcome, listing))
     }
 
+    pub fn backfill_transaction_hashes(&self) -> Result<Vec<TransactionRecord>> {
+        let pending = load_records(&self.paths)?
+            .iter()
+            .filter(|record| record.state == TransactionState::Landed && record.tx_hash.is_none())
+            .map(record_tx_final)
+            .collect::<Result<Vec<_>>>()?;
+        if pending.is_empty() {
+            return Ok(Vec::new());
+        }
+        let settings = self.load_settings()?;
+        let mut updated = Vec::new();
+        for batch in pending.chunks(256) {
+            let response = match self
+                .deps
+                .relayer
+                .fetch_tx_hashes(&settings.relayer_api_url, batch)
+            {
+                Ok(response) => response,
+                Err(err) => {
+                    log::warn!("relayer transaction hashes unavailable: {err:#}");
+                    continue;
+                }
+            };
+            let hashes = response
+                .results
+                .into_iter()
+                .filter(|entry| batch.contains(&entry.tx_final))
+                .map(|entry| (encode_hash_hex(&entry.tx_final), entry.tx_hash))
+                .collect::<HashMap<_, _>>();
+            if hashes.is_empty() {
+                continue;
+            }
+            let _store = self.store_lock.lock().expect("store lock poisoned");
+            for mut record in load_records(&self.paths)? {
+                if record.state != TransactionState::Landed || record.tx_hash.is_some() {
+                    continue;
+                }
+                let Some(tx_hash) = hashes.get(&record.tx_final) else {
+                    continue;
+                };
+                record.tx_hash = Some(tx_hash.clone());
+                write_record(&self.paths, &record)?;
+                if let Err(err) =
+                    self.persist_settled_objects(&record, &mut HashSet::new(), &mut Vec::new())
+                {
+                    log::warn!(
+                        "could not persist recovered hash for {}: {err:#}",
+                        record.tx_final
+                    );
+                }
+                updated.push(record);
+            }
+        }
+        Ok(updated)
+    }
+
     pub fn prune_transactions(&self, current_time_ms: u64) -> Result<PrunedTransactions> {
         let _store = self.store_lock.lock().expect("store lock poisoned");
         let records = load_records(&self.paths)?;

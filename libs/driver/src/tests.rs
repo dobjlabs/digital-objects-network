@@ -8,7 +8,9 @@ use pod2::middleware::Hash;
 use sdk::SpendableObjects;
 use tempfile::tempdir;
 use txlib::{GroundingWitness, MAX_STATE_ROOT_AGE_BLOCKS, StateHeader};
-use wire_types::relayer::{JobStatus, JobStatusResponse, SubmitProofResponse};
+use wire_types::relayer::{
+    JobStatus, JobStatusResponse, SubmitProofResponse, TxHashEntry, TxHashesByTxFinalResponse,
+};
 use wire_types::transactions::{TransactionRecord, TransactionState};
 
 use crate::catalog::ActionCatalog;
@@ -432,6 +434,9 @@ impl SynchronizerClient for MockSynchronizer {
 #[derive(Default)]
 struct MockRelayerState {
     fail_submit: bool,
+    fail_hash_lookup: bool,
+    hash_queries: Vec<Vec<Hash>>,
+    on_hash_lookup: Option<Box<dyn FnOnce() + Send>>,
     submit_calls: usize,
     on_submit: Option<Box<dyn FnOnce() -> Result<()> + Send>>,
     submitted: Vec<Vec<u8>>,
@@ -471,6 +476,36 @@ impl RelayerClient for MockRelayer {
             state_root: Default::default(),
             attempt_count: 0,
             created_at: 0,
+        })
+    }
+
+    fn fetch_tx_hashes(
+        &self,
+        _relayer_api_url: &str,
+        tx_finals: &[Hash],
+    ) -> Result<TxHashesByTxFinalResponse> {
+        let on_lookup = {
+            let mut inner = self.inner.lock().unwrap();
+            inner.hash_queries.push(tx_finals.to_vec());
+            inner.on_hash_lookup.take()
+        };
+        if let Some(on_lookup) = on_lookup {
+            on_lookup();
+        }
+        let inner = self.inner.lock().unwrap();
+        if inner.fail_hash_lookup {
+            anyhow::bail!("relayer hash lookup failed");
+        }
+        Ok(TxHashesByTxFinalResponse {
+            results: tx_finals
+                .iter()
+                .filter_map(|tx_final| {
+                    inner.tx_hash.as_ref().map(|tx_hash| TxHashEntry {
+                        tx_final: *tx_final,
+                        tx_hash: tx_hash.clone(),
+                    })
+                })
+                .collect(),
         })
     }
 
@@ -1511,6 +1546,145 @@ fn landed_objects_keep_creation_hashes_after_transaction_pruning_and_restart() {
         let summary = restarted.read_object(std::path::Path::new(file)).unwrap();
         assert_eq!(summary.tx_hash, stored.tx_hash);
     }
+}
+
+#[test]
+fn late_hash_recovery_survives_restart_lost_acknowledgement_and_pruning() {
+    for lost_acknowledgement in [false, true] {
+        let fx = fixture("log_1.dobj");
+        let mut input = fx.stored(&fx.input_file);
+        input.tx_hash = Some("original-creation".to_string());
+        write_object_file(&fx.paths, &input, &fx.input_file).unwrap();
+        let proved = fx
+            .driver
+            .prove(fx.input("CraftWood"), "run", &NoopExecutionReporter)
+            .unwrap();
+        let record = fx.driver.record(proved).unwrap();
+        fx.relayer.lock().unwrap().fail_submit = lost_acknowledgement;
+        let submission = fx.driver.submit(&tx_final_of(&record));
+        assert_eq!(submission.is_err(), lost_acknowledgement);
+        fx.land(&record);
+        let landed = fx.driver.settle().unwrap().records.remove(0);
+        assert_eq!(landed.state, TransactionState::Landed);
+        assert_eq!(landed.tx_hash, None);
+        assert_eq!(landed.relayer_job_id.is_none(), lost_acknowledgement);
+        let restarted = Driver::open(fx.paths.clone(), fx.driver.deps.clone()).unwrap();
+        fx.chain.lock().unwrap().fail_membership = true;
+        fx.relayer.lock().unwrap().fail_hash_lookup = true;
+        assert!(restarted.backfill_transaction_hashes().unwrap().is_empty());
+        fx.relayer.lock().unwrap().fail_hash_lookup = false;
+        assert!(restarted.backfill_transaction_hashes().unwrap().is_empty());
+        fx.relayer.lock().unwrap().tx_hash = Some("late-creation".to_string());
+        let recovered = restarted.backfill_transaction_hashes().unwrap();
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].tx_hash.as_deref(), Some("late-creation"));
+        assert_eq!(recovered[0].state, TransactionState::Landed);
+        assert_eq!(recovered[0].settled_at_ms, landed.settled_at_ms);
+        assert_eq!(
+            fx.relayer.lock().unwrap().hash_queries,
+            vec![vec![tx_final_of(&record)]; 3]
+        );
+        for file in &record.output_files {
+            assert_eq!(fx.stored(file).tx_hash.as_deref(), Some("late-creation"));
+        }
+        assert_eq!(
+            fx.stored(&fx.input_file).tx_hash.as_deref(),
+            Some("original-creation")
+        );
+        restarted
+            .prune_transactions(landed.settled_at_ms.unwrap() + crate::TRANSACTION_RETENTION_MS)
+            .unwrap();
+        assert!(restarted.backfill_transaction_hashes().unwrap().is_empty());
+        assert_eq!(fx.relayer.lock().unwrap().hash_queries.len(), 3);
+        let reopened = Driver::open(fx.paths.clone(), fx.driver.deps.clone()).unwrap();
+        for file in &record.output_files {
+            assert_eq!(
+                reopened
+                    .read_object(std::path::Path::new(file))
+                    .unwrap()
+                    .tx_hash
+                    .as_deref(),
+                Some("late-creation")
+            );
+        }
+    }
+}
+
+#[test]
+fn hash_recovery_does_not_recreate_a_pruned_record() {
+    let fx = fixture("log_1.dobj");
+    let record = fx.driver.execute(fx.input("CraftWood")).unwrap();
+    fx.land(&record);
+    let landed = fx.driver.settle().unwrap().records.remove(0);
+    let driver = fx.driver.clone();
+    let cleanup_at = landed.settled_at_ms.unwrap() + crate::TRANSACTION_RETENTION_MS;
+    {
+        let mut relayer = fx.relayer.lock().unwrap();
+        relayer.tx_hash = Some("too-late".to_string());
+        relayer.on_hash_lookup = Some(Box::new(move || {
+            assert_eq!(
+                driver
+                    .prune_transactions(cleanup_at)
+                    .unwrap()
+                    .tx_finals
+                    .len(),
+                1
+            );
+        }));
+    }
+    assert!(fx.driver.backfill_transaction_hashes().unwrap().is_empty());
+    assert!(fx.driver.list_transactions().unwrap().is_empty());
+    assert!(!fx.paths.transactions_dir.join(&record.tx_final).exists());
+}
+
+#[test]
+fn hash_recovery_batches_only_landed_transactions_without_hashes() {
+    let fx = fixture("log_1.dobj");
+    let template = fx.driver.execute(fx.input("CraftWood")).unwrap();
+    for index in 1..=260 {
+        let mut record = template.clone();
+        record.tx_final = payload::encode_hash_hex(
+            &decode_hash_hex(&format!("{index:016x}{}", "0".repeat(48))).unwrap(),
+        );
+        record.state = match index {
+            258 => TransactionState::Expired,
+            259 => TransactionState::Recorded,
+            _ => TransactionState::Landed,
+        };
+        record.input_files.clear();
+        record.output_files.clear();
+        record.created.clear();
+        record.nullifiers.clear();
+        if index == 257 {
+            record.tx_hash = Some("already-known".to_string());
+        }
+        crate::transactions::write_record(&fx.paths, &record).unwrap();
+    }
+    fx.relayer.lock().unwrap().tx_hash = Some("recovered".to_string());
+    let recovered = fx.driver.backfill_transaction_hashes().unwrap();
+    assert_eq!(recovered.len(), 257);
+    let relayer = fx.relayer.lock().unwrap();
+    assert_eq!(
+        relayer
+            .hash_queries
+            .iter()
+            .map(Vec::len)
+            .collect::<Vec<_>>(),
+        vec![256, 1]
+    );
+    assert!(
+        recovered
+            .iter()
+            .all(|record| record.state == TransactionState::Landed
+                && record.tx_hash.as_deref() == Some("recovered"))
+    );
+    assert_eq!(
+        fx.driver
+            .get_transaction(&tx_final_of(&template))
+            .unwrap()
+            .state,
+        TransactionState::Submitted
+    );
 }
 
 #[test]

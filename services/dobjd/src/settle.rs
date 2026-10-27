@@ -17,6 +17,7 @@ use crate::events::{Event, EventHub};
 pub const SETTLE_INTERVAL: Duration = Duration::from_millis(1500);
 pub const UNATTEMPTED_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 const MAX_SUBMISSION_RETRIES: usize = 4;
+const HASH_BACKFILL_INTERVAL: Duration = Duration::from_secs(30);
 
 pub struct Settler {
     driver: Arc<Driver>,
@@ -94,10 +95,10 @@ impl Settler {
                     .expect("submission retry lock poisoned")
                     .complete(&tx_final, Instant::now(), result.is_ok());
                 match result {
-                    Ok(_) => {
+                    Ok(record) => {
                         let publisher = settler.clone();
                         if let Err(err) = tokio::task::spawn_blocking(move || {
-                            publisher.publish_submission(&tx_final)
+                            publisher.publish_updates(&[record])
                         })
                         .await
                         {
@@ -112,35 +113,59 @@ impl Settler {
         Ok(())
     }
 
-    fn publish_submission(&self, tx_final: &str) {
+    fn publish_updates(&self, updates: &[TransactionRecord]) {
         let _pass = self.pass_lock.lock().expect("pass lock poisoned");
-        let record = match payload::decode_hash_hex(tx_final)
-            .and_then(|key| self.driver.get_transaction(&key))
-        {
-            Ok(record) => record,
-            Err(err) => {
-                tracing::warn!(%tx_final, "could not read resubmitted transaction: {err:#}");
-                return;
+        let mut records = Vec::new();
+        let mut files = HashSet::new();
+        for update in updates {
+            files.extend(
+                update
+                    .input_files
+                    .iter()
+                    .chain(&update.output_files)
+                    .cloned(),
+            );
+            match payload::decode_hash_hex(&update.tx_final)
+                .and_then(|key| self.driver.get_transaction(&key))
+            {
+                Ok(record) => records.push(record),
+                Err(err) => {
+                    tracing::debug!(tx_final = %update.tx_final, "updated transaction no longer available: {err:#}")
+                }
             }
-        };
-        let files = record
-            .input_files
-            .iter()
-            .chain(&record.output_files)
-            .cloned()
-            .collect::<Vec<_>>();
+        }
         let objects = self
             .driver
-            .read_available_objects(&files)
+            .read_available_objects(&files.into_iter().collect::<Vec<_>>())
             .unwrap_or_else(|err| {
-                tracing::warn!("could not read resubmitted objects: {err:#}");
+                tracing::warn!("could not read updated objects: {err:#}");
                 Vec::new()
             });
         self.publish(&SettleOutcome {
-            records: vec![record],
+            records,
             objects,
             ..SettleOutcome::default()
         });
+    }
+
+    async fn hash_backfill_loop(self: Arc<Self>) {
+        loop {
+            let settler = self.clone();
+            match tokio::task::spawn_blocking(move || {
+                let records = settler.driver.backfill_transaction_hashes()?;
+                if !records.is_empty() {
+                    settler.publish_updates(&records);
+                }
+                anyhow::Ok(())
+            })
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => tracing::warn!("transaction hash recovery failed: {err:#}"),
+                Err(err) => tracing::error!("transaction hash recovery panicked: {err}"),
+            }
+            tokio::time::sleep(HASH_BACKFILL_INTERVAL).await;
+        }
     }
 
     /// Synchronize objects, falling back to a local listing if settlement fails.
@@ -180,6 +205,10 @@ impl Settler {
 
     /// Settle while transactions remain open; otherwise wait for a wake signal.
     pub async fn run_loop(self: Arc<Self>) {
+        tokio::join!(self.clone().settlement_loop(), self.hash_backfill_loop());
+    }
+
+    async fn settlement_loop(self: Arc<Self>) {
         loop {
             let settler = self.clone();
             let delay = match tokio::task::spawn_blocking(move || {
@@ -496,6 +525,107 @@ mod tests {
             retries.due(&records, start + SETTLE_INTERVAL * 2),
             vec![MAX_SUBMISSION_RETRIES.to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn hash_recovery_does_not_block_settlement_and_publishes_updates() {
+        use axum::{Json, Router, routing::post};
+        use driver::{DriverDeps, DriverPaths, Hash};
+        use wire_types::relayer::{
+            TxHashEntry, TxHashesByTxFinalRequest, TxHashesByTxFinalResponse,
+        };
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let request_entered = entered.clone();
+        let request_release = release.clone();
+        let app = Router::new().route(
+            "/api/v1/proofs/tx-hashes",
+            post(move |Json(request): Json<TxHashesByTxFinalRequest>| {
+                let entered = request_entered.clone();
+                let release = request_release.clone();
+                async move {
+                    assert_eq!(request.tx_finals, vec![Hash::default()]);
+                    entered.notify_one();
+                    release.notified().await;
+                    Json(TxHashesByTxFinalResponse {
+                        results: vec![TxHashEntry {
+                            tx_final: Hash::default(),
+                            tx_hash: "late-hash".to_string(),
+                        }],
+                    })
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let (home, settler, mut updates) = tokio::task::spawn_blocking(move || {
+            let home = tempfile::tempdir().unwrap();
+            let paths = DriverPaths::from_dobj_root(home.path());
+            let key = payload::encode_hash_hex(&Hash::default());
+            let mut record = record(&key);
+            record.state = TransactionState::Landed;
+            record.settled_at_ms = Some(driver::now_ms());
+            let directory = paths.transactions_dir.join(&key);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                directory.join(driver::paths::RECORD_FILE),
+                serde_json::to_vec(&record).unwrap(),
+            )
+            .unwrap();
+            let driver =
+                Arc::new(Driver::open(paths.clone(), DriverDeps::load(&paths).unwrap()).unwrap());
+            let mut settings = driver.load_settings().unwrap();
+            settings.relayer_api_url = url;
+            driver.save_settings(&settings).unwrap();
+            let events = EventHub::new();
+            let updates = events.subscribe();
+            (home, Arc::new(Settler::new(driver, events)), updates)
+        })
+        .await
+        .unwrap();
+        let worker = tokio::spawn(settler.clone().run_loop());
+        tokio::time::timeout(Duration::from_secs(5), entered.notified())
+            .await
+            .unwrap();
+        let inventory = settler.clone();
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            tokio::task::spawn_blocking(move || {
+                assert_eq!(inventory.pass().unwrap().open_records, 0);
+                assert!(inventory.sync_objects(None).unwrap().is_empty());
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        release.notify_one();
+        let event = tokio::time::timeout(Duration::from_secs(5), updates.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let Event::Transaction(record) = event.event else {
+            panic!("expected a transaction update");
+        };
+        assert_eq!(record.state, TransactionState::Landed);
+        assert_eq!(record.tx_hash.as_deref(), Some("late-hash"));
+        let publisher = settler.clone();
+        tokio::task::spawn_blocking(move || {
+            publisher
+                .driver
+                .prune_transactions(
+                    record.settled_at_ms.unwrap() + driver::TRANSACTION_RETENTION_MS,
+                )
+                .unwrap();
+            publisher.publish_updates(&[record]);
+        })
+        .await
+        .unwrap();
+        assert!(updates.try_recv().is_err());
+        worker.abort();
+        server.abort();
+        drop(settler);
+        drop(home);
     }
 
     #[tokio::test]
