@@ -159,6 +159,12 @@ fn is_external_link(url: &tauri::Url) -> bool {
 }
 
 fn show_page_title(window: tauri::WebviewWindow, title: String) {
+    if window.label() == "main" && window.url().is_ok_and(|url| is_daemon_url(&url)) {
+        window
+            .state::<Desktop>()
+            .discord
+            .update_inventory_value(&title);
+    }
     let _ = window.set_title(&title);
 }
 

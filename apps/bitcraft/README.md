@@ -148,10 +148,12 @@ quitting clears presence before stopping the daemon. Closing to the tray
 keeps presence active. Shell-only launches never connect to Discord.
 
 Presence shows the current Bitcraft action (or a summary for concurrent
-jobs), active job count, and elapsed session time, with links to the website
-and community Discord. It does not publish inventory, Bit balances, object
-contents, file paths, or errors. Discord's own activity-sharing settings
-control who can see it.
+jobs), Total Inventory Value in BIT, active job count, and elapsed session
+time, with links to the website and community Discord. The total matches the
+main window's title and includes the value of resources and tools, rather
+than just counting Bit objects. It appears once the game has loaded its
+inventory. Individual objects, file paths, and errors are not published.
+Discord's own activity-sharing settings control who can see it.
 
 To activate this integration for development or a release:
 
@@ -180,8 +182,11 @@ The host reads `/runs?status=active` every five seconds while sharing and
 Discord are connected, verifying the managed daemon's identity before each
 snapshot. Activity changes are coalesced to at most one update every 15
 seconds; unchanged payloads are not resent. The start timestamp stays fixed
-so Discord advances the timer itself. This interval is an application policy,
-not a claim about Discord's current rate limit. IPC operations time out,
+so Discord advances the timer itself. The host receives the formatted
+inventory total through the main webview's document-title updates, reusing
+the UI's valuation without additional inventory requests. The 15-second
+interval is an application policy, not a claim about Discord's current rate
+limit. IPC operations time out,
 reconnections back off to once per minute, and RPC retry delays are honored.
 Presence failures do not stop the game. No Discord account linking or hosted
 service is required.

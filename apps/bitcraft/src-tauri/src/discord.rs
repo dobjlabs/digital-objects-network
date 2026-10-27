@@ -28,6 +28,7 @@ pub struct Presence {
     path: PathBuf,
     application_id: Option<String>,
     enabled: watch::Sender<Option<bool>>,
+    inventory_value: watch::Sender<Option<InventoryValue>>,
     receiver: Mutex<Option<watch::Receiver<Option<bool>>>>,
     task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
 }
@@ -58,10 +59,12 @@ impl Presence {
             }
         });
         let (enabled, receiver) = watch::channel(Some(preferences.share_activity));
+        let (inventory_value, _) = watch::channel(None);
         Self {
             path,
             application_id,
             enabled,
+            inventory_value,
             receiver: Mutex::new(Some(receiver)),
             task: Mutex::new(None),
         }
@@ -73,6 +76,11 @@ impl Presence {
 
     pub fn enabled(&self) -> bool {
         self.enabled.borrow().unwrap_or(false)
+    }
+
+    pub fn update_inventory_value(&self, title: &str) {
+        self.inventory_value
+            .send_replace(InventoryValue::from_title(title));
     }
 
     pub fn set_enabled(&self, enabled: bool) -> Result<()> {
@@ -100,6 +108,7 @@ impl Presence {
         *self.task.lock().unwrap() = Some(tauri::async_runtime::spawn(worker(
             connection,
             receiver,
+            self.inventory_value.subscribe(),
             move || {
                 let application_id = application_id.clone();
                 async move { ipc::Client::connect(&application_id).await }
@@ -142,7 +151,29 @@ struct Action {
     name: String,
 }
 
-fn activity(runs: &[Run], started_at: u64) -> Value {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct InventoryValue(String);
+
+impl InventoryValue {
+    fn from_title(title: &str) -> Option<Self> {
+        let formatted = title.strip_prefix("Bitcraft (")?.strip_suffix(')')?;
+        let formatted = match formatted.split_once(" - ") {
+            Some((total, rate)) => {
+                let rate = rate.strip_suffix(" BIT/sec")?.parse::<f64>().ok()?;
+                if !rate.is_finite() {
+                    return None;
+                }
+                total
+            }
+            None => formatted,
+        };
+        let number = formatted.strip_suffix(" BIT")?.parse::<f64>().ok()?;
+        (number.is_finite() && number >= 0.0 && formatted.len() <= 64)
+            .then(|| Self(formatted.to_owned()))
+    }
+}
+
+fn activity(runs: &[Run], started_at: u64, inventory_value: Option<&InventoryValue>) -> Value {
     let active: Vec<_> = runs
         .iter()
         .filter(|run| {
@@ -165,14 +196,19 @@ fn activity(runs: &[Run], started_at: u64) -> Value {
         }
         _ => "Crafting resources".to_owned(),
     };
+    let jobs = match active.len() {
+        0 => "No active jobs".to_owned(),
+        1 => "1 active job".to_owned(),
+        count => format!("{count} active jobs"),
+    };
+    let state = match inventory_value {
+        Some(value) => format!("Inventory: {} | {jobs}", value.0),
+        None => jobs,
+    };
     json!({
         "type": 0,
         "details": details.chars().take(128).collect::<String>(),
-        "state": match active.len() {
-            0 => "No active jobs".to_owned(),
-            1 => "1 active job".to_owned(),
-            count => format!("{count} active jobs"),
-        },
+        "state": state,
         "timestamps": {"start": started_at},
         "assets": {"large_image": "bitcraft", "large_text": "Bitcraft"},
         "buttons": [
@@ -213,6 +249,7 @@ impl Updates {
 async fn worker<F>(
     connection: Connection,
     mut enabled: watch::Receiver<Option<bool>>,
+    inventory_value: watch::Receiver<Option<InventoryValue>>,
     mut connect: impl FnMut() -> F,
 ) where
     F: std::future::Future<Output = Result<ipc::Client>>,
@@ -251,7 +288,7 @@ async fn worker<F>(
                 if changed.is_err() { return; }
                 None
             }
-            result = drive(connect(), &connection, &client, &mut ipc, &mut updates, started_at) => Some(result),
+            result = drive(connect(), &connection, &client, &mut ipc, &mut updates, started_at, &inventory_value) => Some(result),
         };
         let retry_after = outcome
             .as_ref()
@@ -297,6 +334,7 @@ async fn drive(
     ipc: &mut Option<ipc::Client>,
     updates: &mut Updates,
     started_at: u64,
+    inventory_value: &watch::Receiver<Option<InventoryValue>>,
 ) -> Result<()> {
     *ipc = Some(tokio::time::timeout(IPC_TIMEOUT, connect).await??);
     let ipc = ipc.as_mut().unwrap();
@@ -310,7 +348,7 @@ async fn drive(
             .error_for_status()?
             .json()
             .await?;
-        let activity = activity(&runs, started_at);
+        let activity = activity(&runs, started_at, inventory_value.borrow().as_ref());
         let now = Instant::now();
         if updates.due(now, &activity) {
             updates.last_attempt = Some(now);
@@ -340,7 +378,7 @@ mod tests {
             {"action": {"pluginName": "bitcraft", "name": "CraftWoodenAxe"}, "status": "generateProof", "inputObjectPaths": ["private.dobj"]},
             {"action": {"pluginName": "bitcraft", "name": "GatherWood"}, "status": "succeeded"}
         ]));
-        let single = activity(&work, 42);
+        let single = activity(&work, 42, None);
         assert_eq!(single["details"], "Craft Wooden Axe");
         assert_eq!(single["state"], "1 active job");
         assert_eq!(single["timestamps"]["start"], 42);
@@ -349,29 +387,72 @@ mod tests {
             {"action": {"pluginName": "bitcraft", "name": "CraftBit"}, "status": "committing"}
         ]));
         assert_eq!(
-            activity(&concurrent, 42)["details"],
+            activity(&concurrent, 42, None)["details"],
             "Confirming: Craft Bit"
         );
         concurrent.extend(work);
-        assert_eq!(activity(&concurrent, 42)["state"], "2 active jobs");
-        assert_eq!(activity(&[], 42)["state"], "No active jobs");
+        assert_eq!(activity(&concurrent, 42, None)["state"], "2 active jobs");
+        assert_eq!(activity(&[], 42, None)["state"], "No active jobs");
     }
 
     #[test]
     fn updates_coalesce_to_the_latest_state_and_skip_duplicates() {
         let start = Instant::now();
         let mut updates = Updates::default();
-        let idle = activity(&[], 42);
+        let idle = activity(&[], 42, None);
         assert!(updates.due(start, &idle));
         updates.last_attempt = Some(start);
         updates.published = Some(idle.clone());
-        let busy = json!({"details": "Crafting resources"});
+        let value = InventoryValue::from_title("Bitcraft (123.450 BIT)").unwrap();
+        let busy = activity(&[], 42, Some(&value));
         assert!(!updates.due(start + Duration::from_secs(14), &busy));
         assert!(updates.due(start + UPDATE_INTERVAL, &busy));
         assert!(!updates.due(start + UPDATE_INTERVAL, &idle));
         updates.published = None;
         assert!(!updates.due(start + Duration::from_secs(1), &idle));
         assert!(updates.due(start + UPDATE_INTERVAL, &idle));
+    }
+
+    #[test]
+    fn inventory_value_preserves_the_displayed_total_and_rejects_other_titles() {
+        for value in ["0.000 BIT", "123.450 BIT", "987654321.125 BIT", "1e+21 BIT"] {
+            let inventory = InventoryValue::from_title(&format!("Bitcraft ({value})")).unwrap();
+            assert_eq!(
+                activity(&[], 42, Some(&inventory))["state"],
+                format!("Inventory: {value} | No active jobs")
+            );
+        }
+        for title in [
+            "Bitcraft",
+            "Bitcraft Settings",
+            "Bitcraft (NaN BIT)",
+            "Bitcraft (inf BIT)",
+            "Bitcraft (-1.000 BIT)",
+            "Bitcraft (1.000)",
+            "private.dobj",
+            "Bitcraft (1.000 BIT) extra",
+            "Bitcraft ( BIT)",
+        ] {
+            assert_eq!(InventoryValue::from_title(title), None, "{title}");
+        }
+    }
+
+    #[test]
+    fn inventory_value_ignores_the_optional_production_rate() {
+        for rate in ["0.37", "-0.37", "1e+21"] {
+            assert_eq!(
+                InventoryValue::from_title(&format!("Bitcraft (31.00 BIT - {rate} BIT/sec)")),
+                InventoryValue::from_title("Bitcraft (31.00 BIT)")
+            );
+        }
+        for title in [
+            "Bitcraft (31.00 BIT - NaN BIT/sec)",
+            "Bitcraft (31.00 BIT - inf BIT/sec)",
+            "Bitcraft (31.00 BIT - 0.37)",
+            "Bitcraft (NaN BIT - 0.37 BIT/sec)",
+        ] {
+            assert_eq!(InventoryValue::from_title(title), None, "{title}");
+        }
     }
 
     #[test]
@@ -433,11 +514,18 @@ mod tests {
         let (activity_sender, mut activities) = tokio::sync::mpsc::unbounded_channel();
         let connections = Arc::new(AtomicUsize::new(0));
         let connection_count = connections.clone();
-        let task = tokio::spawn(worker(connection, receiver, move || {
-            connection_count.fetch_add(1, Ordering::Relaxed);
-            let client = ipc::mock_client(activity_sender.clone());
-            async move { Ok(client) }
-        }));
+        let (inventory_sender, inventory_receiver) =
+            watch::channel(InventoryValue::from_title("Bitcraft (12.500 BIT)"));
+        let task = tokio::spawn(worker(
+            connection,
+            receiver,
+            inventory_receiver,
+            move || {
+                connection_count.fetch_add(1, Ordering::Relaxed);
+                let client = ipc::mock_client(activity_sender.clone());
+                async move { Ok(client) }
+            },
+        ));
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(connections.load(Ordering::Relaxed), 0);
         assert_eq!(requests.load(Ordering::Relaxed), 0);
@@ -447,6 +535,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(first["details"], "Gather Wood");
+        assert_eq!(first["state"], "Inventory: 12.500 BIT | 1 active job");
         sharing.send_replace(Some(false));
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(2), activities.recv())
@@ -457,12 +546,14 @@ mod tests {
         let stopped_requests = requests.load(Ordering::Relaxed);
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(requests.load(Ordering::Relaxed), stopped_requests);
+        inventory_sender.send_replace(InventoryValue::from_title("Bitcraft (100.125 BIT)"));
         sharing.send_replace(Some(true));
         let second = tokio::time::timeout(Duration::from_secs(20), activities.recv())
             .await
             .unwrap()
             .unwrap();
         assert_eq!(second["details"], "Gather Wood");
+        assert_eq!(second["state"], "Inventory: 100.125 BIT | 1 active job");
         assert_eq!(second["timestamps"], first["timestamps"]);
         assert_eq!(connections.load(Ordering::Relaxed), 2);
         sharing.send_replace(None);
