@@ -24,6 +24,15 @@ pub(crate) fn build_http_client() -> reqwest::blocking::Client {
         .expect("failed to build blocking HTTP client")
 }
 
+/// Whether a request failed without any response, by connection failure or timeout.
+pub(crate) fn is_unreachable(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(|err| err.is_connect() || err.is_timeout())
+    })
+}
+
 fn send_json_request<T: DeserializeOwned>(
     request: reqwest::blocking::RequestBuilder,
     endpoint: &str,
@@ -100,5 +109,23 @@ mod tests {
         assert!(error.contains("503"));
         assert!(error.ends_with(&"x".repeat(2048)));
         assert!(!error.contains(&"x".repeat(2049)));
+    }
+
+    #[test]
+    fn only_requests_without_a_response_are_unreachable() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let refused = send_json_request::<serde_json::Value>(
+            build_http_client().get(&endpoint),
+            &endpoint,
+            "test response",
+        )
+        .unwrap_err();
+        assert!(is_unreachable(&refused));
+        assert!(!is_unreachable(
+            &request("503 Service Unavailable", "down").unwrap_err()
+        ));
+        assert!(!is_unreachable(&request("200 OK", "not JSON").unwrap_err()));
     }
 }

@@ -87,7 +87,7 @@ Transaction APIs:
 - `record(proved)`
 - `submit(tx_final)`
 - `delete_transaction(tx_final)`
-- `settle()`
+- `settle()`, or `fetch_relayer_jobs()` then `settle_with_relayer_jobs(relayer_jobs)` to poll the relayer outside the caller's own locks
 - `list_transactions()`, `get_transaction(tx_final)`, `held_inputs()`
 - `execute(input)`, `execute_with_reporter(input, reporter)`
 

@@ -10,7 +10,7 @@ use anyhow::{Context, Result, anyhow};
 use payload::encode_hash_hex;
 use pod2::middleware::{Hash, containers::Dictionary};
 use txlib::{grounding_aged_out, object_nullifier_hash};
-use wire_types::relayer::JobStatus;
+use wire_types::relayer::{JobStatus, JobStatusResponse};
 use wire_types::transactions::{TransactionRecord, TransactionState};
 use wire_types::{ExecutionPhase, ExecutionStage, ObjectSummary, QualifiedName};
 
@@ -92,6 +92,9 @@ pub struct PrunedTransactions {
     pub removed_files: Vec<String>,
     pub next_cleanup_at_ms: Option<u64>,
 }
+
+/// Relayer job status of submitted records, keyed by txFinal.
+pub type RelayerJobs = HashMap<String, JobStatusResponse>;
 
 /// Settlement changes and the resulting object listing.
 #[derive(Debug, Clone, Default)]
@@ -419,12 +422,52 @@ impl Driver {
     /// Reconcile open records against membership and relayer status, then
     /// persist changes under the store lock.
     pub fn settle(&self) -> Result<SettleOutcome> {
-        self.settle_with(false).map(|(outcome, _)| outcome)
+        let relayer_jobs = self.fetch_relayer_jobs()?;
+        self.settle_with_relayer_jobs(&relayer_jobs)
+    }
+
+    /// Settle with relayer status fetched beforehand, so callers can poll the
+    /// relayer without holding their own locks.
+    pub fn settle_with_relayer_jobs(&self, relayer_jobs: &RelayerJobs) -> Result<SettleOutcome> {
+        self.settle_with(false, relayer_jobs)
+            .map(|(outcome, _)| outcome)
+    }
+
+    /// Fetch the relayer job of each submitted record. Stop at the first
+    /// request that gets no response, since the rest would wait out the same timeout.
+    pub fn fetch_relayer_jobs(&self) -> Result<RelayerJobs> {
+        let settings = self.load_settings()?;
+        let mut relayer_jobs = RelayerJobs::new();
+        for record in load_records(&self.paths)? {
+            let Some(job_id) = record
+                .relayer_job_id
+                .as_deref()
+                .filter(|_| record.state == TransactionState::Submitted)
+            else {
+                continue;
+            };
+            match self
+                .deps
+                .relayer
+                .fetch_job_status(&settings.relayer_api_url, job_id)
+            {
+                Ok(status) => {
+                    relayer_jobs.insert(record.tx_final.clone(), status);
+                }
+                Err(err) => {
+                    log::warn!("relayer status for job {job_id} unavailable: {err:#}");
+                    if crate::clients::is_unreachable(&err) {
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(relayer_jobs)
     }
 
     /// Reconcile open transactions and all object files; return the object listing.
     pub fn sync_objects(&self, query: Option<&ObjectQuery>) -> Result<SyncedObjects> {
-        let (outcome, objects) = self.settle_with(true)?;
+        let (outcome, objects) = self.settle_with(true, &RelayerJobs::new())?;
         Ok(SyncedObjects {
             outcome,
             objects: objects
@@ -436,7 +479,11 @@ impl Driver {
 
     /// With `all_objects`, query and summarize every object; otherwise,
     /// summarize only files changed by settlement.
-    fn settle_with(&self, all_objects: bool) -> Result<(SettleOutcome, Vec<ObjectSummary>)> {
+    fn settle_with(
+        &self,
+        all_objects: bool,
+        relayer_jobs: &RelayerJobs,
+    ) -> Result<(SettleOutcome, Vec<ObjectSummary>)> {
         let settings = self.load_settings()?;
         let records = load_records(&self.paths)?;
         let queried_transactions = records
@@ -501,27 +548,6 @@ impl Driver {
             };
             return Ok((outcome, listing));
         };
-
-        let mut relayer_jobs = HashMap::new();
-        for record in &records {
-            let Some(job_id) = record
-                .relayer_job_id
-                .as_deref()
-                .filter(|_| record.state == TransactionState::Submitted)
-            else {
-                continue;
-            };
-            match self
-                .deps
-                .relayer
-                .fetch_job_status(&settings.relayer_api_url, job_id)
-            {
-                Ok(status) => {
-                    relayer_jobs.insert(record.tx_final.clone(), status);
-                }
-                Err(err) => log::warn!("relayer status for job {job_id} unavailable: {err:#}"),
-            }
-        }
 
         let _store = self.store_lock.lock().expect("store lock poisoned");
         let mut outcome = SettleOutcome::default();

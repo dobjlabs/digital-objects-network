@@ -428,8 +428,15 @@ fn submit_record(
     let record = loop {
         match services.submit_transaction(&tx_final) {
             Ok(submitted) => {
-                let message = match (submitted.state, submitted.relayer_job_id.as_deref()) {
-                    (TransactionState::Submitted, Some(job_id)) => {
+                let message = match (
+                    submitted.state,
+                    submitted.relayer_job_id.as_deref(),
+                    submitted.relayer_failure.as_deref(),
+                ) {
+                    (TransactionState::Submitted, Some(job_id), Some(failure)) => {
+                        format!("Relayer job {job_id} failed: {failure}")
+                    }
+                    (TransactionState::Submitted, Some(job_id), None) => {
                         format!("Relayer accepted job {job_id}")
                     }
                     _ => format!("Transaction {}", submitted.state),
@@ -447,9 +454,10 @@ fn submit_record(
                 if current.state == TransactionState::Recorded
                     && current.submit_attempted_at_ms.is_none()
                 {
-                    if preflight_retries < PREFLIGHT_RETRIES
-                        && err.downcast_ref::<driver::DriverError>().is_none()
-                    {
+                    if err.downcast_ref::<driver::DriverError>().is_some() {
+                        anyhow::bail!("Submission refused: {err:#}");
+                    }
+                    if preflight_retries < PREFLIGHT_RETRIES {
                         let delay = PREFLIGHT_RETRY_DELAY * (1 << preflight_retries);
                         preflight_retries += 1;
                         let message = format!(
@@ -489,11 +497,48 @@ fn submit_record(
         reporter.transaction_progress(
             &record,
             ProofProgressStatus::Running,
-            "Waiting for the transaction to land",
+            waiting_message(&record),
             Some(ExecutionStage::AwaitingSynchronization),
         );
     }
     Ok(record)
+}
+
+/// A failed relayer job may still have reached the chain, so the run keeps following.
+fn waiting_message(record: &TransactionRecord) -> &'static str {
+    if record.relayer_failure.is_some() {
+        "Waiting for the transaction to land or its grounding to expire"
+    } else {
+        "Waiting for the transaction to land"
+    }
+}
+
+/// Report a relayer failure that appears while the run follows its transaction.
+fn report_relayer_failure(
+    reporter: &RunReporter,
+    record: &TransactionRecord,
+    reported: &Mutex<Option<String>>,
+) {
+    let mut reported = reported.lock().expect("relayer failure lock poisoned");
+    let Some(failure) = record
+        .relayer_failure
+        .as_deref()
+        .filter(|failure| reported.as_deref() != Some(*failure))
+    else {
+        return;
+    };
+    *reported = Some(failure.to_string());
+    let message = format!(
+        "Relayer job {} failed: {failure}. {}",
+        record.relayer_job_id.as_deref().unwrap_or("?"),
+        waiting_message(record)
+    );
+    reporter.transaction_progress(
+        record,
+        ProofProgressStatus::Running,
+        &message,
+        Some(ExecutionStage::AwaitingSynchronization),
+    );
 }
 
 /// Supervise worker errors and panics, then follow the transaction until settlement.
@@ -528,6 +573,7 @@ where
         };
         let tx_final = record.tx_final.clone();
         let read_record = Arc::new(read_record);
+        let reported_failure = Mutex::new(record.relayer_failure.clone());
         let settled = crate::routes::wait::follow(
             &events,
             None,
@@ -548,7 +594,13 @@ where
                 }
             },
             |record| record.state.is_terminal(),
-            |event| transaction_event(&tx_final, event),
+            |event| {
+                let update = transaction_event(&tx_final, event)?;
+                if let Some(open) = update.as_ref().filter(|update| update.is_open()) {
+                    report_relayer_failure(&reporter, open, &reported_failure);
+                }
+                Ok(update)
+            },
         )
         .await;
         match settled {
@@ -764,7 +816,9 @@ mod tests {
                 );
                 if expected_posts == 0 {
                     let error = result.unwrap_err().to_string();
-                    assert!(error.contains(&format!("dobj submit {key}")));
+                    let refused = head_block > 1;
+                    assert_eq!(error.starts_with("Submission refused"), refused);
+                    assert_eq!(error.contains(&format!("dobj submit {key}")), !refused);
                     assert_eq!(stored.state, TransactionState::Recorded);
                 } else {
                     assert_eq!(
@@ -1037,6 +1091,39 @@ mod tests {
         let last = landed.progress.last().unwrap();
         assert_eq!(last.status, ProofProgressStatus::Done);
         assert_eq!(last.output_status, Some(ObjectStatus::Live));
+    }
+
+    #[tokio::test]
+    async fn a_run_reports_a_relayer_failure_once_and_keeps_following() {
+        let registry = RunRegistry::default();
+        let events = EventHub::new();
+        let run = spawn_worker(
+            &registry,
+            events.clone(),
+            action("failing"),
+            Vec::new(),
+            |reporter| {
+                reporter.commit_step("Waiting", &Default::default());
+                Ok(record("tx-1", TransactionState::Submitted))
+            },
+            still_open,
+        );
+        wait_status(&registry, &run, RunStatus::Committing).await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let mut failed = record("tx-1", TransactionState::Submitted);
+        failed.relayer_job_id = Some("job-1".to_string());
+        failed.relayer_failure = Some("nonce too low".to_string());
+        events.publish(Event::Transaction(failed.clone()));
+        events.publish(Event::Transaction(failed));
+        events.publish(Event::Transaction(record("tx-1", TransactionState::Landed)));
+        let state = wait_terminal(&registry, &run).await;
+        assert_eq!(state.status, RunStatus::Succeeded);
+        let reports = state
+            .progress
+            .iter()
+            .filter(|progress| progress.message.contains("job-1 failed: nonce too low"))
+            .count();
+        assert_eq!(reports, 1);
     }
 
     #[tokio::test]

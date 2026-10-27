@@ -6,7 +6,7 @@ use futures_util::StreamExt;
 use reqwest_eventsource::{Event as SseEvent, EventSource};
 use serde_json::Value;
 
-use crate::client::DobjdClient;
+use crate::client::{DobjdClient, SLOW_REQUEST_TIMEOUT};
 use wire_types::transactions::TransactionRecord;
 use wire_types::{
     ActionArgValues, ActionInput, ActionSummary, CheckActionReport, ClassRef, ClassSummary,
@@ -39,7 +39,10 @@ fn render_outputs(refs: &[ClassRef]) -> String {
 }
 
 pub async fn objects(client: &DobjdClient, json: bool) -> Result<()> {
-    let objects: Vec<ObjectSummary> = client.get_json("/objects").await?;
+    let objects: Vec<ObjectSummary> = client
+        .with_timeout(SLOW_REQUEST_TIMEOUT)
+        .get_json("/objects")
+        .await?;
     if json {
         println!(
             "{}",
@@ -309,7 +312,9 @@ pub async fn proof_jobs(client: &DobjdClient, active: bool, json: bool) -> Resul
 }
 
 pub async fn submit(client: &DobjdClient, tx_finals: Vec<String>, json: bool) -> Result<()> {
+    let timeout = SLOW_REQUEST_TIMEOUT * u32::try_from(tx_finals.len().max(1))?;
     let records: Vec<TransactionRecord> = client
+        .with_timeout(timeout)
         .post_json(
             "/transactions/submit",
             &SubmitTransactionsRequest { tx_finals },
@@ -410,7 +415,10 @@ fn print_transaction(record: &TransactionRecord) {
 
 pub async fn delete_transaction(client: &DobjdClient, tx_final: String, json: bool) -> Result<()> {
     let path = format!("/transactions/{}", urlencoding::encode(&tx_final));
-    let record: TransactionRecord = client.delete_json(&path).await?;
+    let record: TransactionRecord = client
+        .with_timeout(SLOW_REQUEST_TIMEOUT)
+        .delete_json(&path)
+        .await?;
     if json {
         println!("{}", serde_json::to_string_pretty(&record)?);
         return Ok(());

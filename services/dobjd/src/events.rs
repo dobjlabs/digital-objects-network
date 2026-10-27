@@ -1,7 +1,6 @@
 //! Sequenced state-change events for `GET /events`.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tokio::sync::broadcast;
@@ -44,7 +43,8 @@ pub const CHANNEL_CAPACITY: usize = 1024;
 
 #[derive(Clone)]
 pub struct EventHub {
-    next_seq: Arc<AtomicU64>,
+    /// Held across the send so subscribers receive sequence numbers in order.
+    next_seq: Arc<Mutex<u64>>,
     tx: broadcast::Sender<Envelope>,
 }
 
@@ -58,15 +58,19 @@ impl EventHub {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(CHANNEL_CAPACITY);
         Self {
-            next_seq: Arc::new(AtomicU64::new(1)),
+            next_seq: Arc::new(Mutex::new(1)),
             tx,
         }
     }
 
     /// Publish an event even if no clients are subscribed.
     pub fn publish(&self, event: Event) {
-        let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
-        let _ = self.tx.send(Envelope { seq, event });
+        let mut next_seq = self.next_seq.lock().expect("event sequence lock poisoned");
+        let _ = self.tx.send(Envelope {
+            seq: *next_seq,
+            event,
+        });
+        *next_seq += 1;
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Envelope> {
@@ -113,5 +117,29 @@ mod tests {
         assert_eq!(second["seq"], 2);
         assert_eq!(second["type"], "object-removed");
         assert_eq!(second["fileName"], "gone.dobj");
+    }
+
+    #[test]
+    fn concurrent_publishers_deliver_consecutive_sequence_numbers() {
+        let hub = EventHub::new();
+        let mut rx = hub.subscribe();
+        let publishers = (0..4)
+            .map(|_| {
+                let hub = hub.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..200 {
+                        hub.publish(Event::ObjectRemoved {
+                            file_name: "gone.dobj".to_string(),
+                        });
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for publisher in publishers {
+            publisher.join().unwrap();
+        }
+        for expected in 1..=800 {
+            assert_eq!(rx.try_recv().unwrap().seq, expected);
+        }
     }
 }

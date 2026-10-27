@@ -163,7 +163,7 @@ impl DobjOps for DobjdOps {
     fn list_objects(&self) -> anyhow::Result<Vec<mcp::ObjectSummary>> {
         // The driver folds each object's class metadata (emoji, description)
         // into the summary, so clients need no `/classes` round-trip.
-        self.services.settler.sync_objects(None)
+        tokio::task::block_in_place(|| self.services.settler.sync_objects(None))
     }
 
     fn list_actions(&self) -> anyhow::Result<Vec<mcp::ActionSummary>> {
@@ -175,7 +175,8 @@ impl DobjOps for DobjdOps {
     }
 
     fn get_state_root(&self) -> anyhow::Result<String> {
-        Ok(payload::encode_hash_hex(&self.driver().get_state_root()?))
+        let state_root = tokio::task::block_in_place(|| self.driver().get_state_root())?;
+        Ok(payload::encode_hash_hex(&state_root))
     }
 
     fn inspect_object(&self, file_name: &str) -> anyhow::Result<mcp::ObjectSummary> {
@@ -233,7 +234,7 @@ impl DobjOps for DobjdOps {
             .iter()
             .map(|hex| parse_tx_final(hex))
             .collect::<Result<Vec<_>, _>>()?;
-        self.services.submit_transactions(&tx_finals)
+        tokio::task::block_in_place(|| self.services.submit_transactions(&tx_finals))
     }
 
     fn list_transactions(&self) -> anyhow::Result<Vec<mcp::TransactionRecord>> {
@@ -253,7 +254,8 @@ impl DobjOps for DobjdOps {
     }
 
     fn delete_transaction(&self, tx_final: &str) -> anyhow::Result<mcp::TransactionRecord> {
-        self.services.delete_transaction(&parse_tx_final(tx_final)?)
+        let tx_final = parse_tx_final(tx_final)?;
+        tokio::task::block_in_place(|| self.services.delete_transaction(&tx_final))
     }
 
     fn check_feasibility(

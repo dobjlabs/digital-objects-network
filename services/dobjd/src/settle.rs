@@ -26,6 +26,8 @@ pub struct Settler {
     pass_lock: Mutex<()>,
     submissions: Mutex<SubmissionRetries>,
     wake: Notify,
+    /// Finished transactions whose final record has gone out as an event.
+    published_terminal: Mutex<HashSet<String>>,
 }
 
 impl Settler {
@@ -36,6 +38,7 @@ impl Settler {
             pass_lock: Mutex::new(()),
             submissions: Mutex::new(SubmissionRetries::default()),
             wake: Notify::new(),
+            published_terminal: Mutex::new(HashSet::new()),
         }
     }
 
@@ -45,8 +48,12 @@ impl Settler {
 
     /// Reconcile open transactions and publish changes. Blocks on network requests.
     pub fn pass(&self) -> Result<SettleOutcome> {
+        let relayer_jobs = self.driver.fetch_relayer_jobs().unwrap_or_else(|err| {
+            tracing::warn!("relayer status unavailable: {err:#}");
+            Default::default()
+        });
         let _pass = self.pass_lock.lock().expect("pass lock poisoned");
-        let mut outcome = match self.driver.settle() {
+        let mut outcome = match self.driver.settle_with_relayer_jobs(&relayer_jobs) {
             Ok(outcome) => outcome,
             Err(err) => {
                 tracing::warn!("settlement unavailable, continuing local cleanup: {err:#}");
@@ -61,13 +68,49 @@ impl Settler {
                 }
             }
         };
-        let pruned = self.driver.prune_transactions(driver::now_ms())?;
+        if let Err(err) = self.add_unpublished_terminal(&mut outcome) {
+            tracing::warn!("could not check for unannounced transactions: {err:#}");
+        }
+        let pruned = match self.driver.prune_transactions(driver::now_ms()) {
+            Ok(pruned) => pruned,
+            Err(err) => {
+                self.publish(&outcome);
+                return Err(err);
+            }
+        };
         outcome.pruned_tx_finals = pruned.tx_finals;
         outcome.next_cleanup_at_ms = pruned.next_cleanup_at_ms;
         outcome.objects.extend(pruned.objects);
         outcome.removed_files.extend(pruned.removed_files);
         self.publish(&outcome);
         Ok(outcome)
+    }
+
+    /// Add finished records that no event announced, such as those written by
+    /// a settlement that failed after recording them.
+    fn add_unpublished_terminal(&self, outcome: &mut SettleOutcome) -> Result<()> {
+        let records = self.driver.list_transactions()?;
+        let mut published = self
+            .published_terminal
+            .lock()
+            .expect("published transaction lock poisoned");
+        let on_disk = records
+            .iter()
+            .map(|record| record.tx_final.as_str())
+            .collect::<HashSet<_>>();
+        published.retain(|tx_final| on_disk.contains(tx_final.as_str()));
+        for record in records {
+            if record.state.is_terminal()
+                && !published.contains(&record.tx_final)
+                && !outcome
+                    .records
+                    .iter()
+                    .any(|changed| changed.tx_final == record.tx_final)
+            {
+                outcome.records.push(record);
+            }
+        }
+        Ok(())
     }
 
     fn start_retries(self: &Arc<Self>) -> Result<()> {
@@ -185,8 +228,18 @@ impl Settler {
     }
 
     fn publish(&self, outcome: &SettleOutcome) {
+        let mut published = self
+            .published_terminal
+            .lock()
+            .expect("published transaction lock poisoned");
         for record in &outcome.records {
+            if record.state.is_terminal() {
+                published.insert(record.tx_final.clone());
+            }
             self.events.publish(Event::Transaction(record.clone()));
+        }
+        for tx_final in &outcome.pruned_tx_finals {
+            published.remove(tx_final);
         }
         for file_name in &outcome.removed_files {
             self.events.publish(Event::ObjectRemoved {
@@ -347,7 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn idle_cleanup_prunes_receipts_with_a_distinct_event() {
+    fn finished_transactions_are_announced_once_before_pruning() {
         use driver::{DriverDeps, DriverPaths, Hash};
         let home = tempfile::tempdir().unwrap();
         let paths = DriverPaths::from_dobj_root(home.path());
@@ -373,6 +426,11 @@ mod tests {
             Some(settled_at + driver::TRANSACTION_RETENTION_MS)
         );
         assert!(retained.pruned_tx_finals.is_empty());
+        assert!(
+            matches!(updates.try_recv().unwrap().event, Event::Transaction(announced) if announced == record)
+        );
+        assert!(settler.pass().unwrap().records.is_empty());
+        assert!(updates.try_recv().is_err());
         record.settled_at_ms = Some(1);
         std::fs::write(&record_path, serde_json::to_vec(&record).unwrap()).unwrap();
         assert_eq!(settler.pass().unwrap().pruned_tx_finals, vec![key.clone()]);
@@ -599,6 +657,10 @@ mod tests {
         .await
         .unwrap()
         .unwrap();
+        let Event::Transaction(announced) = updates.try_recv().unwrap().event else {
+            panic!("expected the unannounced landed transaction");
+        };
+        assert_eq!(announced.tx_hash, None);
         release.notify_one();
         let event = tokio::time::timeout(Duration::from_secs(5), updates.recv())
             .await
@@ -667,6 +729,7 @@ mod tests {
             assert_eq!(next_pass_delay(&outcome, driver::now_ms()), Some(UNATTEMPTED_CHECK_INTERVAL));
             assert_eq!(outcome.pruned_tx_finals, vec![expired_key.clone()]);
             assert_eq!(driver.list_transactions().unwrap().len(), 1);
+            assert!(matches!(updates.try_recv().unwrap().event, Event::Transaction(record) if record.tx_final == expired_key));
             assert!(matches!(updates.try_recv().unwrap().event, Event::TransactionPruned { tx_final } if tx_final == expired_key));
         }).await.unwrap();
         server.abort();
