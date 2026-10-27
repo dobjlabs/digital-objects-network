@@ -5,6 +5,25 @@ use std::{fs, path::Path};
 
 use wire_types::{ObjectStatus, QualifiedName};
 
+/// Persisted chain status. Pending status is derived from transaction records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FileStatus {
+    Unknown,
+    Live,
+    Nullified,
+}
+
+impl From<FileStatus> for ObjectStatus {
+    fn from(status: FileStatus) -> Self {
+        match status {
+            FileStatus::Unknown => ObjectStatus::Unknown,
+            FileStatus::Live => ObjectStatus::Live,
+            FileStatus::Nullified => ObjectStatus::Nullified,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ObjectRecord {
@@ -12,23 +31,18 @@ pub struct ObjectRecord {
     /// The class this object belongs to. Plugin-scoped so two plugins with
     /// the same bare class name stay distinguishable.
     pub class: QualifiedName,
-    /// Lifecycle status of this object.
-    pub status: ObjectStatus,
-    /// Optional Ethereum transaction hash for the blob that anchored this object.
-    /// Set once the relayer confirms on-chain inclusion.
+    pub status: FileStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tx_hash: Option<String>,
     /// Object payload dictionary
     pub obj: Dictionary,
-    /// Commitment of the transaction that produced this object. Used only to
-    /// correlate with the relayer, resolving the current Ethereum tx hash
-    /// across fee-bump replacements.
+    /// Producing transaction's commitment; identifies its local record, if any.
     pub tx_final: Hash,
 }
 
 impl ObjectRecord {
     pub(crate) fn is_nullified(&self) -> bool {
-        self.status == ObjectStatus::Nullified
+        self.status == FileStatus::Nullified
     }
 
     pub(crate) fn spendable(&self) -> SpendableObject {

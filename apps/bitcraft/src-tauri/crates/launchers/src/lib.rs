@@ -40,6 +40,25 @@ pub fn connection_path(home: &Path) -> PathBuf {
     home.join("connection.json")
 }
 
+fn tool_home(explicit: Option<PathBuf>) -> Result<PathBuf> {
+    if explicit.is_some() || std::env::var_os("BITCRAFT_HOME").is_some_and(|path| !path.is_empty())
+    {
+        return resolve_home(explicit);
+    }
+    let directory = std::env::current_dir()?;
+    match discover_home(&directory) {
+        Some(home) => Ok(home),
+        None => resolve_home(None),
+    }
+}
+
+fn discover_home(directory: &Path) -> Option<PathBuf> {
+    directory
+        .ancestors()
+        .find(|ancestor| connection_path(ancestor).try_exists().unwrap_or(false))
+        .map(Path::to_path_buf)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Connection {
@@ -99,7 +118,7 @@ impl Connection {
     }
 
     pub fn read(path: &Path) -> Result<Self> {
-        let bytes = fs::read(path).with_context(|| format!("No active Bitcraft connection at {}. Start the Bitcraft app with the same --home first.", path.display()))?;
+        let bytes = fs::read(path).with_context(|| format!("No active Bitcraft connection at {}. Start Bitcraft and run from its home directory, or select it with --home PATH.", path.display()))?;
         let connection: Self =
             serde_json::from_slice(&bytes).context("Invalid Bitcraft connection file")?;
         connection.validate()?;
@@ -277,12 +296,12 @@ pub fn launch(tool: Tool) -> Result<i32> {
             .any(|arg| matches!(arg.to_str(), Some("--help" | "-h")))
         {
             eprintln!(
-                "{} [--home PATH] [tool arguments]\nUses the running Bitcraft app's connection; endpoint overrides and standalone lifecycle commands are unavailable.",
+                "{} [--home PATH] [tool arguments]\nUses --home, BITCRAFT_HOME, a connection.json in the current directory or its ancestors, then ~/.bitcraft. Verifies the running app's identity; endpoint overrides and standalone lifecycle commands are unavailable.",
                 tool.name()
             );
         }
     } else {
-        let connection = Connection::read(&connection_path(&resolve_home(home)?))?;
+        let connection = Connection::read(&connection_path(&tool_home(home)?))?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -327,6 +346,22 @@ pub fn main_for(tool: Tool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_skips_uninspectable_candidates_and_finds_parent_home() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("game");
+        let nested = home.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        let connection = Connection::new(home.clone(), "game".into(), DEFAULT_HTTP_PORT).unwrap();
+        connection.publish(&connection_path(&home)).unwrap();
+        std::os::unix::fs::symlink("connection.json", connection_path(&nested)).unwrap();
+        assert!(connection_path(&nested).try_exists().is_err());
+        assert_eq!(discover_home(&nested), Some(home.clone()));
+        connection.remove(&connection_path(&home)).unwrap();
+        assert_eq!(discover_home(&nested), None);
+    }
 
     #[test]
     fn connection_publication_is_complete_and_cleanup_respects_ownership() {

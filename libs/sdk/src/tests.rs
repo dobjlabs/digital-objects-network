@@ -2312,6 +2312,54 @@ fn test_unsafe_rejects_object_and_subaction_instructions() {
 }
 
 #[test]
+fn execution_progress_separates_mining_building_solving_and_proving() {
+    let module = Sdk::default()
+        .load_module_from_src_actions(
+            r#"
+        fn Main(action) {
+            var wood = action.output("Wood");
+            let target = action.top_limb_u256(9007199254740992);
+            var key = unsafe { arg("key") ?? action.pow_obj_grind(wood, target) };
+            wood.update("key", key);
+            action.intro_lt_eq_u256(wood, target);
+        }
+    "#,
+            &["Main"],
+        )
+        .unwrap();
+    let stages = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = stages.clone();
+    let executor = module
+        .executor(true, grounding_witness(&TestState::default(), &[]))
+        .with_progress(Arc::new(move |stage| recorded.lock().unwrap().push(stage)));
+    executor.action("Main", vec![]).unwrap();
+    assert_eq!(
+        *stages.lock().unwrap(),
+        [
+            ExecutionStage::Building,
+            ExecutionStage::Mining,
+            ExecutionStage::Building,
+            ExecutionStage::Solving,
+            ExecutionStage::Proving
+        ]
+    );
+    stages.lock().unwrap().clear();
+    let args = ActionArgs::from([(
+        "key".to_string(),
+        Value::from(RawValue([F(7), F(8), F(9), F(0)])),
+    )]);
+    executor.action_with_args("Main", vec![], &args).unwrap();
+    assert_eq!(
+        *stages.lock().unwrap(),
+        [
+            ExecutionStage::Building,
+            ExecutionStage::Solving,
+            ExecutionStage::Proving
+        ]
+    );
+}
+
+#[test]
 fn test_arg_supplied_and_default() {
     let src = r#"
         fn Main(action) {
@@ -2526,7 +2574,7 @@ fn test_generated_class_rekey() {
 
     let (st, tx_out, _) = tx.finalize(&mut ctx).unwrap();
     ctx.builder.reveal(&st).unwrap();
-    let pod = prove(ctx.builder, &MockProver {});
+    let pod = prove(ctx.builder, &MockProver {}, None).unwrap();
     pod.pod.verify().unwrap();
 
     assert!(

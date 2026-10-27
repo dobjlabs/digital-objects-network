@@ -12,9 +12,8 @@ use crate::{
     don_state::{state_header, DonState, ExecutionBlock, StateMetadata, StateRoots},
 };
 
-/// The maximum age of a state root used as grounding for a transaction.
-/// At one block per 12 seconds, this is one hour.
-pub const MAX_STATE_ROOT_AGE_BLOCKS: i64 = 300;
+use txlib::grounding_aged_out;
+pub use txlib::MAX_STATE_ROOT_AGE_BLOCKS;
 
 /// The base state's containers and counts, mutated while deriving one slot.
 struct WorkingState {
@@ -139,7 +138,7 @@ impl StateMachine {
             return Ok(());
         };
         let age = block_number as i64 - state_root_block;
-        if age > MAX_STATE_ROOT_AGE_BLOCKS {
+        if grounding_aged_out(block_number as i64, state_root_block) {
             warn!(
                 slot,
                 block_number, state_root_block, age, "Blob proof state_root is too old; rejecting"

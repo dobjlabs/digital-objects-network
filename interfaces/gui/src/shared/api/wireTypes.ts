@@ -1,6 +1,25 @@
 export type ProofPhase = "generateProof" | "commit";
 export type ProofProgressStatus = "running" | "done" | "failed";
 
+export type ExecutionStage =
+  | "verifyingInputs"
+  | "loadingModule"
+  | "building"
+  | "mining"
+  | "solving"
+  | "proving"
+  | "shrinking"
+  | "writingFiles"
+  | "submitting"
+  | "awaitingSynchronization";
+
+export interface RunStageTiming {
+  stage: ExecutionStage;
+  status: ProofProgressStatus;
+  startedAtMs: number;
+  elapsedMs: number;
+}
+
 /** Lifecycle state of a run in the daemon's run registry. Mirrors
  * `wire_types::RunStatus` (camelCase). */
 export type RunStatus =
@@ -66,7 +85,7 @@ export interface ActionPayload {
 /** Optional caller data by name, in POD2 JSON form. */
 export type ActionArgValues = Record<string, unknown>;
 
-export interface RunActionInput {
+export interface ActionInput {
   action: QualifiedNamePayload;
   inputObjectPaths: string[];
   /** Optional caller data by name, in POD2 JSON form. */
@@ -76,12 +95,12 @@ export interface RunActionInput {
 export interface RunActionResult {
   runId: string;
   oldRoot: string;
-  newRoot: string;
   outputFiles: string[];
-  nullifiedFiles: string[];
+  /** The objects the transaction spends; nullified once it lands. */
+  inputFiles: string[];
 }
 
-/** `POST /actions/run` response: the run was accepted and is executing in the
+/** `POST /runs` response: the run was accepted and is executing in the
  * background. Follow it via `getRun` (poll) or the run's SSE stream. */
 export interface RunAccepted {
   runId: string;
@@ -89,7 +108,7 @@ export interface RunAccepted {
   createdAtMs?: number;
 }
 
-/** `GET /actions/runs/{runId}` response: current state of a run. */
+/** `GET /runs/{runId}` response: current state of a run. */
 export interface RunState {
   runId: string;
   action: QualifiedNamePayload;
@@ -98,6 +117,8 @@ export interface RunState {
   createdAtMs?: number;
   startedAtMs?: number | null;
   finishedAtMs?: number | null;
+  elapsedMs?: number;
+  stageTimings?: RunStageTiming[];
   result: RunActionResult | null;
   error: string | null;
   progress: RunActionProgress[];
@@ -113,17 +134,24 @@ export interface ObjectRecordPayload {
   tx: unknown;
 }
 
+/** Names a file removed by expiry, transaction deletion, or discard. */
+export interface ObjectRemovedEvent {
+  seq?: number;
+  fileName: string;
+}
+
 export interface RunActionProgress {
   runId: string;
   phase: ProofPhase;
   status: ProofProgressStatus;
   message: string;
   oldRoot: string | null;
-  newRoot: string | null;
   outputFiles: string[] | null;
   outputStatus: ObjectStatus | null;
-  nullifiedFiles: string[] | null;
+  inputFiles: string[] | null;
   atMs?: number;
+  stage?: ExecutionStage;
+  elapsedMs?: number;
 }
 
 export interface AppSettingsPayload {

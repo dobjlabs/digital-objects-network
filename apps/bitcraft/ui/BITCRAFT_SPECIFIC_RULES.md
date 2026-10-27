@@ -14,8 +14,7 @@ that block should be plugin-agnostic.
 
 ### Only bitcraft objects are listed
 
-- **Where:** `PLUGIN_NAME`, applied in `load()` to the result of
-  `GET /objects/unspent`.
+- **Where:** `PLUGIN_NAME`, applied in `showObjects()` to inventory snapshots and object events.
 - **Generic behavior:** list unspent objects from every installed plugin.
 - **Why:** this is a bitcraft inventory; other plugins' objects (e.g.
   `craft-basics`, `craft-rocket`, `nanoverse`) are out of scope.
@@ -37,34 +36,23 @@ that block should be plugin-agnostic.
 - **Generic behavior:** list every installed plugin's classes and actions.
 - **Why:** same scope as the object list.
 
-### Only bitcraft runs are restored on page load
+### Only bitcraft activity appears in Jobs
 
-- **Where:** `PLUGIN_NAME`, applied in `restoreRuns()` to the result of
-  `GET /actions/runs?status=active`.
-- **Generic behavior:** restore every run dobjd has in progress, whichever
-  plugin's action it runs (runs can also be started by the CLI or an MCP
-  agent).
+- **Where:** `activityInScope()`, applied to retained `/runs`, `/proof-jobs`, open transaction records and activity arriving on `/events`.
+- **Generic behavior:** show actions for every plugin, including work started by the CLI, MCP or another window. A run, proof job and transaction linked by IDs describe one action and share one row; independent actions stay separate. Retained completed work also appears when recovering missed events.
 - **Why:** same scope as the object list.
 
 ## Startup pocketknife
 
-- **Where:** `ensureStartupPocketknife()`, called by `load()` after active
-  runs have been restored successfully.
+- **Where:** `ensureStartupPocketknife()`, called by `load()` after retained activity has been restored successfully.
 - **What:** if no live `bitcraft::Pocketknife` exists, start
   `bitcraft::CraftPocketknife` with no inputs. Live knives, including knives
   held by a run, count as existing. An active crafting run or another active
   action that outputs a pocketknife suppresses creation. Re-read inventory
   after restoring runs so a run that finished during startup does not cause
   another knife to be crafted.
-- **Stale knives:** with no live knife and no such active run, a pending or
-  unknown knife is one whose commit failed. The inventory re-read has already
-  checked it against the synchronizer, so it is moved aside with
-  `POST /objects/{file_name}/discard_unsafe`, which keeps none of dobjd's
-  object-state guarantees, and a new knife is crafted. This
-  happens on "Try again" after a failed commit and on reopening the app.
-  Discarding first requires the synchronizer to answer `GET /state-root`,
-  because the inventory falls back to local state when it is unreachable;
-  otherwise setup shows an error and keeps the knife.
+- **Durable transactions:** if the run registry was lost, an open transaction that creates a pocketknife suppresses another craft. Startup follows its transaction and object events, keeping its outputs. A recorded transaction with no submission attempt is submitted using `/transactions/submit`; an attempted submission with an unknown outcome is followed until landing or expiry. Failure to read transaction records stops setup. Expiry or deletion shows an error and requires an explicit retry before creating another knife.
+- **Stale knives:** with no live knife, active crafting run, or open pocketknife transaction, a pending or unknown knife has no work left that could make it live. The inventory re-read has already checked it against the synchronizer, so it is moved aside with `POST /objects/{file_name}/discard_unsafe`, which keeps none of dobjd's object-state guarantees, and a new knife is crafted. This happens on "Try again" after a failed commit and on reopening the app. Discarding first requires the synchronizer to answer `GET /state-root`, because the inventory falls back to local state when it is unreachable; otherwise setup shows an error and keeps the knife.
 - **Startup screen:** keep inventory hidden and inert until a live
   pocketknife is listed. Existing live knives, including held knives, open
   the inventory directly once the step on display has been up for its
@@ -107,30 +95,8 @@ that block should be plugin-agnostic.
   Object changes made while the setup screen is up do not flash in the
   object list, so the starter knife is already settled when inventory
   opens.
-- **Jobs:** automatic startup runs are tracked but omitted from Jobs.
-  Remember their run ID in session storage so reloading the page keeps
-  them hidden. Manual pocketknife jobs, including restored jobs without
-  that marker, remain visible. The Jobs pane is hidden when no visible
-  jobs exist; starting a manual job reveals it.
-- **Failures:** show the cause with "Try again" and "Copy error" controls
-  if setup fails, active runs cannot be read, the synchronizer cannot be
-  reached before discarding a stale knife, or the recipe is unavailable.
-  There is no way into the inventory from a setup error: it opens only
-  once a live knife exists. Retry re-reads active jobs and inventory before
-  discarding or creating anything.
-  When a setup request or progress read gets no HTTP response at all, the
-  daemon is not running, so the error says the background service isn't
-  responding, suggests quitting and reopening Bitcraft, and names
-  `dobjd.log` in the data directory (the parent of the objects directory)
-  once that directory is known. An HTTP error is shown as it is.
-  "Copy error" copies the full displayed error, including line breaks, and
-  reports success or failure. The error text can also be selected manually.
-  A failed run is never retried automatically while the page is open;
-  reopening the app retries after discarding its stale knife. The startup
-  job is followed through its event stream like any other job; the
-  terminal status arrives through the read prompted by dobjd closing the
-  stream. Inventory is polled after success until the knife is live.
-  Inventory refreshes alone do not trigger creation.
+- **Jobs:** automatic startup runs are tracked but omitted from Jobs. Remember their run ID in session storage so reloading the page keeps them hidden, including when only their owned transaction remains. Manual pocketknife jobs, including externally started proofs and restored transactions without that marker, remain visible. A proof already creating a pocketknife suppresses another automatic craft. The Jobs pane is hidden when no visible jobs exist; starting a manual job reveals it.
+- **Failures:** show the cause with "Try again" and "Copy error" controls if setup fails, active runs cannot be read, the synchronizer cannot be reached before discarding a stale knife, or the recipe is unavailable. There is no way into the inventory from a setup error: it opens only once a live knife exists. Retry re-reads active jobs and inventory before discarding or creating anything. When a setup request or progress read gets no HTTP response at all, the daemon is not running, so the error says the background service isn't responding, suggests quitting and reopening Bitcraft, and names `dobjd.log` in the data directory (the parent of the objects directory) once that directory is known. An HTTP error is shown as it is. "Copy error" copies the full displayed error, including line breaks, and reports success or failure. The error text can also be selected manually. A failed run is never retried automatically while the page is open; reopening the app retries after discarding its stale knife. The startup job is followed through its event stream like any other job; the terminal status arrives through the read prompted by dobjd closing the stream. Transaction and object events advance setup, including after the run registry is lost. Inventory changes alone do not trigger creation.
 - **Generic behavior:** loading the UI never starts actions or discards objects automatically.
 
 ## Action input constraints

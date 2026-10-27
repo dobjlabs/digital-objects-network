@@ -1710,6 +1710,9 @@ impl ActionHandle {
         }
         let key = temporary(Type::Raw);
         if let Some(exe_ctx) = self.0.borrow().exe_ref() {
+            if let Some(progress) = &exe_ctx.progress {
+                progress(ExecutionStage::Mining);
+            }
             // This is a copy of the object, we don't modify the obj argument.
             let mut obj = obj.borrow().to_dict();
             let target_raw = target.borrow().as_value().raw();
@@ -1742,6 +1745,9 @@ impl ActionHandle {
                 }
             }
             key.borrow_mut().set_value(k);
+            if let Some(progress) = &exe_ctx.progress {
+                progress(ExecutionStage::Building);
+            }
         }
         Ok(ArgHandle::new(self.clone(), key))
     }
@@ -3043,7 +3049,20 @@ impl SpendableObjects {
     }
 }
 
-/// The Executor is used to hold the state of action execution at Execution time.
+/// Local execution boundaries, reported without progress percentages or ETAs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionStage {
+    LoadingModule,
+    Building,
+    Mining,
+    Solving,
+    Proving,
+}
+
+/// Called at stage boundaries, including when building resumes after mining.
+pub type ExecutionProgress = Arc<dyn Fn(ExecutionStage) + Send + Sync>;
+
+/// Holds the state used to execute an action.
 pub struct Executor {
     mock: bool,
     params: Params,
@@ -3052,6 +3071,7 @@ pub struct Executor {
     prover: Box<dyn MainPodProver>,
     pod_modules: Vec<Arc<Module>>,
     module: Rc<SdkModule>,
+    progress: Option<ExecutionProgress>,
 }
 
 /// This context is available via ActionContext at Execution time.  It keeps the state of the
@@ -3074,6 +3094,7 @@ struct ExeContext {
     // call tree, in declaration order. Sub-actions append into this
     // same vec so the top-level call sees them in order.
     outputs: Vec<Dictionary>,
+    progress: Option<ExecutionProgress>,
 }
 
 impl ExeContext {
@@ -3092,13 +3113,38 @@ impl ExeContext {
     }
 }
 
-fn prove(builder: MultiPodBuilder, prover: &dyn MainPodProver) -> MainPod {
-    let solution = builder.solve().unwrap();
+fn prove(
+    builder: MultiPodBuilder,
+    prover: &dyn MainPodProver,
+    progress: Option<&ExecutionProgress>,
+) -> Result<MainPod, SdkError> {
+    if let Some(progress) = progress {
+        progress(ExecutionStage::Solving);
+    }
+    let solution = builder.solve().map_err(|err| anyhow!(err))?;
     log::info!("multi-pod solve:\n{}", solution.solution_breakdown());
-    solution.prove(prover).unwrap().pods.pop().unwrap()
+    if let Some(progress) = progress {
+        progress(ExecutionStage::Proving);
+    }
+    solution
+        .prove(prover)
+        .map_err(|err| anyhow!(err))?
+        .pods
+        .pop()
+        .ok_or_else(|| anyhow!("prover returned no transaction proof").into())
 }
 
 impl Executor {
+    pub fn with_progress(mut self, progress: ExecutionProgress) -> Self {
+        self.progress = Some(progress);
+        self
+    }
+
+    fn report_stage(&self, stage: ExecutionStage) {
+        if let Some(progress) = &self.progress {
+            progress(stage);
+        }
+    }
     fn new(module: Rc<SdkModule>, mock: bool, grounding_witness: Arc<GroundingWitness>) -> Self {
         let mock_prover = MockProver {};
         let real_prover = Prover {};
@@ -3123,6 +3169,7 @@ impl Executor {
             prover,
             pod_modules: modules,
             module,
+            progress: None,
         }
     }
     fn new_builder(&self) -> MultiPodBuilder {
@@ -3139,6 +3186,7 @@ impl Executor {
         inputs: Vec<SpendableObject>,
         args: &ActionArgs,
     ) -> Result<(BuildContext, Tx, Vec<Dictionary>), SdkError> {
+        self.report_stage(ExecutionStage::Building);
         let meta = self
             .module
             .actions
@@ -3205,6 +3253,7 @@ impl Executor {
                     tx_builder,
                     module: self.module.clone(),
                     outputs: Vec::new(),
+                    progress: self.progress.clone(),
                 }));
                 let action_handle = ActionHandle::new(action.to_string(), Some(exe_rc.clone()));
                 action_handle.0.borrow_mut().supplied_args = args.clone();
@@ -3244,7 +3293,7 @@ impl Executor {
         // Only TxFinalized is revealed, as required by the proof parser.
         log::info!("proving tx_pod for action {}", action);
         let start = std::time::Instant::now();
-        let tx_pod = prove(bld.builder, &*self.prover);
+        let tx_pod = prove(bld.builder, &*self.prover, self.progress.as_ref())?;
         tx_pod.pod.verify().unwrap();
         log::info!(
             "proving tx_pod for action {} took {:?}",

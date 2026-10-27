@@ -12,6 +12,7 @@ use clap::{Parser, Subcommand};
 mod client;
 mod commands;
 mod daemon;
+mod runs;
 mod update;
 
 use client::DobjdClient;
@@ -120,6 +121,51 @@ enum Cmd {
         #[arg(long)]
         quiet: bool,
     },
+    /// Prove and record an action without submitting it.
+    /// Prints the job ID; with --wait, prints the transaction's txFinal.
+    Prove {
+        /// Action name, e.g. `craft-basics::CraftWoodPick`.
+        #[arg(value_name = "PLUGIN::ACTION")]
+        qualified_id: String,
+        /// Input object filenames or paths, looked up by basename.
+        inputs: Vec<String>,
+        /// Supply caller data as NAME=JSON, using POD2 JSON values.
+        #[arg(long = "arg", value_name = "NAME=JSON")]
+        args: Vec<String>,
+        /// Wait for the job to finish and print its outcome.
+        #[arg(long)]
+        wait: bool,
+    },
+    /// List retained proof jobs.
+    ProofJobs {
+        /// List only unfinished jobs.
+        #[arg(long)]
+        active: bool,
+    },
+    /// Post recorded transactions to the relayer.
+    Submit {
+        /// Transaction IDs from `dobj prove --wait` or `dobj transactions`.
+        #[arg(value_name = "TXFINAL", required = true)]
+        tx_finals: Vec<String>,
+    },
+    /// List open and recently completed transaction records.
+    Transactions,
+    /// Show a transaction record; with --wait, wait until it lands or expires.
+    InspectTransaction {
+        #[arg(value_name = "TXFINAL")]
+        tx_final: String,
+        /// Wait until the transaction lands or expires.
+        #[arg(long)]
+        wait: bool,
+    },
+    /// Delete a recorded transaction if submission has never been attempted.
+    DeleteTransaction {
+        #[arg(value_name = "TXFINAL")]
+        tx_final: String,
+    },
+    /// List, inspect, or wait for existing runs without submitting an action.
+    #[command(subcommand)]
+    Runs(RunsCmd),
     /// Stream every dobjd event as JSON lines until interrupted.
     Events,
     /// Start dobjd in the background. Idempotent — safe to run when
@@ -155,6 +201,25 @@ enum Cmd {
         /// Proceed when the target is not newer (reinstall or downgrade).
         #[arg(long)]
         force: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum RunsCmd {
+    /// List retained runs. Finished runs expire after about ten minutes.
+    List {
+        /// Include only runs still in progress.
+        #[arg(long)]
+        active: bool,
+    },
+    /// Show a run's status, progress, and result or error.
+    Show { run_id: String },
+    /// Follow a run to completion. Disconnecting does not cancel the action.
+    Wait {
+        run_id: String,
+        /// Suppress progress messages on stderr.
+        #[arg(long)]
+        quiet: bool,
     },
 }
 
@@ -222,7 +287,28 @@ async fn main() -> Result<()> {
             inputs,
             args,
             quiet,
-        } => commands::run(&client, qualified_id, inputs, args, quiet).await,
+        } => commands::run(&client, qualified_id, inputs, args, quiet, cli.json).await,
+        Cmd::Runs(RunsCmd::List { active }) => runs::list(&client, active, cli.json).await,
+        Cmd::Runs(RunsCmd::Show { run_id }) => runs::show(&client, &run_id, cli.json).await,
+        Cmd::Runs(RunsCmd::Wait { run_id, quiet }) => {
+            let state = runs::follow(&client, &run_id, quiet).await?;
+            runs::finish(&state, cli.json)
+        }
+        Cmd::Prove {
+            qualified_id,
+            inputs,
+            args,
+            wait,
+        } => commands::prove(&client, qualified_id, inputs, args, wait, cli.json).await,
+        Cmd::ProofJobs { active } => commands::proof_jobs(&client, active, cli.json).await,
+        Cmd::Submit { tx_finals } => commands::submit(&client, tx_finals, cli.json).await,
+        Cmd::Transactions => commands::transactions(&client, cli.json).await,
+        Cmd::InspectTransaction { tx_final, wait } => {
+            commands::inspect_transaction(&client, tx_final, wait, cli.json).await
+        }
+        Cmd::DeleteTransaction { tx_final } => {
+            commands::delete_transaction(&client, tx_final, cli.json).await
+        }
         Cmd::Events => commands::events(&client).await,
         Cmd::Start => with_update_notice(daemon::start(&client).await).await,
         Cmd::Ui { no_open } => {

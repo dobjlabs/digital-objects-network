@@ -15,45 +15,25 @@ use axum::{
 };
 use tokio_stream::wrappers::ReceiverStream;
 use wire_types::{
-    ActionSummary, CheckActionReport, QualifiedName, RunAccepted, RunActionRequest, RunListFilter,
-    RunListQuery, RunState,
+    ActionSummary, CheckActionReport, QualifiedName, RunAccepted, RunListFilter, RunListQuery,
+    RunState, StartRunRequest,
 };
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
-/// `POST /actions/run` — accept an action and return immediately with a run
-/// handle. The proof + commit pipeline runs on a background worker; follow it
-/// via `GET /actions/runs/{run_id}` (poll) or `/events` (SSE). Input/feasibility
-/// errors are not reported here: they surface as the run's terminal `failed`
-/// state, observable through either follow path.
-pub async fn run_action(
+/// `POST /runs`: accept an action and return a run handle immediately.
+/// Input errors appear in the run's terminal state. Follow progress through
+/// `GET /runs/{run_id}` or its `/events` stream.
+pub async fn start_run(
     State(state): State<AppState>,
-    Json(req): Json<RunActionRequest>,
-) -> ApiResult<(StatusCode, Json<RunAccepted>)> {
-    let input = req.input;
-
-    // Pass strings through verbatim — the driver extracts basenames via
-    // `Path::file_name`, so an absolute path or a bare basename resolve to the
-    // same managed file.
-    let input_objects: Vec<String> = input
-        .input_object_paths
-        .iter()
-        .map(|path| path.trim().to_string())
-        .collect();
-
-    let accepted = crate::runs::spawn_run(
-        &state.runs,
-        state.driver.clone(),
-        state.events.clone(),
-        input.action,
-        input_objects,
-        input.args,
-    )?;
-    Ok((StatusCode::ACCEPTED, Json(accepted)))
+    Json(req): Json<StartRunRequest>,
+) -> (StatusCode, Json<RunAccepted>) {
+    let accepted = crate::runs::spawn_run(&state.services, req.input);
+    (StatusCode::ACCEPTED, Json(accepted))
 }
 
-/// `GET /actions/runs` -- every run dobjd still holds, oldest first: runs in
+/// `GET /runs` -- every run dobjd still holds, oldest first: runs in
 /// flight plus finished runs not yet reaped. `?status=active` keeps only the
 /// runs that have not succeeded or failed.
 pub async fn list_runs(
@@ -61,24 +41,24 @@ pub async fn list_runs(
     Query(query): Query<RunListQuery>,
 ) -> Json<Vec<RunState>> {
     let active_only = query.status == Some(RunListFilter::Active);
-    Json(state.runs.list(active_only))
+    Json(state.services.runs.list(active_only))
 }
 
-/// `GET /actions/runs/{run_id}` — current state of a run: status, the result
+/// `GET /runs/{run_id}` -- current state of a run: status, the result
 /// once it succeeds, an error if it fails, and the full ordered progress log.
 /// This is the disconnect-recovery path; pollable until the run is reaped.
 pub async fn get_run(
     State(state): State<AppState>,
     Path(run_id): Path<String>,
 ) -> ApiResult<Json<RunState>> {
-    let entry = state
-        .runs
-        .get(&run_id)
-        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, format!("unknown run: {run_id}")))?;
+    let entry =
+        state.services.runs.get(&run_id).ok_or_else(|| {
+            ApiError::new(StatusCode::NOT_FOUND, format!("unknown run: {run_id}"))
+        })?;
     Ok(Json(entry.snapshot()))
 }
 
-/// `GET /actions/runs/{run_id}/events` — per-run SSE stream. On connect it
+/// `GET /runs/{run_id}/events` -- per-run SSE stream. On connect it
 /// replays the run's buffered progress (resuming after `Last-Event-ID` if
 /// present), then tails live events until the run reaches a terminal state.
 /// Each event's SSE `id` is its index in the run's progress log.
@@ -87,7 +67,7 @@ pub async fn run_events(
     Path(run_id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(entry) = state.runs.get(&run_id) else {
+    let Some(entry) = state.services.runs.get(&run_id) else {
         return (StatusCode::NOT_FOUND, format!("unknown run: {run_id}")).into_response();
     };
 
@@ -118,7 +98,7 @@ pub async fn run_events(
                 return;
             }
             // Wait for the next poll tick, but stop immediately if the client
-            // has disconnected — otherwise we'd keep polling for a dropped
+            // has disconnected -- otherwise we'd keep polling for a dropped
             // receiver through a long quiet phase (e.g. proof generation).
             tokio::select! {
                 _ = ticker.tick() => {}
@@ -136,13 +116,13 @@ pub async fn run_events(
         .into_response()
 }
 
-/// `POST /actions/install` — install a `.pexe` (raw archive bytes in the
+/// `POST /actions/install` -- install a `.pexe` (raw archive bytes in the
 /// request body) into the actions dir and hot-reload the catalog, so the
 /// plugin is usable without restarting dobjd. The catalog is validated before
 /// the swap commits and a bad archive is removed, so a failed install leaves
 /// the running catalog untouched. Returns the installed plugin name.
 pub async fn install_plugin(State(state): State<AppState>, body: Bytes) -> ApiResult<Json<String>> {
-    let driver = state.driver.clone();
+    let driver = state.services.driver.clone();
     let name = tokio::task::spawn_blocking(move || driver.install_plugin(&body))
         .await
         .map_err(|err| anyhow!("install_plugin task panicked: {err}"))??;
@@ -158,24 +138,24 @@ fn resume_start_index(headers: &HeaderMap) -> usize {
         .unwrap_or(0)
 }
 
-/// `GET /actions` — full catalog of every action the loaded plugins
+/// `GET /actions` -- full catalog of every action the loaded plugins
 /// declare. Pure local state; no synchronizer round-trip. Use this
 /// instead of `/objects` when you only need the action list.
 pub async fn list_actions(State(state): State<AppState>) -> ApiResult<Json<Vec<ActionSummary>>> {
-    let driver = state.driver.clone();
+    let driver = state.services.driver.clone();
     let actions = tokio::task::spawn_blocking(move || driver.list_actions(None))
         .await
         .map_err(|err| anyhow!("list_actions task panicked: {err}"))??;
     Ok(Json(actions))
 }
 
-/// `GET /actions/{id}` — one action detail with predicate source.
+/// `GET /actions/{id}` -- one action detail with predicate source.
 /// `id` is the canonical `plugin::name` form.
 pub async fn inspect_action(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<ActionSummary>> {
-    let driver = state.driver.clone();
+    let driver = state.services.driver.clone();
     let qname = QualifiedName::parse(&id).map_err(|err| anyhow!("{err}"))?;
     let action = tokio::task::spawn_blocking(move || driver.get_action(&qname))
         .await
@@ -183,7 +163,7 @@ pub async fn inspect_action(
     Ok(Json(action))
 }
 
-/// `GET /actions/{id}/feasibility` — does the local objects have what
+/// `GET /actions/{id}/feasibility` -- does the local objects have what
 /// this action needs? Returns the report shape `Driver::check_action`
 /// produces: `feasible` flag, the candidate objects we'd use, and any
 /// missing input class names. `id` is the canonical `plugin::name` form.
@@ -191,7 +171,7 @@ pub async fn check_feasibility(
     State(state): State<AppState>,
     Path(action_id): Path<String>,
 ) -> ApiResult<Json<CheckActionReport>> {
-    let driver = state.driver.clone();
+    let driver = state.services.driver.clone();
     let qname = QualifiedName::parse(&action_id).map_err(|err| anyhow!("{err}"))?;
     let report = tokio::task::spawn_blocking(move || driver.check_action(&qname))
         .await

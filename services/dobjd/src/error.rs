@@ -6,6 +6,12 @@ use axum::{
 use driver::DriverError;
 use serde::Serialize;
 
+#[derive(Debug, thiserror::Error)]
+pub enum ServiceError {
+    #[error("unknown job: {0}")]
+    ProofJobNotFound(String),
+}
+
 /// Error type returned by HTTP route handlers.
 ///
 /// Wraps `anyhow::Error` so handler bodies can use `?` against the existing
@@ -33,7 +39,8 @@ fn status_for_driver_error(err: &DriverError) -> StatusCode {
         DriverError::UnknownAction(_)
         | DriverError::UnknownClass(_)
         | DriverError::ObjectNotFound(_)
-        | DriverError::ObjectFileNotFound(_) => StatusCode::NOT_FOUND,
+        | DriverError::ObjectFileNotFound(_)
+        | DriverError::TransactionNotFound(_) => StatusCode::NOT_FOUND,
         DriverError::InvalidInput(_) => StatusCode::BAD_REQUEST,
         DriverError::Conflict(_) => StatusCode::CONFLICT,
     }
@@ -44,6 +51,10 @@ impl From<anyhow::Error> for ApiError {
         let status = err
             .downcast_ref::<DriverError>()
             .map(status_for_driver_error)
+            .or_else(|| {
+                err.downcast_ref::<ServiceError>()
+                    .map(|_| StatusCode::NOT_FOUND)
+            })
             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         // Log the full anyhow chain (`{:#}` joins causes with " : ").
         // tower-http's request span carries `method` + `uri`, so the
@@ -85,3 +96,18 @@ impl IntoResponse for ApiError {
 }
 
 pub type ApiResult<T> = Result<T, ApiError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_proof_job_is_not_found_even_with_context() {
+        let error = anyhow::Error::new(ServiceError::ProofJobNotFound("missing".to_string()))
+            .context("reading proof job");
+        assert_eq!(
+            ApiError::from(error).into_response().status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+}

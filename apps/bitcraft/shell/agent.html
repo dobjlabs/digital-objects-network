@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Play with agents</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="agent.css">
+  <script src="agent.js" defer></script>
+</head>
+<body>
+  <main id="agent-guide">
+    <h1>Play with agents</h1>
+    <p id="agent-error" role="alert" hidden></p>
+    <p class="description">Keep Bitcraft open. Paste this prompt into an agent with access to local files and a terminal, including a desktop app or CLI tool.</p>
+    <section class="prompt-section">
+      <label for="prompt">Player prompt</label>
+      <textarea id="prompt" readonly spellcheck="false"></textarea>
+      <div class="copy-controls">
+        <button id="copy" type="button">Copy prompt</button>
+        <span id="copy-status" role="status"></span>
+      </div>
+    </section>
+    <p class="note">Use the game folder as the agent's working directory. The CLI finds the running game there; no <code>--home</code> argument or permanent skill installation is needed.</p>
+  </main>
+</body>
+</html>

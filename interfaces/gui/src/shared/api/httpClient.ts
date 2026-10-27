@@ -5,9 +5,10 @@
 import type {
   ActionPayload,
   AppSettingsPayload,
+  ObjectRemovedEvent,
   ObjectSummaryPayload,
   RunAccepted,
-  RunActionInput,
+  ActionInput,
   RunActionProgress,
   RunState,
 } from "./wireTypes";
@@ -16,10 +17,11 @@ export type {
   ActionArgValues,
   ActionPayload,
   AppSettingsPayload,
+  ObjectRemovedEvent,
   ObjectSummaryPayload,
   QualifiedNamePayload,
   RunAccepted,
-  RunActionInput,
+  ActionInput,
   RunActionProgress,
   RunActionResult,
   RunState,
@@ -111,8 +113,8 @@ export function getStateRoot(): Promise<string> {
 // (runId + status); proof generation + commit happen on a background worker.
 // Follow progress via the per-run SSE stream and read the terminal outcome
 // with `getRun`, so a dropped connection can't lose the result.
-export function runAction(input: RunActionInput): Promise<RunAccepted> {
-  return dobjdFetch("/actions/run", {
+export function startRun(input: ActionInput): Promise<RunAccepted> {
+  return dobjdFetch("/runs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ input }),
@@ -123,7 +125,7 @@ export function runAction(input: RunActionInput): Promise<RunAccepted> {
 // if it fails, and the progress log. Polled to detect completion and to
 // recover the outcome if live progress was missed.
 export function getRun(runId: string): Promise<RunState> {
-  return dobjdFetch(`/actions/runs/${encodeURIComponent(runId)}`).then(
+  return dobjdFetch(`/runs/${encodeURIComponent(runId)}`).then(
     httpJson<RunState>,
   );
 }
@@ -136,8 +138,7 @@ export function importObject(dobj: string): Promise<ObjectSummaryPayload> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ dobj }),
-    // Import does one synchronizer round-trip; allow more than the default
-    // read timeout, but not unbounded like /actions/run.
+    // Allow extra time for the synchronizer request.
     timeoutMs: 30_000,
   }).then(httpJson<ObjectSummaryPayload>);
 }
@@ -165,7 +166,7 @@ export function saveAppSettings(
 // === Event subscriptions ====================================================
 //
 // The global `/events` stream is a firehose used for coarse refresh triggers.
-// The active proof panel follows its own replayable `/actions/runs/{id}/events`
+// The active proof panel follows its own replayable `/runs/{id}/events`
 // stream so it cannot miss early progress emitted before the frontend learned
 // the daemon-assigned run id.
 
@@ -173,16 +174,33 @@ type Handler<T> = (payload: T) => void;
 
 let sharedEventSource: EventSource | null = null;
 const httpHandlers = new Map<string, Set<Handler<unknown>>>();
+const reopenHandlers = new Set<() => void>();
+let streamOpenedBefore = false;
+let lastEventSeq: number | null = null;
 
 function ensureEventSource() {
   if (sharedEventSource) return;
   sharedEventSource = new EventSource(`${HTTP_BASE}/events`);
+  sharedEventSource.onopen = () => {
+    lastEventSeq = null;
+    if (streamOpenedBefore) {
+      for (const handler of reopenHandlers) handler();
+    }
+    streamOpenedBefore = true;
+  };
   sharedEventSource.onmessage = (e) => {
     let parsed: { type?: string } & Record<string, unknown>;
     try {
       parsed = JSON.parse(e.data);
     } catch {
       return;
+    }
+    if (typeof parsed.seq === "number") {
+      const gap = lastEventSeq !== null && parsed.seq !== lastEventSeq + 1;
+      lastEventSeq = parsed.seq;
+      if (gap) {
+        for (const handler of reopenHandlers) handler();
+      }
     }
     const { type, ...payload } = parsed;
     if (!type) return;
@@ -198,7 +216,7 @@ function ensureEventSource() {
 function subscribeHttp<T>(
   type: string,
   handler: Handler<T>,
-): Promise<UnlistenFn> {
+): UnlistenFn {
   ensureEventSource();
   let set = httpHandlers.get(type);
   if (!set) {
@@ -211,13 +229,35 @@ function subscribeHttp<T>(
     if (!s) return;
     s.delete(handler as Handler<unknown>);
   };
-  return Promise.resolve(unlisten);
+  return unlisten;
 }
 
-export function listenRunActionProgress(
-  handler: (event: RunActionProgress) => void,
-): Promise<UnlistenFn> {
-  return subscribeHttp<RunActionProgress>("run-action-progress", handler);
+/** Subscribe to object summaries and file removals. */
+export function listenObjectEvents(handlers: {
+  object: (object: ObjectSummaryPayload) => void;
+  removed: (event: ObjectRemovedEvent) => void;
+}): UnlistenFn {
+  const unlistenObject = subscribeHttp<ObjectSummaryPayload>(
+    "object",
+    handlers.object,
+  );
+  const unlistenRemoved = subscribeHttp<ObjectRemovedEvent>(
+    "object-removed",
+    handlers.removed,
+  );
+  return () => {
+    unlistenObject();
+    unlistenRemoved();
+  };
+}
+
+/** Fires on reconnection or a sequence gap so subscribers can reload missed state. */
+export function listenEventStreamReopen(handler: () => void): UnlistenFn {
+  ensureEventSource();
+  reopenHandlers.add(handler);
+  return () => {
+    reopenHandlers.delete(handler);
+  };
 }
 
 function isTerminalRunProgress(event: RunActionProgress): boolean {
@@ -230,9 +270,9 @@ function isTerminalRunProgress(event: RunActionProgress): boolean {
 export function listenRunActionProgressForRun(
   runId: string,
   handler: (event: RunActionProgress) => void,
-): Promise<UnlistenFn> {
+): UnlistenFn {
   const source = new EventSource(
-    `${HTTP_BASE}/actions/runs/${encodeURIComponent(runId)}/events`,
+    `${HTTP_BASE}/runs/${encodeURIComponent(runId)}/events`,
   );
   let closed = false;
   const close = () => {
@@ -254,5 +294,5 @@ export function listenRunActionProgressForRun(
     // EventSource auto-reconnects, resending Last-Event-ID so the daemon can
     // replay from the run's buffered progress log.
   };
-  return Promise.resolve(close);
+  return close;
 }

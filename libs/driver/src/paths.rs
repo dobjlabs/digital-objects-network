@@ -33,6 +33,15 @@ pub const DISCARDED_DIR: &str = ".discarded";
 /// Subdirectory (inside [`DOBJ_HOME_DIR`]) holding installed `.pexe` plugins.
 pub const ACTIONS_DIR: &str = "actions";
 
+/// Transaction directories, named by txFinal, inside [`DOBJ_HOME_DIR`].
+pub const TRANSACTIONS_DIR: &str = "transactions";
+
+/// Filename for a transaction's payload bytes.
+pub const PAYLOAD_FILE: &str = "payload.bin";
+
+/// Record filename. Its presence marks a committed local transaction.
+pub const RECORD_FILE: &str = "record.json";
+
 /// File extension (no leading dot) of a digital-object file.
 pub const DOBJ_EXTENSION: &str = "dobj";
 
@@ -51,6 +60,7 @@ impl DriverPaths {
             nullified_objects_dir,
             discarded_objects_dir,
             actions_dir: root.join(ACTIONS_DIR),
+            transactions_dir: root.join(TRANSACTIONS_DIR),
         }
     }
 }
@@ -115,7 +125,9 @@ mod tests {
         let expect_nullified = format!("{DOBJ_HOME_DIR}/{OBJECTS_DIR}/{NULLIFIED_DIR}");
         let expect_discarded = format!("{DOBJ_HOME_DIR}/{OBJECTS_DIR}/{DISCARDED_DIR}");
         let expect_actions = format!("{DOBJ_HOME_DIR}/{ACTIONS_DIR}");
+        let expect_transactions = format!("{DOBJ_HOME_DIR}/{TRANSACTIONS_DIR}");
         assert!(paths.settings_path.ends_with(&expect_settings));
+        assert!(paths.transactions_dir.ends_with(&expect_transactions));
         assert!(paths.objects_dir.ends_with(&expect_objects));
         assert!(paths.nullified_objects_dir.ends_with(&expect_nullified));
         assert!(paths.discarded_objects_dir.ends_with(&expect_discarded));
@@ -142,6 +154,10 @@ mod tests {
         assert_eq!(
             paths.actions_dir,
             PathBuf::from("/tmp/fake-home/.dobj").join(ACTIONS_DIR)
+        );
+        assert_eq!(
+            paths.transactions_dir,
+            PathBuf::from("/tmp/fake-home/.dobj").join(TRANSACTIONS_DIR)
         );
     }
 

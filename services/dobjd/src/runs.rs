@@ -1,45 +1,23 @@
-//! In-memory registry of action runs.
-//!
-//! `POST /actions/run` (and the MCP `run_action` tool) return immediately with
-//! a run id; the proof + commit pipeline executes on a background task that
-//! records progress and the terminal outcome into a [`RunEntry`] here. Clients
-//! recover the outcome by polling `GET /actions/runs/{id}` or by streaming
-//! `GET /actions/runs/{id}/events`, both of which read this state.
-//!
-//! Entries are kept in memory only. A terminal run is retained for
-//! [`RUN_RETENTION`] so a disconnected client can still read its result, then
-//! reaped. The work itself (and its on-chain / `.dobj` effects) never depends
-//! on this state surviving -- `sync_objects` reconciles those independently.
+//! In-memory run progress and results for polling and SSE replay.
+//! Runs prove, record, submit, and follow settlement. Transaction records
+//! persist independently, so settlement continues after the run registry is lost.
 
-use std::collections::HashMap;
-use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use driver::{
-    Driver, ExecuteActionInput, ExecuteActionResult, ExecutionReporter, ExecutionStepContext,
-};
+use driver::{ExecutionReporter, ExecutionStepContext, now_ms};
+use wire_types::transactions::{TransactionRecord, TransactionState};
 use wire_types::{
-    ActionArgValues, ExecutionPhase, ObjectStatus, ObjectSummary, ProofProgressStatus,
-    QualifiedName, RunAccepted, RunActionProgress, RunActionResult, RunState, RunStatus,
+    ActionInput, ExecutionPhase, ExecutionStage, ObjectStatus, ProofProgressStatus, QualifiedName,
+    RunAccepted, RunActionProgress, RunActionResult, RunStageTiming, RunState, RunStatus,
 };
 
-use crate::events::{Event, EventTx};
+use crate::events::{Event, EventHub};
+use crate::registry::{Registry, Retained};
+use crate::state::{Services, transaction_event};
 
-/// How long a terminal run is retained for polling/replay before reaping.
-pub const RUN_RETENTION: Duration = Duration::from_secs(600);
-/// How often the reaper sweeps for expired terminal runs.
-pub const REAP_INTERVAL: Duration = Duration::from_secs(60);
-
-/// Wall-clock time in Unix epoch milliseconds, for the timestamps clients
-/// read. Reaping uses the monotonic `Instant` in `RunInner::finished_at`.
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis() as u64)
-        .unwrap_or(0)
-}
+const PREFLIGHT_RETRIES: u32 = 2;
+const PREFLIGHT_RETRY_DELAY: Duration = Duration::from_millis(1500);
 
 struct RunInner {
     status: RunStatus,
@@ -52,6 +30,45 @@ struct RunInner {
     finished_at: Option<Instant>,
     started_at_ms: Option<u64>,
     finished_at_ms: Option<u64>,
+    stage_timings: Vec<RunStageTiming>,
+    stage_started: Option<Instant>,
+}
+
+impl RunInner {
+    fn finish_stage(&mut self, status: ProofProgressStatus, now: Instant) {
+        if let Some(started) = self.stage_started.take() {
+            let timing = self.stage_timings.last_mut().unwrap();
+            timing.elapsed_ms = now.duration_since(started).as_millis() as u64;
+            timing.status = status;
+        }
+    }
+
+    fn begin_stage(&mut self, stage: ExecutionStage, now: Instant, at_ms: u64) {
+        if self.stage_started.is_some()
+            && self
+                .stage_timings
+                .last()
+                .is_some_and(|timing| timing.stage == stage)
+        {
+            return;
+        }
+        self.finish_stage(ProofProgressStatus::Done, now);
+        self.stage_timings.push(RunStageTiming {
+            stage,
+            status: ProofProgressStatus::Running,
+            started_at_ms: at_ms,
+            elapsed_ms: 0,
+        });
+        self.stage_started = Some(now);
+    }
+
+    fn timings_at(&self, now: Instant) -> Vec<RunStageTiming> {
+        let mut timings = self.stage_timings.clone();
+        if let Some(started) = self.stage_started {
+            timings.last_mut().unwrap().elapsed_ms = now.duration_since(started).as_millis() as u64;
+        }
+        timings
+    }
 }
 
 /// One run's mutable state plus its identity.
@@ -60,10 +77,19 @@ pub struct RunEntry {
     action: QualifiedName,
     input_object_paths: Vec<String>,
     created_at_ms: u64,
-    /// Registration order; breaks ties between runs created in the same
-    /// millisecond when listing oldest first.
+    created_at: Instant,
     sequence: u64,
     inner: Mutex<RunInner>,
+}
+
+impl Retained for RunEntry {
+    fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    fn finished_at(&self) -> Option<Instant> {
+        self.inner.lock().unwrap().finished_at
+    }
 }
 
 impl RunEntry {
@@ -78,6 +104,7 @@ impl RunEntry {
             action,
             input_object_paths,
             created_at_ms: now_ms(),
+            created_at: Instant::now(),
             sequence,
             inner: Mutex::new(RunInner {
                 status: RunStatus::Queued,
@@ -87,14 +114,16 @@ impl RunEntry {
                 finished_at: None,
                 started_at_ms: None,
                 finished_at_ms: None,
+                stage_timings: Vec::new(),
+                stage_started: None,
             }),
         }
     }
 
     /// Append a non-terminal progress event and advance the status to match
-    /// its phase. Asserts the run is still in flight — the worker never emits
+    /// its phase. Asserts the run is still in flight -- the worker never emits
     /// events after the run finishes.
-    fn push_progress(&self, progress: RunActionProgress) {
+    fn push_progress(&self, mut progress: RunActionProgress) -> RunActionProgress {
         let mut inner = self.inner.lock().unwrap();
         assert!(
             inner.finished_at.is_none(),
@@ -105,7 +134,16 @@ impl RunEntry {
             ExecutionPhase::Commit => RunStatus::Committing,
         };
         inner.started_at_ms.get_or_insert(progress.at_ms);
-        inner.progress.push(progress);
+        let now = Instant::now();
+        progress.elapsed_ms = now.duration_since(self.created_at).as_millis() as u64;
+        if let Some(stage) = progress.stage {
+            inner.begin_stage(stage, now, progress.at_ms);
+        }
+        if progress.status != ProofProgressStatus::Running {
+            inner.finish_stage(progress.status, now);
+        }
+        inner.progress.push(progress.clone());
+        progress
     }
 
     fn succeed(&self, result: RunActionResult) {
@@ -116,7 +154,9 @@ impl RunEntry {
         );
         inner.status = RunStatus::Succeeded;
         inner.result = Some(result);
-        inner.finished_at = Some(Instant::now());
+        let now = Instant::now();
+        inner.finish_stage(ProofProgressStatus::Done, now);
+        inner.finished_at = Some(now);
         inner.finished_at_ms = Some(now_ms());
     }
 
@@ -135,23 +175,29 @@ impl RunEntry {
             RunStatus::Committing => ExecutionPhase::Commit,
             _ => ExecutionPhase::GenerateProof,
         };
+        let now = Instant::now();
+        let stage = inner
+            .stage_started
+            .and_then(|_| inner.stage_timings.last().map(|timing| timing.stage));
+        inner.finish_stage(ProofProgressStatus::Failed, now);
         let event = RunActionProgress {
             run_id: self.run_id.clone(),
             phase,
             status: ProofProgressStatus::Failed,
             message: message.clone(),
             old_root: None,
-            new_root: None,
             output_files: None,
             output_status: None,
-            nullified_files: None,
+            input_files: None,
             at_ms: now_ms(),
+            stage,
+            elapsed_ms: now.duration_since(self.created_at).as_millis() as u64,
         };
         inner.started_at_ms.get_or_insert(event.at_ms);
         inner.progress.push(event.clone());
         inner.status = RunStatus::Failed;
         inner.error = Some(message);
-        inner.finished_at = Some(Instant::now());
+        inner.finished_at = Some(now);
         inner.finished_at_ms = Some(event.at_ms);
         event
     }
@@ -172,6 +218,7 @@ impl RunEntry {
 
     pub fn snapshot(&self) -> RunState {
         let inner = self.inner.lock().unwrap();
+        let now = inner.finished_at.unwrap_or_else(Instant::now);
         RunState {
             run_id: self.run_id.clone(),
             action: self.action.clone(),
@@ -180,302 +227,411 @@ impl RunEntry {
             created_at_ms: self.created_at_ms,
             started_at_ms: inner.started_at_ms,
             finished_at_ms: inner.finished_at_ms,
+            elapsed_ms: now.duration_since(self.created_at).as_millis() as u64,
+            stage_timings: inner.timings_at(now),
             result: inner.result.clone(),
             error: inner.error.clone(),
             progress: inner.progress.clone(),
         }
     }
+}
 
-    fn is_finished(&self) -> bool {
-        self.inner.lock().unwrap().finished_at.is_some()
-    }
-
-    fn expired(&self, ttl: Duration) -> bool {
-        self.inner
-            .lock()
-            .unwrap()
-            .finished_at
-            .map(|at| at.elapsed() >= ttl)
-            .unwrap_or(false)
+fn progress_event(
+    run_id: &str,
+    phase: ExecutionPhase,
+    status: ProofProgressStatus,
+    message: String,
+    ctx: &ExecutionStepContext,
+) -> RunActionProgress {
+    RunActionProgress {
+        run_id: run_id.to_string(),
+        phase,
+        status,
+        message,
+        old_root: ctx.old_root.as_ref().map(payload::encode_hash_hex),
+        output_files: (!ctx.output_files.is_empty()).then(|| ctx.output_files.clone()),
+        output_status: ctx.output_status,
+        input_files: None,
+        at_ms: now_ms(),
+        stage: ctx.stage,
+        elapsed_ms: 0,
     }
 }
 
 #[derive(Clone, Default)]
 pub struct RunRegistry {
-    runs: Arc<RwLock<HashMap<String, Arc<RunEntry>>>>,
-    execution_gate: Arc<tokio::sync::Mutex<()>>,
-    next_sequence: Arc<AtomicU64>,
+    pub entries: Registry<RunEntry>,
 }
 
 impl RunRegistry {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Register a fresh run and return its entry. `run_id` is a daemon-minted
-    /// UUID, so it never collides with an existing run.
-    fn start(
-        &self,
-        run_id: String,
-        action: QualifiedName,
-        input_object_paths: Vec<String>,
-    ) -> Arc<RunEntry> {
-        let sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
-        let entry = Arc::new(RunEntry::new(
-            run_id.clone(),
-            action,
-            input_object_paths,
-            sequence,
-        ));
-        self.runs.write().unwrap().insert(run_id, entry.clone());
-        entry
-    }
-
     pub fn get(&self, run_id: &str) -> Option<Arc<RunEntry>> {
-        self.runs.read().unwrap().get(run_id).cloned()
+        self.entries.get(run_id)
     }
 
     /// Every retained run, oldest first: in-flight runs plus terminal runs
     /// not yet reaped. `active_only` keeps just the in-flight ones.
     pub fn list(&self, active_only: bool) -> Vec<RunState> {
-        let mut entries: Vec<Arc<RunEntry>> = self
-            .runs
-            .read()
-            .unwrap()
-            .values()
-            .filter(|entry| !(active_only && entry.is_finished()))
-            .cloned()
-            .collect();
-        entries.sort_by_key(|entry| entry.sequence);
-        entries.iter().map(|entry| entry.snapshot()).collect()
-    }
-
-    /// Maps the basename of each `.dobj` file held as an input by a run that
-    /// has not yet succeeded or failed to that run's id. A file given to more
-    /// than one such run maps to the oldest of them.
-    pub fn held_input_run_ids(&self) -> HashMap<String, String> {
-        let mut in_flight: Vec<Arc<RunEntry>> = self
-            .runs
-            .read()
-            .unwrap()
-            .values()
-            .filter(|entry| !entry.is_finished())
-            .cloned()
-            .collect();
-        in_flight.sort_by_key(|entry| entry.sequence);
-        let mut run_ids_by_file = HashMap::new();
-        for entry in &in_flight {
-            for path in &entry.input_object_paths {
-                if let Some(file_name) = Path::new(path).file_name().and_then(|name| name.to_str())
-                {
-                    run_ids_by_file
-                        .entry(file_name.to_string())
-                        .or_insert_with(|| entry.run_id.clone());
-                }
-            }
-        }
-        run_ids_by_file
-    }
-
-    /// Sets `held_by_run_id` on each object that an in-flight run holds as
-    /// an input, and clears it on every other object.
-    pub fn fill_held_by_run_ids(&self, objects: &mut [ObjectSummary]) {
-        let run_ids_by_file = self.held_input_run_ids();
-        for object in objects {
-            object.held_by_run_id = run_ids_by_file.get(&object.file_name).cloned();
-        }
-    }
-
-    /// Drop terminal runs older than [`RUN_RETENTION`].
-    pub fn reap(&self) {
-        self.runs
-            .write()
-            .unwrap()
-            .retain(|_, entry| !entry.expired(RUN_RETENTION));
+        self.entries
+            .entries(active_only)
+            .iter()
+            .map(|entry| entry.snapshot())
+            .collect()
     }
 }
 
 /// `ExecutionReporter` that fans every step out to both the global `/events`
 /// broadcast (firehose subscribers) and the run's registry entry (which backs
-/// `GET /actions/runs/{id}` and its SSE stream).
+/// `GET /runs/{id}` and its SSE stream).
 #[derive(Clone)]
-struct RunReporter {
-    events: EventTx,
+pub struct RunReporter {
+    events: EventHub,
     entry: Arc<RunEntry>,
-    run_id: String,
 }
 
 impl RunReporter {
-    fn new(events: EventTx, entry: Arc<RunEntry>, run_id: String) -> Self {
-        Self {
-            events,
-            entry,
-            run_id,
-        }
+    fn new(events: EventHub, entry: Arc<RunEntry>) -> Self {
+        Self { events, entry }
+    }
+
+    fn run_id(&self) -> &str {
+        &self.entry.run_id
     }
 
     fn emit(&self, progress: RunActionProgress) {
-        // A broadcast send fails only when there are no subscribers, so ignore
-        // the result; the registry entry is the durable record.
-        let _ = self.events.send(Event::RunActionProgress(progress.clone()));
-        self.entry.push_progress(progress);
+        let progress = self.entry.push_progress(progress);
+        self.events.publish(Event::RunActionProgress(progress));
     }
 
-    fn finish_success(&self, result: &ExecuteActionResult) {
+    #[cfg(test)]
+    fn commit_step(&self, message: &str, ctx: &ExecutionStepContext) {
+        self.on_step(ExecutionPhase::Commit, message, ctx);
+    }
+
+    fn transaction_progress(
+        &self,
+        record: &TransactionRecord,
+        status: ProofProgressStatus,
+        message: &str,
+        stage: Option<ExecutionStage>,
+    ) {
+        self.emit(RunActionProgress {
+            run_id: self.run_id().to_string(),
+            phase: ExecutionPhase::Commit,
+            status,
+            message: message.to_string(),
+            old_root: Some(record.grounding_root.clone()),
+            output_files: Some(record.output_files.clone()),
+            output_status: Some(match record.state {
+                TransactionState::Recorded | TransactionState::Expired => ObjectStatus::Unknown,
+                TransactionState::Submitted => ObjectStatus::Pending,
+                TransactionState::Landed => ObjectStatus::Live,
+            }),
+            input_files: Some(record.input_files.clone()),
+            at_ms: now_ms(),
+            stage,
+            elapsed_ms: 0,
+        });
+    }
+
+    fn finish_landed(&self, record: &TransactionRecord) {
+        tracing::info!(run_id = %self.run_id(), tx_final = %record.tx_final, "Transaction landed");
+        self.transaction_progress(
+            record,
+            ProofProgressStatus::Done,
+            "Transaction landed",
+            None,
+        );
         self.entry.succeed(RunActionResult {
-            run_id: self.run_id.clone(),
-            old_root: payload::encode_hash_hex(&result.old_root),
-            new_root: payload::encode_hash_hex(&result.new_root),
-            output_files: result.output_files.clone(),
-            nullified_files: result.nullified_files.clone(),
+            run_id: self.run_id().to_string(),
+            old_root: record.grounding_root.clone(),
+            output_files: record.output_files.clone(),
+            input_files: record.input_files.clone(),
         });
     }
 
     fn finish_failure(&self, message: String) {
-        tracing::error!(run_id = %self.run_id, error = %message, "Action failed");
-        // `fail` builds the event (tagged with the failing phase) and records
-        // it in the registry; mirror it to the global hub.
+        tracing::error!(run_id = %self.run_id(), error = %message, "Action failed");
         let event = self.entry.fail(message);
-        let _ = self.events.send(Event::RunActionProgress(event));
+        self.events.publish(Event::RunActionProgress(event));
     }
 }
 
 impl ExecutionReporter for RunReporter {
     fn on_step(&self, phase: ExecutionPhase, message: &str, ctx: &ExecutionStepContext) {
-        tracing::info!(run_id = %self.run_id, ?phase, "{message}");
-        let progress = match phase {
-            ExecutionPhase::GenerateProof => RunActionProgress {
-                run_id: self.run_id.clone(),
-                phase,
-                status: ProofProgressStatus::Running,
-                message: message.to_string(),
-                old_root: None,
-                new_root: None,
-                output_files: None,
-                output_status: None,
-                nullified_files: None,
-                at_ms: now_ms(),
-            },
-            ExecutionPhase::Commit => RunActionProgress {
-                run_id: self.run_id.clone(),
-                phase,
-                status: ProofProgressStatus::Running,
-                message: message.to_string(),
-                old_root: ctx.old_root.as_ref().map(payload::encode_hash_hex),
-                new_root: None,
-                output_files: (!ctx.output_files.is_empty()).then(|| ctx.output_files.clone()),
-                output_status: ctx.output_status,
-                nullified_files: None,
-                at_ms: now_ms(),
-            },
-        };
-        self.emit(progress);
+        tracing::info!(run_id = %self.run_id(), ?phase, "{message}");
+        self.emit(progress_event(
+            self.run_id(),
+            phase,
+            ProofProgressStatus::Running,
+            message.to_string(),
+            ctx,
+        ));
     }
 
-    fn on_done(&self, phase: ExecutionPhase, result: Option<&ExecuteActionResult>) {
-        let progress = match phase {
-            ExecutionPhase::GenerateProof => RunActionProgress {
-                run_id: self.run_id.clone(),
+    fn on_done(&self, phase: ExecutionPhase) {
+        if phase == ExecutionPhase::GenerateProof {
+            self.emit(progress_event(
+                self.run_id(),
                 phase,
-                status: ProofProgressStatus::Done,
-                message: "Proof generation complete".to_string(),
-                old_root: None,
-                new_root: None,
-                output_files: None,
-                output_status: None,
-                nullified_files: None,
-                at_ms: now_ms(),
-            },
-            ExecutionPhase::Commit => match result {
-                Some(result) => RunActionProgress {
-                    run_id: self.run_id.clone(),
-                    phase,
-                    status: ProofProgressStatus::Done,
-                    message: "Commit complete".to_string(),
-                    old_root: Some(payload::encode_hash_hex(&result.old_root)),
-                    new_root: Some(payload::encode_hash_hex(&result.new_root)),
-                    output_files: Some(result.output_files.clone()),
-                    output_status: Some(ObjectStatus::Live),
-                    nullified_files: Some(result.nullified_files.clone()),
-                    at_ms: now_ms(),
-                },
-                None => return,
-            },
-        };
-        tracing::info!(run_id = %self.run_id, ?phase, "{}", progress.message);
-        self.emit(progress);
+                ProofProgressStatus::Done,
+                "Proof generation complete".to_string(),
+                &ExecutionStepContext::default(),
+            ));
+        }
     }
 }
 
-/// Mint a fresh run id, register it, and spawn the background worker that runs
-/// the action and records its outcome. Returns immediately with the run handle;
-/// follow the run via `GET /actions/runs/{run_id}` or its SSE stream.
-pub fn spawn_run(
-    registry: &RunRegistry,
-    driver: Arc<Driver>,
-    events: EventTx,
-    action: QualifiedName,
-    input_objects: Vec<String>,
-    args: ActionArgValues,
-) -> anyhow::Result<RunAccepted> {
-    let exec_input = ExecuteActionInput {
-        action: action.clone(),
-        input_objects: input_objects.clone(),
-        args,
+/// Start background execution and return a run handle.
+pub fn spawn_run(services: &Services, input: ActionInput) -> RunAccepted {
+    let input = crate::proof_jobs::trimmed(input);
+    let services_for_worker = services.clone();
+    let driver = services.driver.clone();
+    let exec_input = crate::proof_jobs::execute_input(&input);
+    spawn_worker(
+        &services.runs,
+        services.events.clone(),
+        input.action,
+        input.input_object_paths,
+        move |reporter| {
+            let record = crate::proof_jobs::prove_and_record(
+                &services_for_worker,
+                exec_input,
+                reporter.run_id(),
+                reporter,
+            )?;
+            submit_record(&services_for_worker, record, reporter)
+        },
+        move |tx_final| driver.get_transaction(&payload::decode_hash_hex(tx_final)?),
+    )
+}
+
+/// Keep following the transaction after a submission error if its record is readable.
+fn submit_record(
+    services: &Services,
+    record: TransactionRecord,
+    reporter: &RunReporter,
+) -> anyhow::Result<TransactionRecord> {
+    reporter.transaction_progress(
+        &record,
+        ProofProgressStatus::Running,
+        "Transaction recorded",
+        Some(ExecutionStage::WritingFiles),
+    );
+    reporter.transaction_progress(
+        &record,
+        ProofProgressStatus::Running,
+        "Submitting proof to relayer",
+        Some(ExecutionStage::Submitting),
+    );
+    let tx_final = payload::decode_hash_hex(&record.tx_final)?;
+    let mut preflight_retries = 0;
+    let record = loop {
+        match services.submit_transaction(&tx_final) {
+            Ok(submitted) => {
+                let message = match (
+                    submitted.state,
+                    submitted.relayer_job_id.as_deref(),
+                    submitted.relayer_failure.as_deref(),
+                ) {
+                    (TransactionState::Submitted, Some(job_id), Some(failure)) => {
+                        format!("Relayer job {job_id} failed: {failure}")
+                    }
+                    (TransactionState::Submitted, Some(job_id), None) => {
+                        format!("Relayer accepted job {job_id}")
+                    }
+                    _ => format!("Transaction {}", submitted.state),
+                };
+                reporter.transaction_progress(
+                    &submitted,
+                    ProofProgressStatus::Running,
+                    &message,
+                    Some(ExecutionStage::AwaitingSynchronization),
+                );
+                break submitted;
+            }
+            Err(err) => {
+                let current = services.driver.get_transaction(&tx_final)?;
+                if current.state == TransactionState::Recorded
+                    && current.submit_attempted_at_ms.is_none()
+                {
+                    if err.downcast_ref::<driver::DriverError>().is_some() {
+                        anyhow::bail!("Submission refused: {err:#}");
+                    }
+                    if preflight_retries < PREFLIGHT_RETRIES {
+                        let delay = PREFLIGHT_RETRY_DELAY * (1 << preflight_retries);
+                        preflight_retries += 1;
+                        let message = format!(
+                            "Submission could not start: {err:#}; retrying ({preflight_retries}/{PREFLIGHT_RETRIES})"
+                        );
+                        reporter.transaction_progress(
+                            &current,
+                            ProofProgressStatus::Running,
+                            &message,
+                            Some(ExecutionStage::Submitting),
+                        );
+                        std::thread::sleep(delay);
+                        continue;
+                    }
+                    anyhow::bail!(
+                        "Submission could not start: {err:#}. Transaction {} is recorded; retry with dobj submit {}",
+                        current.tx_final,
+                        current.tx_final
+                    );
+                }
+                let message = format!(
+                    "Relayer submission failed: {err:#}; the daemon will retry while transaction is {}",
+                    current.state
+                );
+                reporter.transaction_progress(
+                    &current,
+                    ProofProgressStatus::Running,
+                    &message,
+                    Some(ExecutionStage::Submitting),
+                );
+                services.announce_transaction(&current);
+                break current;
+            }
+        }
     };
-    spawn_worker(registry, events, action, input_objects, move |reporter| {
-        driver.execute_with_reporter(exec_input, reporter)
-    })
+    if record.is_open() {
+        reporter.transaction_progress(
+            &record,
+            ProofProgressStatus::Running,
+            waiting_message(&record),
+            Some(ExecutionStage::AwaitingSynchronization),
+        );
+    }
+    Ok(record)
 }
 
-fn spawn_worker<F>(
+/// A failed relayer job may still have reached the chain, so the run keeps following.
+fn waiting_message(record: &TransactionRecord) -> &'static str {
+    if record.relayer_failure.is_some() {
+        "Waiting for the transaction to land or its grounding to expire"
+    } else {
+        "Waiting for the transaction to land"
+    }
+}
+
+/// Report a relayer failure that appears while the run follows its transaction.
+fn report_relayer_failure(
+    reporter: &RunReporter,
+    record: &TransactionRecord,
+    reported: &Mutex<Option<String>>,
+) {
+    let mut reported = reported.lock().expect("relayer failure lock poisoned");
+    let Some(failure) = record
+        .relayer_failure
+        .as_deref()
+        .filter(|failure| reported.as_deref() != Some(*failure))
+    else {
+        return;
+    };
+    *reported = Some(failure.to_string());
+    let message = format!(
+        "Relayer job {} failed: {failure}. {}",
+        record.relayer_job_id.as_deref().unwrap_or("?"),
+        waiting_message(record)
+    );
+    reporter.transaction_progress(
+        record,
+        ProofProgressStatus::Running,
+        &message,
+        Some(ExecutionStage::AwaitingSynchronization),
+    );
+}
+
+/// Supervise worker errors and panics, then follow the transaction until settlement.
+fn spawn_worker<S, R>(
     registry: &RunRegistry,
-    events: EventTx,
+    events: EventHub,
     action: QualifiedName,
     input_object_paths: Vec<String>,
-    execute: F,
-) -> anyhow::Result<RunAccepted>
+    stage: S,
+    read_record: R,
+) -> RunAccepted
 where
-    F: FnOnce(&RunReporter) -> anyhow::Result<ExecuteActionResult> + Send + 'static,
+    S: FnOnce(&RunReporter) -> anyhow::Result<TransactionRecord> + Send + 'static,
+    R: Fn(&str) -> anyhow::Result<TransactionRecord> + Send + Sync + 'static,
 {
-    let permit = registry
-        .execution_gate
-        .clone()
-        .try_lock_owned()
-        .map_err(|_| driver::DriverError::Conflict("another action is already running".into()))?;
     let run_id = uuid::Uuid::new_v4().to_string();
-    let entry = registry.start(run_id.clone(), action, input_object_paths);
+    let entry = registry.entries.start(run_id.clone(), |sequence| {
+        RunEntry::new(run_id.clone(), action, input_object_paths, sequence)
+    });
     let created_at_ms = entry.created_at_ms;
+    let reporter = RunReporter::new(events.clone(), entry);
 
-    let reporter = RunReporter::new(events, entry, run_id.clone());
-
-    // A supervisor task drives the blocking pipeline and records the terminal
-    // state on every exit path -- including a panic -- so a run can never get
-    // stuck non-terminal. spawn_blocking keeps the CPU-bound proof off the
-    // async runtime's worker threads.
     tokio::spawn(async move {
         let worker = reporter.clone();
-        let join = tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            execute(&worker)
-        });
-        match join.await {
-            Ok(Ok(result)) => reporter.finish_success(&result),
-            Ok(Err(err)) => reporter.finish_failure(format!("{err:#}")),
-            Err(join_err) => reporter.finish_failure(format!("run worker panicked: {join_err}")),
+        let staged = tokio::task::spawn_blocking(move || stage(&worker)).await;
+        let record = match staged {
+            Ok(Ok(record)) => record,
+            Ok(Err(err)) => return reporter.finish_failure(format!("{err:#}")),
+            Err(join_err) => {
+                return reporter.finish_failure(format!("run worker panicked: {join_err}"));
+            }
+        };
+        let tx_final = record.tx_final.clone();
+        let read_record = Arc::new(read_record);
+        let reported_failure = Mutex::new(record.relayer_failure.clone());
+        let settled = crate::routes::wait::follow(
+            &events,
+            None,
+            || {
+                let record = record.clone();
+                let tx_final = tx_final.clone();
+                let read_record = read_record.clone();
+                async move {
+                    if record.state.is_terminal() {
+                        Ok(record)
+                    } else {
+                        tokio::task::spawn_blocking(move || read_record(&tx_final))
+                            .await
+                            .map_err(|err| {
+                                anyhow::anyhow!("run transaction read task failed: {err}")
+                            })?
+                    }
+                }
+            },
+            |record| record.state.is_terminal(),
+            |event| {
+                let update = transaction_event(&tx_final, event)?;
+                if let Some(open) = update.as_ref().filter(|update| update.is_open()) {
+                    report_relayer_failure(&reporter, open, &reported_failure);
+                }
+                Ok(update)
+            },
+        )
+        .await;
+        match settled {
+            Ok(settled) => match settled.state {
+                TransactionState::Landed => reporter.finish_landed(&settled),
+                TransactionState::Expired => reporter.finish_failure(format!(
+                    "transaction {} expired without landing: {}",
+                    settled.tx_final,
+                    settled.reason.as_deref().unwrap_or("grounding aged out")
+                )),
+                TransactionState::Recorded | TransactionState::Submitted => {
+                    unreachable!("follow returns only terminal records")
+                }
+            },
+            Err(err) => {
+                reporter.finish_failure(format!("lost track of transaction {tx_final}: {err:#}"))
+            }
         }
     });
 
-    Ok(RunAccepted {
+    RunAccepted {
         run_id,
         status: RunStatus::Queued,
         created_at_ms,
-    })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn action(name: &str) -> QualifiedName {
         QualifiedName {
@@ -484,13 +640,16 @@ mod tests {
         }
     }
 
-    // Test-only accessor. `mod tests` is a child of `runs`, so it can both
-    // add an inherent method to `RunEntry` and read its private `inner` —
-    // keeping this out of the production impl where nothing else needs it.
     impl RunEntry {
         fn status(&self) -> RunStatus {
             self.inner.lock().unwrap().status
         }
+    }
+
+    fn start(registry: &RunRegistry, run_id: &str) -> Arc<RunEntry> {
+        registry.entries.start(run_id.to_string(), |sequence| {
+            RunEntry::new(run_id.to_string(), action("A"), Vec::new(), sequence)
+        })
     }
 
     fn step(
@@ -498,43 +657,183 @@ mod tests {
         status: ProofProgressStatus,
         message: &str,
     ) -> RunActionProgress {
-        RunActionProgress {
-            run_id: "r1".to_string(),
+        progress_event(
+            "r1",
             phase,
             status,
-            message: message.to_string(),
-            old_root: None,
-            new_root: None,
-            output_files: None,
-            output_status: None,
-            nullified_files: None,
-            at_ms: now_ms(),
-        }
+            message.to_string(),
+            &ExecutionStepContext::default(),
+        )
     }
 
     fn ok_result() -> RunActionResult {
         RunActionResult {
             run_id: "r1".to_string(),
             old_root: "0xold".to_string(),
-            new_root: "0xnew".to_string(),
             output_files: vec!["out.dobj".to_string()],
-            nullified_files: vec!["in.dobj".to_string()],
+            input_files: vec!["in.dobj".to_string()],
         }
     }
 
-    fn execution_result() -> ExecuteActionResult {
-        let root = payload::decode_hash_hex(
-            "0000000000000000000000000000000000000000000000000000000000000001",
-        )
-        .unwrap();
-        ExecuteActionResult {
-            old_root: root,
-            new_root: root,
-            output_files: vec![],
-            nullified_files: vec![],
-            relayer_job_id: "job".into(),
-            tx_hash: None,
-            block_number: None,
+    fn record(tx_final: &str, state: TransactionState) -> TransactionRecord {
+        let mut record = TransactionRecord::recorded(
+            tx_final.to_string(),
+            action("A"),
+            "run".to_string(),
+            vec!["in.dobj".to_string()],
+            vec!["out.dobj".to_string()],
+            "0xroot".to_string(),
+            1,
+            vec![],
+            vec![],
+            0,
+        );
+        record.state = state;
+        record.reason = (state == TransactionState::Expired).then(|| "aged out".to_string());
+        record
+    }
+
+    fn still_open(tx_final: &str) -> anyhow::Result<TransactionRecord> {
+        Ok(record(tx_final, TransactionState::Submitted))
+    }
+
+    #[tokio::test]
+    async fn run_retries_preflight_failures_but_stops_at_acceptance_attempt_or_conflict() {
+        use axum::{
+            Json, Router,
+            http::StatusCode,
+            response::IntoResponse,
+            routing::{get, post},
+        };
+        use driver::{Driver, DriverDeps, DriverPaths, Hash};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use wire_types::{
+            relayer::{JobStatus, SubmitProofResponse},
+            synchronizer::StateHeadResponse,
+        };
+        for (failed_heads, head_block, reject_proof, expected_heads, expected_posts) in [
+            (2, 1, false, 3, 1),
+            (usize::MAX, 1, false, 3, 0),
+            (0, 1000, false, 1, 0),
+            (0, 1, true, 1, 1),
+        ] {
+            let heads = Arc::new(AtomicUsize::new(0));
+            let posts = Arc::new(AtomicUsize::new(0));
+            let head_requests = heads.clone();
+            let proof_requests = posts.clone();
+            let app = Router::new()
+                .route(
+                    "/v1/state/head",
+                    get(move || {
+                        let requests = head_requests.clone();
+                        async move {
+                            if requests.fetch_add(1, Ordering::SeqCst) < failed_heads {
+                                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                            }
+                            Json(StateHeadResponse {
+                                slot: 1,
+                                state_root: Hash::default(),
+                                block_number: head_block,
+                                block_hash: Default::default(),
+                                created_count: 0,
+                                nullifier_count: 0,
+                                state_root_count: 1,
+                            })
+                            .into_response()
+                        }
+                    }),
+                )
+                .route(
+                    "/api/v1/proofs",
+                    post(move || {
+                        let requests = proof_requests.clone();
+                        async move {
+                            requests.fetch_add(1, Ordering::SeqCst);
+                            if reject_proof {
+                                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                            }
+                            Json(SubmitProofResponse {
+                                job_id: "accepted-job".to_string(),
+                                status: JobStatus::Queued,
+                                tx_final: Hash::default(),
+                                state_root: Hash::default(),
+                                attempt_count: 0,
+                                created_at: 0,
+                            })
+                            .into_response()
+                        }
+                    }),
+                );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            tokio::task::spawn_blocking(move || {
+                let home = tempfile::tempdir().unwrap();
+                let paths = DriverPaths::from_dobj_root(home.path());
+                let key = payload::encode_hash_hex(&Hash::default());
+                let mut record = record(&key, TransactionState::Recorded);
+                record.input_files.clear();
+                record.output_files.clear();
+                let directory = paths.transactions_dir.join(&key);
+                std::fs::create_dir_all(&directory).unwrap();
+                std::fs::write(
+                    directory.join(driver::paths::RECORD_FILE),
+                    serde_json::to_vec(&record).unwrap(),
+                )
+                .unwrap();
+                std::fs::write(directory.join(driver::paths::PAYLOAD_FILE), b"proof").unwrap();
+                let driver = Arc::new(
+                    Driver::open(paths.clone(), DriverDeps::load(&paths).unwrap()).unwrap(),
+                );
+                let mut settings = driver.load_settings().unwrap();
+                settings.synchronizer_api_url = url.clone();
+                settings.relayer_api_url = url;
+                driver.save_settings(&settings).unwrap();
+                let events = EventHub::new();
+                let runs = RunRegistry::default();
+                let entry = start(&runs, "run");
+                let reporter = RunReporter::new(events.clone(), entry.clone());
+                let services = Services {
+                    settler: Arc::new(crate::settle::Settler::new(driver.clone(), events.clone())),
+                    driver: driver.clone(),
+                    events,
+                    runs,
+                    proof_jobs: crate::proof_jobs::ProofJobRegistry::default(),
+                };
+                let result = submit_record(&services, record, &reporter);
+                assert_eq!(heads.load(Ordering::SeqCst), expected_heads);
+                assert_eq!(posts.load(Ordering::SeqCst), expected_posts);
+                let stored = driver.get_transaction(&Hash::default()).unwrap();
+                assert_eq!(stored.submit_attempted_at_ms.is_some(), expected_posts > 0);
+                assert_eq!(
+                    entry
+                        .snapshot()
+                        .progress
+                        .iter()
+                        .filter(|progress| progress.message.contains("retrying ("))
+                        .count(),
+                    if failed_heads > 0 { 2 } else { 0 }
+                );
+                if expected_posts == 0 {
+                    let error = result.unwrap_err().to_string();
+                    let refused = head_block > 1;
+                    assert_eq!(error.starts_with("Submission refused"), refused);
+                    assert_eq!(error.contains(&format!("dobj submit {key}")), !refused);
+                    assert_eq!(stored.state, TransactionState::Recorded);
+                } else {
+                    assert_eq!(
+                        result.unwrap().state,
+                        if reject_proof {
+                            TransactionState::Recorded
+                        } else {
+                            TransactionState::Submitted
+                        }
+                    );
+                }
+            })
+            .await
+            .unwrap();
+            server.abort();
         }
     }
 
@@ -545,151 +844,421 @@ mod tests {
                 if matches!(state.status, RunStatus::Succeeded | RunStatus::Failed) {
                     return state;
                 }
-                tokio::time::sleep(Duration::from_millis(1)).await;
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
         .await
-        .expect("run should finish")
+        .expect("run reached a terminal state")
+    }
+
+    async fn wait_status(registry: &RunRegistry, run: &RunAccepted, wanted: RunStatus) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while registry.get(&run.run_id).unwrap().status() != wanted {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("run did not reach {wanted:?}"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn transaction_reads_do_not_block_the_runtime() {
+        let registry = RunRegistry::default();
+        let runtime_thread = std::thread::current().id();
+        let (started, reading) = tokio::sync::oneshot::channel();
+        let started = Mutex::new(Some(started));
+        let (release, blocked) = std::sync::mpsc::channel();
+        let blocked = Mutex::new(blocked);
+        let run = spawn_worker(
+            &registry,
+            EventHub::new(),
+            action("A"),
+            vec![],
+            |_| Ok(record("tx", TransactionState::Recorded)),
+            move |_| {
+                assert_ne!(std::thread::current().id(), runtime_thread);
+                if let Some(started) = started.lock().unwrap().take() {
+                    started.send(()).unwrap();
+                }
+                blocked
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(2))
+                    .map_err(|err| anyhow::anyhow!("read was not released: {err}"))?;
+                Ok(record("tx", TransactionState::Landed))
+            },
+        );
+        tokio::time::timeout(Duration::from_secs(1), reading)
+            .await
+            .unwrap()
+            .unwrap();
+        release.send(()).unwrap();
+        assert_eq!(
+            wait_terminal(&registry, &run).await.status,
+            RunStatus::Succeeded
+        );
+    }
+
+    #[test]
+    fn stage_intervals_separate_mining_and_resumed_building() {
+        let entry = RunEntry::new("r1".into(), action("A"), vec![], 0);
+        let mut inner = entry.inner.lock().unwrap();
+        let start = Instant::now();
+        inner.begin_stage(ExecutionStage::Building, start, 100);
+        inner.begin_stage(
+            ExecutionStage::Mining,
+            start + Duration::from_millis(20),
+            120,
+        );
+        inner.begin_stage(
+            ExecutionStage::Mining,
+            start + Duration::from_millis(30),
+            130,
+        );
+        let active = inner.timings_at(start + Duration::from_millis(60));
+        assert_eq!(active.len(), 2);
+        assert_eq!(active[0].elapsed_ms, 20);
+        assert_eq!(active[1].elapsed_ms, 40);
+        assert_eq!(active[1].status, ProofProgressStatus::Running);
+        inner.begin_stage(
+            ExecutionStage::Building,
+            start + Duration::from_millis(70),
+            170,
+        );
+        inner.finish_stage(
+            ProofProgressStatus::Done,
+            start + Duration::from_millis(100),
+        );
+        let finished = inner.timings_at(start + Duration::from_secs(100));
+        assert_eq!(
+            finished
+                .iter()
+                .map(|timing| timing.elapsed_ms)
+                .collect::<Vec<_>>(),
+            [20, 50, 30]
+        );
+        assert!(
+            finished
+                .iter()
+                .all(|timing| timing.status == ProofProgressStatus::Done)
+        );
+        assert_eq!(
+            finished
+                .iter()
+                .map(|timing| timing.stage)
+                .collect::<Vec<_>>(),
+            [
+                ExecutionStage::Building,
+                ExecutionStage::Mining,
+                ExecutionStage::Building
+            ]
+        );
+    }
+
+    #[test]
+    fn stage_progress_is_shared_by_broadcast_snapshots_and_replay() {
+        let entry = Arc::new(RunEntry::new("r1".into(), action("A"), vec![], 0));
+        let events = EventHub::new();
+        let mut receiver = events.subscribe();
+        let reporter = RunReporter::new(events, entry.clone());
+        reporter.on_step(
+            ExecutionPhase::GenerateProof,
+            ExecutionStage::Proving.message(),
+            &ExecutionStepContext {
+                stage: Some(ExecutionStage::Proving),
+                ..Default::default()
+            },
+        );
+        let Event::RunActionProgress(broadcast) = receiver.try_recv().unwrap().event else {
+            panic!("expected run progress");
+        };
+        let snapshot = entry.snapshot();
+        assert_eq!(snapshot.progress[0], broadcast);
+        assert_eq!(snapshot.progress[0], entry.events_from(0).0[0].1);
+        assert_eq!(snapshot.stage_timings[0].stage, ExecutionStage::Proving);
+        assert_eq!(
+            snapshot.stage_timings[0].status,
+            ProofProgressStatus::Running
+        );
+        assert!(snapshot.elapsed_ms >= broadcast.elapsed_ms);
+        reporter.finish_failure("prover failed".into());
+        let failed = entry.snapshot();
+        assert_eq!(
+            failed.progress.last().unwrap().stage,
+            Some(ExecutionStage::Proving)
+        );
+        assert_eq!(failed.stage_timings[0].status, ProofProgressStatus::Failed);
+        assert_eq!(entry.snapshot(), failed);
+        assert!(entry.inner.lock().unwrap().stage_started.is_none());
+    }
+
+    #[test]
+    fn transaction_progress_preserves_the_record_root_and_state() {
+        let registry = RunRegistry::default();
+        let entry = start(&registry, "run");
+        let reporter = RunReporter::new(EventHub::new(), entry.clone());
+        for (state, expected) in [
+            (TransactionState::Recorded, ObjectStatus::Unknown),
+            (TransactionState::Submitted, ObjectStatus::Pending),
+            (TransactionState::Landed, ObjectStatus::Live),
+            (TransactionState::Expired, ObjectStatus::Unknown),
+        ] {
+            let record = record("tx-1", state);
+            reporter.transaction_progress(
+                &record,
+                ProofProgressStatus::Running,
+                "Transaction updated",
+                None,
+            );
+            let snapshot = entry.snapshot();
+            let progress = snapshot.progress.last().unwrap();
+            assert_eq!(
+                progress.old_root.as_deref(),
+                Some(record.grounding_root.as_str())
+            );
+            assert_eq!(progress.output_status, Some(expected));
+            assert_eq!(progress.output_files.as_ref(), Some(&record.output_files));
+            assert_eq!(progress.input_files.as_ref(), Some(&record.input_files));
+        }
     }
 
     #[tokio::test]
-    async fn concurrent_runs_are_rejected_through_synchronizer_wait() {
-        let registry = RunRegistry::new();
-        let (events, _receiver) = crate::events::channel();
+    async fn runs_prove_concurrently_and_follow_their_own_transaction() {
+        let registry = RunRegistry::default();
+        let events = EventHub::new();
         let (first_started, first_start) = tokio::sync::oneshot::channel();
-        let (confirm, confirmed) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
         let first = spawn_worker(
             &registry,
             events.clone(),
             action("first"),
-            Vec::new(),
+            vec!["in.dobj".to_string()],
             move |reporter| {
                 reporter.on_step(
-                    ExecutionPhase::Commit,
-                    "Waiting for synchronizer",
+                    ExecutionPhase::GenerateProof,
+                    "Generating proof",
                     &Default::default(),
                 );
                 first_started.send(()).unwrap();
-                confirmed.recv_timeout(Duration::from_secs(5)).unwrap();
-                Ok(execution_result())
+                released.recv_timeout(Duration::from_secs(5)).unwrap();
+                reporter.commit_step("Waiting for the transaction to land", &Default::default());
+                Ok(record("tx-1", TransactionState::Submitted))
             },
-        )
-        .unwrap();
-        let rejected = spawn_worker(
-            &registry.clone(),
-            events.clone(),
-            action("early"),
-            Vec::new(),
-            |_| {
-                panic!("rejected action must not execute");
-            },
-        )
-        .unwrap_err();
-        assert!(matches!(
-            rejected.downcast_ref::<driver::DriverError>(),
-            Some(driver::DriverError::Conflict(_))
-        ));
+            still_open,
+        );
         tokio::time::timeout(Duration::from_secs(5), first_start)
             .await
             .unwrap()
             .unwrap();
 
-        let rejected = spawn_worker(
-            &registry.clone(),
+        let second = spawn_worker(
+            &registry,
             events.clone(),
             action("second"),
             Vec::new(),
-            |_| {
-                panic!("rejected action must not execute");
+            |reporter| {
+                reporter.commit_step("Waiting for the transaction to land", &Default::default());
+                Ok(record("tx-2", TransactionState::Submitted))
             },
-        )
-        .unwrap_err();
-        assert!(matches!(
-            rejected.downcast_ref::<driver::DriverError>(),
-            Some(driver::DriverError::Conflict(_))
-        ));
+            still_open,
+        );
+        wait_status(&registry, &second, RunStatus::Committing).await;
         assert_eq!(
-            axum::response::IntoResponse::into_response(crate::error::ApiError::from(rejected))
-                .status(),
-            axum::http::StatusCode::CONFLICT
+            registry.get(&first.run_id).unwrap().status(),
+            RunStatus::GenerateProof
+        );
+
+        release.send(()).unwrap();
+        wait_status(&registry, &first, RunStatus::Committing).await;
+        events.publish(Event::Transaction(record("tx-2", TransactionState::Landed)));
+        assert_eq!(
+            wait_terminal(&registry, &second).await.status,
+            RunStatus::Succeeded
         );
         assert_eq!(
             registry.get(&first.run_id).unwrap().status(),
             RunStatus::Committing
         );
-        assert_eq!(registry.runs.read().unwrap().len(), 1);
 
-        confirm.send(()).unwrap();
-        assert_eq!(
-            wait_terminal(&registry, &first).await.status,
-            RunStatus::Succeeded
+        events.publish(Event::Transaction(record("tx-1", TransactionState::Landed)));
+        let landed = wait_terminal(&registry, &first).await;
+        assert_eq!(landed.status, RunStatus::Succeeded);
+        let result = landed.result.unwrap();
+        assert_eq!(result.run_id, first.run_id);
+        assert_eq!(result.output_files, vec!["out.dobj".to_string()]);
+        assert_eq!(result.input_files, vec!["in.dobj".to_string()]);
+        assert_eq!(result.old_root, "0xroot");
+        let last = landed.progress.last().unwrap();
+        assert_eq!(last.status, ProofProgressStatus::Done);
+        assert_eq!(last.output_status, Some(ObjectStatus::Live));
+    }
+
+    #[tokio::test]
+    async fn a_run_reports_a_relayer_failure_once_and_keeps_following() {
+        let registry = RunRegistry::default();
+        let events = EventHub::new();
+        let run = spawn_worker(
+            &registry,
+            events.clone(),
+            action("failing"),
+            Vec::new(),
+            |reporter| {
+                reporter.commit_step("Waiting", &Default::default());
+                Ok(record("tx-1", TransactionState::Submitted))
+            },
+            still_open,
         );
-        let second = spawn_worker(&registry, events, action("second"), Vec::new(), |_| {
-            Ok(execution_result())
-        })
-        .unwrap();
+        wait_status(&registry, &run, RunStatus::Committing).await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let mut failed = record("tx-1", TransactionState::Submitted);
+        failed.relayer_job_id = Some("job-1".to_string());
+        failed.relayer_failure = Some("nonce too low".to_string());
+        events.publish(Event::Transaction(failed.clone()));
+        events.publish(Event::Transaction(failed));
+        events.publish(Event::Transaction(record("tx-1", TransactionState::Landed)));
+        let state = wait_terminal(&registry, &run).await;
+        assert_eq!(state.status, RunStatus::Succeeded);
+        let reports = state
+            .progress
+            .iter()
+            .filter(|progress| progress.message.contains("job-1 failed: nonce too low"))
+            .count();
+        assert_eq!(reports, 1);
+    }
+
+    #[tokio::test]
+    async fn a_run_fails_when_its_transaction_expires_or_disappears() {
+        let registry = RunRegistry::default();
+        let events = EventHub::new();
+        let expired = spawn_worker(
+            &registry,
+            events.clone(),
+            action("expiring"),
+            Vec::new(),
+            |reporter| {
+                reporter.commit_step("Waiting", &Default::default());
+                Ok(record("tx-1", TransactionState::Submitted))
+            },
+            still_open,
+        );
+        wait_status(&registry, &expired, RunStatus::Committing).await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        events.publish(Event::Transaction(record(
+            "tx-1",
+            TransactionState::Expired,
+        )));
+        let state = wait_terminal(&registry, &expired).await;
+        assert_eq!(state.status, RunStatus::Failed);
+        assert!(state.error.unwrap().contains("aged out"));
+
+        let deleted = spawn_worker(
+            &registry,
+            events.clone(),
+            action("deleted"),
+            Vec::new(),
+            |reporter| {
+                reporter.commit_step("Waiting", &Default::default());
+                Ok(record("tx-2", TransactionState::Recorded))
+            },
+            still_open,
+        );
+        wait_status(&registry, &deleted, RunStatus::Committing).await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        events.publish(Event::TransactionDeleted {
+            tx_final: "tx-2".to_string(),
+        });
+        let state = wait_terminal(&registry, &deleted).await;
+        assert_eq!(state.status, RunStatus::Failed);
+        assert!(state.error.unwrap().contains("deleted"));
+
+        let landed = spawn_worker(
+            &registry,
+            events,
+            action("landed"),
+            Vec::new(),
+            |_| Ok(record("tx-3", TransactionState::Submitted)),
+            |tx_final| Ok(record(tx_final, TransactionState::Landed)),
+        );
         assert_eq!(
-            wait_terminal(&registry, &second).await.status,
+            wait_terminal(&registry, &landed).await.status,
             RunStatus::Succeeded
         );
     }
 
     #[tokio::test]
-    async fn errors_and_panics_release_the_execution_gate() {
-        let registry = RunRegistry::new();
-        let (events, _receiver) = crate::events::channel();
-        let timed_out = spawn_worker(
+    async fn worker_errors_and_panics_fail_the_run() {
+        let registry = RunRegistry::default();
+        let events = EventHub::new();
+        let refused = spawn_worker(
             &registry,
             events.clone(),
-            action("timeout"),
+            action("refused"),
             Vec::new(),
-            |_| Err(anyhow::anyhow!("synchronizer timeout")),
-        )
-        .unwrap();
+            |_| Err(anyhow::anyhow!("input is held by another run")),
+            still_open,
+        );
         assert_eq!(
-            wait_terminal(&registry, &timed_out).await.error.as_deref(),
-            Some("synchronizer timeout")
+            wait_terminal(&registry, &refused).await.error.as_deref(),
+            Some("input is held by another run")
         );
         let panicked = spawn_worker(
             &registry,
             events.clone(),
             action("panic"),
             Vec::new(),
-            |_| {
+            |reporter| {
+                reporter.on_step(
+                    ExecutionPhase::GenerateProof,
+                    ExecutionStage::Proving.message(),
+                    &ExecutionStepContext {
+                        stage: Some(ExecutionStage::Proving),
+                        ..Default::default()
+                    },
+                );
                 panic!("worker panic");
             },
-        )
-        .unwrap();
+            still_open,
+        );
         let state = wait_terminal(&registry, &panicked).await;
         assert_eq!(state.status, RunStatus::Failed);
+        assert_eq!(state.stage_timings[0].stage, ExecutionStage::Proving);
+        assert_eq!(state.stage_timings[0].status, ProofProgressStatus::Failed);
+        assert_eq!(registry.get(&panicked.run_id).unwrap().snapshot(), state);
         assert!(state.error.unwrap().contains("worker panic"));
-        let next = spawn_worker(&registry, events, action("next"), Vec::new(), |_| {
-            Ok(execution_result())
-        })
-        .unwrap();
-        assert_eq!(
-            wait_terminal(&registry, &next).await.status,
-            RunStatus::Succeeded
-        );
     }
 
     #[test]
-    fn progress_advances_status_and_indexes_events() {
-        let entry = RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0);
-        assert_eq!(entry.status(), RunStatus::Queued);
+    fn run_lifecycle_preserves_inputs_timestamps_and_replay() {
+        let inputs = vec!["a.dobj".to_string(), "b.dobj".to_string()];
+        let entry = RunEntry::new("r1".to_string(), action("A"), inputs.clone(), 0);
+        let queued = entry.snapshot();
+        assert_eq!(queued.status, RunStatus::Queued);
+        assert_eq!(queued.input_object_paths, inputs);
+        assert!(queued.created_at_ms > 0);
+        assert_eq!(queued.started_at_ms, None);
+        assert_eq!(queued.finished_at_ms, None);
 
-        entry.push_progress(step(
+        let mut first = step(
             ExecutionPhase::GenerateProof,
             ProofProgressStatus::Running,
             "gen",
-        ));
+        );
+        first.stage = Some(ExecutionStage::Proving);
+        let first_at_ms = first.at_ms;
+        entry.push_progress(first);
         assert_eq!(entry.status(), RunStatus::GenerateProof);
-        entry.push_progress(step(
+        let mut committing = step(
             ExecutionPhase::Commit,
             ProofProgressStatus::Running,
             "commit",
-        ));
-        assert_eq!(entry.status(), RunStatus::Committing);
+        );
+        committing.at_ms = first_at_ms + 1;
+        committing.stage = Some(ExecutionStage::AwaitingSynchronization);
+        entry.push_progress(committing);
+        let running = entry.snapshot();
+        assert_eq!(running.status, RunStatus::Committing);
+        assert_eq!(running.started_at_ms, Some(first_at_ms));
+        assert_eq!(running.finished_at_ms, None);
 
         let (all, terminal) = entry.events_from(0);
         assert_eq!(
@@ -697,32 +1266,27 @@ mod tests {
             [0, 1]
         );
         assert!(!terminal);
-
-        // Replay from index 1 yields only the later event -- the Last-Event-ID
-        // resume semantics the SSE stream depends on.
         let (tail, _) = entry.events_from(1);
         assert_eq!(tail.len(), 1);
         assert_eq!(tail[0].0, 1);
         assert_eq!(tail[0].1.message, "commit");
-    }
 
-    #[test]
-    fn succeed_is_terminal() {
-        let entry = RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0);
-        entry.push_progress(step(
-            ExecutionPhase::GenerateProof,
-            ProofProgressStatus::Running,
-            "gen",
-        ));
         entry.succeed(ok_result());
-
-        let snapshot = entry.snapshot();
-        assert_eq!(snapshot.status, RunStatus::Succeeded);
-        assert_eq!(snapshot.result.unwrap().new_root, "0xnew");
-        assert!(snapshot.error.is_none());
-        assert_eq!(snapshot.progress.len(), 1);
-        let (_, terminal) = entry.events_from(0);
-        assert!(terminal);
+        let finished = entry.snapshot();
+        assert_eq!(finished.status, RunStatus::Succeeded);
+        assert_eq!(entry.snapshot(), finished);
+        assert_eq!(finished.stage_timings.len(), 2);
+        assert!(
+            finished
+                .stage_timings
+                .iter()
+                .all(|timing| timing.status == ProofProgressStatus::Done)
+        );
+        assert_eq!(finished.result, Some(ok_result()));
+        assert!(finished.error.is_none());
+        assert_eq!(finished.progress, running.progress);
+        assert!(finished.finished_at_ms.unwrap() >= first_at_ms);
+        assert!(entry.events_from(0).1);
     }
 
     #[test]
@@ -747,6 +1311,8 @@ mod tests {
         let snapshot = entry.snapshot();
         assert_eq!(snapshot.status, RunStatus::Failed);
         assert_eq!(snapshot.error.as_deref(), Some("boom"));
+        assert_eq!(snapshot.started_at_ms, Some(event.at_ms));
+        assert_eq!(snapshot.finished_at_ms, Some(event.at_ms));
         // The terminal failure event is appended so SSE subscribers see it.
         assert_eq!(snapshot.progress.len(), 1);
         assert_eq!(snapshot.progress[0].status, ProofProgressStatus::Failed);
@@ -787,78 +1353,26 @@ mod tests {
     }
 
     #[test]
-    fn expired_only_after_terminal() {
-        let entry = RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0);
-        // In-flight runs are never reaped, even at zero TTL.
-        assert!(!entry.expired(Duration::from_secs(0)));
-        entry.succeed(ok_result());
-        // Terminal + elapsed TTL => reapable; terminal within TTL => retained.
-        assert!(entry.expired(Duration::from_secs(0)));
-        assert!(!entry.expired(Duration::from_secs(3600)));
-    }
-
-    #[test]
-    fn reaper_keeps_in_flight_and_recent_terminal_runs() {
-        let registry = RunRegistry::new();
-        let _live = registry.start("live".to_string(), action("A"), Vec::new());
-        let done = registry.start("done".to_string(), action("A"), Vec::new());
-        done.succeed(ok_result());
-        // RUN_RETENTION has not elapsed, so nothing is dropped yet.
-        registry.reap();
-        assert!(registry.get("live").is_some());
-        assert!(registry.get("done").is_some());
-    }
-
-    #[test]
-    fn timestamps_follow_the_run_lifecycle() {
-        let entry = RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0);
-        let queued = entry.snapshot();
-        assert!(queued.created_at_ms > 0);
-        assert_eq!(queued.started_at_ms, None);
-        assert_eq!(queued.finished_at_ms, None);
-
-        let first = step(
-            ExecutionPhase::GenerateProof,
-            ProofProgressStatus::Running,
-            "gen",
-        );
-        let first_at_ms = first.at_ms;
-        entry.push_progress(first);
-        entry.push_progress(step(
-            ExecutionPhase::Commit,
-            ProofProgressStatus::Running,
-            "commit",
-        ));
-        let running = entry.snapshot();
-        assert_eq!(running.started_at_ms, Some(first_at_ms));
-        assert_eq!(running.finished_at_ms, None);
-
-        entry.succeed(ok_result());
-        let finished = entry.snapshot().finished_at_ms.unwrap();
-        assert!(finished >= first_at_ms);
-    }
-
-    #[test]
-    fn failure_records_finish_time_even_when_queued() {
-        let entry = RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0);
-        let event = entry.fail("boom".to_string());
-        let snapshot = entry.snapshot();
-        assert_eq!(snapshot.started_at_ms, Some(event.at_ms));
-        assert_eq!(snapshot.finished_at_ms, Some(event.at_ms));
-    }
-
-    #[test]
-    fn snapshot_reports_input_paths() {
-        let inputs = vec!["a.dobj".to_string(), "b.dobj".to_string()];
-        let entry = RunEntry::new("r1".to_string(), action("A"), inputs.clone(), 0);
-        assert_eq!(entry.snapshot().input_object_paths, inputs);
+    fn reaper_keeps_active_runs_and_retains_terminal_runs_until_expired() {
+        let registry = RunRegistry::default();
+        start(&registry, "active");
+        start(&registry, "succeeded").succeed(ok_result());
+        start(&registry, "failed").fail("stopped".to_string());
+        registry.entries.reap(crate::registry::RETENTION);
+        for id in ["active", "succeeded", "failed"] {
+            assert!(registry.get(id).is_some());
+        }
+        registry.entries.reap(Duration::ZERO);
+        assert!(registry.get("active").is_some());
+        assert!(registry.get("succeeded").is_none());
+        assert!(registry.get("failed").is_none());
     }
 
     #[test]
     fn list_is_oldest_first_and_can_keep_only_active_runs() {
-        let registry = RunRegistry::new();
+        let registry = RunRegistry::default();
         for run_id in ["first", "second", "third"] {
-            registry.start(run_id.to_string(), action("A"), Vec::new());
+            start(&registry, run_id);
         }
         registry.get("second").unwrap().succeed(ok_result());
 
@@ -869,147 +1383,45 @@ mod tests {
         assert_eq!(run_ids(registry.list(true)), ["first", "third"]);
     }
 
-    fn object(file_name: &str) -> ObjectSummary {
-        ObjectSummary {
-            content_hash: String::new(),
-            file_name: file_name.to_string(),
-            file_size: None,
-            class: action("Thing"),
-            class_hash: String::new(),
-            emoji: String::new(),
-            status: ObjectStatus::Live,
-            tx_hash: None,
-            description: None,
-            fields: HashMap::new(),
-            held_by_run_id: None,
-        }
-    }
-
     #[test]
-    fn inputs_are_held_only_while_their_run_is_in_flight() {
-        let registry = RunRegistry::new();
-        let running = registry.start(
-            "running".to_string(),
-            action("A"),
-            vec![
-                "/elsewhere/held.dobj".to_string(),
-                "also-held.dobj".to_string(),
-            ],
-        );
-        let done = registry.start(
-            "done".to_string(),
-            action("A"),
-            vec!["released.dobj".to_string()],
-        );
-        done.succeed(ok_result());
-
-        let held = registry.held_input_run_ids();
-        assert_eq!(held.get("held.dobj").map(String::as_str), Some("running"));
-        assert_eq!(
-            held.get("also-held.dobj").map(String::as_str),
-            Some("running")
-        );
-        assert!(!held.contains_key("released.dobj"));
-
-        running.fail("boom".to_string());
-        assert!(registry.held_input_run_ids().is_empty());
-    }
-
-    #[test]
-    fn a_file_given_to_two_runs_is_held_by_the_older() {
-        let registry = RunRegistry::new();
-        for run_id in ["older", "newer"] {
-            registry.start(
-                run_id.to_string(),
-                action("A"),
-                vec!["shared.dobj".to_string()],
+    fn reporter_broadcasts_the_retained_progress_for_success_and_failure() {
+        for failed in [false, true] {
+            let events = EventHub::new();
+            let mut rx = events.subscribe();
+            let entry = Arc::new(RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0));
+            let reporter = RunReporter::new(events, entry.clone());
+            reporter.on_step(ExecutionPhase::GenerateProof, "gen", &Default::default());
+            reporter.on_done(ExecutionPhase::GenerateProof);
+            reporter.on_step(ExecutionPhase::Commit, "commit", &Default::default());
+            if failed {
+                reporter.finish_failure("kaboom".to_string());
+            } else {
+                reporter.finish_landed(&record("tx-1", TransactionState::Landed));
+            }
+            let progress = entry.snapshot().progress;
+            assert_eq!(
+                progress
+                    .iter()
+                    .map(|event| event.status)
+                    .collect::<Vec<_>>(),
+                [
+                    ProofProgressStatus::Running,
+                    ProofProgressStatus::Done,
+                    ProofProgressStatus::Running,
+                    if failed {
+                        ProofProgressStatus::Failed
+                    } else {
+                        ProofProgressStatus::Done
+                    },
+                ]
             );
+            for retained in progress {
+                let Event::RunActionProgress(broadcast) = rx.try_recv().unwrap().event else {
+                    panic!("expected run progress");
+                };
+                assert_eq!(broadcast, retained);
+            }
+            assert!(rx.try_recv().is_err());
         }
-        assert_eq!(
-            registry
-                .held_input_run_ids()
-                .get("shared.dobj")
-                .map(String::as_str),
-            Some("older")
-        );
-    }
-
-    #[test]
-    fn fill_sets_and_clears_held_by_run_id_without_touching_status() {
-        let registry = RunRegistry::new();
-        registry.start(
-            "running".to_string(),
-            action("A"),
-            vec!["held.dobj".to_string()],
-        );
-        let mut stale = object("idle.dobj");
-        stale.held_by_run_id = Some("long-gone".to_string());
-        let mut objects = vec![object("held.dobj"), stale];
-        registry.fill_held_by_run_ids(&mut objects);
-
-        assert_eq!(objects[0].held_by_run_id.as_deref(), Some("running"));
-        assert_eq!(objects[1].held_by_run_id, None);
-        assert!(
-            objects
-                .iter()
-                .all(|object| object.status == ObjectStatus::Live)
-        );
-    }
-
-    #[test]
-    fn reporter_drives_entry_through_lifecycle() {
-        let (events, _rx) = crate::events::channel();
-        let entry = Arc::new(RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0));
-        let reporter = RunReporter::new(events, entry.clone(), "r1".to_string());
-
-        let ctx = ExecutionStepContext::default();
-        reporter.on_step(ExecutionPhase::GenerateProof, "gen", &ctx);
-        assert_eq!(entry.status(), RunStatus::GenerateProof);
-        reporter.on_step(ExecutionPhase::Commit, "commit", &ctx);
-        assert_eq!(entry.status(), RunStatus::Committing);
-
-        let old_root = payload::decode_hash_hex(
-            "0000000000000000000000000000000000000000000000000000000000000001",
-        )
-        .unwrap();
-        let new_root = payload::decode_hash_hex(
-            "0000000000000000000000000000000000000000000000000000000000000002",
-        )
-        .unwrap();
-        reporter.finish_success(&ExecuteActionResult {
-            old_root,
-            new_root,
-            output_files: vec!["o.dobj".to_string()],
-            nullified_files: vec!["n.dobj".to_string()],
-            relayer_job_id: "job".to_string(),
-            tx_hash: Some("0xtx".to_string()),
-            block_number: Some(1),
-        });
-
-        let snapshot = entry.snapshot();
-        assert_eq!(snapshot.status, RunStatus::Succeeded);
-        let result = snapshot.result.unwrap();
-        assert_eq!(result.run_id, "r1");
-        assert_eq!(result.new_root, payload::encode_hash_hex(&new_root));
-        assert_eq!(result.nullified_files, vec!["n.dobj".to_string()]);
-    }
-
-    #[test]
-    fn reporter_failure_is_terminal_and_logged() {
-        let (events, _rx) = crate::events::channel();
-        let entry = Arc::new(RunEntry::new("r1".to_string(), action("A"), Vec::new(), 0));
-        let reporter = RunReporter::new(events, entry.clone(), "r1".to_string());
-
-        reporter.finish_failure("kaboom".to_string());
-
-        let snapshot = entry.snapshot();
-        assert_eq!(snapshot.status, RunStatus::Failed);
-        assert_eq!(snapshot.error.as_deref(), Some("kaboom"));
-        assert!(
-            snapshot
-                .progress
-                .iter()
-                .any(|event| event.status == ProofProgressStatus::Failed)
-        );
     }
 }

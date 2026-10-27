@@ -6,23 +6,7 @@ For the desktop app, run `just bitcraft-dev` from the repository root. It prepar
 
 For standalone browser development, serve this directory with `python3 -m http.server 4170 --bind 127.0.0.1 --directory apps/bitcraft/ui` and open `http://127.0.0.1:4170`. Without the daemon-injected API origin, the page connects to the standalone Digital Objects daemon at `http://127.0.0.1:7717` (MCP uses `7718` when enabled). See [the desktop README](../README.md) for build and bundle commands.
 
-The main window always shows the inventory (the files view). Its top bar
-has three groups of icons, separated by thin dividers, and at its right end
-the inventory's value, read like a balance ("Total Inventory Value:", the Bit
-icon and "N.NNN BIT"),
-which opens the Inventory Summary. The window title repeats the amount:
-"Bitcraft (N.NNN BIT)". The game
-views: a
-folder, permanently selected, for the files view; a bar chart that opens
-the Inventory Summary; and an open book that opens Recipe Info. The outside
-links: an info icon and a Discord icon, which open the Bitcraft website
-and its Discord server in the player's browser. Last, a gear that opens
-Settings. Their tooltips read Objects, Stats, Reference, More Info, Discord
-and Settings; they are drawn by the page's CSS (`data-tooltip`), not native
-`title` tooltips, so they appear without the system's hover delay. Recipe Info, the Inventory Summary and
-Settings each open their window once, and a later click focuses it. These
-windows load this same page in a mode of their own and run none of the
-main window's startup.
+The main window always shows the inventory (the files view). Its top bar has four groups of controls, separated by thin dividers, and at its right end the inventory's value, read like a balance ("Total Inventory Value:", the Bit icon and "N.NNN BIT"), which opens the Inventory Summary. The window title repeats the amount: "Bitcraft (N.NNN BIT)". The game views: a folder, permanently selected, for the files view; a bar chart that opens the Inventory Summary; and an open book that opens Recipe Info. The outside links: an info icon and a Discord icon, which open the Bitcraft website and its Discord server in the player's browser. Desktop agent buttons use monochrome Claude and ChatGPT/OpenAI logo marks, with accessible names and tooltips. They open Claude Code or Codex with the game's home directory and a player prompt; these controls are hidden in a standalone browser. The host handles their `bitcraft://agent/claude` and `bitcraft://agent/codex` requests, constructing the external deep links from its own installation and game home paths. The app and tray menus also offer "Play with agents...", a native guide window backed by `shell/agent.html`. It shares the startup shell's base styling and shows the same player prompt as the deep links, with copy controls; installation paths are included in the prompt. Missing URL handlers and launch errors open this guide with an explanatory message on macOS, Windows and Linux. Last, a gear opens Settings. Toolbar tooltips are drawn by the page's CSS (`data-tooltip`), so they appear without the system's hover delay. Recipe Info, the Inventory Summary and Settings each open their window once, and a later click focuses it. These windows load this same page in a mode of their own and run none of the main window's startup.
 
 "View raw", Open and a double-click on a row open `?page=raw&file=NAME`, a
 window that shows the file's stored text (an object's from dobjd's
@@ -34,6 +18,8 @@ webview shows a bare JSON response in the system's dark theme, and makes its
 text selectable, since the desktop app turns selection off on every page
 and the windows it opens inherit that.
 
+The outer page fills the window with scrolling and overscroll disabled, including on the desktop startup screen. Scrollable content stays within its inventory, jobs, details or secondary-view panel.
+
 Settings (`?page=settings`) shows the synchronizer and relayer addresses
 from dobjd's `GET /settings` in read-only fields; they cannot be edited yet.
 
@@ -43,13 +29,11 @@ the daemon open as app windows; links to a site listed in the host's
 browser instead; anything else is blocked. A new external link from the
 page needs its host added there.
 
-The Inventory Summary (`?page=summary`) is laid out like Finder's Get Info
-window: the inventory's Total Inventory Value beside an icon, then an
-"Objects (N)" section, N being the live bitcraft objects it lists, with a
-count and a summed value per class, which can be collapsed. It refreshes on every job event from
-dobjd's `/events` stream, when that stream reconnects, and on window focus.
-It polls every 10 seconds only while some object is pending or unknown,
-since those settle when the inventory is read, without an event.
+The Inventory Summary (`?page=summary`) is laid out like Finder's Get Info window: the inventory's Total Inventory Value beside an icon, then an "Objects (N)" section, N being the live bitcraft objects it lists, with a count and a summed value per class, which can be collapsed. Both inventory views apply `object` and `object-removed` events from dobjd's `/events` stream, including changes made by other clients. They read inventory and transaction snapshots on load, stream connection or reconnection, sequence gaps, and window focus. Changes received during a snapshot read are reapplied to its result. Recorded transactions settle in the daemon and need no UI polling; pending or unknown objects with no open local transaction record are reconciled every 10 seconds.
+
+Actions using independent inputs can run concurrently, including actions with no inputs. Selected inputs must be live and unheld. The page reserves inputs while the start request is pending and until the action finishes; daemon holds also cover work started in another window or client.
+
+Jobs discovers work from every client through `/events`. A run, proof job and transaction describing the same action share one row, linked by run/proof-job IDs, transaction ownership and `txFinal`. Recipe names and shared owner labels do not group independent actions. Run-backed jobs retain their replayable run stream; separately proved actions show "Ready to submit" until submission and remain active through settlement. Details include proof/transaction IDs, input and output paths, status, errors and available progress. Retained runs and proof jobs are read on load, stream open/reopen, sequence gaps and window focus. Open transaction records recover activity after a daemon restart. Historical transactions without retained activity are left out of Jobs. An unfinished proof lost on restart shows an error unless its transaction survived; that transaction continues through settlement. Inventory is not re-read for each progress event. Completed transaction receipts are pruned after ten minutes; `transaction-pruned` removes them from the inventory's transaction snapshot without changing completed Jobs to failures.
 
 Recipe Info is loaded as
 `?page=recipebook`: it shows only a list of classes, then actions, with the

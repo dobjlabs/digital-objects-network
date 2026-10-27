@@ -1,21 +1,18 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use futures_util::StreamExt;
 use reqwest_eventsource::{Event as SseEvent, EventSource};
 use serde_json::Value;
-use tokio::time::sleep;
 
-use crate::client::DobjdClient;
+use crate::client::{DobjdClient, SLOW_REQUEST_TIMEOUT};
+use wire_types::transactions::TransactionRecord;
 use wire_types::{
-    ActionArgValues, ActionSummary, CheckActionReport, ClassRef, ClassSummary, DriverSettings,
-    ImportObjectRequest, ObjectSummary, ObjectsDirInfo, QualifiedName, RunAccepted, RunActionInput,
-    RunActionRequest, RunState, RunStatus,
+    ActionArgValues, ActionInput, ActionSummary, CheckActionReport, ClassRef, ClassSummary,
+    DriverSettings, ImportObjectRequest, ObjectSummary, ObjectsDirInfo, ProofJobState,
+    QualifiedName, RunAccepted, StartRunRequest, SubmitTransactionsRequest,
 };
-
-const MAX_CONSECUTIVE_RUN_POLL_ERRORS: usize = 5;
 
 fn parse_qualified(id: &str) -> Result<QualifiedName> {
     QualifiedName::parse(id).map_err(|err| anyhow!("{err}"))
@@ -42,7 +39,10 @@ fn render_outputs(refs: &[ClassRef]) -> String {
 }
 
 pub async fn objects(client: &DobjdClient, json: bool) -> Result<()> {
-    let objects: Vec<ObjectSummary> = client.get_json("/objects").await?;
+    let objects: Vec<ObjectSummary> = client
+        .with_timeout(SLOW_REQUEST_TIMEOUT)
+        .get_json("/objects")
+        .await?;
     if json {
         println!(
             "{}",
@@ -52,6 +52,7 @@ pub async fn objects(client: &DobjdClient, json: bool) -> Result<()> {
                     .map(|o| serde_json::json!({
                         "contentHash": o.content_hash, "fileName": o.file_name, "class": o.class,
                         "status": o.status, "txHash": o.tx_hash,
+                        "fields": o.fields, "heldByRunId": o.held_by_run_id,
                     }))
                     .collect::<Vec<_>>()
             )?
@@ -65,11 +66,12 @@ pub async fn objects(client: &DobjdClient, json: bool) -> Result<()> {
     }
     for obj in &objects {
         println!(
-            "[{:<10}] {} {:<28} content_hash={}",
+            "[{:<10}] {} {:<28} content_hash={} file={}",
             obj.status,
             obj.emoji,
             obj.class,
             short_hex(&obj.content_hash),
+            obj.file_name,
         );
     }
     Ok(())
@@ -89,6 +91,8 @@ pub async fn actions(client: &DobjdClient, json: bool) -> Result<()> {
                         "action": a.action,
                         "description": a.description,
                         "totalInputs": a.total_inputs.iter().map(|r| &r.class).collect::<Vec<_>>(),
+                        "totalOutputs": a.total_outputs.iter().map(|r| &r.class).collect::<Vec<_>>(),
+                        "args": a.args, "mutatedObjects": a.mutated_objects,
                     }))
                     .collect::<Vec<_>>()
             )?
@@ -191,6 +195,7 @@ pub async fn run(
     input_paths: Vec<String>,
     raw_args: Vec<String>,
     quiet: bool,
+    json: bool,
 ) -> Result<()> {
     let action = parse_qualified(&action_id)?;
 
@@ -200,9 +205,9 @@ pub async fn run(
     // background worker, and returns the run handle immediately.
     let accepted: RunAccepted = client
         .post_json(
-            "/actions/run",
-            &RunActionRequest {
-                input: RunActionInput {
+            "/runs",
+            &StartRunRequest {
+                input: ActionInput {
                     action: action.clone(),
                     input_object_paths: input_paths,
                     args,
@@ -215,85 +220,215 @@ pub async fn run(
         eprintln!("run id:   {run_id}");
     }
 
-    // Follow progress over the run's own SSE stream. `EventSource` reconnects
-    // on a dropped connection, resending the last event id it saw, and the
-    // endpoint replays from there — so a hiccup mid-run just resumes where it
-    // left off. We stop at the first terminal event; the authoritative outcome
-    // is read below either way.
-    let events_url = format!("{}/actions/runs/{}/events", client.base_url(), run_id);
-    let mut es = EventSource::get(&events_url);
-    // Bound consecutive reconnect failures so a genuinely-down daemon falls
-    // through to the poll (which surfaces the error) instead of retrying
-    // forever. A successful (re)connect resets the count.
-    const MAX_RECONNECTS: u32 = 5;
-    let mut failures = 0u32;
-    while let Some(event) = es.next().await {
-        match event {
-            Ok(SseEvent::Open) => failures = 0,
-            Ok(SseEvent::Message(msg)) => {
-                failures = 0;
-                let Ok(value) = serde_json::from_str::<Value>(&msg.data) else {
-                    continue;
-                };
-                let phase = value.get("phase").and_then(|v| v.as_str()).unwrap_or("?");
-                let status = value.get("status").and_then(|v| v.as_str()).unwrap_or("?");
-                let message = value.get("message").and_then(|v| v.as_str()).unwrap_or("");
-                if !quiet {
-                    eprintln!("[{phase}/{status}] {message}");
-                }
-                let terminal = status == "failed" || (phase == "commit" && status == "done");
-                if terminal {
-                    es.close();
-                    break;
-                }
-            }
-            // A hiccup isn't a run failure: let EventSource reconnect and
-            // resume from the last event id. Only give up after repeated
-            // failures (dobjd is likely down), then poll for the result.
-            Err(err) => {
-                failures += 1;
-                if failures > MAX_RECONNECTS {
-                    if !quiet {
-                        eprintln!("(progress stream lost: {err}; polling for result)");
-                    }
-                    break;
-                }
-            }
-        }
-    }
+    let state = crate::runs::follow(client, &run_id, quiet).await?;
+    crate::runs::finish(&state, json)
+}
 
-    // Authoritative outcome, and the recovery path if the stream dropped:
-    // poll the run until it reaches a terminal state.
-    let state = poll_run_to_terminal(client, &run_id, quiet).await?;
-    match state.status {
-        RunStatus::Succeeded => {
-            let result = state
-                .result
-                .ok_or_else(|| anyhow!("run {run_id} reported success but no result"))?;
-            println!("action:   {action}");
-            println!("run id:   {run_id}");
-            println!("old root: {}", result.old_root);
-            println!("new root: {}", result.new_root);
-            if !result.output_files.is_empty() {
-                println!("outputs:");
-                for f in &result.output_files {
-                    println!("  + {f}");
-                }
+/// Timeout for each daemon wait request; repeat until the state is terminal.
+const WAIT_STEP_MS: u64 = 30_000;
+
+pub async fn prove(
+    client: &DobjdClient,
+    action_id: String,
+    input_paths: Vec<String>,
+    raw_args: Vec<String>,
+    wait: bool,
+    json: bool,
+) -> Result<()> {
+    let action = parse_qualified(&action_id)?;
+    let args = parse_action_args(&raw_args)?;
+    let mut job: ProofJobState = client
+        .post_json(
+            "/proof-jobs",
+            &ActionInput {
+                action,
+                input_object_paths: input_paths,
+                args,
+            },
+        )
+        .await?;
+    if wait {
+        while !job.status.is_terminal() {
+            let path = format!(
+                "/proof-jobs/{}?wait=true&timeoutMs={WAIT_STEP_MS}",
+                job.job_id
+            );
+            job = client.get_json(&path).await?;
+            if let Some(message) = &job.message
+                && !json
+            {
+                eprintln!("[{}] {message}", job.status);
             }
-            if !result.nullified_files.is_empty() {
-                println!("nullified:");
-                for f in &result.nullified_files {
-                    println!("  - {f}");
-                }
-            }
-            Ok(())
         }
-        RunStatus::Failed => Err(anyhow!(
-            "run {run_id} failed: {}",
-            state.error.unwrap_or_else(|| "unknown error".to_string())
-        )),
-        other => Err(anyhow!("run {run_id} ended in unexpected state: {other:?}")),
     }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&job)?);
+        return Ok(());
+    }
+    print_proof_job(&job);
+    match (job.status, job.error) {
+        (wire_types::ProofJobStatus::Failed, Some(error)) => Err(anyhow!("proof failed: {error}")),
+        _ => Ok(()),
+    }
+}
+
+fn print_proof_job(job: &ProofJobState) {
+    println!("{:<10} {}", "job id:", job.job_id);
+    println!("{:<10} {}", "action:", job.action);
+    println!("{:<10} {}", "status:", job.status);
+    if let Some(tx_final) = &job.tx_final {
+        println!("{:<10} {}", "txFinal:", tx_final);
+    }
+    if let Some(error) = &job.error {
+        println!("{:<10} {}", "error:", error);
+    }
+}
+
+pub async fn proof_jobs(client: &DobjdClient, active: bool, json: bool) -> Result<()> {
+    let path = if active {
+        "/proof-jobs?status=active"
+    } else {
+        "/proof-jobs"
+    };
+    let jobs: Vec<ProofJobState> = client.get_json(path).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&jobs)?);
+        return Ok(());
+    }
+    if jobs.is_empty() {
+        println!("(no proof jobs)");
+        return Ok(());
+    }
+    for job in &jobs {
+        println!(
+            "[{:<9}] {} {} {}",
+            job.status,
+            job.job_id,
+            job.action,
+            job.tx_final.as_deref().map(short_hex).unwrap_or_default()
+        );
+    }
+    Ok(())
+}
+
+pub async fn submit(client: &DobjdClient, tx_finals: Vec<String>, json: bool) -> Result<()> {
+    let timeout = SLOW_REQUEST_TIMEOUT * u32::try_from(tx_finals.len().max(1))?;
+    let records: Vec<TransactionRecord> = client
+        .with_timeout(timeout)
+        .post_json(
+            "/transactions/submit",
+            &SubmitTransactionsRequest { tx_finals },
+        )
+        .await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&records)?);
+        return Ok(());
+    }
+    for record in &records {
+        println!(
+            "{} submitted as relayer job {}",
+            short_hex(&record.tx_final),
+            record.relayer_job_id.as_deref().unwrap_or("?")
+        );
+    }
+    Ok(())
+}
+
+pub async fn transactions(client: &DobjdClient, json: bool) -> Result<()> {
+    let records: Vec<TransactionRecord> = client.get_json("/transactions").await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&records)?);
+        return Ok(());
+    }
+    if records.is_empty() {
+        println!("(no transactions)");
+        return Ok(());
+    }
+    for record in &records {
+        println!(
+            "[{:<9}] {} {} block {}{}",
+            record.state,
+            record.tx_final,
+            record.action,
+            record.grounding_block,
+            record
+                .tx_hash
+                .as_deref()
+                .map(|tx| format!(" tx {}", short_hex(tx)))
+                .unwrap_or_default()
+        );
+    }
+    Ok(())
+}
+
+pub async fn inspect_transaction(
+    client: &DobjdClient,
+    tx_final: String,
+    wait: bool,
+    json: bool,
+) -> Result<()> {
+    let base = format!("/transactions/{}", urlencoding::encode(&tx_final));
+    let mut record: TransactionRecord = client.get_json(&base).await?;
+    while wait && !record.state.is_terminal() {
+        let path = format!("{base}?wait=true&timeoutMs={WAIT_STEP_MS}");
+        record = client.get_json(&path).await?;
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&record)?);
+        return Ok(());
+    }
+    print_transaction(&record);
+    Ok(())
+}
+
+fn print_transaction(record: &TransactionRecord) {
+    println!("{:<16} {}", "txFinal:", record.tx_final);
+    println!("{:<16} {}", "action:", record.action);
+    println!("{:<16} {}", "state:", record.state);
+    println!("{:<16} {}", "grounding block:", record.grounding_block);
+    println!("{:<16} {}", "grounding root:", record.grounding_root);
+    if let Some(job) = &record.relayer_job_id {
+        println!("{:<16} {}", "relayer job:", job);
+    }
+    if let Some(tx) = &record.tx_hash {
+        println!("{:<16} {}", "tx hash:", tx);
+    }
+    if let Some(failure) = &record.relayer_failure {
+        println!("{:<16} {}", "relayer failure:", failure);
+    }
+    if let Some(reason) = &record.reason {
+        println!("{:<16} {}", "reason:", reason);
+    }
+    if !record.input_files.is_empty() {
+        println!("inputs:");
+        for f in &record.input_files {
+            println!("  - {f}");
+        }
+    }
+    if !record.output_files.is_empty() {
+        println!("outputs:");
+        for f in &record.output_files {
+            println!("  + {f}");
+        }
+    }
+}
+
+pub async fn delete_transaction(client: &DobjdClient, tx_final: String, json: bool) -> Result<()> {
+    let path = format!("/transactions/{}", urlencoding::encode(&tx_final));
+    let record: TransactionRecord = client
+        .with_timeout(SLOW_REQUEST_TIMEOUT)
+        .delete_json(&path)
+        .await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&record)?);
+        return Ok(());
+    }
+    println!(
+        "deleted {} ({} output file(s) removed)",
+        record.tx_final,
+        record.output_files.len()
+    );
+    Ok(())
 }
 
 fn parse_action_args(raw: &[String]) -> Result<ActionArgValues> {
@@ -311,45 +446,8 @@ fn parse_action_args(raw: &[String]) -> Result<ActionArgValues> {
     Ok(args)
 }
 
-/// Poll `GET /actions/runs/{run_id}` until the run reaches a terminal state,
-/// tolerating transient follow-up failures so a brief HTTP hiccup is not
-/// reported as an action failure.
-async fn poll_run_to_terminal(client: &DobjdClient, run_id: &str, quiet: bool) -> Result<RunState> {
-    let path = format!("/actions/runs/{run_id}");
-    let mut consecutive_errors = 0usize;
-    loop {
-        match client.get_json::<RunState>(&path).await {
-            Ok(state) => {
-                consecutive_errors = 0;
-                match state.status {
-                    RunStatus::Succeeded | RunStatus::Failed => return Ok(state),
-                    _ => sleep(Duration::from_millis(500)).await,
-                }
-            }
-            Err(err) => {
-                consecutive_errors += 1;
-                if consecutive_errors >= MAX_CONSECUTIVE_RUN_POLL_ERRORS {
-                    return Err(anyhow!(
-                        "lost contact while following run {run_id}; it may still complete. Run `dobj objects` to reconcile. Last error: {err:#}"
-                    ));
-                }
-                if !quiet {
-                    eprintln!(
-                        "(poll failed {consecutive_errors}/{MAX_CONSECUTIVE_RUN_POLL_ERRORS}: {err}; retrying)"
-                    );
-                }
-                let delay_ms = 500 * consecutive_errors.min(10) as u64;
-                sleep(Duration::from_millis(delay_ms)).await;
-            }
-        }
-    }
-}
-
-/// Stream every event flowing through dobjd's broadcast hub as JSON
-/// lines. Today this is `run-action-progress`.
-/// Each event prints once across all connected clients, so this is the
-/// single place to see activity from the desktop, web UI, MCP, and
-/// other CLI invocations at the same time.
+/// Stream dobjd's shared event hub as JSON lines, including activity from
+/// the desktop, browser UI, MCP, and other CLI invocations.
 pub async fn events(client: &DobjdClient) -> Result<()> {
     let url = format!("{}/events", client.base_url());
     let mut es = EventSource::get(&url);
@@ -382,7 +480,7 @@ pub async fn inspect_object(client: &DobjdClient, file_name: String, json: bool)
             serde_json::to_string_pretty(&serde_json::json!({
                 "contentHash": obj.content_hash, "fileName": obj.file_name, "class": obj.class,
                 "status": obj.status, "txHash": obj.tx_hash,
-                "fields": obj.fields,
+                "fields": obj.fields, "heldByRunId": obj.held_by_run_id,
             }))?
         );
         return Ok(());

@@ -46,6 +46,8 @@
   html, body {
     height: 100%;
     margin: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
   }
   body {
     background: var(--bg);
@@ -396,6 +398,7 @@
     font-weight: 400;
   }
   .toolbar-button:active { background: var(--toolbar-pressed); }
+  .toolbar-button[hidden], .toolbar-divider[hidden] { display: none; }
   .toolbar-divider {
     align-self: center;
     width: 1px;
@@ -893,6 +896,17 @@
       </svg>
     </button>
     <span class="toolbar-divider" role="separator"></span>
+    <button type="button" id="claude-button" class="toolbar-button" data-tooltip="Play with Claude Code" aria-label="Play with Claude Code" hidden>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd" aria-hidden="true">
+        <path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z"/>
+      </svg>
+    </button>
+    <button type="button" id="codex-button" class="toolbar-button" data-tooltip="Play with Codex" aria-label="Play with Codex" hidden>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd" aria-hidden="true">
+        <path d="M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00-.856 0l-5.97 3.473zm10.609 8.8V12.06c0-.333-.143-.57-.429-.737l-5.97-3.473 1.95-1.118a.433.433 0 01.476 0l4.543 2.617c1.309.76 2.189 2.378 2.189 3.948 0 1.808-1.07 3.473-2.76 4.163zM7.802 12.703l-1.95-1.142c-.167-.095-.239-.238-.239-.428V5.899c0-2.545 1.95-4.472 4.591-4.472 1 0 1.927.333 2.712.928L8.23 5.067c-.285.166-.428.404-.428.737v6.898zM12 15.128l-2.795-1.57v-3.33L12 8.658l2.795 1.57v3.33L12 15.128zm1.796 7.23c-1 0-1.927-.332-2.712-.927l4.686-2.712c.285-.166.428-.404.428-.737v-6.898l1.974 1.142c.167.095.238.238.238.428v5.233c0 2.545-1.974 4.472-4.614 4.472zm-5.637-5.303l-4.544-2.617c-1.308-.761-2.188-2.378-2.188-3.948A4.482 4.482 0 014.21 6.327v5.423c0 .333.143.571.428.738l5.947 3.449-1.95 1.118a.432.432 0 01-.476 0zm-.262 3.9c-2.688 0-4.662-2.021-4.662-4.519 0-.19.024-.38.047-.57l4.686 2.71c.286.167.571.167.856 0l5.97-3.448v2.26c0 .19-.07.333-.237.428l-4.543 2.616c-.619.357-1.356.523-2.117.523zm5.899 2.83a5.947 5.947 0 005.827-4.756C22.287 18.339 24 15.84 24 13.296c0-1.665-.713-3.282-1.998-4.448.119-.5.19-.999.19-1.498 0-3.401-2.759-5.947-5.946-5.947-.642 0-1.26.095-1.88.31A5.962 5.962 0 0010.205 0a5.947 5.947 0 00-5.827 4.757C1.713 5.447 0 7.945 0 10.49c0 1.666.713 3.283 1.998 4.448-.119.5-.19 1-.19 1.499 0 3.401 2.759 5.946 5.946 5.946.642 0 1.26-.095 1.88-.309a5.96 5.96 0 004.162 1.713z"/>
+      </svg>
+    </button>
+    <span id="agent-divider" class="toolbar-divider" role="separator" hidden></span>
     <button type="button" id="settings-button" class="toolbar-button" data-tooltip="Settings" aria-label="Open Settings">
       <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
         <path d="M14.22 7.60 L16.09 7.75 L16.09 10.25 L14.22 10.40 L13.68 11.70 L14.90 13.13 L13.13 14.90 L11.70 13.68 L10.40 14.22 L10.25 16.09 L7.75 16.09 L7.60 14.22 L6.30 13.68 L4.87 14.90 L3.10 13.13 L4.32 11.70 L3.78 10.40 L1.91 10.25 L1.91 7.75 L3.78 7.60 L4.32 6.30 L3.10 4.87 L4.87 3.10 L6.30 4.32 L7.60 3.78 L7.75 1.91 L10.25 1.91 L10.40 3.78 L11.70 4.32 L13.13 3.10 L14.90 4.87 L13.68 6.30Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
@@ -999,12 +1013,16 @@
   const STARTUP_RUN_STORAGE_KEY = "bitcraft.startup-pocketknife-run";
   let startupPocketknifeActive = false;
   let startupPocketknifeRun = null;
-  let startupPocketknifeTimer = null;
+  let startupPocketknifeTxFinal = null;
+  let startupPocketknifeSubmitError = null;
 
   function isPocketknife(className) {
     return className.pluginName === PLUGIN_NAME && className.name === "Pocketknife";
   }
 
+  function activityInScope(action) {
+    return action?.pluginName === PLUGIN_NAME;
+  }
 
   function rememberStartupRun(runId) {
     try {
@@ -1019,14 +1037,13 @@
     } catch {
       return;
     }
-    const run = runs.find((candidate) => candidate.runId === runId);
+    if (!runId) return;
+    const run = runs.find((candidate) => candidate.runId === runId || candidate.transaction?.owner === runId);
     if (run) run.showInJobs = false;
   }
 
   function stopStartupPocketknife() {
     startupPocketknifeActive = false;
-    clearInterval(startupPocketknifeTimer);
-    startupPocketknifeTimer = null;
   }
 
   function updateStartupPocketknife(run = startupPocketknifeRun) {
@@ -1043,7 +1060,18 @@
       || [...objectsByFileName.values()].some((object) => isPocketknife(object.class))) {
       setStartupProgress(3);
     }
-    if (run?.requestError || run?.state?.status === "failed") {
+    const transaction = inventory?.records().find((record) =>
+      record.txFinal === startupPocketknifeTxFinal || run?.runId && record.owner === run.runId);
+    if (transaction) startupPocketknifeTxFinal = transaction.txFinal;
+    if (transaction?.state === "expired" || startupPocketknifeTxFinal && !transaction) {
+      showStartupError(transaction?.reason ?? "The pocketknife transaction is no longer available.");
+      return;
+    }
+    if (transaction?.state === "recorded" && startupPocketknifeSubmitError) {
+      showStartupError(startupErrorText(startupPocketknifeSubmitError));
+      return;
+    }
+    if (!transaction && (run?.requestError || run?.state?.status === "failed")) {
       showStartupError(run.requestError ?? run.state.error ?? "Setup failed.");
       return;
     }
@@ -1051,7 +1079,8 @@
       showStartupError(startupErrorText(run.transportError, "Could not check progress: "));
       return;
     }
-    if (run?.state?.status === "committing" || run?.state?.status === "succeeded") {
+    if (transaction || run?.state?.status === "committing" || run?.state?.status === "succeeded") {
+      setStartupProgress(3);
       showStartup("Connecting to Bitcraft network...");
     } else {
       showStartup("Loading cryptography engine...");
@@ -1068,6 +1097,12 @@
       + (dobjHome ? ` Its log is dobjd.log in ${dobjHome}.` : "");
   }
 
+  function startupInventoryError(error) {
+    if (startupPocketknifeActive) {
+      showStartupError(startupErrorText(error, "Could not refresh inventory: "));
+    }
+  }
+
   async function discardObjectUnsafe(fileName) {
     try {
       await postJson(`/objects/${encodeURIComponent(fileName)}/discard_unsafe`, {});
@@ -1079,17 +1114,18 @@
   async function ensureStartupPocketknife() {
     stopStartupPocketknife();
     startupPocketknifeRun = null;
+    startupPocketknifeTxFinal = null;
+    startupPocketknifeSubmitError = null;
     hideRestoredStartupRun();
     renderRuns();
-    const objects = await fetchJson("/objects/unspent");
-    showObjects(objects);
+    const objects = await inventory.reload();
     if (objects.some((object) => isPocketknife(object.class) && isLive(object))) {
       setStartupProgress(4);
       finishStartup();
       return;
     }
     startupPocketknifeActive = true;
-    const activeRun = runs.find((run) => isRunInProgress(run) && (
+    const activeRun = runs.find((run) => (run.runId || run.proofJob && !["done", "failed"].includes(run.proofJob.status)) && isRunInProgress(run) && (
       run.action.action.name === "CraftPocketknife"
       || run.action.totalOutputs?.some((output) => isPocketknife(output.class))
     ));
@@ -1097,9 +1133,28 @@
       activeRun.onUpdate = updateStartupPocketknife;
       updateStartupPocketknife(activeRun);
     } else {
-      // No run is left to finish these. The object listing reports local
-      // state when it cannot reach the synchronizer, so reaching it here is
-      // what shows the listing really found them off chain.
+      const transaction = inventory.records().find((record) =>
+        ["recorded", "submitted"].includes(record.state) && (
+          record.action.pluginName === PLUGIN_NAME && record.action.name === "CraftPocketknife"
+          || record.outputFiles.some((fileName) => objects.some((object) =>
+            object.fileName === fileName && isPocketknife(object.class)))
+        ));
+      if (transaction) {
+        startupPocketknifeTxFinal = transaction.txFinal;
+        updateStartupPocketknife();
+        if (transaction.state === "recorded" && transaction.submitAttemptedAtMs == null) {
+          try {
+            const records = await postJson("/transactions/submit", { txFinals: [transaction.txFinal] });
+            records.forEach((record) => inventory.accept({ type: "transaction", ...record }));
+          } catch (error) {
+            startupPocketknifeSubmitError = error;
+            throw error;
+          }
+        }
+        return;
+      }
+      // The listing can fall back to local state. Check the synchronizer
+      // before discarding outputs that have no run or open transaction.
       const staleKnives = objects.filter((object) => isPocketknife(object.class));
       if (staleKnives.length > 0) {
         try {
@@ -1110,9 +1165,7 @@
       }
       for (const knife of staleKnives) {
         await discardObjectUnsafe(knife.fileName);
-      }
-      if (staleKnives.length > 0) {
-        showObjects(objects.filter((object) => !staleKnives.includes(object)));
+        inventory.accept({ type: "object-removed", fileName: knife.fileName });
       }
       const action = pluginActions.find((candidate) => candidate.action.name === "CraftPocketknife");
       if (!action) throw new Error("A recipe Bitcraft needs to start is unavailable. Check that the Bitcraft plugin is installed.");
@@ -1123,13 +1176,6 @@
           updateStartupPocketknife(run);
         },
       });
-    }
-    if (startupPocketknifeActive) {
-      startupPocketknifeTimer = setInterval(() => {
-        if (!startupPocketknifeRun || !isRunInProgress(startupPocketknifeRun) || startupPocketknifeRun.transportError) {
-          return reloadObjects();
-        }
-      }, 1500);
     }
   }
 
@@ -1237,7 +1283,7 @@
   const SUMMARY_PAGE = "summary";
   const SUMMARY_WINDOW_NAME = "bitcraft-inventory-summary";
   const SUMMARY_WINDOW_FEATURES = "popup,width=420,height=560";
-  const SUMMARY_REFRESH_MS = 10000;
+  const INVENTORY_RECONCILE_MS = 10000;
   const initialParams = new URLSearchParams(location.search);
   const isReferenceWindow = initialParams.get(PAGE_PARAM) === RECIPEBOOK_PAGE;
   const isSummaryWindow = initialParams.get(PAGE_PARAM) === SUMMARY_PAGE;
@@ -1259,11 +1305,6 @@
   // Windows opened from the top bar, by name.
   const openedWindows = new Map();
   const summaryView = document.getElementById("summary-view");
-  let summaryRefreshInFlight = false;
-  let summaryRefreshQueued = false;
-  // Set while the summary polls, which it does only while some object is
-  // not yet live.
-  let summaryPoll = null;
   const rowTooltip = document.getElementById("row-tooltip");
   const ROW_TOOLTIP_DELAY_MS = 250;
   // Pending while the pointer rests on a row, and the pointer's last event.
@@ -1294,13 +1335,16 @@
   // time, or a file's shown state changing.
   const flashStartedAt = new Map();
   const ROW_FLASH_MS = 1500;
-  let objectReloadInFlight = false;
-  let objectReloadQueued = false;
+  let inventory = null;
   let pluginActions = [];
   let objectsDirPath = "";
-  // Runs started from this page, newest first. A selected run is always the
-  // only selection: selecting one clears the object selection.
+  // One displayed job per action, including work started by other clients.
+  // Selecting a job clears the object selection.
   let runs = [];
+  const discoveringRuns = new Map();
+  const discoveringTransactions = new Map();
+  let restoringActivity = null;
+  let activityEventsDuringRestore = null;
   let nextRunClientId = 1;
   let selectedRunId = null;
   const rowsByFileName = new Map();
@@ -1650,7 +1694,7 @@
         label: qualifiedClassName(action.action),
         labelClass: "action-name",
         icon: actionIcon(action.action, 16),
-        isDisabled: () => runs.some(isRunInProgress),
+        isDisabled: () => !inputsAvailable(fileNames),
         onSelect: () => startRun(action, fileNames),
       });
     }
@@ -1760,7 +1804,7 @@
   }
 
   function isRunInProgress(run) {
-    if (run.requestError !== null) {
+    if (run.requestError !== null && !run.transaction) {
       return false;
     }
     const status = run.state?.status;
@@ -1774,6 +1818,12 @@
       inputFileNames,
       runId: null,
       state: null,
+      runSnapshot: null,
+      proofJob: null,
+      proofProgress: [],
+      transaction: null,
+      transactionDeleted: false,
+      mergedInto: null,
       requestError: null,
       transportError: null,
       eventSource: null,
@@ -1792,9 +1842,224 @@
     };
   }
 
+  function canonicalActivity(run) {
+    while (run.mergedInto) run = run.mergedInto;
+    return run;
+  }
+
+  function activityAction(action) {
+    return pluginActions.find((candidate) => qualifiedClassName(candidate.action) === qualifiedClassName(action))
+      ?? { action };
+  }
+
+  // Owner labels alone are not identities: several direct driver actions can
+  // share one. Link an owner only to a known run or proof-job ID.
+  function activityFor(action, inputs, { runId, jobId, txFinal, owner } = {}, preferred = null) {
+    const matches = runs.filter((run) =>
+      runId && (run.runId === runId || run.transaction?.owner === runId)
+      || jobId && (run.proofJob?.jobId === jobId || run.transaction?.owner === jobId)
+      || txFinal && (run.transaction?.txFinal === txFinal || run.proofJob?.txFinal === txFinal)
+      || owner && (run.runId === owner || run.proofJob?.jobId === owner));
+    const run = preferred ? canonicalActivity(preferred) : matches[0] ?? newRun(activityAction(action), inputs);
+    if (!runs.includes(run)) runs.unshift(run);
+    for (const other of matches) {
+      if (other === run) continue;
+      other.eventSource?.close();
+      run.runId ??= other.runId;
+      run.runSnapshot ??= other.runSnapshot;
+      run.proofJob ??= other.proofJob;
+      run.proofProgress.push(...other.proofProgress);
+      run.transaction ??= other.transaction;
+      run.transactionDeleted ||= other.transactionDeleted;
+      run.showInJobs &&= other.showInJobs;
+      run.onUpdate ??= other.onUpdate;
+      run.clientStartedAt = Math.min(run.clientStartedAt, other.clientStartedAt);
+      if (selectedRunId === other.id) selectedRunId = run.id;
+      if (startupPocketknifeRun === other) startupPocketknifeRun = run;
+      other.mergedInto = run;
+      runs = runs.filter((candidate) => candidate !== other);
+    }
+    run.runId ??= runId ?? null;
+    run.action = activityAction(action);
+    run.inputFileNames = inputs.map((path) => path.split(/[\\/]/).at(-1));
+    return run;
+  }
+
+  function transactionProgress(record) {
+    return [
+      [record.recordedAtMs, "Transaction recorded", "running"],
+      [record.submitAttemptedAtMs, "Submission attempted", "running"],
+      [record.submittedAtMs, "Waiting for confirmation", "running"],
+      [record.settledAtMs, record.state === "landed" ? "Transaction landed" : record.reason ?? "Transaction expired",
+        record.state === "landed" ? "done" : "failed"],
+    ].filter(([atMs]) => atMs != null).map(([atMs, message, status]) => ({
+      atMs, message, status, phase: "commit", outputFiles: record.outputFiles,
+    }));
+  }
+
+  function updateActivityState(run) {
+    const proof = run.proofJob;
+    const record = run.transaction;
+    const state = { status: "queued", progress: [], error: null, result: null, ...run.runSnapshot };
+    if (!run.runSnapshot && proof) {
+      Object.assign(state, {
+        status: proof.status === "failed" ? "failed" : ["recording", "done"].includes(proof.status) ? "committing"
+          : proof.status === "queued" ? "queued" : "generateProof",
+        createdAtMs: proof.createdAtMs, startedAtMs: proof.startedAtMs,
+        finishedAtMs: proof.status === "failed" ? proof.finishedAtMs : null,
+        error: proof.error, inputObjectPaths: proof.inputObjectPaths,
+        progress: run.proofProgress,
+      });
+    }
+    if (record) {
+      const terminal = ["landed", "expired"].includes(record.state);
+      Object.assign(state, {
+        status: record.state === "landed" ? "succeeded" : record.state === "expired" ? "failed" : "committing",
+        createdAtMs: state.createdAtMs ?? record.recordedAtMs,
+        finishedAtMs: terminal ? record.settledAtMs : null,
+        inputObjectPaths: record.inputFiles,
+        error: record.state === "expired" ? record.reason ?? "Transaction expired without landing" : null,
+        result: record.state === "landed" ? {
+          oldRoot: record.groundingRoot, inputFiles: record.inputFiles, outputFiles: record.outputFiles,
+        } : null,
+      });
+      if (!run.runSnapshot) state.progress = [...run.proofProgress, ...transactionProgress(record)]
+        .sort((left, right) => left.atMs - right.atMs);
+      else if (terminal && !["succeeded", "failed"].includes(run.runSnapshot.status)) {
+        state.progress = [...state.progress, ...transactionProgress(record)
+          .filter((event) => event.atMs === record.settledAtMs)];
+      }
+    }
+    if (run.transactionDeleted) {
+      state.status = "failed";
+      state.error = "Transaction was deleted before submission";
+      state.finishedAtMs ??= run.clientEndedAt ?? Date.now();
+    }
+    run.state = state;
+    run.clientEndedAt = ["succeeded", "failed"].includes(state.status)
+      ? state.finishedAtMs ?? run.clientEndedAt ?? Date.now() : null;
+    if (["succeeded", "failed"].includes(state.status)) run.eventSource?.close();
+    hideRestoredStartupRun();
+  }
+
+  function trackRun(state, preferred = null) {
+    const run = activityFor(state.action, state.inputObjectPaths ?? [], { runId: state.runId }, preferred);
+    const previous = run.runSnapshot;
+    const rank = { queued: 0, generateProof: 1, committing: 2, succeeded: 3, failed: 3 };
+    if (!previous || rank[state.status] >= rank[previous.status]
+      && (state.progress?.length ?? 0) >= (previous.progress?.length ?? 0)) {
+      run.runSnapshot = state;
+    }
+    run.requestError = null;
+    updateActivityState(run);
+    return run;
+  }
+
+  function trackProofJob(proof) {
+    let run = activityFor(proof.action, proof.inputObjectPaths ?? [], { jobId: proof.jobId, txFinal: proof.txFinal });
+    const rank = { queued: 0, proving: 1, recording: 2, done: 3, failed: 3 };
+    if (!run.proofJob || rank[proof.status] >= rank[run.proofJob.status]) {
+      if (proof.message && (proof.message !== run.proofJob?.message || proof.status !== run.proofJob?.status)) {
+        run.proofProgress.push({
+          phase: ["recording", "done"].includes(proof.status) ? "commit" : "generateProof",
+          status: proof.status === "failed" ? "failed" : proof.status === "done" ? "done" : "running",
+          message: proof.message, atMs: proof.finishedAtMs ?? Date.now(),
+        });
+      }
+      run.proofJob = proof;
+    }
+    run.requestError = null;
+    updateActivityState(run);
+    if (proof.txFinal && !run.transaction && !run.transactionDeleted) {
+      const record = inventory?.records().find((record) => record.txFinal === proof.txFinal);
+      if (record) run = trackTransaction(record);
+      else discoverTransaction(proof.txFinal);
+    }
+    if (run.runSnapshot) followRun(run);
+    return run;
+  }
+
+  function trackTransaction(record, create = true) {
+    if (!create && !["recorded", "submitted"].includes(record.state)
+      && !runs.some((run) => run.transaction?.txFinal === record.txFinal || run.proofJob?.txFinal === record.txFinal
+        || run.runId === record.owner || run.proofJob?.jobId === record.owner)) return;
+    const run = activityFor(record.action, record.inputFiles, { txFinal: record.txFinal, owner: record.owner });
+    const rank = { recorded: 0, submitted: 1, landed: 2, expired: 2 };
+    if (!run.transaction || rank[record.state] > rank[run.transaction.state]
+      || record.state === run.transaction.state) run.transaction = record;
+    run.requestError = null;
+    updateActivityState(run);
+    if (run.runSnapshot) followRun(run);
+    return run;
+  }
+
+  function refreshActivity(run) {
+    showSelection();
+    run?.onUpdate?.(run);
+  }
+
+  function discoverRun(runId) {
+    if (discoveringRuns.has(runId)) return discoveringRuns.get(runId);
+    const request = fetchJson(`/runs/${encodeURIComponent(runId)}`).then((state) => {
+      if (!activityInScope(state.action)) return;
+      const run = trackRun(state);
+      followRun(run);
+      refreshActivity(run);
+    }).catch((error) => console.warn("Could not discover run:", error))
+      .finally(() => discoveringRuns.delete(runId));
+    discoveringRuns.set(runId, request);
+    return request;
+  }
+
+  function discoverTransaction(txFinal) {
+    if (discoveringTransactions.has(txFinal)) return discoveringTransactions.get(txFinal);
+    const request = fetchJson(`/transactions/${encodeURIComponent(txFinal)}`).then((record) => {
+      inventory.accept({ type: "transaction", ...record });
+    }).catch((error) => {
+      if (error.status === 404) activityEvent({ type: "transaction-deleted", txFinal });
+      else console.warn("Could not discover transaction:", error);
+    }).finally(() => discoveringTransactions.delete(txFinal));
+    discoveringTransactions.set(txFinal, request);
+    return request;
+  }
+
+  function activityEvent(event) {
+    if (!["run-action-progress", "proof-job", "transaction", "transaction-deleted"].includes(event.type)) return;
+    activityEventsDuringRestore?.push(event);
+    let run;
+    if (event.type === "run-action-progress") {
+      run = runs.find((run) => run.runId === event.runId);
+      if (!run) discoverRun(event.runId);
+    } else if (event.type === "proof-job" && activityInScope(event.action)) {
+      run = trackProofJob(event);
+    } else if (event.type === "transaction" && activityInScope(event.action)) {
+      run = trackTransaction(event);
+    } else if (event.type === "transaction-deleted") {
+      run = runs.find((run) => run.transaction?.txFinal === event.txFinal || run.proofJob?.txFinal === event.txFinal);
+      if (run) {
+        run.transactionDeleted = true;
+        updateActivityState(run);
+      }
+    }
+    if (run && event.type !== "run-action-progress") refreshActivity(run);
+  }
+
+  function inputRun(fileName) {
+    return runs.find((run) => isRunInProgress(run) && run.inputFileNames.includes(fileName));
+  }
+
+  function inputsAvailable(fileNames) {
+    return fileNames.every((fileName) => {
+      const object = objectsByFileName.get(fileName);
+      return object?.status === "live" && object.heldByRunId == null
+        && !inputRun(fileName);
+    });
+  }
+
   async function startRun(action, fileNames, { showInJobs = true, onUpdate = null } = {}) {
+    if (!inputsAvailable(fileNames)) return null;
     const inputFileNames = assignInputSlots(action, fileNames).map((object) => object.fileName);
-    const run = newRun(action, inputFileNames);
+    let run = newRun(action, inputFileNames);
     run.showInJobs = showInJobs;
     run.onUpdate = onUpdate;
     runs.unshift(run);
@@ -1802,11 +2067,10 @@
     run.onUpdate?.(run);
 
     try {
-      const accepted = await postJson("/actions/run", {
+      const accepted = await postJson("/runs", {
         input: { action: action.action, inputObjectPaths: inputFileNames },
       });
-      run.runId = accepted.runId;
-      run.state = { status: accepted.status, progress: [], createdAtMs: accepted.createdAtMs };
+      run = trackRun({ ...accepted, action: action.action, inputObjectPaths: inputFileNames, progress: [] }, run);
       run.onUpdate?.(run);
       followRun(run);
     } catch (error) {
@@ -1814,10 +2078,7 @@
       run.clientEndedAt = Date.now();
       run.onUpdate?.(run);
     }
-    renderRuns();
-    if (run.id === selectedRunId) {
-      renderDetails();
-    }
+    showSelection();
     return run;
   }
 
@@ -1825,7 +2086,9 @@
   // The terminal status is not an event: it arrives through the re-read
   // prompted by dobjd closing the stream once the run has finished.
   function followRun(run) {
-    const runPath = `/actions/runs/${encodeURIComponent(run.runId)}`;
+    run = canonicalActivity(run);
+    if (!run.runId || run.eventSource || ["succeeded", "failed"].includes(run.runSnapshot?.status)) return;
+    const runPath = `/runs/${encodeURIComponent(run.runId)}`;
     let source = null;
     try {
       source = new EventSource(`${DOBJD_URL}${runPath}/events`);
@@ -1835,10 +2098,11 @@
     run.eventSource = source;
 
     const readState = async () => {
+      run = canonicalActivity(run);
       if (!isRunInProgress(run)) return;
-      const previous = run.state;
       try {
-        run.state = await fetchJson(runPath);
+        const state = await fetchJson(runPath);
+        run = trackRun(state, canonicalActivity(run));
         run.transportError = null;
       } catch (error) {
         if (error.status !== 404) {
@@ -1846,23 +2110,19 @@
           run.onUpdate?.(run);
           return;
         }
-        run.requestError = "dobjd no longer has this run.";
+        source?.close();
+        if (run.transaction || run.proofJob) {
+          run.runSnapshot = null;
+          updateActivityState(run);
+        } else {
+          run.requestError = "dobjd no longer has this run.";
+        }
       }
       if (!isRunInProgress(run)) {
         run.clientEndedAt ??= Date.now();
         source?.close();
       }
-      // Inputs become held and outputs appear (pending, then live) only at
-      // a status change or a new progress step.
-      if (run.state?.status !== previous?.status
-        || run.state?.progress?.length !== previous?.progress?.length
-        || !isRunInProgress(run)) {
-        reloadObjects();
-      }
-      renderRuns();
-      if (run.id === selectedRunId) {
-        renderDetails();
-      }
+      showSelection();
       run.onUpdate?.(run);
     };
 
@@ -1918,35 +2178,54 @@
     return `${Math.floor(hours / 24)}d ago`;
   }
 
-  // Rebuilds the job list from the runs dobjd still has in
-  // progress, so a reload does not lose them. Runs that finished before the
-  // page loaded are left out, as are runs this page already tracks.
+  // Recover retained activity, including actions that finished during a
+  // disconnect. Events received during the reads supersede their snapshots.
   async function restoreRuns() {
-    let retainedRuns;
-    try {
-      retainedRuns = await fetchJson("/actions/runs?status=active");
-    } catch (error) {
-      console.warn("Could not list runs:", error);
-      return false;
-    }
-    for (const state of retainedRuns) {
-      const alreadyTracked = runs.some((run) => run.runId === state.runId);
-      if (state.action.pluginName !== PLUGIN_NAME || alreadyTracked) {
-        continue;
+    if (restoringActivity) return restoringActivity;
+    const events = [];
+    const knownRuns = new Set(runs.map((run) => run.runId).filter(Boolean));
+    const knownProofs = new Set(runs.map((run) => run.proofJob?.jobId).filter(Boolean));
+    activityEventsDuringRestore = events;
+    restoringActivity = (async () => {
+      try {
+        const [retainedRuns, proofJobs] = await Promise.all([fetchJson("/runs"), fetchJson("/proof-jobs")]);
+        for (const state of retainedRuns) {
+          if (!activityInScope(state.action)) continue;
+          const run = trackRun(state);
+          followRun(run);
+        }
+        for (const proof of proofJobs) {
+          if (activityInScope(proof.action)) trackProofJob(proof);
+        }
+        for (const run of runs) {
+          if (knownRuns.has(run.runId) && !retainedRuns.some((state) => state.runId === run.runId)
+            && !events.some((event) => event.runId === run.runId) && isRunInProgress(run)) {
+            run.eventSource?.close();
+            run.runSnapshot = null;
+            if (!run.transaction && !run.proofJob) run.requestError = "dobjd no longer has this run.";
+            updateActivityState(run);
+          }
+          if (knownProofs.has(run.proofJob?.jobId) && !proofJobs.some((proof) => proof.jobId === run.proofJob.jobId)
+            && !events.some((event) => event.jobId === run.proofJob.jobId)
+            && !run.transaction && !run.runSnapshot && isRunInProgress(run)) {
+            run.requestError = "dobjd no longer has this proof job.";
+          }
+          if (run.requestError) {
+            run.clientEndedAt ??= Date.now();
+            run.onUpdate?.(run);
+          }
+        }
+        return true;
+      } catch (error) {
+        console.warn("Could not restore activity:", error);
+        return false;
+      } finally {
+        activityEventsDuringRestore = null;
+        for (const event of events) activityEvent(event);
+        showSelection();
       }
-      const action = pluginActions.find(
-        (candidate) => qualifiedClassName(candidate.action) === qualifiedClassName(state.action),
-      ) ?? { action: state.action };
-      const run = newRun(action, state.inputObjectPaths ?? []);
-      run.runId = state.runId;
-      run.state = state;
-      runs.unshift(run);
-      if (isRunInProgress(run)) {
-        followRun(run);
-      }
-    }
-    renderRuns();
-    return true;
+    })().finally(() => { restoringActivity = null; });
+    return restoringActivity;
   }
 
   setInterval(() => {
@@ -2028,7 +2307,7 @@
       run.elapsedElement = document.createElement("span");
       run.elapsedElement.textContent = elapsedText(run);
       runDetail.append(
-        ` ${run.runId === null ? "Job" : `Job ${run.runId.slice(0, 4)}`} \u00b7 `,
+        ` ${activityId(run) === null ? "Job" : `Job ${activityId(run).slice(0, 4)}`} \u00b7 `,
         run.elapsedElement,
       );
       run.finishedAgoElement = null;
@@ -2261,11 +2540,6 @@
     openedWindows.set(name, window.open(url, name, features));
   }
 
-  // The Inventory Summary window reads only the inventory; it runs none of
-  // the main window's startup. Jobs announce their changes on the event
-  // stream, so it refreshes on every event and when the stream reconnects
-  // after missing some. A pending or unknown object settles only when the
-  // inventory is read, with no event, so it polls while one exists.
   // The Settings window shows the connection addresses from dobjd's settings.
   // They cannot be edited yet, so the fields are read-only.
   async function loadSettingsWindow() {
@@ -2305,53 +2579,122 @@
     }
   }
 
+  // Buffer changes during a snapshot read so its older response cannot
+  // overwrite events received while the request was in flight.
+  function watchInventory(onChange, { onError = () => {}, onReconnect = () => {}, onActivity = () => {} } = {}) {
+    let objects = new Map();
+    let transactions = new Map();
+    let buffered = null;
+    let reading = null;
+    let readAgain = false;
+    let lastSeq = null;
+    let poll = null;
+    const source = new EventSource(`${DOBJD_URL}/events`);
+    const values = () => [...objects.values()];
+    const records = () => [...transactions.values()];
+    const reconcile = () => reload().catch((error) => {
+      console.warn("Could not refresh inventory:", error);
+      onError(error);
+    });
+    const notify = () => {
+      const recordedOutputs = new Set(records()
+        .filter((record) => ["recorded", "submitted"].includes(record.state))
+        .flatMap((record) => record.outputFiles));
+      const needsReconcile = values().some((object) => object.status !== "live"
+        && !recordedOutputs.has(object.fileName));
+      if (needsReconcile && poll === null) poll = setInterval(reconcile, INVENTORY_RECONCILE_MS);
+      if (!needsReconcile && poll !== null) {
+        clearInterval(poll);
+        poll = null;
+      }
+      onChange(values());
+    };
+    const apply = (event) => {
+      if (event.type === "object") {
+        const { type, seq, ...object } = event;
+        if (object.status === "nullified") objects.delete(object.fileName);
+        else objects.set(object.fileName, object);
+      } else if (event.type === "object-removed") {
+        objects.delete(event.fileName);
+      } else if (event.type === "transaction") {
+        const { type, seq, ...record } = event;
+        transactions.set(record.txFinal, record);
+      } else if (["transaction-deleted", "transaction-pruned"].includes(event.type)) {
+        transactions.delete(event.txFinal);
+      }
+    };
+    const accept = (event) => {
+      if (!["object", "object-removed", "transaction", "transaction-deleted", "transaction-pruned"].includes(event.type)) {
+        onActivity(event);
+        return;
+      }
+      buffered?.push(event);
+      apply(event);
+      onActivity(event);
+      notify();
+    };
+    async function reload() {
+      if (reading) {
+        readAgain = true;
+        return reading;
+      }
+      reading = (async () => {
+        do {
+          readAgain = false;
+          buffered = [];
+          const [snapshot, recordSnapshot] = await Promise.all([
+            fetchJson("/objects/unspent"), fetchJson("/transactions"),
+          ]);
+          objects = new Map(snapshot.map((object) => [object.fileName, object]));
+          transactions = new Map(recordSnapshot.map((record) => [record.txFinal, record]));
+          buffered.forEach(apply);
+          buffered = null;
+          notify();
+        } while (readAgain);
+        return values();
+      })();
+      try {
+        return await reading;
+      } finally {
+        buffered = null;
+        reading = null;
+      }
+    }
+    source.onmessage = ({ data }) => {
+      let event;
+      try { event = JSON.parse(data); } catch { reconcile(); return; }
+      const gap = lastSeq !== null && event.seq !== lastSeq + 1;
+      lastSeq = event.seq;
+      accept(event);
+      if (gap) reconcile().then(onReconnect);
+    };
+    // The initial snapshot may precede the connection, so the first open
+    // needs reconciliation too. Later opens also cover daemon restarts.
+    source.onopen = () => {
+      lastSeq = null;
+      reconcile().then(onReconnect);
+    };
+    window.addEventListener("focus", () => { reconcile().then(onReconnect); });
+    window.addEventListener("beforeunload", () => {
+      source.close();
+      clearInterval(poll);
+    });
+    return { reload, records, accept, values };
+  }
+
   async function loadSummaryWindow() {
     document.body.classList.add("secondary-window");
     document.title = "Bitcraft Inventory Summary";
     summaryView.hidden = false;
     await Presentation.load();
-    await refreshSummary();
-    const events = new EventSource(`${DOBJD_URL}/events`);
-    let eventsOpened = false;
-    events.onopen = () => {
-      if (eventsOpened) refreshSummary();
-      eventsOpened = true;
-    };
-    events.onmessage = () => refreshSummary();
-    window.addEventListener("focus", () => refreshSummary());
-  }
-
-  function updateSummaryPolling(objects) {
-    const unsettled = objects.some((object) => !isLive(object));
-    if (unsettled && summaryPoll === null) {
-      summaryPoll = setInterval(refreshSummary, SUMMARY_REFRESH_MS);
-    } else if (!unsettled && summaryPoll !== null) {
-      clearInterval(summaryPoll);
-      summaryPoll = null;
-    }
-  }
-
-  async function refreshSummary() {
-    if (summaryRefreshInFlight) {
-      summaryRefreshQueued = true;
-      return;
-    }
-    summaryRefreshInFlight = true;
+    inventory = watchInventory(renderSummary);
     try {
-      const objects = await fetchJson("/objects/unspent");
-      renderSummary(objects);
-      updateSummaryPolling(objects);
+      await inventory.reload();
     } catch (error) {
       const message = document.createElement("div");
       message.className = "message error";
       message.textContent = `Could not read the inventory: ${error.message}`;
       summaryView.replaceChildren(message);
-    } finally {
-      summaryRefreshInFlight = false;
-      if (summaryRefreshQueued) {
-        summaryRefreshQueued = false;
-        refreshSummary();
-      }
     }
   }
 
@@ -2691,7 +3034,19 @@
   }
 
   function runStatus(run) {
-    return run.requestError !== null ? "failed" : run.state?.status;
+    if (run.requestError !== null && !run.transaction) return "failed";
+    if (!run.runId && !run.transactionDeleted) {
+      if (run.transaction?.state === "submitted") return "Waiting for confirmation";
+      if (run.transaction?.state === "recorded") {
+        return run.transaction.submitAttemptedAtMs == null ? "Ready to submit" : "Submission outcome unknown";
+      }
+      if (!run.transaction && run.proofJob?.status === "done") return "Ready to submit";
+    }
+    return run.state?.status;
+  }
+
+  function activityId(run) {
+    return run.runId ?? run.proofJob?.jobId ?? run.transaction?.txFinal ?? null;
   }
 
   function formatTimestamp(milliseconds) {
@@ -2701,14 +3056,16 @@
   // Spent inputs move into the hidden `.nullified/` folder once the run has
   // succeeded and its nullifiers are on-chain.
   function inputFilePath(run, fileName) {
+    fileName = fileName.split(/[\\/]/).at(-1);
     const spent = run.state?.status === "succeeded"
-      && (run.state.result?.nullifiedFiles ?? []).includes(fileName);
+      && (run.state.result?.inputFiles ?? []).includes(fileName);
     return `${objectsDirPath}/${spent ? ".nullified/" : ""}${fileName}`;
   }
 
   // The result names the outputs once the run succeeds; before that, the
   // commit phase's progress events report them as they are written.
   function runOutputFiles(run) {
+    if (run.transaction) return run.transaction.outputFiles;
     if (run.state?.result) {
       return run.state.result.outputFiles;
     }
@@ -2742,7 +3099,7 @@
 
     const title = document.createElement("div");
     title.className = "details-title";
-    title.textContent = run.runId === null ? "Job" : `Job ${run.runId}`;
+    title.textContent = activityId(run) === null ? "Job" : `Job ${activityId(run)}`;
 
     const meta = document.createElement("div");
     meta.className = "details-meta";
@@ -2759,10 +3116,19 @@
       formatTimestamp(run.state?.createdAtMs || run.clientStartedAt),
     );
     run.detailsElapsedElement = appendFieldRow(properties, "duration", elapsedText(run));
+    if (run.proofJob) appendFieldRow(properties, "proof job", run.proofJob.jobId);
+    if (run.transaction) {
+      appendFieldRow(properties, "transaction", run.transaction.txFinal);
+      appendFieldRow(properties, "transaction state", run.transaction.state);
+      if (run.transaction.txHash) appendFieldRow(properties, "transaction hash", run.transaction.txHash);
+      if (run.transaction.relayerFailure) appendFieldRow(properties, "relayer error", run.transaction.relayerFailure);
+    }
+    if (run.runSnapshot?.error && run.runSnapshot.error !== run.state?.error) {
+      appendFieldRow(properties, "run error", run.runSnapshot.error);
+    }
     const result = run.state?.result;
     if (result) {
-      appendFieldRow(properties, "old root", result.oldRoot);
-      appendFieldRow(properties, "new root", result.newRoot);
+      appendFieldRow(properties, "grounding root", result.oldRoot);
     }
     const error = run.requestError ?? run.state?.error;
     if (error) {
@@ -3246,6 +3612,12 @@
   function showSelection() {
     for (const [rowFileName, row] of rowsByFileName) {
       row.classList.toggle("selected", selectedFileNames.has(rowFileName));
+      const object = objectsByFileName.get(rowFileName);
+      if (!object) continue;
+      const state = shownState(object);
+      for (const status of ["live", "held", "pending", "unknown"]) {
+        row.classList.toggle(status, state === status);
+      }
     }
     renderRuns();
     renderDetails();
@@ -3257,9 +3629,14 @@
     showStartup("Loading inventory...");
     showMessage("Loading...", false);
     try {
-      const [objectsDir, objects, actions, welcome] = await Promise.all([
+      inventory ??= watchInventory(showObjects, {
+        onError: startupInventoryError,
+        onReconnect: restoreRuns,
+        onActivity: activityEvent,
+      });
+      const [objectsDir, , actions, welcome] = await Promise.all([
         fetchJson("/objects/dir"),
-        fetchJson("/objects/unspent"),
+        inventory.reload(),
         fetchJson("/actions"),
         loadUiTextFile(WELCOME_FILE),
         Presentation.load(),
@@ -3271,7 +3648,7 @@
       objectsDirPath = objectsDir.path;
       objectsDirHeader.textContent = objectsDir.path;
       objectsDirHeader.title = objectsDir.path;
-      showObjects(objects);
+      showObjects(inventory.values());
       if (!await restoreRuns()) throw new Error("Could not check active jobs. Please try again.");
       await ensureStartupPocketknife();
     } catch (error) {
@@ -3433,36 +3810,13 @@
     }
   }
 
-  // Keeps the current list on failure; the next completed run retries.
-  async function reloadObjects() {
-    if (objectReloadInFlight) {
-      objectReloadQueued = true;
-      return;
-    }
-    objectReloadInFlight = true;
-    try {
-      showObjects(await fetchJson("/objects/unspent"));
-    } catch (error) {
-      console.warn("Could not reload objects:", error);
-      if (isStartupUnfinished()) {
-        showStartupError(`Could not refresh inventory: ${error.message}`);
-      }
-    } finally {
-      objectReloadInFlight = false;
-      if (objectReloadQueued) {
-        objectReloadQueued = false;
-        reloadObjects();
-      }
-    }
-  }
-
   // The state a row's colour shows. `pending` takes precedence over being
   // held by a run, which takes precedence over the remaining statuses.
   function shownState(object) {
     if (object.status === "pending") {
       return "pending";
     }
-    return object.heldByRunId != null ? "held" : object.status;
+    return object.heldByRunId != null || inputRun(object.fileName) ? "held" : object.status;
   }
 
   // Pending objects are left out of every count and value until they are
@@ -3512,6 +3866,17 @@
   // the page or its shown state changed; nothing flashes on the first load,
   // or for changes made while the setup screen covers the list.
   function showObjects(objects) {
+    const records = inventory?.records() ?? [];
+    for (const record of records) {
+      if (activityInScope(record.action)) trackTransaction(record, false);
+    }
+    for (const run of runs) {
+      if (run.transaction && ["recorded", "submitted"].includes(run.transaction.state)
+        && !records.some((record) => record.txFinal === run.transaction.txFinal)) {
+        run.transactionDeleted = true;
+        updateActivityState(run);
+      }
+    }
     const heldObjects = objects
       .filter((object) => object.class.pluginName === PLUGIN_NAME)
       .sort((left, right) => left.fileName.localeCompare(right.fileName));
@@ -3625,6 +3990,15 @@
   } else if (isRawWindow) {
     loadRawWindow();
   } else {
+    if (window.bitcraftDesktop) {
+      for (const agent of ["claude", "codex"]) {
+        const button = document.getElementById(`${agent}-button`);
+        button.hidden = false;
+        button.addEventListener("click",
+          () => window.open(`bitcraft://agent/${agent}`, "_blank", "noopener"));
+      }
+      document.getElementById("agent-divider").hidden = false;
+    }
     document.getElementById("reference-button").addEventListener("click",
       () => openPageWindow(RECIPEBOOK_PAGE, REFERENCE_WINDOW_NAME, REFERENCE_WINDOW_FEATURES));
     document.getElementById("summary-button").addEventListener("click",
