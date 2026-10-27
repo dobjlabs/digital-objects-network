@@ -44,7 +44,7 @@ pub async fn list_runs(
     Json(state.services.runs.list(active_only))
 }
 
-/// `GET /runs/{run_id}` — current state of a run: status, the result
+/// `GET /runs/{run_id}` -- current state of a run: status, the result
 /// once it succeeds, an error if it fails, and the full ordered progress log.
 /// This is the disconnect-recovery path; pollable until the run is reaped.
 pub async fn get_run(
@@ -58,7 +58,7 @@ pub async fn get_run(
     Ok(Json(entry.snapshot()))
 }
 
-/// `GET /runs/{run_id}/events` — per-run SSE stream. On connect it
+/// `GET /runs/{run_id}/events` -- per-run SSE stream. On connect it
 /// replays the run's buffered progress (resuming after `Last-Event-ID` if
 /// present), then tails live events until the run reaches a terminal state.
 /// Each event's SSE `id` is its index in the run's progress log.
@@ -98,7 +98,7 @@ pub async fn run_events(
                 return;
             }
             // Wait for the next poll tick, but stop immediately if the client
-            // has disconnected — otherwise we'd keep polling for a dropped
+            // has disconnected -- otherwise we'd keep polling for a dropped
             // receiver through a long quiet phase (e.g. proof generation).
             tokio::select! {
                 _ = ticker.tick() => {}
@@ -116,7 +116,7 @@ pub async fn run_events(
         .into_response()
 }
 
-/// `POST /actions/install` — install a `.pexe` (raw archive bytes in the
+/// `POST /actions/install` -- install a `.pexe` (raw archive bytes in the
 /// request body) into the actions dir and hot-reload the catalog, so the
 /// plugin is usable without restarting dobjd. The catalog is validated before
 /// the swap commits and a bad archive is removed, so a failed install leaves
@@ -138,7 +138,7 @@ fn resume_start_index(headers: &HeaderMap) -> usize {
         .unwrap_or(0)
 }
 
-/// `GET /actions` — full catalog of every action the loaded plugins
+/// `GET /actions` -- full catalog of every action the loaded plugins
 /// declare. Pure local state; no synchronizer round-trip. Use this
 /// instead of `/objects` when you only need the action list.
 pub async fn list_actions(State(state): State<AppState>) -> ApiResult<Json<Vec<ActionSummary>>> {
@@ -149,7 +149,7 @@ pub async fn list_actions(State(state): State<AppState>) -> ApiResult<Json<Vec<A
     Ok(Json(actions))
 }
 
-/// `GET /actions/{id}` — one action detail with predicate source.
+/// `GET /actions/{id}` -- one action detail with predicate source.
 /// `id` is the canonical `plugin::name` form.
 pub async fn inspect_action(
     State(state): State<AppState>,
@@ -163,7 +163,7 @@ pub async fn inspect_action(
     Ok(Json(action))
 }
 
-/// `GET /actions/{id}/feasibility` — does the local objects have what
+/// `GET /actions/{id}/feasibility` -- does the local objects have what
 /// this action needs? Returns the report shape `Driver::check_action`
 /// produces: `feasible` flag, the candidate objects we'd use, and any
 /// missing input class names. `id` is the canonical `plugin::name` form.

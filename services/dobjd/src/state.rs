@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use driver::{Driver, DriverError, Hash};
 use wire_types::transactions::TransactionRecord;
 use wire_types::{ObjectSummary, ProofJobState, WaitQuery};
@@ -122,7 +122,7 @@ impl Services {
         wait_until(
             &self.events,
             query,
-            || Ok(entry.snapshot()),
+            || std::future::ready(Ok(entry.snapshot())),
             |job| job.status.is_terminal(),
             |event| match event {
                 Event::ProofJob(job) if job.job_id == job_id => Ok(Some(job.clone())),
@@ -143,7 +143,15 @@ impl Services {
         wait_until(
             &self.events,
             query,
-            || self.driver.get_transaction(tx_final),
+            || {
+                let driver = self.driver.clone();
+                let tx_final = *tx_final;
+                async move {
+                    tokio::task::spawn_blocking(move || driver.get_transaction(&tx_final))
+                        .await
+                        .context("transaction read task failed")?
+                }
+            },
             |record| record.state.is_terminal(),
             |event| transaction_event(&key, event),
         )

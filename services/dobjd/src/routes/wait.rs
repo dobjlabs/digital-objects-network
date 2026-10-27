@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -11,7 +12,7 @@ pub const MAX_WAIT: Duration = Duration::from_secs(120);
 pub const DEFAULT_WAIT: Duration = Duration::from_secs(30);
 
 /// Read immediately or wait for completion, bounded by the query timeout.
-pub async fn wait_until<T, Read, Done, Match>(
+pub async fn wait_until<T, Read, ReadFuture, Done, Match>(
     events: &EventHub,
     query: WaitQuery,
     read: Read,
@@ -19,12 +20,13 @@ pub async fn wait_until<T, Read, Done, Match>(
     from_event: Match,
 ) -> Result<T>
 where
-    Read: Fn() -> Result<T>,
+    Read: Fn() -> ReadFuture,
+    ReadFuture: Future<Output = Result<T>>,
     Done: Fn(&T) -> bool,
     Match: Fn(&Event) -> Result<Option<T>>,
 {
     if !query.wait {
-        return read();
+        return read().await;
     }
     let timeout = query
         .timeout_ms
@@ -43,7 +45,7 @@ where
 
 /// Subscribe before reading to avoid missing a concurrent change.
 /// Re-read after lag or at the deadline; propagate matching event errors.
-pub async fn follow<T, Read, Done, Match>(
+pub async fn follow<T, Read, ReadFuture, Done, Match>(
     events: &EventHub,
     deadline: Option<Instant>,
     read: Read,
@@ -51,17 +53,18 @@ pub async fn follow<T, Read, Done, Match>(
     from_event: Match,
 ) -> Result<T>
 where
-    Read: Fn() -> Result<T>,
+    Read: Fn() -> ReadFuture,
+    ReadFuture: Future<Output = Result<T>>,
     Done: Fn(&T) -> bool,
     Match: Fn(&Event) -> Result<Option<T>>,
 {
     let mut rx = events.subscribe();
-    let mut current = read()?;
+    let mut current = read().await?;
     while !is_done(&current) {
         let received = match deadline {
             Some(deadline) => match tokio::time::timeout_at(deadline, rx.recv()).await {
                 Ok(received) => received,
-                Err(_elapsed) => return read(),
+                Err(_elapsed) => return read().await,
             },
             None => rx.recv().await,
         };
@@ -72,7 +75,7 @@ where
                 }
             }
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                current = read()?;
+                current = read().await?;
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                 anyhow::bail!("event hub closed");
@@ -102,7 +105,7 @@ mod tests {
             let reads = reads.clone();
             move || {
                 reads.fetch_add(1, Ordering::Relaxed);
-                Ok(0u32)
+                std::future::ready(Ok(0u32))
             }
         };
         let matched = |event: &Event| match event {
@@ -158,10 +161,71 @@ mod tests {
 
         let failing = {
             let hub = hub.clone();
-            tokio::spawn(async move { follow(&hub, None, || Ok(0u32), |v| *v == 1, matched).await })
+            tokio::spawn(async move {
+                follow(
+                    &hub,
+                    None,
+                    || std::future::ready(Ok(0u32)),
+                    |v| *v == 1,
+                    matched,
+                )
+                .await
+            })
         };
         tokio::time::sleep(Duration::from_millis(20)).await;
         hub.publish(removed("poison"));
         assert!(failing.await.unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn events_during_an_async_read_are_preserved_or_reloaded_after_lag() {
+        for lagged in [false, true] {
+            let hub = EventHub::new();
+            let entered = Arc::new(tokio::sync::Notify::new());
+            let release = Arc::new(tokio::sync::Notify::new());
+            let reads = Arc::new(AtomicU32::new(0));
+            let read = {
+                let entered = entered.clone();
+                let release = release.clone();
+                let reads = reads.clone();
+                move || {
+                    let entered = entered.clone();
+                    let release = release.clone();
+                    let reads = reads.clone();
+                    async move {
+                        if reads.fetch_add(1, Ordering::Relaxed) == 0 {
+                            entered.notify_one();
+                            release.notified().await;
+                            Ok(0u32)
+                        } else {
+                            Ok(2u32)
+                        }
+                    }
+                }
+            };
+            let waiting = {
+                let hub = hub.clone();
+                tokio::spawn(async move {
+                    follow(&hub, None, read, |value| *value > 0, |_| Ok(Some(1u32))).await
+                })
+            };
+            entered.notified().await;
+            let events = if lagged {
+                crate::events::CHANNEL_CAPACITY + 1
+            } else {
+                1
+            };
+            for _ in 0..events {
+                hub.publish(removed("changed"));
+            }
+            release.notify_one();
+            let result = tokio::time::timeout(Duration::from_secs(1), waiting)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(result, if lagged { 2 } else { 1 });
+            assert_eq!(reads.load(Ordering::Relaxed), if lagged { 2 } else { 1 });
+        }
     }
 }

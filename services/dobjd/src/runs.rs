@@ -503,14 +503,24 @@ where
             }
         };
         let tx_final = record.tx_final.clone();
+        let read_record = Arc::new(read_record);
         let settled = crate::routes::wait::follow(
             &events,
             None,
             || {
-                if record.state.is_terminal() {
-                    Ok(record.clone())
-                } else {
-                    read_record(&tx_final)
+                let record = record.clone();
+                let tx_final = tx_final.clone();
+                let read_record = read_record.clone();
+                async move {
+                    if record.state.is_terminal() {
+                        Ok(record)
+                    } else {
+                        tokio::task::spawn_blocking(move || read_record(&tx_final))
+                            .await
+                            .map_err(|err| {
+                                anyhow::anyhow!("run transaction read task failed: {err}")
+                            })?
+                    }
                 }
             },
             |record| record.state.is_terminal(),
@@ -633,6 +643,44 @@ mod tests {
         })
         .await
         .unwrap_or_else(|_| panic!("run did not reach {wanted:?}"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn transaction_reads_do_not_block_the_runtime() {
+        let registry = RunRegistry::default();
+        let runtime_thread = std::thread::current().id();
+        let (started, reading) = tokio::sync::oneshot::channel();
+        let started = Mutex::new(Some(started));
+        let (release, blocked) = std::sync::mpsc::channel();
+        let blocked = Mutex::new(blocked);
+        let run = spawn_worker(
+            &registry,
+            EventHub::new(),
+            action("A"),
+            vec![],
+            |_| Ok(record("tx", TransactionState::Recorded)),
+            move |_| {
+                assert_ne!(std::thread::current().id(), runtime_thread);
+                if let Some(started) = started.lock().unwrap().take() {
+                    started.send(()).unwrap();
+                }
+                blocked
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(2))
+                    .map_err(|err| anyhow::anyhow!("read was not released: {err}"))?;
+                Ok(record("tx", TransactionState::Landed))
+            },
+        );
+        tokio::time::timeout(Duration::from_secs(1), reading)
+            .await
+            .unwrap()
+            .unwrap();
+        release.send(()).unwrap();
+        assert_eq!(
+            wait_terminal(&registry, &run).await.status,
+            RunStatus::Succeeded
+        );
     }
 
     #[test]

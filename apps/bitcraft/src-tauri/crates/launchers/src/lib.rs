@@ -46,12 +46,17 @@ fn tool_home(explicit: Option<PathBuf>) -> Result<PathBuf> {
         return resolve_home(explicit);
     }
     let directory = std::env::current_dir()?;
-    for ancestor in directory.ancestors() {
-        if connection_path(ancestor).try_exists()? {
-            return Ok(ancestor.to_path_buf());
-        }
+    match discover_home(&directory) {
+        Some(home) => Ok(home),
+        None => resolve_home(None),
     }
-    resolve_home(None)
+}
+
+fn discover_home(directory: &Path) -> Option<PathBuf> {
+    directory
+        .ancestors()
+        .find(|ancestor| connection_path(ancestor).try_exists().unwrap_or(false))
+        .map(Path::to_path_buf)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -341,6 +346,22 @@ pub fn main_for(tool: Tool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_skips_uninspectable_candidates_and_finds_parent_home() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("game");
+        let nested = home.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        let connection = Connection::new(home.clone(), "game".into(), DEFAULT_HTTP_PORT).unwrap();
+        connection.publish(&connection_path(&home)).unwrap();
+        std::os::unix::fs::symlink("connection.json", connection_path(&nested)).unwrap();
+        assert!(connection_path(&nested).try_exists().is_err());
+        assert_eq!(discover_home(&nested), Some(home.clone()));
+        connection.remove(&connection_path(&home)).unwrap();
+        assert_eq!(discover_home(&nested), None);
+    }
 
     #[test]
     fn connection_publication_is_complete_and_cleanup_respects_ownership() {
