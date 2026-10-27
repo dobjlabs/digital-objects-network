@@ -138,8 +138,9 @@ the selected objects.
 
 ## Cosmetic
 
-- **Page title:** "Bitcraft", which becomes "Bitcraft (N.NNN BIT)" once the
-  inventory loads (see below).
+- **Page title:** "Bitcraft", which becomes "Bitcraft (N.NN BIT - N.NN
+  BIT/sec)" once the inventory loads, or "Bitcraft (N.NN BIT)" while the
+  rate is 0.00 (see below).
 - **Presentation pack:** class and action icons, summaries and
   descriptions come from the bitcraft presentation pack
   (`../../../examples/bitcraft/presentation/`), which the app ships by
@@ -168,8 +169,8 @@ the selected objects.
 ## Inventory value, Inventory Summary and status bar
 
 The inventory's value, shown at the right end of the main window's top bar
-("Total Inventory Value:", the `SUMMARY_ICON_CLASS` icon and "31.000 BIT", which
-opens the Inventory Summary) and in its title ("Bitcraft (31.000 BIT)",
+("Total Inventory Value:", the `SUMMARY_ICON_CLASS` icon and "31.00 BIT", which
+opens the Inventory Summary) and in its title ("Bitcraft (31.00 BIT - 0.37 BIT/sec)",
 which the desktop app shows in its title bar), the Inventory Summary window
 opened
 from the top bar, and the status bar along the bottom of the page. Three of
@@ -178,6 +179,13 @@ their entries know about bitcraft:
 - **Bitcraft version** (status bar): `BITCRAFT_VERSION` ("Alpha 1.0"), a
   fixed string in the page; dobjd and the plugin manifest report no game
   version.
+- **BIT/sec** (top bar and window title): how much the Total Inventory
+  Value grew over the last `VALUE_RATE_WINDOW_MS` (5 minutes), divided by
+  the full window, from samples of it taken on every inventory change; the
+  value before the first sample counts as that sample's, so a new session's
+  first gains do not spike. A rate that rounds to 0.00 is not shown. Since crafting converts value
+  rather than creating it, this is in effect the player's production rate.
+  Generic behavior: no rate.
 - **Total Inventory Value** (top bar, window title and Inventory Summary):
   the summed
   Total Bit Value of the live bitcraft objects (pending ones are left out);
@@ -187,8 +195,10 @@ their entries know about bitcraft:
 - **Inventory Summary icon:** `SUMMARY_ICON_CLASS` (`Bit`), the class whose
   art heads the window, since it totals the inventory in bits.
 - **Website and Discord links:** `BITCRAFT_SITE_URL` and
-  `BITCRAFT_DISCORD_URL`, opened in the player's browser by the top bar's
-  info and Discord icons. Generic behavior: no links.
+  `BITCRAFT_DISCORD_URL`, shown as the website's address and a Discord
+  button under the name and version (`BITCRAFT_VERSION`) at the foot of the
+  Settings window, and opened in the player's browser.
+  Generic behavior: no links.
 - **Generic behavior:** no version, Total Inventory Value, per-class values
   or summary icon. The
   Inventory Summary's object count and per-class counts are generic: both
@@ -228,8 +238,8 @@ of its durability it has left, out of the 100 a new wood axe starts with
 (`FULL_DURABILITY`; upgrading to a stone or iron axe carries the durability
 over). An axe at 60 durability is worth 60% of a new one, and a spent axe
 nothing. Rekeying does not change the value: a `Rekey<Class>` action leaves
-every value field alone. Values are shown with three decimal places and the
-unit, as in "31.000 BIT".
+every value field alone. Values are shown with two decimal places and the
+unit, as in "31.00 BIT".
 
 ## Welcome guide
 

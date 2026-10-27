@@ -117,6 +117,12 @@ fn is_daemon_url(url: &tauri::Url) -> bool {
 /// Sites the game page may open in the user's browser.
 const EXTERNAL_LINK_HOSTS: &[&str] = &["bitcraft.sh", "discord.gg"];
 
+fn open_in_browser(url: &tauri::Url) {
+    if let Err(error) = tauri_plugin_opener::open_url(url.as_str(), None::<&str>) {
+        eprintln!("Could not open {url} in the browser: {error}");
+    }
+}
+
 fn is_external_link(url: &tauri::Url) -> bool {
     url.scheme() == "https"
         && url.port().is_none()
@@ -279,9 +285,7 @@ fn main() -> Result<()> {
                         return tauri::webview::NewWindowResponse::Deny;
                     }
                     if is_external_link(&url) {
-                        if let Err(error) = tauri_plugin_opener::open_url(url.as_str(), None::<&str>) {
-                            eprintln!("Could not open {url} in the browser: {error}");
-                        }
+                        open_in_browser(&url);
                         return tauri::webview::NewWindowResponse::Deny;
                     }
                     if !is_daemon_url(&url) {
@@ -293,6 +297,13 @@ fn main() -> Result<()> {
                         .window_features(features)
                         .on_navigation(move |url| allow_navigation(url, dev_url.as_ref()))
                         .on_document_title_changed(show_page_title)
+                        // Such a window opens only listed sites, in the browser.
+                        .on_new_window(|url, _| {
+                            if is_external_link(&url) {
+                                open_in_browser(&url);
+                            }
+                            tauri::webview::NewWindowResponse::Deny
+                        })
                         .build()
                     {
                         Ok(window) => tauri::webview::NewWindowResponse::Create { window },

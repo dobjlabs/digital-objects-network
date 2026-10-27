@@ -66,6 +66,9 @@ async function page(context, options = {}) {
       };
       window.clearTimeout = (id) => holds.delete(id);
       if (options.startupRunId) window.sessionStorage.setItem("bitcraft.startup-pocketknife-run", options.startupRunId);
+      for (const [key, value] of Object.entries(options.sessionStorage ?? {})) {
+        window.sessionStorage.setItem(key, value);
+      }
       window.EventSource = class {
         constructor(url) { this.url = url; this.closed = false; sources.push(this); }
         close() { this.closed = true; }
@@ -668,6 +671,7 @@ test("desktop agent buttons request the selected app without starting game actio
     const button = ui.document.getElementById(`${agent}-button`);
     assert.equal(button.hidden, false);
     assert.match(button.getAttribute("aria-label"), new RegExp(agent, "i"));
+    assert.equal(button.dataset.tooltip, `Automate with ${agent === "claude" ? "Claude" : "Codex"}`);
     button.querySelector("svg").dispatchEvent(new ui.dom.window.MouseEvent("click", { bubbles: true }));
     button.click();
   }
@@ -928,7 +932,7 @@ test("resting on an object row shows its BIT value after a quarter second", asyn
   hover("axe.dobj", "mousemove");
   await ui.elapse();
   assert.equal(tooltip.hidden, false);
-  assert.equal(tooltip.textContent, "1.200 BIT", "60% of a new wood axe's 2");
+  assert.equal(tooltip.textContent, "1.20 BIT", "60% of a new wood axe's 2");
   assert.equal(tooltip.style.left, "52px");
   assert.equal(tooltip.style.top, "78px");
 
@@ -962,6 +966,68 @@ test("Recipe Info lists the classes in game order, then any others by name", asy
     "bitcraft::BucketOfWood", "bitcraft::BucketOfStone", "bitcraft::BucketOfIron",
     "bitcraft::Gem", "bitcraft::Ore",
   ]);
+});
+
+test("the welcome guide's name is semibold and object names are not", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  const weight = (fileName) => ui.dom.window.getComputedStyle(
+    ui.document.querySelector(`.object-row[data-file-name="${fileName}"] .object-name`),
+  ).fontWeight;
+  assert.equal(weight("BITCRAFT_WELCOME.md"), "600");
+  assert.notEqual(weight("pocketknife.dobj"), "600");
+});
+
+const quarry = (level) => ({
+  fileName: "quarry.dobj", class: qname("Quarry"), status: "live",
+  fields: { kvs: [["level", { Int: String(level) }]] },
+});
+const valueSamples = (...samples) => ({
+  "bitcraft.inventory-value-samples": JSON.stringify(samples.map(([ago, value]) => ({ atMs: Date.now() - ago, value }))),
+});
+
+test("BIT/sec shows how fast the inventory's value grew over the last 5 minutes", async (context) => {
+  // A level 3 quarry is worth 300; the inventory was worth nothing 10 minutes
+  // ago, so over the 5-minute window it grew 300 BIT in 300 seconds.
+  const ui = await page(context, {
+    objects: [knife(), quarry(3)], sessionStorage: valueSamples([600000, 0]),
+  });
+  const rate = () => ui.document.querySelector("#inventory-rate").textContent;
+  assert.equal(rate(), "1.00 BIT/sec");
+  assert.equal(ui.document.title, "Bitcraft (300.00 BIT - 1.00 BIT/sec)");
+  const ticks = [...ui.timers.values()].filter((timer) => timer.delay === 1000);
+  assert.ok(ticks.length > 0, "the rate is refreshed every second");
+
+  const stored = JSON.parse(ui.dom.window.sessionStorage.getItem("bitcraft.inventory-value-samples"));
+  assert.deepEqual(stored.map((sample) => sample.value), [0, 300], "the samples are kept for a reload");
+});
+
+test("BIT/sec counts only the window, and can fall", async (context) => {
+  // 200 BIT 8 minutes ago is the value the window starts from; 400 a minute
+  // ago, 300 now: 100 BIT more over 300 seconds.
+  const ui = await page(context, {
+    objects: [knife(), quarry(3)], sessionStorage: valueSamples([900000, 0], [480000, 200], [60000, 400]),
+  });
+  assert.equal(ui.document.querySelector("#inventory-rate").textContent, "0.33 BIT/sec");
+  const fell = await page(context, {
+    objects: [knife(), quarry(3)], sessionStorage: valueSamples([600000, 450]),
+  });
+  assert.equal(fell.document.querySelector("#inventory-rate").textContent, "-0.50 BIT/sec");
+});
+
+test("BIT/sec always averages over 5 minutes, and a 0.00 rate is not shown", async (context) => {
+  const ui = await page(context, { objects: [knife(), quarry(3)] });
+  const rateShown = (page) => !page.document.querySelector("#inventory-rate").hidden
+    && !page.document.querySelector("#inventory-rate-divider").hidden;
+  assert.equal(rateShown(ui), false, "with one sample nothing has grown, and a 0.00 rate is not shown");
+  assert.equal(ui.document.title, "Bitcraft (300.00 BIT)");
+  // 270 BIT ten seconds ago, 300 now: 30 BIT more, spread over 300 seconds
+  // rather than 10.
+  const recent = await page(context, {
+    objects: [knife(), quarry(3)], sessionStorage: valueSamples([10000, 270]),
+  });
+  assert.equal(recent.document.querySelector("#inventory-rate").textContent, "0.10 BIT/sec");
+  assert.equal(rateShown(recent), true);
+  assert.equal(recent.document.title, "Bitcraft (300.00 BIT - 0.10 BIT/sec)");
 });
 
 test("the summary icon opens the Inventory Summary in one window", async (context) => {
@@ -1004,12 +1070,12 @@ test("the Inventory Summary applies object events and reconciles untracked outpu
   assert.equal(document.title, "Bitcraft Inventory Summary");
   assert.equal(document.body.classList.contains("secondary-window"), true);
   assert.deepEqual(ui.backend.posts, []);
-  assert.equal(text(".summary-total"), "2.000 BIT");
+  assert.equal(text(".summary-total"), "2.00 BIT");
   assert.equal(document.querySelector(".summary-subtitle"), null, "no object total under the title");
   assert.equal(document.querySelector('[data-section="general"]'), null, "no General section");
   const objectsTitle = () => document.querySelector('[data-section="classes"] summary').textContent;
   assert.equal(objectsTitle(), "Objects (3):", "this plugin's live objects, as listed");
-  assert.deepEqual(fields("classes"), ["bitcraft::Pocketknife: 1 | 0.000 BIT", "bitcraft::Wood: 2 | 2.000 BIT"]);
+  assert.deepEqual(fields("classes"), ["bitcraft::Pocketknife: 1 | 0.00 BIT", "bitcraft::Wood: 2 | 2.00 BIT"]);
 
   const polls = () => [...ui.timers.values()].filter((timer) => timer.delay === 10000);
   assert.equal(polls().length, 1, "polls while the stick is pending");
@@ -1019,7 +1085,7 @@ test("the Inventory Summary applies object events and reconciles untracked outpu
   const eventReads = ui.backend.inventoryReads;
   await ui.event({ type: "object", ...item("wood-3.dobj", "Wood") });
   assert.equal(ui.backend.inventoryReads, eventReads, "an object event needs no inventory request");
-  assert.deepEqual(fields("classes"), ["bitcraft::Pocketknife: 1 | 0.000 BIT", "bitcraft::Wood: 3 | 3.000 BIT"]);
+  assert.deepEqual(fields("classes"), ["bitcraft::Pocketknife: 1 | 0.00 BIT", "bitcraft::Wood: 3 | 3.00 BIT"]);
   assert.equal(objectsTitle(), "Objects (4):");
   assert.equal(document.querySelector('[data-section="classes"]').open, false, "a collapsed section stays collapsed");
 
@@ -1035,24 +1101,22 @@ test("the Inventory Summary applies object events and reconciles untracked outpu
   await polls()[0].callback();
   await flush();
   assert.deepEqual(fields("classes"), [
-    "bitcraft::Pocketknife: 1 | 0.000 BIT", "bitcraft::Stick: 1 | 0.500 BIT", "bitcraft::Wood: 3 | 3.000 BIT",
+    "bitcraft::Pocketknife: 1 | 0.00 BIT", "bitcraft::Stick: 1 | 0.50 BIT", "bitcraft::Wood: 3 | 3.00 BIT",
   ]);
   assert.equal(polls().length, 0, "stops polling once everything is live");
 });
 
-test("the right-hand buttons open the site, Discord and Settings", async (context) => {
+test("the gear opens Settings, and the top bar has no site or Discord links", async (context) => {
   const ui = await page(context, { objects: [knife()] });
   const opened = [];
   ui.dom.window.open = (url, name) => {
     opened.push({ url: String(url), name });
     return { closed: false, focus() {} };
   };
-  ui.document.querySelector("#about-button").click();
-  ui.document.querySelector("#discord-button").click();
+  assert.equal(ui.document.querySelector("#about-button"), null);
+  assert.equal(ui.document.querySelector("#discord-button"), null);
   ui.document.querySelector("#settings-button").click();
   assert.deepEqual(opened, [
-    { url: "https://bitcraft.sh/", name: "_blank" },
-    { url: "https://discord.gg/cWtZZYrer", name: "_blank" },
     { url: "http://127.0.0.1:7727/bitcraft/?page=settings", name: "bitcraft-settings" },
   ]);
 });
@@ -1072,16 +1136,26 @@ test("the Settings window shows the connection addresses read-only and runs no s
   assert.equal(field("relayer").value, "http://127.0.0.1:3200");
   assert.equal(field("synchronizer").readOnly, true);
   assert.equal(field("relayer").readOnly, true);
+  assert.equal(field("version").textContent, "Alpha 1.0");
+  assert.equal(document.querySelector("#settings-view img"), null, "no logo");
+  for (const [id, url, text] of [
+    ["website", "https://bitcraft.sh/", "https://bitcraft.sh"],
+    ["discord", "https://discord.gg/cWtZZYrer", "Discord"],
+  ]) {
+    assert.equal(field(id).href, url);
+    assert.equal(field(id).textContent.trim(), text);
+    assert.equal(field(id).target, "_blank", `${id} opens outside the Settings window`);
+  }
 });
 
 test("the top bar and the window title show the Inventory Value of live objects", async (context) => {
   const wood = (fileName, status = "live") => ({ fileName, class: qname("Wood"), status, fields: { kvs: [] } });
   const ui = await page(context, { objects: [knife(), wood("wood-1.dobj"), wood("wood-2.dobj"), wood("wood-3.dobj", "pending")] });
   const value = () => ui.document.querySelector("#inventory-value-amount").textContent;
-  assert.equal(value(), "2.000 BIT");
+  assert.equal(value(), "2.00 BIT");
   assert.equal(ui.document.querySelector("#inventory-value").textContent.replace(/\s+/g, " ").trim(),
-    "Total Inventory Value: 2.000 BIT");
-  assert.equal(ui.document.title, "Bitcraft (2.000 BIT)");
+    "Total Inventory Value: 2.00 BIT");
+  assert.equal(ui.document.title, "Bitcraft (2.00 BIT)");
   const opened = [];
   ui.dom.window.open = (url, name) => {
     opened.push({ url: String(url), name });
@@ -1094,8 +1168,8 @@ test("the top bar and the window title show the Inventory Value of live objects"
   ui.backend.objects.find((object) => object.fileName === "wood-3.dobj").status = "live";
   ui.dom.window.dispatchEvent(new ui.dom.window.Event("focus"));
   await flush();
-  assert.equal(value(), "3.000 BIT");
-  assert.equal(ui.document.title, "Bitcraft (3.000 BIT)");
+  assert.equal(value(), "3.00 BIT");
+  assert.equal(ui.document.title, "Bitcraft (3.00 BIT)");
 });
 
 test("a worn tool is worth the fraction of its durability it has left", async (context) => {
@@ -1107,13 +1181,13 @@ test("a worn tool is worth the fraction of its durability it has left", async (c
     objects: [knife(), axe("wood-axe.dobj", "WoodAxe", 60), axe("stone-axe.dobj", "StoneAxe", 0), axe("iron-axe.dobj", "IronAxe", 100)],
   });
   // 60% of a wood axe's 2, nothing for the spent stone axe, all of an iron axe's 9.
-  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "10.200 BIT");
+  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "10.20 BIT");
 });
 
 test("the top bar's icons have tooltips", async (context) => {
   const ui = await page(context, { objects: [knife()] });
   assert.deepEqual([...ui.document.querySelectorAll("#top-bar .toolbar-button:not([hidden])")].map((button) => button.dataset.tooltip),
-    ["Objects", "Stats", "Reference", "More Info", "Discord", "Settings"]);
+    ["Objects", "Stats", "Reference", "Settings"]);
 });
 
 const bitcraftPack = {
@@ -1585,11 +1659,11 @@ for (const mode of ["main", "summary"]) {
         "the transaction received during the snapshot keeps its output out of fallback polling");
     }
     await ui.event({ type: "object", ...wood("new.dobj") });
-    if (mode === "main") assert.equal(ui.document.title, "Bitcraft (1.000 BIT)");
-    else assert.equal(ui.document.querySelector(".summary-total").textContent, "1.000 BIT");
+    if (mode === "main") assert.equal(ui.document.title, "Bitcraft (1.00 BIT)");
+    else assert.equal(ui.document.querySelector(".summary-total").textContent, "1.00 BIT");
     await ui.event({ type: "object-removed", fileName: "new.dobj" });
     if (mode === "main") assert.equal(ui.document.querySelector('.object-row[data-file-name="new.dobj"]'), null);
-    else assert.equal(ui.document.querySelector(".summary-total").textContent, "0.000 BIT");
+    else assert.equal(ui.document.querySelector(".summary-total").textContent, "0.00 BIT");
   });
 }
 

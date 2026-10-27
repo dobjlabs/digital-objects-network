@@ -6,7 +6,7 @@ For the desktop app, run `just bitcraft-dev` from the repository root. It prepar
 
 For standalone browser development, serve this directory with `python3 -m http.server 4170 --bind 127.0.0.1 --directory apps/bitcraft/ui` and open `http://127.0.0.1:4170`. Without the daemon-injected API origin, the page connects to the standalone Digital Objects daemon at `http://127.0.0.1:7717` (MCP uses `7718` when enabled). See [the desktop README](../README.md) for build and bundle commands.
 
-The main window always shows the inventory (the files view). Its top bar has four groups of controls, separated by thin dividers, and at its right end the inventory's value, read like a balance ("Total Inventory Value:", the Bit icon and "N.NNN BIT"), which opens the Inventory Summary. The window title repeats the amount: "Bitcraft (N.NNN BIT)". The game views: a folder, permanently selected, for the files view; a bar chart that opens the Inventory Summary; and an open book that opens Recipe Info. The outside links: an info icon and a Discord icon, which open the Bitcraft website and its Discord server in the player's browser. Desktop agent buttons use monochrome Claude and ChatGPT/OpenAI logo marks, with accessible names and tooltips. They open Claude Code or Codex with the game's home directory and a player prompt; these controls are hidden in a standalone browser. The host handles their `bitcraft://agent/claude` and `bitcraft://agent/codex` requests, constructing the external deep links from its own installation and game home paths. The app and tray menus also offer "Play with agents...", a native guide window backed by `shell/agent.html`. It shares the startup shell's base styling and shows the same player prompt as the deep links, with copy controls; installation paths are included in the prompt. Missing URL handlers and launch errors open this guide with an explanatory message on macOS, Windows and Linux. Last, a gear opens Settings. Toolbar tooltips are drawn by the page's CSS (`data-tooltip`), so they appear without the system's hover delay. Recipe Info, the Inventory Summary and Settings each open their window once, and a later click focuses it. These windows load this same page in a mode of their own and run none of the main window's startup.
+The main window always shows the inventory (the files view). Its top bar has three groups of controls, separated by thin dividers, and at its right end the inventory's value, read like a balance ("Total Inventory Value:", the Bit icon and "N.NN BIT"), which opens the Inventory Summary. Just left of it, past a divider, "N.NN BIT/sec" shows how fast that value grew over the last 5 minutes (`VALUE_RATE_WINDOW_MS`): the value now minus the value at the window's start, divided by the full 300 seconds, from samples taken on every inventory change and kept in session storage so a reload does not restart it. Before the first sample the value counts as that sample's, so a new session's first gains do not spike. It refreshes every second and can be negative. The window title repeats both: "Bitcraft (N.NN BIT - N.NN BIT/sec)". A rate that rounds to 0.00 is left out of both, with its divider, and the title is then "Bitcraft (N.NN BIT)". The game views: a folder, permanently selected, for the files view; a bar chart that opens the Inventory Summary; and an open book that opens Recipe Info. Then the desktop agent buttons, drawn slightly smaller than the other icons since their logo marks fill more of the box, with the tooltips "Automate with Claude" and "Automate with Codex". They use monochrome Claude and ChatGPT/OpenAI logo marks. They open Claude Code or Codex with the game's home directory and a player prompt; these controls are hidden in a standalone browser. The host handles their `bitcraft://agent/claude` and `bitcraft://agent/codex` requests, constructing the external deep links from its own installation and game home paths. The app and tray menus also offer "Play with agents...", a native guide window backed by `shell/agent.html`. It shares the startup shell's base styling and shows the same player prompt as the deep links, with copy controls; installation paths are included in the prompt. Missing URL handlers and launch errors open this guide with an explanatory message on macOS, Windows and Linux. Last, a gear opens Settings. Toolbar tooltips are drawn by the page's CSS (`data-tooltip`), so they appear without the system's hover delay. Recipe Info, the Inventory Summary and Settings each open their window once, and a later click focuses it. These windows load this same page in a mode of their own and run none of the main window's startup.
 
 "View raw", Open and a double-click on a row open `?page=raw&file=NAME`, a
 window that shows the file's stored text (an object's from dobjd's
@@ -22,12 +22,17 @@ The outer page fills the window with scrolling and overscroll disabled, includin
 
 Settings (`?page=settings`) shows the synchronizer and relayer addresses
 from dobjd's `GET /settings` in read-only fields; they cannot be edited yet.
+Below them, set apart like a Mac About window, it shows the Bitcraft name
+and version, the website's address as a link, and a Discord button; both
+open in the player's browser. The window's opening height counts the title
+bar in the desktop app, so it leaves room for one.
 
 In the desktop app, the host builds every window the page opens. Links to
 the daemon open as app windows; links to a site listed in the host's
 `EXTERNAL_LINK_HOSTS` (in `src-tauri/src/main.rs`) open in the player's
-browser instead; anything else is blocked. A new external link from the
-page needs its host added there.
+browser instead; anything else is blocked. The windows it opens, such as
+Settings, send listed sites to the browser the same way and open nothing
+else. A new external link from the page needs its host added there.
 
 The Inventory Summary (`?page=summary`) is laid out like Finder's Get Info window: the inventory's Total Inventory Value beside an icon, then an "Objects (N)" section, N being the live bitcraft objects it lists, with a count and a summed value per class, which can be collapsed. Both inventory views apply `object` and `object-removed` events from dobjd's `/events` stream, including changes made by other clients. They read inventory and transaction snapshots on load, stream connection or reconnection, sequence gaps, and window focus. Changes received during a snapshot read are reapplied to its result. Recorded transactions settle in the daemon and need no UI polling; pending or unknown objects with no open local transaction record are reconciled every 10 seconds.
 
@@ -49,7 +54,9 @@ older name) opens Recipe Info with that entry selected and shown.
 
 Resting the pointer on a row of the object list for a quarter second
 (`ROW_TOOLTIP_DELAY_MS`) shows a tooltip with the object's Total Bit Value
-alone; the welcome guide's row shows none. Rows carry their file name in `data-file-name` rather than a `title`, so
+alone; the welcome guide's row shows none. The welcome guide's name is set
+in semibold, so it stands out from the objects below it; names are cut to
+fit in each row's own font. Rows carry their file name in `data-file-name` rather than a `title`, so
 no delayed native tooltip competes with it; the tooltip is a single element
 outside the list, placed by the script, since the scrolling list would clip
 it.
