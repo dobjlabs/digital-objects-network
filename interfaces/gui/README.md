@@ -16,6 +16,12 @@ just dev-local    # local devnet, services, dobjd, Vite
 Open `http://localhost:1420`. To run only the frontend against an existing
 daemon, use `just web` (or `pnpm dev` in this directory).
 
+The Rust dev commands use `cargo run --bin ...` from the workspace root so
+shared dependencies use the same workspace feature set across services and
+plugin packaging. The first launch after this change may rebuild dependencies;
+later services can reuse them. Separate dependency versions and host/build
+dependencies can still require separate compilations.
+
 Development fetches and SSE streams use `/api` on the Vite origin. Vite
 proxies them to `http://127.0.0.1:7717` on its host, so forwarding only port
 1420 works. `VITE_DOBJD_URL` chooses a different upstream:

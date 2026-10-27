@@ -13,17 +13,21 @@ DOBJ_ROOT := env_var_or_default("DOBJ_HOME", home_directory() / ".dobj")
 LOCAL_DOBJ_ROOT := justfile_directory() / "data/dobj-local"
 LOCAL_BITCRAFT_ROOT := justfile_directory() / ".dev/bitcraft-local"
 
+# Use --bin for dev commands so dependency features are unified across the
+# workspace. Separate -p selections rebuild shared dependencies with different
+# feature sets as each service starts.
+
 # Run the synchronizer (loads env from services/synchronizer/.env if present)
 sync:
-    RUST_LOG=info cargo run -p synchronizer --release
+    RUST_LOG=info cargo run --bin synchronizer --release
 
 # Run the relayer (loads env from services/relayer/.env if present)
 relayer:
-    RUST_LOG=info cargo run -p relayer --release
+    RUST_LOG=info cargo run --bin relayer --release
 
 # Run the archiver (loads env from services/archiver/.env if present)
 archiver:
-    RUST_LOG=info cargo run -p archiver --release
+    RUST_LOG=info cargo run --bin archiver --release
 
 # The 2s block time is load-bearing, and the state file must stay in step with
 # the archiver + synchronizer stores; see devtools/beacon-shim/README.md.
@@ -37,7 +41,7 @@ anvil:
 # Run the Beacon REST shim that projects anvil blocks onto beacon slots for the
 # archiver and synchronizer. Waits for anvil, so start order does not matter.
 beacon-shim:
-    RUST_LOG=info cargo run -p beacon-shim --release
+    RUST_LOG=info cargo run --bin beacon-shim --release
 
 # Run the browser UI development server on :1420. HTTP/SSE requests are
 # proxied to dobjd, so forwarding just the UI port also works.
@@ -75,16 +79,19 @@ bitcraft-shell:
 bitcraft-prepare:
     python3 apps/bitcraft/scripts/prepare.py
 
+bitcraft-prepare-dev:
+    python3 apps/bitcraft/scripts/prepare.py --dev
+
 # Regenerate bitcraft's presentation pack (icons, summaries, descriptions) and
 # copy it into the Bitcraft UI.
 bitcraft-presentation:
     python3 examples/bitcraft/presentation/generate.py
     python3 apps/bitcraft/scripts/sync_presentation.py
 
-bitcraft-dev: bitcraft-prepare
+bitcraft-dev: bitcraft-prepare-dev
     cd apps/bitcraft && npx --yes @tauri-apps/cli@2.12.2 dev --config src-tauri/tauri.bundle.conf.json
 
-bitcraft-dev-local: bitcraft-prepare
+bitcraft-dev-local: bitcraft-prepare-dev
     python3 apps/bitcraft/scripts/init_local.py "{{LOCAL_BITCRAFT_ROOT}}"
     cd apps/bitcraft && npx --yes @tauri-apps/cli@2.12.2 dev --config src-tauri/tauri.bundle.conf.json -- -- --home "{{LOCAL_BITCRAFT_ROOT}}"
 
@@ -98,7 +105,7 @@ docs:
 # Run the headless HTTP server that exposes the driver API to every client
 # (browser UI, MCP, dobj CLI).
 dobjd:
-    RUST_LOG=info cargo run -p dobjd --release
+    RUST_LOG=info cargo run --bin dobjd --release
 
 # Bring up synchronizer, relayer, dobjd, and the Vite browser UI.
 # Open http://localhost:1420 once the web server is ready.
@@ -366,16 +373,16 @@ build:
 
 # Build all plugins into target/pexe/*.pexe
 pack-plugins:
-    cargo run -p pexe --release -- build examples/*
+    cargo run --bin pexe --release -- build examples/*
 
 # Build and install plugins into the driver's actions/ dir (default ~/.dobj/actions/)
 install-plugins ROOT=DOBJ_ROOT:
-    cargo run -p pexe --release -- build --install --install-dir '{{ROOT}}/actions' examples/*
+    cargo run --bin pexe --release -- build --install --install-dir '{{ROOT}}/actions' examples/*
 
 # Run the `pexe` CLI with arbitrary args. Example:
 #   just pexe inspect plan --action CraftWood examples/craft-basics
 pexe *ARGS:
-    cargo run -p pexe --release -- {{ARGS}}
+    cargo run --bin pexe --release -- {{ARGS}}
 
 # Run the dobj `cli` CLI with arbitrary args. Example:
 #   just cli inspect-action craft-basics::FindLog
