@@ -43,9 +43,9 @@ The [Quint workflow](../../../.github/workflows/models.yml) runs these checks in
 
 ## Rust replay adapter
 
-The workspace includes the `quint-connect` dependency pin, but the driver adapter
-is still to be implemented. It will replay model transitions against a `Driver`
-on a temporary home, using mock synchronizer and relayer state, gates at crash
-boundaries, and restart by reopening the driver. It will compare object files,
+The driver adapter is still to be implemented. It will replay model
+transitions against a `Driver` on a temporary home, using mock synchronizer
+and relayer state, gates at crash boundaries, and restart by reopening the
+driver. It will compare object files,
 transaction records, and holds against `node`; auxiliary variables such as
 `deleted`, `strays`, and `previousObjects` are used only by the specification.

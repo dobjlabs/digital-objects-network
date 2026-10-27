@@ -41,7 +41,7 @@ beside the implementation and register their checks in `package.json`.
 
 ## Rust replay
 
-The workspace pins `quint-connect` to 0.1.2 for adapters that replay model
-transitions against production Rust code. The driver adapter is not implemented
-yet; passing these scripts checks the specification itself, without comparing
-it to the driver implementation.
+Adapters that replay model transitions against production Rust code are
+planned. The driver adapter is not implemented yet; passing these scripts
+checks the specification itself, without comparing it to the driver
+implementation. Add the Rust replay dependency when an adapter uses it.
