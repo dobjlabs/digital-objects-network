@@ -711,26 +711,45 @@ impl Driver {
         let records = load_records(&self.paths)?;
         let mut outcome = PrunedTransactions::default();
         let mut changed_files = HashSet::new();
+        let terminal_ids = records
+            .iter()
+            .filter(|record| record.state.is_terminal())
+            .map(|record| record.tx_final.as_str())
+            .collect::<HashSet<_>>();
+        let mut reconciled = self
+            .reconciled_transactions
+            .lock()
+            .expect("reconciliation cache lock poisoned");
+        reconciled.retain(|tx_final, _| terminal_ids.contains(tx_final.as_str()));
         for record in records.iter().filter(|record| record.state.is_terminal()) {
-            if let Err(err) =
-                self.persist_settled_objects(record, &mut changed_files, &mut outcome.removed_files)
-            {
-                log::warn!("retaining transaction {}: {err:#}", record.tx_final);
-                let retry_at = current_time_ms.saturating_add(60_000);
-                outcome.next_cleanup_at_ms = Some(
-                    outcome
-                        .next_cleanup_at_ms
-                        .map_or(retry_at, |next| next.min(retry_at)),
-                );
-                continue;
-            }
             let cleanup_at = record
                 .settled_at_ms
                 .unwrap_or(record.recorded_at_ms)
                 .saturating_add(TRANSACTION_RETENTION_MS);
+            if current_time_ms >= cleanup_at || reconciled.get(&record.tx_final) != Some(record) {
+                if let Err(err) = self.persist_settled_objects(
+                    record,
+                    &mut changed_files,
+                    &mut outcome.removed_files,
+                ) {
+                    reconciled.remove(&record.tx_final);
+                    log::warn!("retaining transaction {}: {err:#}", record.tx_final);
+                    let retry_at = current_time_ms.saturating_add(60_000);
+                    outcome.next_cleanup_at_ms = Some(
+                        outcome
+                            .next_cleanup_at_ms
+                            .map_or(retry_at, |next| next.min(retry_at)),
+                    );
+                    continue;
+                }
+                reconciled.insert(record.tx_final.clone(), record.clone());
+            }
             if current_time_ms >= cleanup_at {
                 match remove_transaction(&self.paths, &record_tx_final(record)?) {
-                    Ok(()) => outcome.tx_finals.push(record.tx_final.clone()),
+                    Ok(()) => {
+                        reconciled.remove(&record.tx_final);
+                        outcome.tx_finals.push(record.tx_final.clone());
+                    }
                     Err(err) => {
                         log::warn!("could not prune transaction {}: {err:#}", record.tx_final);
                         let retry_at = current_time_ms.saturating_add(60_000);

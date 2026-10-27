@@ -94,6 +94,7 @@ pub struct Driver {
     /// generation or network requests.
     pub(crate) store_lock: Arc<Mutex<()>>,
     pub(crate) holds: HoldTable,
+    pub(crate) reconciled_transactions: Arc<Mutex<HashMap<String, TransactionRecord>>>,
     pub(crate) submission_locks: Arc<Mutex<HashMap<Hash, Weak<Mutex<()>>>>>,
 }
 
@@ -111,6 +112,7 @@ impl Driver {
             deps,
             store_lock: Arc::new(Mutex::new(())),
             holds: HoldTable::default(),
+            reconciled_transactions: Arc::default(),
             submission_locks: Arc::default(),
         })
     }

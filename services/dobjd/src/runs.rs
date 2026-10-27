@@ -3,7 +3,7 @@
 //! persist independently, so settlement continues after the run registry is lost.
 
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use driver::{ExecutionReporter, ExecutionStepContext, now_ms};
 use wire_types::transactions::{TransactionRecord, TransactionState};
@@ -15,6 +15,9 @@ use wire_types::{
 use crate::events::{Event, EventHub};
 use crate::registry::{Registry, Retained};
 use crate::state::{Services, transaction_event};
+
+const PREFLIGHT_RETRIES: u32 = 2;
+const PREFLIGHT_RETRY_DELAY: Duration = Duration::from_millis(1500);
 
 struct RunInner {
     status: RunStatus,
@@ -421,44 +424,65 @@ fn submit_record(
         Some(ExecutionStage::Submitting),
     );
     let tx_final = payload::decode_hash_hex(&record.tx_final)?;
-    let record = match services.submit_transaction(&tx_final) {
-        Ok(submitted) => {
-            let message = match (submitted.state, submitted.relayer_job_id.as_deref()) {
-                (TransactionState::Submitted, Some(job_id)) => {
-                    format!("Relayer accepted job {job_id}")
-                }
-                _ => format!("Transaction {}", submitted.state),
-            };
-            reporter.transaction_progress(
-                &submitted,
-                ProofProgressStatus::Running,
-                &message,
-                Some(ExecutionStage::AwaitingSynchronization),
-            );
-            submitted
-        }
-        Err(err) => {
-            let current = services.driver.get_transaction(&tx_final)?;
-            if current.state == TransactionState::Recorded
-                && current.submit_attempted_at_ms.is_none()
-            {
-                anyhow::bail!(
-                    "Submission could not start: {err:#}. Transaction {} is recorded; retry with dobj submit {}",
-                    current.tx_final,
-                    current.tx_final
+    let mut preflight_retries = 0;
+    let record = loop {
+        match services.submit_transaction(&tx_final) {
+            Ok(submitted) => {
+                let message = match (submitted.state, submitted.relayer_job_id.as_deref()) {
+                    (TransactionState::Submitted, Some(job_id)) => {
+                        format!("Relayer accepted job {job_id}")
+                    }
+                    _ => format!("Transaction {}", submitted.state),
+                };
+                reporter.transaction_progress(
+                    &submitted,
+                    ProofProgressStatus::Running,
+                    &message,
+                    Some(ExecutionStage::AwaitingSynchronization),
                 );
+                break submitted;
             }
-            reporter.transaction_progress(
-                &current,
-                ProofProgressStatus::Running,
-                &format!(
+            Err(err) => {
+                let current = services.driver.get_transaction(&tx_final)?;
+                if current.state == TransactionState::Recorded
+                    && current.submit_attempted_at_ms.is_none()
+                {
+                    if preflight_retries < PREFLIGHT_RETRIES
+                        && err.downcast_ref::<driver::DriverError>().is_none()
+                    {
+                        let delay = PREFLIGHT_RETRY_DELAY * (1 << preflight_retries);
+                        preflight_retries += 1;
+                        let message = format!(
+                            "Submission could not start: {err:#}; retrying ({preflight_retries}/{PREFLIGHT_RETRIES})"
+                        );
+                        reporter.transaction_progress(
+                            &current,
+                            ProofProgressStatus::Running,
+                            &message,
+                            Some(ExecutionStage::Submitting),
+                        );
+                        std::thread::sleep(delay);
+                        continue;
+                    }
+                    anyhow::bail!(
+                        "Submission could not start: {err:#}. Transaction {} is recorded; retry with dobj submit {}",
+                        current.tx_final,
+                        current.tx_final
+                    );
+                }
+                let message = format!(
                     "Relayer submission failed: {err:#}; the daemon will retry while transaction is {}",
                     current.state
-                ),
-                Some(ExecutionStage::Submitting),
-            );
-            services.announce_transaction(&current);
-            current
+                );
+                reporter.transaction_progress(
+                    &current,
+                    ProofProgressStatus::Running,
+                    &message,
+                    Some(ExecutionStage::Submitting),
+                );
+                services.announce_transaction(&current);
+                break current;
+            }
         }
     };
     if record.is_open() {
@@ -619,6 +643,144 @@ mod tests {
 
     fn still_open(tx_final: &str) -> anyhow::Result<TransactionRecord> {
         Ok(record(tx_final, TransactionState::Submitted))
+    }
+
+    #[tokio::test]
+    async fn run_retries_preflight_failures_but_stops_at_acceptance_attempt_or_conflict() {
+        use axum::{
+            Json, Router,
+            http::StatusCode,
+            response::IntoResponse,
+            routing::{get, post},
+        };
+        use driver::{Driver, DriverDeps, DriverPaths, Hash};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use wire_types::{
+            relayer::{JobStatus, SubmitProofResponse},
+            synchronizer::StateHeadResponse,
+        };
+        for (failed_heads, head_block, reject_proof, expected_heads, expected_posts) in [
+            (2, 1, false, 3, 1),
+            (usize::MAX, 1, false, 3, 0),
+            (0, 1000, false, 1, 0),
+            (0, 1, true, 1, 1),
+        ] {
+            let heads = Arc::new(AtomicUsize::new(0));
+            let posts = Arc::new(AtomicUsize::new(0));
+            let head_requests = heads.clone();
+            let proof_requests = posts.clone();
+            let app = Router::new()
+                .route(
+                    "/v1/state/head",
+                    get(move || {
+                        let requests = head_requests.clone();
+                        async move {
+                            if requests.fetch_add(1, Ordering::SeqCst) < failed_heads {
+                                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                            }
+                            Json(StateHeadResponse {
+                                slot: 1,
+                                state_root: Hash::default(),
+                                block_number: head_block,
+                                block_hash: Default::default(),
+                                created_count: 0,
+                                nullifier_count: 0,
+                                state_root_count: 1,
+                            })
+                            .into_response()
+                        }
+                    }),
+                )
+                .route(
+                    "/api/v1/proofs",
+                    post(move || {
+                        let requests = proof_requests.clone();
+                        async move {
+                            requests.fetch_add(1, Ordering::SeqCst);
+                            if reject_proof {
+                                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                            }
+                            Json(SubmitProofResponse {
+                                job_id: "accepted-job".to_string(),
+                                status: JobStatus::Queued,
+                                tx_final: Hash::default(),
+                                state_root: Hash::default(),
+                                attempt_count: 0,
+                                created_at: 0,
+                            })
+                            .into_response()
+                        }
+                    }),
+                );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            tokio::task::spawn_blocking(move || {
+                let home = tempfile::tempdir().unwrap();
+                let paths = DriverPaths::from_dobj_root(home.path());
+                let key = payload::encode_hash_hex(&Hash::default());
+                let mut record = record(&key, TransactionState::Recorded);
+                record.input_files.clear();
+                record.output_files.clear();
+                let directory = paths.transactions_dir.join(&key);
+                std::fs::create_dir_all(&directory).unwrap();
+                std::fs::write(
+                    directory.join(driver::paths::RECORD_FILE),
+                    serde_json::to_vec(&record).unwrap(),
+                )
+                .unwrap();
+                std::fs::write(directory.join(driver::paths::PAYLOAD_FILE), b"proof").unwrap();
+                let driver = Arc::new(
+                    Driver::open(paths.clone(), DriverDeps::load(&paths).unwrap()).unwrap(),
+                );
+                let mut settings = driver.load_settings().unwrap();
+                settings.synchronizer_api_url = url.clone();
+                settings.relayer_api_url = url;
+                driver.save_settings(&settings).unwrap();
+                let events = EventHub::new();
+                let runs = RunRegistry::default();
+                let entry = start(&runs, "run");
+                let reporter = RunReporter::new(events.clone(), entry.clone());
+                let services = Services {
+                    settler: Arc::new(crate::settle::Settler::new(driver.clone(), events.clone())),
+                    driver: driver.clone(),
+                    events,
+                    runs,
+                    proof_jobs: crate::proof_jobs::ProofJobRegistry::default(),
+                };
+                let result = submit_record(&services, record, &reporter);
+                assert_eq!(heads.load(Ordering::SeqCst), expected_heads);
+                assert_eq!(posts.load(Ordering::SeqCst), expected_posts);
+                let stored = driver.get_transaction(&Hash::default()).unwrap();
+                assert_eq!(stored.submit_attempted_at_ms.is_some(), expected_posts > 0);
+                assert_eq!(
+                    entry
+                        .snapshot()
+                        .progress
+                        .iter()
+                        .filter(|progress| progress.message.contains("retrying ("))
+                        .count(),
+                    if failed_heads > 0 { 2 } else { 0 }
+                );
+                if expected_posts == 0 {
+                    let error = result.unwrap_err().to_string();
+                    assert!(error.contains(&format!("dobj submit {key}")));
+                    assert_eq!(stored.state, TransactionState::Recorded);
+                } else {
+                    assert_eq!(
+                        result.unwrap().state,
+                        if reject_proof {
+                            TransactionState::Recorded
+                        } else {
+                            TransactionState::Submitted
+                        }
+                    );
+                }
+            })
+            .await
+            .unwrap();
+            server.abort();
+        }
     }
 
     async fn wait_terminal(registry: &RunRegistry, run: &RunAccepted) -> RunState {

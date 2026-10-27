@@ -1773,6 +1773,72 @@ fn pruning_repairs_committed_settlement_after_restart_and_retains_unreadable_out
 }
 
 #[test]
+fn completed_reconciliation_is_cached_until_pruning_is_due() {
+    let fx = fixture("log_1.dobj");
+    let record = fx.driver.execute(fx.input("CraftWood")).unwrap();
+    fx.land(&record);
+    let landed = fx.driver.settle().unwrap().records.remove(0);
+    let settled_at = landed.settled_at_ms.unwrap();
+    let cleanup_at = settled_at + crate::TRANSACTION_RETENTION_MS;
+    fx.driver.prune_transactions(settled_at).unwrap();
+    let file = &record.output_files[0];
+    let output = fx.stored(file);
+    std::fs::write(fx.paths.objects_dir.join(file), "broken JSON").unwrap();
+    let retained = fx
+        .driver
+        .clone()
+        .prune_transactions(settled_at + 1)
+        .unwrap();
+    assert!(retained.tx_finals.is_empty());
+    assert_eq!(retained.next_cleanup_at_ms, Some(cleanup_at));
+    let blocked = fx.driver.prune_transactions(cleanup_at).unwrap();
+    assert!(blocked.tx_finals.is_empty());
+    assert_eq!(blocked.next_cleanup_at_ms, Some(cleanup_at + 60_000));
+    assert!(fx.driver.get_transaction(&tx_final_of(&record)).is_ok());
+    write_object_file(&fx.paths, &output, file).unwrap();
+    assert_eq!(
+        fx.driver
+            .prune_transactions(cleanup_at + 1)
+            .unwrap()
+            .tx_finals,
+        vec![record.tx_final]
+    );
+}
+
+#[test]
+fn reconciliation_cache_rechecks_changed_records_and_after_restart() {
+    let fx = fixture("log_1.dobj");
+    let record = fx.driver.execute(fx.input("CraftWood")).unwrap();
+    fx.land(&record);
+    let mut landed = fx.driver.settle().unwrap().records.remove(0);
+    let settled_at = landed.settled_at_ms.unwrap();
+    fx.driver.prune_transactions(settled_at).unwrap();
+    landed.tx_hash = Some("late-creation".to_string());
+    crate::transactions::write_record(&fx.paths, &landed).unwrap();
+    fx.driver.prune_transactions(settled_at + 1).unwrap();
+    for file in &record.output_files {
+        assert_eq!(fx.stored(file).tx_hash.as_deref(), Some("late-creation"));
+    }
+    let file = &record.output_files[0];
+    let mut output = fx.stored(file);
+    output.tx_hash = None;
+    output.status = FileStatus::Unknown;
+    write_object_file(&fx.paths, &output, file).unwrap();
+    let restarted = Driver::open(fx.paths.clone(), fx.driver.deps.clone()).unwrap();
+    let recovered = restarted.prune_transactions(settled_at + 2).unwrap();
+    assert!(recovered.tx_finals.is_empty());
+    assert!(
+        recovered
+            .objects
+            .iter()
+            .any(|object| object.file_name == *file
+                && object.tx_hash.as_deref() == Some("late-creation"))
+    );
+    assert_eq!(fx.stored(file).status, FileStatus::Live);
+    assert_eq!(fx.stored(file).tx_hash.as_deref(), Some("late-creation"));
+}
+
+#[test]
 fn object_hash_metadata_is_optional_and_survives_import() {
     let (json, commitment, _) = make_importable_log();
     let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
