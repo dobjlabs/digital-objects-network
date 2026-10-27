@@ -202,7 +202,7 @@ fn activity(runs: &[Run], started_at: u64, inventory_value: Option<&InventoryVal
         count => format!("{count} active jobs"),
     };
     let state = match inventory_value {
-        Some(value) => format!("Inventory: {} | {jobs}", value.0),
+        Some(value) => format!("{} | {jobs}", value.0),
         None => jobs,
     };
     json!({
@@ -419,7 +419,7 @@ mod tests {
             let inventory = InventoryValue::from_title(&format!("Bitcraft ({value})")).unwrap();
             assert_eq!(
                 activity(&[], 42, Some(&inventory))["state"],
-                format!("Inventory: {value} | No active jobs")
+                format!("{value} | No active jobs")
             );
         }
         for title in [
@@ -535,7 +535,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(first["details"], "Gather Wood");
-        assert_eq!(first["state"], "Inventory: 12.500 BIT | 1 active job");
+        assert_eq!(first["state"], "12.500 BIT | 1 active job");
         sharing.send_replace(Some(false));
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(2), activities.recv())
@@ -553,7 +553,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(second["details"], "Gather Wood");
-        assert_eq!(second["state"], "Inventory: 100.125 BIT | 1 active job");
+        assert_eq!(second["state"], "100.125 BIT | 1 active job");
         assert_eq!(second["timestamps"], first["timestamps"]);
         assert_eq!(connections.load(Ordering::Relaxed), 2);
         sharing.send_replace(None);
