@@ -4446,7 +4446,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 [[package]]
 name = "plonky2"
 version = "1.1.0"
-source = "git+https://github.com/robknight/plonky2?rev=035c827656e00ac390cf11cb45c6df3c715b181d#035c827656e00ac390cf11cb45c6df3c715b181d"
+source = "git+https://github.com/robknight/plonky2?rev=f115955af1fe0bd2064a18040db25205addbb965#f115955af1fe0bd2064a18040db25205addbb965"
 dependencies = [
  "ahash",
  "anyhow",
@@ -4469,7 +4469,6 @@ dependencies = [
  "rayon",
  "serde",
  "serde_arrays",
- "serde_json",
  "static_assertions",
  "unroll",
  "web-time",
@@ -4480,7 +4479,7 @@ dependencies = [
 [[package]]
 name = "plonky2_field"
 version = "1.0.0"
-source = "git+https://github.com/robknight/plonky2?rev=035c827656e00ac390cf11cb45c6df3c715b181d#035c827656e00ac390cf11cb45c6df3c715b181d"
+source = "git+https://github.com/robknight/plonky2?rev=f115955af1fe0bd2064a18040db25205addbb965#f115955af1fe0bd2064a18040db25205addbb965"
 dependencies = [
  "anyhow",
  "itertools 0.11.0",
@@ -4495,7 +4494,7 @@ dependencies = [
 [[package]]
 name = "plonky2_maybe_rayon"
 version = "1.0.0"
-source = "git+https://github.com/robknight/plonky2?rev=035c827656e00ac390cf11cb45c6df3c715b181d#035c827656e00ac390cf11cb45c6df3c715b181d"
+source = "git+https://github.com/robknight/plonky2?rev=f115955af1fe0bd2064a18040db25205addbb965#f115955af1fe0bd2064a18040db25205addbb965"
 dependencies = [
  "rayon",
 ]
@@ -4514,12 +4513,12 @@ dependencies = [
 [[package]]
 name = "plonky2_util"
 version = "1.0.0"
-source = "git+https://github.com/robknight/plonky2?rev=035c827656e00ac390cf11cb45c6df3c715b181d#035c827656e00ac390cf11cb45c6df3c715b181d"
+source = "git+https://github.com/robknight/plonky2?rev=f115955af1fe0bd2064a18040db25205addbb965#f115955af1fe0bd2064a18040db25205addbb965"
 
 [[package]]
 name = "pod2"
 version = "0.1.0"
-source = "git+https://github.com/robknight/pod2?rev=b13f91f2134df2edc32b10a1ec1e373c7ea55bd7#b13f91f2134df2edc32b10a1ec1e373c7ea55bd7"
+source = "git+https://github.com/robknight/pod2?rev=52e14a99be6b2ec82b102b057095ca259a57312a#52e14a99be6b2ec82b102b057095ca259a57312a"
 dependencies = [
  "annotate-snippets",
  "anyhow",
