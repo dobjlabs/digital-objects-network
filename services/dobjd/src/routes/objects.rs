@@ -100,7 +100,10 @@ pub async fn import_object(
     Ok(Json(summary))
 }
 
-/// `GET /objects`: synchronized object summaries, including class metadata.
+/// `GET /objects` -- local objects synced against the chain, each already
+/// carrying its class's emoji/description (the driver folds that in). The
+/// action catalog comes from `GET /actions` separately, so clients can
+/// fetch the two in parallel.
 pub async fn load_objects(State(state): State<AppState>) -> ApiResult<Json<Vec<ObjectSummary>>> {
     synced_objects(state, None).await
 }

@@ -1203,7 +1203,9 @@ fn test_import_unknown_class_is_rejected() {
 
 #[test]
 fn test_import_class_hash_mismatch_is_rejected() {
-    // The class name is valid, but its hash disagrees with the object's type.
+    // Forge a real Log's class to craft-basics::Wood: the qualified name is a
+    // known class, but the pod's `type` hash is IsLog, so the cryptographic
+    // hash check must fire -- the same guarantee execute relies on.
     let (json, _source_tx, _nullifier) = make_importable_log();
     let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
     value["class"]["name"] = serde_json::Value::String("Wood".to_string());
