@@ -9,11 +9,21 @@
 <body>
   <div class="screen">
     <main>
-      <p class="brand">Bitcraft</p>
-      <progress class="startup-progress" max="3" value="0" aria-label="Startup progress" aria-describedby="startup-progress-label status"></progress>
-      <p id="startup-progress-label">Step 1 of 3</p>
+      <div class="icon" aria-hidden="true">
+        <svg width="96" height="120" viewBox="0 0 128 160">
+          <defs>
+            <filter id="icon-shadow" x="-10%" y="-10%" width="120%" height="120%">
+              <feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-color="#000" flood-opacity="0.18"/>
+            </filter>
+          </defs>
+          <path d="M6 4h80l36 36v114H6z" fill="#fff" stroke="#d0d0d0" filter="url(#icon-shadow)"/>
+          <path d="M86 4v28a8 8 0 0 0 8 8h28" fill="#f2f2f2" stroke="#d0d0d0"/>
+        </svg>
+      </div>
       <h1 id="status" role="status" aria-live="polite">Preparing cryptography...</h1>
       <p class="description">On first launch, Bitcraft prepares the cryptography used to certify your items. This can take several minutes.</p>
+      <progress class="startup-progress" max="3" value="0" aria-label="Startup progress" aria-describedby="startup-progress-label status"></progress>
+      <p id="startup-progress-label">Step 1 of 3</p>
     </main>
   </div>
   <!-- Static stand-in for the game page's status bar: services cannot be

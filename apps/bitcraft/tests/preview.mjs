@@ -60,7 +60,7 @@ const server = createServer(async (request, response) => {
         <h1>Bitcraft startup preview</h1><p>This preview uses a simulated daemon. It creates no real objects or proofs.</p><ul>
         <li><a href="/cryptography/">Cryptography preparation screen</a></li>
         <li><a href="/first-launch/">First launch</a> &mdash; proof, confirmation, then inventory (about 11 seconds)</li>
-        <li><a href="/existing/">Existing inventory</a> &mdash; opens immediately</li>
+        <li><a href="/existing/">Existing inventory</a> &mdash; opens after one second</li>
         <li><a href="/failure/">Setup failure</a> &mdash; error after 5 seconds; retry succeeds</li></ul>`, "text/html; charset=utf-8");
     }
     const scenario = url.pathname.match(/^\/(first-launch|existing|failure)\/$/);

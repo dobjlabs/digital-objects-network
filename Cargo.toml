@@ -23,6 +23,9 @@ members = [
 resolver = "2"
 exclude = ["apps/bitcraft/src-tauri"]
 
+[workspace.package]
+license = "MIT"
+
 [workspace.dependencies]
 pod2 = { git = "https://github.com/0xPARC/pod2", rev = "331a1145a8a5679a63058953464969fb960d9955", default-features = false, features = [
     "backend_plonky2",

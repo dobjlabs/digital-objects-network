@@ -31,6 +31,7 @@ async function page(context, options = {}) {
     inventoryReads: 0, runGate: null, ...options,
   };
   const timers = new Map();
+  const holds = new Map();
   const sources = [];
   const errors = [];
   let nextTimer = 0;
@@ -50,6 +51,19 @@ async function page(context, options = {}) {
         return id;
       };
       window.clearInterval = (id) => timers.delete(id);
+      // Startup steps stay up for a minimum time. Holds end at the next turn
+      // of the event loop unless `holdSteps` keeps them until `elapse`.
+      window.setTimeout = (callback, delay) => {
+        const id = ++nextTimer;
+        holds.set(id, { callback, delay });
+        if (!options.holdSteps) {
+          setImmediate(() => {
+            if (holds.delete(id)) callback();
+          });
+        }
+        return id;
+      };
+      window.clearTimeout = (id) => holds.delete(id);
       if (options.startupRunId) window.sessionStorage.setItem("bitcraft.startup-pocketknife-run", options.startupRunId);
       window.EventSource = class {
         constructor(url) { this.url = url; this.closed = false; sources.push(this); }
@@ -119,6 +133,13 @@ async function page(context, options = {}) {
     }
     await flush();
   };
+  // Ends every startup step's minimum time.
+  const elapse = async () => {
+    for (const [id, hold] of [...holds]) {
+      if (holds.delete(id)) hold.callback();
+    }
+    await flush();
+  };
   const openStreams = (runId) => sources.filter((source) => !source.closed
     && source.url.endsWith(`/actions/runs/${encodeURIComponent(runId)}/events`));
   // A progress event on the run's stream, with no change to its state.
@@ -149,7 +170,7 @@ async function page(context, options = {}) {
     await flush();
   };
   return {
-    backend, document, dom, tick, sources, timers, emit, dropStream, publish,
+    backend, document, dom, tick, sources, timers, holds, elapse, emit, dropStream, publish,
     splash: document.querySelector("#startup-screen"),
     app: document.querySelector("#inventory-app"),
     jobs: () => [...document.querySelectorAll(".run-row")],
@@ -201,6 +222,73 @@ test("first launch waits for proof, confirmation, and a live knife, then reveals
   assert.equal(ui.document.querySelectorAll(".object-row.flashing").length, 0,
     "the starter knife does not flash when the inventory opens");
   assert.equal(ui.backend.posts.length, 1);
+});
+
+test("each startup step stays up for its minimum time, even when the work behind it is done", async (context) => {
+  const ui = await page(context, { holdSteps: true });
+  assert.equal(ui.backend.posts.length, 1, "the work goes ahead while a step is held");
+  assert.match(ui.title(), /Opening Bitcraft/);
+  assert.equal(ui.progress(), 0);
+  assert.equal(ui.holds.size, 1);
+  assert.equal([...ui.holds.values()][0].delay, 1000);
+  await ui.elapse();
+  assert.match(ui.title(), /Creating your first pocketknife/);
+  assert.equal(ui.progress(), 1);
+  ui.backend.objects = [knife("pending")];
+  await ui.publish("run-1", "committing");
+  assert.match(ui.title(), /Creating your first pocketknife/, "confirmation waits for the proof step's minimum");
+  await ui.elapse();
+  assert.match(ui.title(), /Waiting for confirmation/);
+  assert.equal(ui.progress(), 2);
+  await ui.complete();
+  assert.equal(ui.splash.hidden, false, "the inventory waits for the confirmation step's minimum");
+  assert.equal(ui.app.hidden, true);
+  await ui.elapse();
+  assert.equal(ui.splash.hidden, true);
+  assert.equal(ui.app.hidden, false);
+  assert.equal(ui.progress(), 3);
+});
+
+test("a held startup step skips steps the startup did not reach", async (context) => {
+  const ui = await page(context, { holdSteps: true, objects: [knife()] });
+  assert.match(ui.title(), /Opening Bitcraft/);
+  assert.equal(ui.app.hidden, true, "an existing knife still shows the first step for its minimum");
+  await ui.elapse();
+  assert.equal(ui.app.hidden, false);
+  assert.equal(ui.holds.size, 0);
+});
+
+test("errors and retries replace a held startup step at once", async (context) => {
+  const ui = await page(context, { holdSteps: true, inventoryError: true });
+  assert.match(ui.title(), /could not finish setup/, "an error on the step on display is not held back");
+  assert.equal(ui.progress(), 0);
+  ui.backend.inventoryError = false;
+  await ui.retry();
+  assert.match(ui.title(), /Opening Bitcraft/);
+  assert.equal(ui.holds.size, 1, "retry restarts the first step's minimum");
+  await ui.elapse();
+  assert.match(ui.title(), /Creating your first pocketknife/);
+  await ui.publish("run-1", "failed", { error: "Proof failed" });
+  assert.match(ui.document.querySelector("#startup-error").textContent, /Proof failed/);
+  assert.equal(ui.document.querySelector("#startup-actions").hidden, false);
+  await ui.retry();
+  assert.match(ui.title(), /Opening Bitcraft/, "retry goes back to the first step without waiting");
+  assert.equal(ui.progress(), 0);
+});
+
+test("the pocketknife steps show the pocketknife's icon from the presentation pack", async (context) => {
+  const ui = await page(context, {
+    presentation: {
+      "index.json": { packs: ["bitcraft/pack.json"] },
+      "bitcraft/pack.json": { format: 1, plugin: "bitcraft", classes: { Pocketknife: { icon: "assets/pocketknife.png" } } },
+    },
+  });
+  const icon = ui.document.querySelector("#startup-class-icon");
+  assert.match(ui.title(), /Creating your first pocketknife/);
+  assert.equal(icon.hidden, false);
+  assert.equal(icon.src, "http://127.0.0.1:7727/bitcraft/presentation/bitcraft/assets/pocketknife.png");
+  await ui.publish("run-1", "failed", { error: "Proof failed" });
+  assert.equal(icon.hidden, true, "the setup error shows a blank page");
 });
 
 test("an existing live knife opens inventory immediately, including a held knife", async (context) => {
@@ -605,7 +693,7 @@ test("the right-hand buttons open the site and Settings; Discord does nothing ye
   ui.document.querySelector("#about-button").click();
   ui.document.querySelector("#settings-button").click();
   assert.deepEqual(opened, [
-    { url: "https://bitcraft.digiobjects.net/", name: "_blank" },
+    { url: "https://bitcraft.sh/", name: "_blank" },
     { url: "http://127.0.0.1:7727/bitcraft/?page=settings", name: "bitcraft-settings" },
   ]);
 });
