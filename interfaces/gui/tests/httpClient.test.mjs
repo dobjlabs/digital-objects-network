@@ -73,7 +73,7 @@ test("built client selects the same daemon for HTTP and SSE", async (t) => {
       assert.equal(fetch.mock.calls[0].arguments[0], `${scenario.expected}/objects`);
       assert.deepEqual(eventUrls, [
         `${scenario.expected}/events`,
-        `${scenario.expected}/actions/runs/run-1/events`,
+        `${scenario.expected}/runs/run-1/events`,
       ]);
       unlistenGlobal();
       unlistenRun();

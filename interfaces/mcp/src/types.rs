@@ -12,11 +12,11 @@ use serde::{Deserialize, Serialize};
 
 pub use wire_types::transactions::{TransactionRecord, TransactionState};
 pub use wire_types::{
-    ActionSummary, CheckActionCandidate as FeasibilityInput,
+    ActionInput, ActionSummary, CheckActionCandidate as FeasibilityInput,
     CheckActionReport as FeasibilityReport, ClassRef, ClassSummary, DriverSettings,
     DriverSettingsPatch, ObjectStatus, ObjectSummary, ObjectsDirInfo, ProofJobState,
-    ProofJobStatus, QualifiedName, RunAccepted, RunActionInput, RunActionResult as RunActionInner,
-    RunState, RunStatus, SubmitRequest,
+    ProofJobStatus, QualifiedName, RunAccepted, RunActionResult as RunActionInner, RunState,
+    RunStatus, SubmitTransactionsRequest,
 };
 
 // -- List response wrappers (MCP outputSchema requires root type "object") --

@@ -9,7 +9,7 @@ use driver::{ExecutionReporter, ExecutionStepContext, now_ms};
 use tokio::sync::Semaphore;
 use wire_types::transactions::{TransactionRecord, TransactionState};
 use wire_types::{
-    ExecutionPhase, ObjectStatus, ProofProgressStatus, QualifiedName, RunAccepted, RunActionInput,
+    ActionInput, ExecutionPhase, ObjectStatus, ProofProgressStatus, QualifiedName, RunAccepted,
     RunActionProgress, RunActionResult, RunState, RunStatus,
 };
 
@@ -317,19 +317,24 @@ impl ExecutionReporter for RunReporter {
 }
 
 /// Start background execution and return a run handle.
-pub fn spawn_run(services: &Services, input: RunActionInput) -> RunAccepted {
-    let input = crate::jobs::trimmed(input);
+pub fn spawn_run(services: &Services, input: ActionInput) -> RunAccepted {
+    let input = crate::proof_jobs::trimmed(input);
     let proof_services = services.clone();
     let submit_services = services.clone();
     let driver = services.driver.clone();
-    let exec_input = crate::jobs::execute_input(&input);
+    let exec_input = crate::proof_jobs::execute_input(&input);
     spawn_worker(
         &services.runs,
         services.events.clone(),
         input.action,
         input.input_object_paths,
         move |reporter| {
-            crate::jobs::prove_and_record(&proof_services, exec_input, reporter.run_id(), reporter)
+            crate::proof_jobs::prove_and_record(
+                &proof_services,
+                exec_input,
+                reporter.run_id(),
+                reporter,
+            )
         },
         move |record, reporter| submit_record(&submit_services, record, reporter),
         move |tx_final| driver.get_transaction(&payload::decode_hash_hex(tx_final)?),

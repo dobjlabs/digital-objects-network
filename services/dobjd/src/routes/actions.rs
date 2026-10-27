@@ -15,25 +15,25 @@ use axum::{
 };
 use tokio_stream::wrappers::ReceiverStream;
 use wire_types::{
-    ActionSummary, CheckActionReport, QualifiedName, RunAccepted, RunActionRequest, RunListFilter,
-    RunListQuery, RunState,
+    ActionSummary, CheckActionReport, QualifiedName, RunAccepted, RunListFilter, RunListQuery,
+    RunState, StartRunRequest,
 };
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
-/// `POST /actions/run`: accept an action and return a run handle immediately.
+/// `POST /runs`: accept an action and return a run handle immediately.
 /// Input errors appear in the run's terminal state. Follow progress through
-/// `GET /actions/runs/{run_id}` or its `/events` stream.
-pub async fn run_action(
+/// `GET /runs/{run_id}` or its `/events` stream.
+pub async fn start_run(
     State(state): State<AppState>,
-    Json(req): Json<RunActionRequest>,
+    Json(req): Json<StartRunRequest>,
 ) -> (StatusCode, Json<RunAccepted>) {
     let accepted = crate::runs::spawn_run(&state.services, req.input);
     (StatusCode::ACCEPTED, Json(accepted))
 }
 
-/// `GET /actions/runs` -- every run dobjd still holds, oldest first: runs in
+/// `GET /runs` -- every run dobjd still holds, oldest first: runs in
 /// flight plus finished runs not yet reaped. `?status=active` keeps only the
 /// runs that have not succeeded or failed.
 pub async fn list_runs(
@@ -44,7 +44,7 @@ pub async fn list_runs(
     Json(state.services.runs.list(active_only))
 }
 
-/// `GET /actions/runs/{run_id}` — current state of a run: status, the result
+/// `GET /runs/{run_id}` — current state of a run: status, the result
 /// once it succeeds, an error if it fails, and the full ordered progress log.
 /// This is the disconnect-recovery path; pollable until the run is reaped.
 pub async fn get_run(
@@ -58,7 +58,7 @@ pub async fn get_run(
     Ok(Json(entry.snapshot()))
 }
 
-/// `GET /actions/runs/{run_id}/events` — per-run SSE stream. On connect it
+/// `GET /runs/{run_id}/events` — per-run SSE stream. On connect it
 /// replays the run's buffered progress (resuming after `Last-Event-ID` if
 /// present), then tails live events until the run reaches a terminal state.
 /// Each event's SSE `id` is its index in the run's progress log.

@@ -10,8 +10,8 @@ use wire_types::{ObjectSummary, ProofJobState, WaitQuery};
 
 use crate::error::ServiceError;
 use crate::events::{Event, EventHub};
-use crate::jobs::JobRegistry;
 use crate::mcp::McpRuntime;
+use crate::proof_jobs::ProofJobRegistry;
 use crate::routes::wait::wait_until;
 use crate::runs::RunRegistry;
 use crate::settle::Settler;
@@ -21,7 +21,7 @@ pub struct Services {
     pub driver: Arc<Driver>,
     pub events: EventHub,
     pub runs: RunRegistry,
-    pub jobs: JobRegistry,
+    pub proof_jobs: ProofJobRegistry,
     pub settler: Arc<Settler>,
 }
 
@@ -79,8 +79,8 @@ impl Services {
         Ok(record)
     }
 
-    pub fn list_proofs(&self, active_only: bool) -> Vec<ProofJobState> {
-        self.jobs
+    pub fn list_proof_jobs(&self, active_only: bool) -> Vec<ProofJobState> {
+        self.proof_jobs
             .entries(active_only)
             .iter()
             .map(|entry| entry.snapshot())
@@ -110,9 +110,13 @@ impl Services {
     }
 
     /// Read a job's state, optionally waiting for completion or timeout.
-    pub async fn wait_for_proof(&self, job_id: &str, query: WaitQuery) -> Result<ProofJobState> {
+    pub async fn wait_for_proof_job(
+        &self,
+        job_id: &str,
+        query: WaitQuery,
+    ) -> Result<ProofJobState> {
         let entry = self
-            .jobs
+            .proof_jobs
             .get(job_id)
             .ok_or_else(|| ServiceError::ProofJobNotFound(job_id.to_string()))?;
         wait_until(

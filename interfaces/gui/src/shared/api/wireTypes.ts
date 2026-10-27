@@ -66,7 +66,7 @@ export interface ActionPayload {
 /** Optional caller data by name, in POD2 JSON form. */
 export type ActionArgValues = Record<string, unknown>;
 
-export interface RunActionInput {
+export interface ActionInput {
   action: QualifiedNamePayload;
   inputObjectPaths: string[];
   /** Optional caller data by name, in POD2 JSON form. */
@@ -81,7 +81,7 @@ export interface RunActionResult {
   inputFiles: string[];
 }
 
-/** `POST /actions/run` response: the run was accepted and is executing in the
+/** `POST /runs` response: the run was accepted and is executing in the
  * background. Follow it via `getRun` (poll) or the run's SSE stream. */
 export interface RunAccepted {
   runId: string;
@@ -89,7 +89,7 @@ export interface RunAccepted {
   createdAtMs?: number;
 }
 
-/** `GET /actions/runs/{runId}` response: current state of a run. */
+/** `GET /runs/{runId}` response: current state of a run. */
 export interface RunState {
   runId: string;
   action: QualifiedNamePayload;

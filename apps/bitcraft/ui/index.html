@@ -1598,7 +1598,7 @@
     run.onUpdate?.(run);
 
     try {
-      const accepted = await postJson("/actions/run", {
+      const accepted = await postJson("/runs", {
         input: { action: action.action, inputObjectPaths: inputFileNames },
       });
       run.runId = accepted.runId;
@@ -1621,7 +1621,7 @@
   // The terminal status is not an event: it arrives through the re-read
   // prompted by dobjd closing the stream once the run has finished.
   function followRun(run) {
-    const runPath = `/actions/runs/${encodeURIComponent(run.runId)}`;
+    const runPath = `/runs/${encodeURIComponent(run.runId)}`;
     let source = null;
     try {
       source = new EventSource(`${DOBJD_URL}${runPath}/events`);
@@ -1720,7 +1720,7 @@
   async function restoreRuns() {
     let retainedRuns;
     try {
-      retainedRuns = await fetchJson("/actions/runs?status=active");
+      retainedRuns = await fetchJson("/runs?status=active");
     } catch (error) {
       console.warn("Could not list runs:", error);
       return false;

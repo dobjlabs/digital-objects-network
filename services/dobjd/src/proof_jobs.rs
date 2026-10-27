@@ -6,15 +6,15 @@ use std::time::Instant;
 
 use driver::{ExecuteActionInput, ExecutionReporter, ExecutionStepContext, now_ms};
 use wire_types::transactions::TransactionRecord;
-use wire_types::{ExecutionPhase, ProofJobState, ProofJobStatus, RunActionInput};
+use wire_types::{ActionInput, ExecutionPhase, ProofJobState, ProofJobStatus};
 
 use crate::events::Event;
 use crate::registry::{Registry, Retained};
 use crate::state::Services;
 
-pub type JobRegistry = Registry<JobEntry>;
+pub type ProofJobRegistry = Registry<ProofJobEntry>;
 
-struct JobInner {
+struct ProofJobInner {
     status: ProofJobStatus,
     message: Option<String>,
     tx_final: Option<String>,
@@ -24,15 +24,15 @@ struct JobInner {
     finished_at: Option<Instant>,
 }
 
-pub struct JobEntry {
-    input: RunActionInput,
+pub struct ProofJobEntry {
+    input: ActionInput,
     job_id: String,
     created_at_ms: u64,
     sequence: u64,
-    inner: Mutex<JobInner>,
+    inner: Mutex<ProofJobInner>,
 }
 
-impl Retained for JobEntry {
+impl Retained for ProofJobEntry {
     fn sequence(&self) -> u64 {
         self.sequence
     }
@@ -42,7 +42,7 @@ impl Retained for JobEntry {
     }
 }
 
-impl JobEntry {
+impl ProofJobEntry {
     pub fn snapshot(&self) -> ProofJobState {
         let inner = self.inner.lock().unwrap();
         ProofJobState {
@@ -94,12 +94,12 @@ impl JobEntry {
     }
 }
 
-struct JobReporter {
+struct ProofJobReporter {
     services: Services,
-    entry: Arc<JobEntry>,
+    entry: Arc<ProofJobEntry>,
 }
 
-impl ExecutionReporter for JobReporter {
+impl ExecutionReporter for ProofJobReporter {
     fn on_step(&self, phase: ExecutionPhase, message: &str, _ctx: &ExecutionStepContext) {
         let status = match phase {
             ExecutionPhase::GenerateProof => ProofJobStatus::Proving,
@@ -113,28 +113,30 @@ impl ExecutionReporter for JobReporter {
 }
 
 /// Start a proof job and return before completion.
-pub fn spawn_proof(services: &Services, input: RunActionInput) -> ProofJobState {
+pub fn spawn_proof_job(services: &Services, input: ActionInput) -> ProofJobState {
     let input = trimmed(input);
     let job_id = uuid::Uuid::new_v4().to_string();
-    let entry = services.jobs.start(job_id.clone(), |sequence| JobEntry {
-        input: input.clone(),
-        job_id,
-        created_at_ms: now_ms(),
-        sequence,
-        inner: Mutex::new(JobInner {
-            status: ProofJobStatus::Queued,
-            message: None,
-            tx_final: None,
-            error: None,
-            started_at_ms: None,
-            finished_at_ms: None,
-            finished_at: None,
-        }),
-    });
+    let entry = services
+        .proof_jobs
+        .start(job_id.clone(), |sequence| ProofJobEntry {
+            input: input.clone(),
+            job_id,
+            created_at_ms: now_ms(),
+            sequence,
+            inner: Mutex::new(ProofJobInner {
+                status: ProofJobStatus::Queued,
+                message: None,
+                tx_final: None,
+                error: None,
+                started_at_ms: None,
+                finished_at_ms: None,
+                finished_at: None,
+            }),
+        });
     let accepted = entry.snapshot();
     services.events.publish(Event::ProofJob(accepted.clone()));
 
-    let reporter = Arc::new(JobReporter {
+    let reporter = Arc::new(ProofJobReporter {
         services: services.clone(),
         entry,
     });
@@ -167,14 +169,14 @@ pub fn spawn_proof(services: &Services, input: RunActionInput) -> ProofJobState 
 }
 
 /// Trim whitespace without changing the paths supplied by the caller.
-pub(crate) fn trimmed(mut input: RunActionInput) -> RunActionInput {
+pub(crate) fn trimmed(mut input: ActionInput) -> ActionInput {
     for path in &mut input.input_object_paths {
         *path = path.trim().to_string();
     }
     input
 }
 
-pub(crate) fn execute_input(input: &RunActionInput) -> ExecuteActionInput {
+pub(crate) fn execute_input(input: &ActionInput) -> ExecuteActionInput {
     ExecuteActionInput {
         action: input.action.clone(),
         input_objects: input.input_object_paths.clone(),

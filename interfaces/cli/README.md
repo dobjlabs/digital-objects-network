@@ -32,7 +32,13 @@ Two flavors of commands.
 | `import <path>`                                 | `POST /objects/import` (reads the `.dobj` file locally, sends contents)                                             |
 | `settings get`                                  | `GET /settings`                                                                                                     |
 | `settings set [--synchronizer URL] [--relayer URL] [--mcp on\|off]` | `PUT /settings` (omitted flags left unchanged; the MCP toggle starts/stops the server immediately) |
-| `run <action> [paths...]`                       | `POST /actions/run`, then follows `/actions/runs/{id}/events` and polls `/actions/runs/{id}` to the terminal result |
+| `run <action> [paths...]`                       | `POST /runs`, then follows `/runs/{id}/events` and polls `/runs/{id}` to the terminal result |
+| `prove <action> [paths...] [--wait]`             | `POST /proof-jobs`; with `--wait`, follows the job through recording |
+| `proof-jobs [--active]`                          | `GET /proof-jobs`; lists retained proof jobs |
+| `submit <txFinal>...`                            | `POST /transactions/submit`; submits recorded transactions in order |
+| `transactions`                                  | `GET /transactions`; lists durable records |
+| `inspect-transaction <txFinal> [--wait]`          | `GET /transactions/{txFinal}`; optionally waits for landing or expiry |
+| `delete-transaction <txFinal>`                   | `DELETE /transactions/{txFinal}`; abandons a record before any submission attempt |
 | `events`                                        | `GET /events` SSE — prints every event as JSON lines                                                                |
 
 Each command renders human-friendly output by default. Pass `--json`

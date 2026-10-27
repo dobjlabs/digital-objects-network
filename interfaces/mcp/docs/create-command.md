@@ -28,15 +28,15 @@ Tools the command will call (discover exact shapes by calling them):
 | `inspect_class({ class: { pluginName, name } })`                 | detail on one class                                                      |
 | `inspect_action({ action: { pluginName, name } })`               | detail on one action                                                     |
 | `check_feasibility({ action: { pluginName, name } })`            | whether an action can run now; missing inputs                            |
-| `run_action({ action: { pluginName, name }, inputObjectPaths })` | start an action; returns a `runId`                                       |
+| `start_run({ action: { pluginName, name }, inputObjectPaths })` | start an action; returns a `runId`                                       |
 | `get_run({ run_id })`                                            | poll until `status` is `succeeded`/`failed`, then read `result`          |
 | `get_state_root` / `read_settings` / `get_objects_dir`           | chain head / config / objects path                                       |
 | `read_doc(name)`                                                 | reference docs (`read_doc("list")` for the index)                        |
 
-- Qualified action names: `run_action`'s `action` is `{pluginName, name}`. Take
+- Qualified action names: `start_run`'s `action` is `{pluginName, name}`. Take
   `pluginName` from `list_actions` -- do not guess it (it is the plugin's name,
   not the MCP server name).
-- Running an action is async: `run_action` returns a `runId`; poll
+- Running an action is async: `start_run` returns a `runId`; poll
   `get_run({ run_id: <runId> })` until `succeeded`/`failed`, and read produced
   objects from the run `result`.
 - Files: objects are JSON at `~/.dobj/objects/*.dobj`; this command's files live

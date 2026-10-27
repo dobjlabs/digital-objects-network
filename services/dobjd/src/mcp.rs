@@ -190,7 +190,7 @@ impl DobjOps for DobjdOps {
         self.driver().get_action(action)
     }
 
-    fn run_action(&self, input: mcp::RunActionInput) -> anyhow::Result<mcp::RunAccepted> {
+    fn start_run(&self, input: mcp::ActionInput) -> anyhow::Result<mcp::RunAccepted> {
         Ok(crate::runs::spawn_run(&self.services, input))
     }
 
@@ -206,19 +206,23 @@ impl DobjOps for DobjdOps {
         Ok(self.services.runs.list(active_only))
     }
 
-    fn start_proof(&self, input: mcp::RunActionInput) -> anyhow::Result<mcp::ProofJobState> {
-        Ok(crate::jobs::spawn_proof(&self.services, input))
+    fn start_proof_job(&self, input: mcp::ActionInput) -> anyhow::Result<mcp::ProofJobState> {
+        Ok(crate::proof_jobs::spawn_proof_job(&self.services, input))
     }
 
-    fn get_proof(&self, job_id: &str, wait_ms: Option<u64>) -> anyhow::Result<mcp::ProofJobState> {
+    fn get_proof_job(
+        &self,
+        job_id: &str,
+        wait_ms: Option<u64>,
+    ) -> anyhow::Result<mcp::ProofJobState> {
         block_on(
             self.services
-                .wait_for_proof(job_id, mcp_wait_query(wait_ms)),
+                .wait_for_proof_job(job_id, mcp_wait_query(wait_ms)),
         )
     }
 
-    fn list_proofs(&self, active_only: bool) -> anyhow::Result<Vec<mcp::ProofJobState>> {
-        Ok(self.services.list_proofs(active_only))
+    fn list_proof_jobs(&self, active_only: bool) -> anyhow::Result<Vec<mcp::ProofJobState>> {
+        Ok(self.services.list_proof_jobs(active_only))
     }
 
     fn submit_transactions(

@@ -279,11 +279,11 @@ pub struct CheckActionReport {
     pub missing_inputs: Vec<ClassRef>,
 }
 
-/// `POST /actions/run` body.
+/// Action parameters shared by run and proof-job requests.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct RunActionInput {
+pub struct ActionInput {
     pub action: QualifiedName,
     pub input_object_paths: Vec<String>,
     /// Optional caller data by name, in POD2 JSON form.
@@ -291,20 +291,20 @@ pub struct RunActionInput {
     pub args: ActionArgValues,
 }
 
-/// Action request body: `{ "input": { ... } }`.
+/// `POST /runs` request body: `{ "input": { ... } }`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
-pub struct RunActionRequest {
-    pub input: RunActionInput,
+pub struct StartRunRequest {
+    pub input: ActionInput,
 }
 
-/// `POST /actions/run` response.
+/// Result of a successful run.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct RunActionResult {
     /// Daemon-assigned id for this run (also the key for
-    /// `GET /actions/runs/{run_id}` and the scope of its `run-action-progress`
+    /// `GET /runs/{run_id}` and the scope of its `run-action-progress`
     /// events).
     pub run_id: String,
     pub old_root: String,
@@ -330,7 +330,7 @@ pub enum RunStatus {
     Failed,
 }
 
-/// `GET /actions/runs` query: `?status=active` limits the list to runs that
+/// `GET /runs` query: `?status=active` limits the list to runs that
 /// have not yet succeeded or failed.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
@@ -347,9 +347,9 @@ pub enum RunListFilter {
     Active,
 }
 
-/// `POST /actions/run` response. The run was accepted and now executes in the
-/// background; follow it via `GET /actions/runs/{runId}` (poll) or
-/// `GET /actions/runs/{runId}/events` (SSE, replayable via `Last-Event-ID`).
+/// `POST /runs` response. The run was accepted and now executes in the
+/// background; follow it via `GET /runs/{runId}` (poll) or
+/// `GET /runs/{runId}/events` (SSE, replayable via `Last-Event-ID`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -361,7 +361,7 @@ pub struct RunAccepted {
     pub created_at_ms: u64,
 }
 
-/// `GET /actions/runs/{runId}` response: the current state of a run. The
+/// `GET /runs/{runId}` response: the current state of a run. The
 /// poll-and-recover counterpart to the SSE stream — a client that lost its
 /// connection re-reads the outcome here for as long as the run is retained.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -430,7 +430,7 @@ impl fmt::Display for ProofJobStatus {
     }
 }
 
-/// `POST /proofs` response and `GET /proofs/{jobId}` body.
+/// `POST /proof-jobs` response and `GET /proof-jobs/{jobId}` body.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -459,7 +459,7 @@ pub struct ProofJobState {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct SubmitRequest {
+pub struct SubmitTransactionsRequest {
     pub tx_finals: Vec<String>,
 }
 

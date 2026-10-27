@@ -4,16 +4,16 @@ use axum::{
     extract::{Path, Query, State},
 };
 use wire_types::transactions::TransactionRecord;
-use wire_types::{SubmitRequest, WaitQuery};
+use wire_types::{SubmitTransactionsRequest, WaitQuery};
 
 use crate::error::ApiResult;
 use crate::state::{AppState, parse_tx_final};
 
-/// `POST /submissions`: submit records in order, stopping on the first error.
+/// `POST /transactions/submit`: submit records in order, stopping on the first error.
 /// Return updated records when all submissions succeed.
 pub async fn submit(
     State(state): State<AppState>,
-    Json(request): Json<SubmitRequest>,
+    Json(request): Json<SubmitTransactionsRequest>,
 ) -> ApiResult<Json<Vec<TransactionRecord>>> {
     let tx_finals = request
         .tx_finals

@@ -92,7 +92,7 @@ const server = createServer(async (request, response) => {
       return reply(response, objects);
     }
     if (path === "/actions") return reply(response, actions);
-    if (path === "/actions/run" && request.method === "POST") {
+    if (path === "/runs" && request.method === "POST") {
       let body = "";
       for await (const chunk of request) body += chunk;
       const input = JSON.parse(body).input;
@@ -102,10 +102,10 @@ const server = createServer(async (request, response) => {
       session.runs.push(run);
       return reply(response, { runId: run.runId, createdAtMs: run.createdAtMs, status: "queued" });
     }
-    if (path === "/actions/runs") {
+    if (path === "/runs") {
       return reply(response, session.runs.map(runState).filter((state) => !["failed", "succeeded"].includes(state.status)));
     }
-    const runPath = path.match(/^\/actions\/runs\/([^/]+)(\/events)?$/);
+    const runPath = path.match(/^\/runs\/([^/]+)(\/events)?$/);
     const run = runPath && session.runs.find((run) => run.runId === runPath[1]);
     if (run) {
       if (!runPath[2]) return reply(response, runState(run));

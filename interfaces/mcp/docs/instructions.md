@@ -35,7 +35,7 @@ object could have reached its current state. Use `list_classes` and
 generate a ZK proof, and produce output objects. Each action takes
 seconds to minutes of CPU time for proof generation. Start several runs
 at once if the user has work to batch: the daemon queues them behind its
-proof slots and follows each to the chain. For finer control, `start_proof`
+proof slots and follows each to the chain. For finer control, `start_proof_job`
 proves without submitting and `submit_transactions` posts when you choose.
 Use `list_actions` to see what's available and what each action requires.
 
@@ -72,7 +72,7 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 
 ### Mutation
 
-- `run_action({ action: { pluginName, name }, inputObjectPaths })` — start an action end to end; returns a
+- `start_run({ action: { pluginName, name }, inputObjectPaths })` — start an action end to end; returns a
   `runId` immediately (prove, record, submit and follow to the chain run in the background). See
   "running actions" below.
 - `get_run({ run_id })` — poll a run's status, result/error, and progress log.
@@ -81,10 +81,10 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 
 ### Stages
 
-- `start_proof({ action, inputObjectPaths, args? })` — prove and record a
+- `start_proof_job({ action, inputObjectPaths, args? })` — prove and record a
   transaction without submitting it; returns a `jobId` immediately.
-- `get_proof({ job_id, wait_ms? })` — the job's state; `done` carries `txFinal`.
-- `list_proofs({ active_only? })` — the proof jobs the daemon still holds.
+- `get_proof_job({ job_id, wait_ms? })` — the job's state; `done` carries `txFinal`.
+- `list_proof_jobs({ active_only? })` — the proof jobs the daemon still holds.
 - `submit_transactions({ txFinals })` — post recorded transactions to the relayer.
 - `list_transactions()` — every transaction record on disk: `recorded`,
   `submitted`, `landed` or `expired`. Survives a daemon restart.
@@ -102,13 +102,13 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 ## Recommended workflow
 
 - Start with `list_objects` and `list_actions` to understand what's available.
-- Use `check_feasibility` before `run_action` to verify inputs exist (and to confirm the action's required input classes).
+- Use `check_feasibility` before `start_run` to verify inputs exist (and to confirm the action's required input classes).
 - Use `inspect_object` / `inspect_class` to understand state and predicates.
 - After a run reaches `succeeded`, call `list_objects` again to see the updated state.
 
 ## Running actions
 
-`run_action` does not block. It returns immediately with a `runId` and
+`start_run` does not block. It returns immediately with a `runId` and
 `status: queued`; proof generation and the commit run in the background
 (seconds to minutes).
 
@@ -123,7 +123,7 @@ the user which step a run is on while it's still `generateProof` or
 Start several runs and poll each `runId` independently; the daemon proves
 them one at a time by default and follows each to the chain.
 
-To separate proving from submitting, use `start_proof`, then `get_proof` with
+To separate proving from submitting, use `start_proof_job`, then `get_proof_job` with
 `wait_ms` until it is `done`, then `submit_transactions` with its `txFinal`
 when ready, and `get_transaction` with `wait_ms` until it is `landed` or
 `expired`. Proof jobs are not queued behind the run slot, so start only as
