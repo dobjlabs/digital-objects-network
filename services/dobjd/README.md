@@ -127,6 +127,8 @@ that the relayer may hold the payload, so the record stays until the chain
 lands or outruns it. The daemon retries attempted submissions whose acceptance
 was not recorded, with exponential backoff up to 60 seconds between attempts.
 Retries resume after a restart and stop on acceptance, landing, or expiry.
+At most four retries run concurrently, outside the settlement lock, so slow
+submission requests do not hold up inventory refreshes or other settlement passes.
 Overlapping submissions for one `txFinal` wait for the in-flight call and
 reuse its accepted job. Calls for other transactions proceed independently.
 A failed request releases the submission lock while retaining the durable
@@ -135,7 +137,7 @@ Transactions that have never been offered to the relayer are not submitted
 automatically. Records survive a daemon restart; proof jobs, runs and
 input holds do not, and nothing on disk depends on them.
 
-Completed (`landed` or `expired`) records and payloads are retained for ten minutes after settlement, then pruned. The daemon finishes local file reconciliation and copies known creation hashes to outputs before pruning. Metadata read/write failures defer pruning. Open records are never pruned. A later `GET /transactions/{txFinal}` returns 404 once its receipt has been removed.
+Completed (`landed` or `expired`) records and payloads are retained for ten minutes after settlement, then pruned. The daemon finishes local file reconciliation and copies known creation hashes to outputs before pruning. Metadata read/write failures defer pruning. Cleanup continues when synchronizer requests fail, and never-submitted transactions retain their 30-second polling interval during an outage. Open records are never pruned. A later `GET /transactions/{txFinal}` returns 404 once its receipt has been removed.
 
 The event stream publishes `transaction-pruned` with `txFinal` when retention ends. This removes the receipt from client snapshots while preserving a completed job's outcome. `transaction-deleted` continues to mean an unsubmitted transaction was explicitly abandoned.
 
