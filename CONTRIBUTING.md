@@ -6,7 +6,7 @@ start with [INSTALL.md](INSTALL.md) instead.
 ## Prerequisites
 
 - Rust toolchain (nightly pin in [rust-toolchain.toml](rust-toolchain.toml))
-- Node.js + [`pnpm`](https://pnpm.io/)
+- Node.js 22 + [`pnpm`](https://pnpm.io/) (model checks pin pnpm 10.34.8)
 - [`just`](https://github.com/casey/just) and [`mprocs`](https://github.com/pvolok/mprocs)
 - [`jq`](https://jqlang.github.io/jq/) (used by a couple of `just` setup recipes)
 - PostgreSQL running locally, only if you also run the chain-side services
@@ -92,6 +92,7 @@ dobjd to pick up the new catalog.
 just test            # cargo test --workspace --release
 just test-ignored    # run #[ignore] tests with --nocapture
 just test-e2e        # the slow, full real-proof end-to-end test
+just models          # install pinned Quint tooling and check the protocol models
 ```
 
 Always run tests with `--release` -- proof generation is impractically slow in
@@ -99,6 +100,9 @@ debug. Unit tests use `MockProver`; real-proof tests are `#[ignore]`-gated.
 
 Before committing, run `cargo fmt` and `cargo clippy --tests --examples`. Keep
 code and comments ASCII-only (no em-dashes or other non-ASCII characters).
+
+See [the model tooling README](devtools/models/README.md) for individual checks
+and the distinction between specification checks and Rust replay adapters.
 
 ## Reset
 
