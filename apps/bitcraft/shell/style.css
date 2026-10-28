@@ -1,16 +1,46 @@
 * { box-sizing: border-box; }
+/* The game page's theme variables, light and dark, under the same names and
+   with the same values, so both startup screens look the same. */
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --pane-header-bg: #f5f5f5;
+  --border: #d4d4d4;
+  --text: #1f1f1f;
+  --muted: #6b6b6b;
+  --row-hover: #f0f0f0;
+  --row-selected: #cce4ff;
+  --error: #b00020;
+  --progress-track: #e2e2e2;
+  --progress-fill: #0a64d8;
+  --button-bg: #ffffff;
+  --button-border: #c4c4c4;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1e1e1e;
+    --pane-header-bg: #282828;
+    --border: #3d3d3d;
+    --text: #e4e4e4;
+    --muted: #9a9a9a;
+    --row-hover: #2d2d2d;
+    --row-selected: #1d3f66;
+    --error: #ff7b72;
+    --progress-track: #3a3a3a;
+    --button-bg: #333333;
+    --button-border: #4d4d4d;
+  }
+}
 html, body { height: 100%; margin: 0; overflow: hidden; overscroll-behavior: none; }
 body {
   display: flex;
   flex-direction: column;
   font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  background: #ffffff;
-  color: #1f1f1f;
+  background: var(--bg);
+  color: var(--text);
   user-select: none;
   -webkit-user-select: none;
 }
-/* Matches the game page's startup screen, which takes these values from its
-   theme variables. */
 .screen {
   display: grid;
   flex: 1;
@@ -29,23 +59,23 @@ main { width: min(100%, 360px); text-align: center; }
   border: 0;
   border-radius: 3px;
   overflow: hidden;
-  background: #e2e2e2;
-  color: #0a64d8;
+  background: var(--progress-track);
+  color: var(--progress-fill);
 }
-.startup-progress::-webkit-progress-bar { background: #e2e2e2; }
-.startup-progress::-webkit-progress-value { background: #0a64d8; }
-.startup-progress::-moz-progress-bar { background: #0a64d8; }
+.startup-progress::-webkit-progress-bar { background: var(--progress-track); }
+.startup-progress::-webkit-progress-value { background: var(--progress-fill); }
+.startup-progress::-moz-progress-bar { background: var(--progress-fill); }
 .status-bar {
   flex: none;
   display: flex;
   flex-wrap: wrap;
   gap: 2px 20px;
   padding: 4px 12px;
-  border-top: 1px solid #d4d4d4;
-  background: #f5f5f5;
+  border-top: 1px solid var(--border);
+  background: var(--pane-header-bg);
   font-size: 12px;
 }
-.status-label { color: #6b6b6b; }
+.status-label { color: var(--muted); }
 .status-item { white-space: nowrap; }
 .status-dot {
   display: inline-block;

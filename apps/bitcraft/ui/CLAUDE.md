@@ -13,10 +13,17 @@ window that shows the file's stored text (an object's from dobjd's
 `GET /objects/{file_name}/raw`, or the welcome guide's Markdown), titled with
 the file's name. It opens wide enough for the title bar to show the whole
 name (the name measured in the title font, plus room for the window buttons;
-at least 480px). It sets its own light background, since the desktop app's
-webview shows a bare JSON response in the system's dark theme, and makes its
-text selectable, since the desktop app turns selection off on every page
-and the windows it opens inherit that.
+at least 480px). It sets its own background from the page's theme, rather
+than leaving a bare JSON response to the webview's default styling, and
+makes its text selectable, since the desktop app turns selection off on
+every page and the windows it opens inherit that.
+
+Every window follows the system's light or dark appearance
+(`prefers-color-scheme`). Colors come from the `:root` variables, which a
+dark block redefines; give a new color a variable with a value in both
+themes rather than a literal. Class icon tiles stay white in both themes,
+since the class art is drawn for a white tile, and so do the paper file
+icons.
 
 The outer page fills the window with scrolling and overscroll disabled, including on the desktop startup screen. Scrollable content stays within its inventory, jobs, details or secondary-view panel.
 
@@ -78,8 +85,9 @@ Automatic setup jobs stay out of Jobs; manual jobs stay visible. Failures
 offer retry and never open the inventory. See `BITCRAFT_SPECIFIC_RULES.md`.
 The startup screen shows the Bitcraft logo, a 16px heading and a progress
 bar in the blue accent, and the same layout appears in the desktop `shell/`,
-whose `style.css` copies this page's values as literals. The logo is the app
-icon (`../src-tauri/icons/icon.png`), copied to `assets/bitcraft-logo.png`
+whose `style.css` repeats the theme variables it needs from this page,
+under the same names and with the same light and dark values. The logo is
+the app icon (`../src-tauri/icons/icon.png`), copied to `assets/bitcraft-logo.png`
 here and `../shell/bitcraft-logo.png`; replace all three together. Keep both
 splash screens visually consistent, including the bottom status bar, which
 both show. On this page the bar is live: it reads the service addresses from
