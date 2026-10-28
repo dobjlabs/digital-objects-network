@@ -240,6 +240,10 @@ mod tests {
 
     #[test]
     fn test_payload_roundtrip() {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_test_writer()
+            .try_init();
         let params = Params::default();
         let vd_set = &*DEFAULT_VD_SET;
         let vds_root = vd_set.root();
