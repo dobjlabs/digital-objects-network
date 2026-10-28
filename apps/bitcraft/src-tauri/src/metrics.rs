@@ -18,6 +18,8 @@ pub struct InventoryMetrics {
 }
 
 const WINDOW: Duration = Duration::from_secs(300);
+/// Listing the inventory can wait on the chain before the daemon answers.
+const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Default)]
 struct Samples(VecDeque<(Instant, f64)>);
@@ -134,8 +136,14 @@ async fn snapshot(
     connection: &Connection,
     client: &reqwest::Client,
 ) -> Result<HashMap<String, Value>> {
-    let objects: Vec<Value> =
-        runtime::get_verified_json(connection, client, "/objects/unspent").await?;
+    let objects: Vec<Value> = client
+        .get(format!("{}/objects/unspent", connection.http_url))
+        .timeout(SNAPSHOT_TIMEOUT)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
     objects
         .into_iter()
         .map(|object| {
@@ -207,20 +215,14 @@ async fn follow(
     let mut pending = Vec::new();
     let mut sequence = None;
     let mut tick = tokio::time::interval(Duration::from_secs(1));
-    let mut verify = tokio::time::interval(Duration::from_secs(30));
     let mut last_chunk = Instant::now();
     publish(&objects, rules, &mut samples, sender)?;
     tick.tick().await;
-    verify.tick().await;
     loop {
         tokio::select! {
             _ = tick.tick() => {
                 anyhow::ensure!(last_chunk.elapsed() < Duration::from_secs(35), "Inventory event stream stalled");
                 refresh_rate(&mut samples, sender);
-            }
-            _ = verify.tick() => {
-                objects = snapshot(connection, client).await?;
-                publish(&objects, rules, &mut samples, sender)?;
             }
             chunk = stream.chunk() => {
                 let bytes = chunk?.context("Inventory event stream closed")?;
