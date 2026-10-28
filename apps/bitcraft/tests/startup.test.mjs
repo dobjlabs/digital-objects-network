@@ -34,6 +34,7 @@ async function page(context, options = {}) {
   const holds = new Map();
   const sources = [];
   const errors = [];
+  const desktopCalls = [];
   let nextTimer = 0;
   const virtualConsole = new VirtualConsole();
   virtualConsole.on("jsdomError", (error) => errors.push(error));
@@ -42,6 +43,12 @@ async function page(context, options = {}) {
     url: options.url ?? "http://127.0.0.1:7727/bitcraft/", runScripts: "dangerously", virtualConsole,
     beforeParse(window) {
       window.bitcraftDesktop = options.desktop ?? false;
+      if (options.desktop || options.invoke) {
+        window.__TAURI__ = { core: { invoke: async (command, args) => {
+          desktopCalls.push({ command, args: copy(args) });
+          return options.invoke?.(command, args);
+        } } };
+      }
       window.TextEncoder = TextEncoder;
       window.ResizeObserver = class { observe() {} };
       window.Element.prototype.scrollIntoView = () => {};
@@ -236,7 +243,7 @@ async function page(context, options = {}) {
     await flush();
   };
   return {
-    backend, document, dom, sources, timers, holds, elapse, emit, dropStream, publish, event,
+    backend, document, dom, sources, timers, holds, elapse, emit, dropStream, publish, event, desktopCalls,
     splash: document.querySelector("#startup-screen"),
     app: document.querySelector("#inventory-app"),
     jobs: () => [...document.querySelectorAll(".run-row")],
@@ -1028,6 +1035,69 @@ test("BIT/sec always averages over 5 minutes, and a 0.00 rate is not shown", asy
   assert.equal(recent.document.querySelector("#inventory-rate").textContent, "0.10 BIT/sec");
   assert.equal(rateShown(recent), true);
   assert.equal(recent.document.title, "Bitcraft (300.00 BIT - 0.10 BIT/sec)");
+});
+
+test("desktop metrics use numeric inventory data independently of rendered text", async (context) => {
+  const ui = await page(context, {
+    desktop: true, objects: [knife(), quarry(3)], sessionStorage: valueSamples([600000, 0]),
+  });
+  const latest = () => ui.desktopCalls.at(-1);
+  assert.deepEqual(latest(), {
+    command: "update_inventory_metrics", args: { metrics: { totalBits: 300, bitsPerSecond: 1 } },
+  });
+  const count = ui.desktopCalls.length;
+  ui.document.title = "A cosmetic title";
+  ui.document.querySelector("#inventory-value-amount").textContent = "999999 BIT";
+  await flush();
+  assert.equal(ui.desktopCalls.length, count);
+  const tick = () => { for (const timer of ui.timers.values()) if (timer.delay === 1000) timer.callback(); };
+  tick();
+  await flush();
+  assert.deepEqual(latest().args.metrics, { totalBits: 300, bitsPerSecond: 1 });
+  await ui.event({ type: "object", ...quarry(4) });
+  assert.deepEqual(latest().args.metrics, { totalBits: 630, bitsPerSecond: 2.1 });
+  const now = Date.now();
+  ui.dom.window.Date.now = () => now + 600000;
+  tick();
+  await flush();
+  assert.deepEqual(latest().args.metrics, { totalBits: 630, bitsPerSecond: 0 });
+});
+
+test("desktop metrics preserve rates hidden by display rounding, including negative rates", async (context) => {
+  for (const previous of [0, 2]) {
+    const ui = await page(context, {
+      desktop: true, objects: [knife(), { fileName: "bit.dobj", class: qname("Bit"), status: "live", fields: { kvs: [] } }],
+      sessionStorage: valueSamples([600000, previous]),
+    });
+    assert.equal(ui.document.querySelector("#inventory-rate").hidden, true);
+    assert.deepEqual(ui.desktopCalls.at(-1).args.metrics, { totalBits: 1, bitsPerSecond: (1 - previous) / 300 });
+  }
+});
+
+test("browser and secondary pages do not report desktop inventory metrics", async (context) => {
+  const browser = await page(context, { objects: [knife()], invoke: () => {} });
+  assert.deepEqual(browser.desktopCalls, []);
+  for (const mode of ["summary", "settings", "recipebook", "raw&file=pocketknife.dobj"]) {
+    const secondary = await page(context, {
+      desktop: true, objects: [knife()], url: `http://127.0.0.1:7727/bitcraft/?page=${mode}`,
+    });
+    assert.deepEqual(secondary.desktopCalls, [], mode);
+  }
+});
+
+test("a rejected desktop update leaves the inventory usable and the next tick retries", async (context) => {
+  let attempts = 0;
+  const ui = await page(context, {
+    desktop: true, objects: [knife(), quarry(3)],
+    invoke: () => { if (++attempts === 1) throw new Error("Desktop unavailable"); },
+  });
+  assert.equal(ui.app.hidden, false);
+  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "300.00 BIT");
+  const before = attempts;
+  for (const timer of ui.timers.values()) if (timer.delay === 1000) timer.callback();
+  await flush();
+  assert.ok(attempts > before);
+  assert.deepEqual(ui.desktopCalls.at(-1).args.metrics, { totalBits: 300, bitsPerSecond: 0 });
 });
 
 test("the summary icon opens the Inventory Summary in one window", async (context) => {

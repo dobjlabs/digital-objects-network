@@ -159,13 +159,22 @@ fn is_external_link(url: &tauri::Url) -> bool {
 }
 
 fn show_page_title(window: tauri::WebviewWindow, title: String) {
-    if window.label() == "main" && window.url().is_ok_and(|url| is_daemon_url(&url)) {
-        window
-            .state::<Desktop>()
-            .discord
-            .update_inventory_value(&title);
-    }
     let _ = window.set_title(&title);
+}
+
+#[tauri::command]
+fn update_inventory_metrics<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    metrics: discord::InventoryMetrics,
+) -> Result<(), String> {
+    if window.label() != "main" || !window.url().is_ok_and(|url| is_daemon_url(&url)) {
+        return Err("Inventory metrics must come from the main game window".into());
+    }
+    window
+        .state::<Desktop>()
+        .discord
+        .update_inventory_metrics(metrics)
+        .map_err(|error| error.to_string())
 }
 
 fn shell_dev_url(app: &tauri::AppHandle) -> Option<tauri::Url> {
@@ -284,6 +293,7 @@ fn main() -> Result<()> {
         background_pending: AtomicBool::new(args.background),
     };
     let app = tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![update_inventory_metrics])
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
             if !args.iter().any(|arg| arg == "--background") {
                 show_window(app);
@@ -432,6 +442,73 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inventory_metrics_command_accepts_only_numeric_updates_from_the_main_game() {
+        let home = tempfile::tempdir().unwrap();
+        let desktop = Desktop {
+            home: home.path().to_path_buf(),
+            discord: discord::Presence::new(home.path()),
+            discord_menu_items: Mutex::new(Vec::new()),
+            discord_available: false,
+            runtime: Mutex::new(None),
+            message: Mutex::new(String::new()),
+            tray_available: AtomicBool::new(false),
+            #[cfg(target_os = "linux")]
+            background_pending: AtomicBool::new(false),
+        };
+        let app = tauri::test::mock_builder()
+            .manage(desktop)
+            .invoke_handler(tauri::generate_handler![update_inventory_metrics])
+            .build(tauri::generate_context!())
+            .unwrap();
+        let game_url: tauri::Url = "http://127.0.0.1:7727/bitcraft/".parse().unwrap();
+        let main = WebviewWindowBuilder::new(&app, "main", WebviewUrl::External(game_url.clone()))
+            .build()
+            .unwrap();
+        let secondary =
+            WebviewWindowBuilder::new(&app, "page-1", WebviewUrl::External(game_url.clone()))
+                .build()
+                .unwrap();
+        let invoke = |window: &tauri::WebviewWindow<tauri::test::MockRuntime>,
+                      url: tauri::Url,
+                      metrics: serde_json::Value| {
+            tauri::test::get_ipc_response(
+                window,
+                tauri::webview::InvokeRequest {
+                    cmd: "update_inventory_metrics".into(),
+                    callback: tauri::ipc::CallbackFn(0),
+                    error: tauri::ipc::CallbackFn(1),
+                    url,
+                    body: tauri::ipc::InvokeBody::Json(serde_json::json!({"metrics": metrics})),
+                    headers: Default::default(),
+                    invoke_key: tauri::test::INVOKE_KEY.to_owned(),
+                },
+            )
+        };
+        let metrics = serde_json::json!({"totalBits": 31.25, "bitsPerSecond": -0.37});
+        assert!(invoke(&main, game_url.clone(), metrics.clone()).is_ok());
+        for invalid in [
+            serde_json::json!({"totalBits": -1.0, "bitsPerSecond": 0.0}),
+            serde_json::json!({"totalBits": "31.25", "bitsPerSecond": 0.0}),
+            serde_json::json!({"totalBits": 31.25}),
+            serde_json::json!({"totalBits": 31.25, "bitsPerSecond": null}),
+        ] {
+            assert!(invoke(&main, game_url.clone(), invalid).is_err());
+        }
+        assert!(invoke(&secondary, game_url, metrics.clone()).is_err());
+        for url in [
+            "http://127.0.0.1:7727/objects/a.dobj/raw",
+            "http://127.0.0.1:7717/bitcraft/",
+            "https://example.com/bitcraft/",
+            "tauri://localhost/index.html",
+        ] {
+            assert!(
+                invoke(&main, url.parse().unwrap(), metrics.clone()).is_err(),
+                "{url}"
+            );
+        }
+    }
 
     #[test]
     fn navigation_stays_on_the_app_or_its_daemon() {

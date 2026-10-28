@@ -10,9 +10,17 @@
     "updater": { "endpoints": [], "pubkey": "" }
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [],
     "security": {
-      "capabilities": [],
+      "capabilities": [{
+        "identifier": "inventory-metrics",
+        "description": "Report inventory value and production rate from the main game window",
+        "windows": ["main"],
+        "local": false,
+        "remote": { "urls": ["http://127.0.0.1:7727/bitcraft/*"] },
+        "permissions": ["allow-update-inventory-metrics"]
+      }],
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; frame-src 'none'"
     }
   },

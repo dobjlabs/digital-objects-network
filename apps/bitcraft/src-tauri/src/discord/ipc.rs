@@ -176,17 +176,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Client<S> {
 
 #[cfg(test)]
 #[cfg(unix)]
-pub(super) fn mock_client(activities: tokio::sync::mpsc::UnboundedSender<Value>) -> Client {
+pub(super) fn mock_client(
+    activities: tokio::sync::mpsc::UnboundedSender<Value>,
+) -> (Client, tokio::task::JoinHandle<()>) {
     let (app, discord) = Stream::pair().unwrap();
-    tokio::spawn(async move {
+    let server = tokio::spawn(async move {
         let mut server = Client { stream: discord };
         while let Ok((_, request)) = server.read().await {
-            if activities
-                .send(request["args"]["activity"].clone())
-                .is_err()
-            {
-                break;
-            }
             if server
                 .write(
                     FRAME,
@@ -199,9 +195,15 @@ pub(super) fn mock_client(activities: tokio::sync::mpsc::UnboundedSender<Value>)
             {
                 break;
             }
+            if activities
+                .send(request["args"]["activity"].clone())
+                .is_err()
+            {
+                break;
+            }
         }
     });
-    Client { stream: app }
+    (Client { stream: app }, server)
 }
 
 #[cfg(test)]

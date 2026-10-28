@@ -16,6 +16,8 @@ use tokio::sync::watch;
 const UPDATE_INTERVAL: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const IPC_TIMEOUT: Duration = Duration::from_secs(2);
+const RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(1);
+const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
 
 #[derive(Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,7 +30,7 @@ pub struct Presence {
     path: PathBuf,
     application_id: Option<String>,
     enabled: watch::Sender<Option<bool>>,
-    inventory_value: watch::Sender<Option<InventoryValue>>,
+    inventory_metrics: watch::Sender<Option<InventoryMetrics>>,
     receiver: Mutex<Option<watch::Receiver<Option<bool>>>>,
     task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
 }
@@ -59,12 +61,12 @@ impl Presence {
             }
         });
         let (enabled, receiver) = watch::channel(Some(preferences.share_activity));
-        let (inventory_value, _) = watch::channel(None);
+        let (inventory_metrics, _) = watch::channel(None);
         Self {
             path,
             application_id,
             enabled,
-            inventory_value,
+            inventory_metrics,
             receiver: Mutex::new(Some(receiver)),
             task: Mutex::new(None),
         }
@@ -78,9 +80,10 @@ impl Presence {
         self.enabled.borrow().unwrap_or(false)
     }
 
-    pub fn update_inventory_value(&self, title: &str) {
-        self.inventory_value
-            .send_replace(InventoryValue::from_title(title));
+    pub fn update_inventory_metrics(&self, metrics: InventoryMetrics) -> Result<()> {
+        metrics.validate()?;
+        self.inventory_metrics.send_replace(Some(metrics));
+        Ok(())
     }
 
     pub fn set_enabled(&self, enabled: bool) -> Result<()> {
@@ -108,7 +111,7 @@ impl Presence {
         *self.task.lock().unwrap() = Some(tauri::async_runtime::spawn(worker(
             connection,
             receiver,
-            self.inventory_value.subscribe(),
+            self.inventory_metrics.subscribe(),
             move || {
                 let application_id = application_id.clone();
                 async move { ipc::Client::connect(&application_id).await }
@@ -151,29 +154,35 @@ struct Action {
     name: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct InventoryValue(String);
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct InventoryMetrics {
+    total_bits: f64,
+    bits_per_second: f64,
+}
 
-impl InventoryValue {
-    fn from_title(title: &str) -> Option<Self> {
-        let formatted = title.strip_prefix("Bitcraft (")?.strip_suffix(')')?;
-        let formatted = match formatted.split_once(" - ") {
-            Some((total, rate)) => {
-                let rate = rate.strip_suffix(" BIT/sec")?.parse::<f64>().ok()?;
-                if !rate.is_finite() {
-                    return None;
-                }
-                total
-            }
-            None => formatted,
-        };
-        let number = formatted.strip_suffix(" BIT")?.parse::<f64>().ok()?;
-        (number.is_finite() && number >= 0.0 && formatted.len() <= 64)
-            .then(|| Self(formatted.to_owned()))
+impl InventoryMetrics {
+    fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.total_bits.is_finite() && self.total_bits >= 0.0,
+            "Total BIT must be finite and nonnegative"
+        );
+        anyhow::ensure!(self.bits_per_second.is_finite(), "BIT/sec must be finite");
+        Ok(())
     }
 }
 
-fn activity(runs: &[Run], started_at: u64, inventory_value: Option<&InventoryValue>) -> Value {
+fn format_bits(value: f64) -> String {
+    if value.abs() >= 1e21 {
+        format!("{value:.2e}")
+    } else if value.abs() < 0.005 {
+        "0.00".into()
+    } else {
+        format!("{value:.2}")
+    }
+}
+
+fn activity(runs: &[Run], started_at: u64, inventory_metrics: Option<&InventoryMetrics>) -> Value {
     let active: Vec<_> = runs
         .iter()
         .filter(|run| {
@@ -201,8 +210,12 @@ fn activity(runs: &[Run], started_at: u64, inventory_value: Option<&InventoryVal
         1 => "1 active job".to_owned(),
         count => format!("{count} active jobs"),
     };
-    let state = match inventory_value {
-        Some(value) => format!("{} | {jobs}", value.0),
+    let state = match inventory_metrics {
+        Some(metrics) => format!(
+            "{} BIT | {} BIT/sec | {jobs}",
+            format_bits(metrics.total_bits),
+            format_bits(metrics.bits_per_second)
+        ),
         None => jobs,
     };
     json!({
@@ -249,7 +262,7 @@ impl Updates {
 async fn worker<F>(
     connection: Connection,
     mut enabled: watch::Receiver<Option<bool>>,
-    inventory_value: watch::Receiver<Option<InventoryValue>>,
+    inventory_metrics: watch::Receiver<Option<InventoryMetrics>>,
     mut connect: impl FnMut() -> F,
 ) where
     F: std::future::Future<Output = Result<ipc::Client>>,
@@ -269,8 +282,7 @@ async fn worker<F>(
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let mut updates = Updates::default();
-    let mut delay = UPDATE_INTERVAL;
+    let mut delay = RECONNECT_INITIAL_DELAY;
     let mut last_error = String::new();
     loop {
         let Some(sharing) = *enabled.borrow_and_update() else {
@@ -288,7 +300,7 @@ async fn worker<F>(
                 if changed.is_err() { return; }
                 None
             }
-            result = drive(connect(), &connection, &client, &mut ipc, &mut updates, started_at, &inventory_value) => Some(result),
+            result = drive(connect(), &connection, &client, &mut ipc, started_at, &inventory_metrics, &mut delay) => Some(result),
         };
         let retry_after = outcome
             .as_ref()
@@ -302,10 +314,9 @@ async fn worker<F>(
                 tokio::time::timeout(Duration::from_secs(1), ipc.set_activity(Value::Null)).await;
         }
         drop(ipc);
-        updates.published = None;
         match outcome {
             None => {
-                delay = UPDATE_INTERVAL;
+                delay = RECONNECT_INITIAL_DELAY;
             }
             Some(Err(error)) => {
                 let message = error.to_string();
@@ -320,7 +331,7 @@ async fn worker<F>(
                     }
                     _ = tokio::time::sleep(wait) => {}
                 }
-                delay = (delay * 2).min(Duration::from_secs(60));
+                delay = (delay * 2).min(RECONNECT_MAX_DELAY);
             }
             Some(Ok(())) => return,
         }
@@ -332,13 +343,13 @@ async fn drive(
     connection: &Connection,
     client: &reqwest::Client,
     ipc: &mut Option<ipc::Client>,
-    updates: &mut Updates,
     started_at: u64,
-    inventory_value: &watch::Receiver<Option<InventoryValue>>,
+    inventory_metrics: &watch::Receiver<Option<InventoryMetrics>>,
+    retry_delay: &mut Duration,
 ) -> Result<()> {
     *ipc = Some(tokio::time::timeout(IPC_TIMEOUT, connect).await??);
     let ipc = ipc.as_mut().unwrap();
-    let mut last_contact = Instant::now();
+    let mut updates = Updates::default();
     loop {
         connection.verify().await?;
         let runs: Vec<Run> = client
@@ -348,17 +359,16 @@ async fn drive(
             .error_for_status()?
             .json()
             .await?;
-        let activity = activity(&runs, started_at, inventory_value.borrow().as_ref());
+        let activity = activity(&runs, started_at, inventory_metrics.borrow().as_ref());
         let now = Instant::now();
         if updates.due(now, &activity) {
             updates.last_attempt = Some(now);
             tokio::time::timeout(IPC_TIMEOUT, ipc.set_activity(activity.clone())).await??;
             updates.published = Some(activity);
-            last_contact = Instant::now();
-        } else if last_contact.elapsed() >= UPDATE_INTERVAL {
+        } else {
             tokio::time::timeout(IPC_TIMEOUT, ipc.ping()).await??;
-            last_contact = Instant::now();
         }
+        *retry_delay = RECONNECT_INITIAL_DELAY;
         tokio::time::sleep(POLL_INTERVAL).await;
     }
 }
@@ -403,7 +413,10 @@ mod tests {
         assert!(updates.due(start, &idle));
         updates.last_attempt = Some(start);
         updates.published = Some(idle.clone());
-        let value = InventoryValue::from_title("Bitcraft (123.450 BIT)").unwrap();
+        let value = InventoryMetrics {
+            total_bits: 123.45,
+            bits_per_second: 0.37,
+        };
         let busy = activity(&[], 42, Some(&value));
         assert!(!updates.due(start + Duration::from_secs(14), &busy));
         assert!(updates.due(start + UPDATE_INTERVAL, &busy));
@@ -414,45 +427,74 @@ mod tests {
     }
 
     #[test]
-    fn inventory_value_preserves_the_displayed_total_and_rejects_other_titles() {
-        for value in ["0.000 BIT", "123.450 BIT", "987654321.125 BIT", "1e+21 BIT"] {
-            let inventory = InventoryValue::from_title(&format!("Bitcraft ({value})")).unwrap();
+    fn inventory_metrics_are_numeric_and_presence_includes_total_and_rate() {
+        let metrics: InventoryMetrics = serde_json::from_value(json!({
+            "totalBits": 31.125, "bitsPerSecond": -0.375
+        }))
+        .unwrap();
+        metrics.validate().unwrap();
+        assert_eq!(
+            activity(&[], 42, Some(&metrics))["state"],
+            "31.12 BIT | -0.38 BIT/sec | No active jobs"
+        );
+        for value in [0.0, -0.0, 0.001, -0.001] {
+            let metrics = InventoryMetrics {
+                total_bits: 0.0,
+                bits_per_second: value,
+            };
             assert_eq!(
-                activity(&[], 42, Some(&inventory))["state"],
-                format!("{value} | No active jobs")
+                activity(&[], 42, Some(&metrics))["state"],
+                "0.00 BIT | 0.00 BIT/sec | No active jobs"
             );
         }
-        for title in [
-            "Bitcraft",
-            "Bitcraft Settings",
-            "Bitcraft (NaN BIT)",
-            "Bitcraft (inf BIT)",
-            "Bitcraft (-1.000 BIT)",
-            "Bitcraft (1.000)",
-            "private.dobj",
-            "Bitcraft (1.000 BIT) extra",
-            "Bitcraft ( BIT)",
-        ] {
-            assert_eq!(InventoryValue::from_title(title), None, "{title}");
-        }
+        let large = InventoryMetrics {
+            total_bits: f64::MAX,
+            bits_per_second: -f64::MAX,
+        };
+        large.validate().unwrap();
+        assert!(
+            activity(&[], 42, Some(&large))["state"]
+                .as_str()
+                .unwrap()
+                .len()
+                <= 128
+        );
     }
 
     #[test]
-    fn inventory_value_ignores_the_optional_production_rate() {
-        for rate in ["0.37", "-0.37", "1e+21"] {
-            assert_eq!(
-                InventoryValue::from_title(&format!("Bitcraft (31.00 BIT - {rate} BIT/sec)")),
-                InventoryValue::from_title("Bitcraft (31.00 BIT)")
+    fn invalid_inventory_metrics_do_not_replace_the_last_update() {
+        let home = tempfile::tempdir().unwrap();
+        let presence = Presence::new(home.path());
+        assert_eq!(*presence.inventory_metrics.borrow(), None);
+        let metrics = InventoryMetrics {
+            total_bits: 31.0,
+            bits_per_second: -0.5,
+        };
+        presence.update_inventory_metrics(metrics).unwrap();
+        for total_bits in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(
+                presence
+                    .update_inventory_metrics(InventoryMetrics {
+                        total_bits,
+                        ..metrics
+                    })
+                    .is_err()
             );
+            assert_eq!(*presence.inventory_metrics.borrow(), Some(metrics));
         }
-        for title in [
-            "Bitcraft (31.00 BIT - NaN BIT/sec)",
-            "Bitcraft (31.00 BIT - inf BIT/sec)",
-            "Bitcraft (31.00 BIT - 0.37)",
-            "Bitcraft (NaN BIT - 0.37 BIT/sec)",
-        ] {
-            assert_eq!(InventoryValue::from_title(title), None, "{title}");
+        for bits_per_second in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(
+                presence
+                    .update_inventory_metrics(InventoryMetrics {
+                        bits_per_second,
+                        ..metrics
+                    })
+                    .is_err()
+            );
+            assert_eq!(*presence.inventory_metrics.borrow(), Some(metrics));
         }
+        assert!(!presence.enabled());
+        assert!(!home.path().join("desktop.json").exists());
     }
 
     #[test]
@@ -474,19 +516,22 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[tokio::test]
-    async fn opt_in_opt_out_reenable_and_shutdown_control_the_live_connection() {
+    async fn mock_daemon(
+        home: &std::path::Path,
+    ) -> (
+        Connection,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        tokio::task::JoinHandle<()>,
+    ) {
         use std::sync::{
             Arc,
             atomic::{AtomicUsize, Ordering},
         };
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let home = tempfile::tempdir().unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let connection =
-            Connection::new(home.path().to_path_buf(), "test-instance".into(), port).unwrap();
+        let connection = Connection::new(home.to_path_buf(), "test-instance".into(), port).unwrap();
         let requests = Arc::new(AtomicUsize::new(0));
         let request_count = requests.clone();
         let daemon = tokio::spawn(async move {
@@ -510,19 +555,115 @@ mod tests {
                 stream.write_all(response.as_bytes()).await.unwrap();
             }
         });
+        (connection, requests, daemon)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn discord_restarts_republish_unchanged_activity_without_toggling_sharing() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        let home = tempfile::tempdir().unwrap();
+        let (connection, _, daemon) = mock_daemon(home.path()).await;
+        let (sharing, receiver) = watch::channel(Some(true));
+        let (_metrics_sender, inventory_metrics) = watch::channel(Some(InventoryMetrics {
+            total_bits: 31.0,
+            bits_per_second: 0.37,
+        }));
+        let online = Arc::new(AtomicBool::new(false));
+        let discord_online = online.clone();
+        let (activity_sender, mut activities) = tokio::sync::mpsc::unbounded_channel();
+        let (server_sender, mut servers) = tokio::sync::mpsc::unbounded_channel();
+        let (attempt_sender, mut attempts) = tokio::sync::mpsc::unbounded_channel();
+        let task = tokio::spawn(worker(connection, receiver, inventory_metrics, move || {
+            let online = discord_online.load(Ordering::Relaxed);
+            attempt_sender.send(()).unwrap();
+            let activity_sender = activity_sender.clone();
+            let server_sender = server_sender.clone();
+            async move {
+                anyhow::ensure!(online, "Discord is not running");
+                let (client, server) = ipc::mock_client(activity_sender);
+                server_sender.send(server).unwrap();
+                Ok(client)
+            }
+        }));
+        assert!(attempts.recv().await.is_some());
+        tokio::time::timeout(Duration::from_secs(4), attempts.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        online.store(true, Ordering::Relaxed);
+        let first = tokio::time::timeout(Duration::from_secs(4), activities.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let server = servers.recv().await.unwrap();
+        assert_eq!(first["state"], "31.00 BIT | 0.37 BIT/sec | 1 active job");
+        while attempts.try_recv().is_ok() {}
+
+        online.store(false, Ordering::Relaxed);
+        server.abort();
+        tokio::time::timeout(Duration::from_secs(9), attempts.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        online.store(true, Ordering::Relaxed);
+        let second = tokio::time::timeout(Duration::from_secs(4), activities.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(second, first);
+        let server = servers.recv().await.unwrap();
+        server.abort();
+        let third = tokio::time::timeout(Duration::from_secs(9), activities.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(third, first);
+        assert_eq!(*sharing.borrow(), Some(true));
+
+        sharing.send_replace(None);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), activities.recv())
+                .await
+                .unwrap(),
+            Some(Value::Null)
+        );
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap();
+        daemon.abort();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn opt_in_opt_out_reenable_and_shutdown_control_the_live_connection() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let home = tempfile::tempdir().unwrap();
+        let (connection, requests, daemon) = mock_daemon(home.path()).await;
         let (sharing, receiver) = watch::channel(Some(false));
         let (activity_sender, mut activities) = tokio::sync::mpsc::unbounded_channel();
         let connections = Arc::new(AtomicUsize::new(0));
         let connection_count = connections.clone();
-        let (inventory_sender, inventory_receiver) =
-            watch::channel(InventoryValue::from_title("Bitcraft (12.500 BIT)"));
+        let (inventory_sender, inventory_receiver) = watch::channel(Some(InventoryMetrics {
+            total_bits: 12.5,
+            bits_per_second: 0.25,
+        }));
         let task = tokio::spawn(worker(
             connection,
             receiver,
             inventory_receiver,
             move || {
                 connection_count.fetch_add(1, Ordering::Relaxed);
-                let client = ipc::mock_client(activity_sender.clone());
+                let (client, _) = ipc::mock_client(activity_sender.clone());
                 async move { Ok(client) }
             },
         ));
@@ -535,7 +676,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(first["details"], "Gather Wood");
-        assert_eq!(first["state"], "12.500 BIT | 1 active job");
+        assert_eq!(first["state"], "12.50 BIT | 0.25 BIT/sec | 1 active job");
         sharing.send_replace(Some(false));
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(2), activities.recv())
@@ -546,14 +687,17 @@ mod tests {
         let stopped_requests = requests.load(Ordering::Relaxed);
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(requests.load(Ordering::Relaxed), stopped_requests);
-        inventory_sender.send_replace(InventoryValue::from_title("Bitcraft (100.125 BIT)"));
+        inventory_sender.send_replace(Some(InventoryMetrics {
+            total_bits: 100.125,
+            bits_per_second: -0.5,
+        }));
         sharing.send_replace(Some(true));
         let second = tokio::time::timeout(Duration::from_secs(20), activities.recv())
             .await
             .unwrap()
             .unwrap();
         assert_eq!(second["details"], "Gather Wood");
-        assert_eq!(second["state"], "100.125 BIT | 1 active job");
+        assert_eq!(second["state"], "100.12 BIT | -0.50 BIT/sec | 1 active job");
         assert_eq!(second["timestamps"], first["timestamps"]);
         assert_eq!(connections.load(Ordering::Relaxed), 2);
         sharing.send_replace(None);

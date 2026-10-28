@@ -1068,6 +1068,14 @@
 
   const PLUGIN_NAME = "bitcraft";
 
+  function reportInventoryMetrics(totalBits, bitsPerSecond) {
+    const invoke = window.__TAURI__?.core?.invoke;
+    if (window.bitcraftDesktop && invoke) {
+      invoke("update_inventory_metrics", { metrics: { totalBits, bitsPerSecond } })
+        .catch((error) => console.warn("Could not update desktop inventory metrics:", error));
+    }
+  }
+
   const STARTUP_RUN_STORAGE_KEY = "bitcraft.startup-pocketknife-run";
   let startupPocketknifeActive = false;
   let startupPocketknifeRun = null;
@@ -3964,7 +3972,7 @@
     try {
       sessionStorage.setItem(VALUE_SAMPLES_STORAGE_KEY, JSON.stringify(valueSamples));
     } catch {}
-    showValueRate();
+    updateInventoryMetrics();
   }
 
   function valueRate(now) {
@@ -3976,11 +3984,12 @@
   // The rate in the top bar and, with the value, in the window's title,
   // which the desktop app shows in its title bar. A rate that rounds to
   // 0.00 is left out of both.
-  function showValueRate() {
+  function updateInventoryMetrics() {
     if (latestInventoryValue === null) {
       return;
     }
     const rate = valueRate(Date.now());
+    reportInventoryMetrics(latestInventoryValue, rate);
     const shown = Math.abs(rate) >= 0.005;
     const rateText = `${rate.toFixed(2)} BIT/sec`;
     document.getElementById("inventory-rate").textContent = shown ? rateText : "";
@@ -4153,7 +4162,7 @@
     refreshServiceStatus();
     setInterval(refreshServiceStatus, SERVICE_STATUS_INTERVAL_MS);
     // The rate falls as the window moves past growth, with no new event.
-    setInterval(showValueRate, 1000);
+    setInterval(updateInventoryMetrics, 1000);
     renderDetails();
     load();
   }

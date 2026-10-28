@@ -191,9 +191,13 @@ their entries know about bitcraft:
   Total Bit Value of the live bitcraft objects (pending ones are left out);
   see below. The Inventory Summary also shows each class's summed value
   beside its count, and hovering an object row in the main window shows
-  that object's value in a tooltip. The native host also reads the main
-  window's title to show the same total in Discord Rich Presence when
-  sharing is enabled.
+  that object's value in a tooltip. The main game page reports the numeric
+  total and five-minute production rate through the desktop's
+  `update_inventory_metrics` Tauri command whenever inventory changes and
+  every second. Discord Rich Presence shows both values when sharing is
+  enabled, including zero and negative rates. These updates use the computed
+  numbers, independently of title and toolbar text. Browser and secondary
+  pages do not send them; the host accepts only the main game window.
 - **Inventory Summary icon:** `SUMMARY_ICON_CLASS` (`Bit`), the class whose
   art heads the window, since it totals the inventory in bits.
 - **Website and Discord links:** `BITCRAFT_SITE_URL` and
