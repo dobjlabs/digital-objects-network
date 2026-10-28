@@ -1154,7 +1154,7 @@ test("browser and secondary pages do not request native metrics", async (context
   assert.deepEqual(browser.desktopCalls, []);
   for (const mode of ["summary", "settings", "recipebook", "raw&file=pocketknife.dobj"]) {
     const secondary = await page(context, { desktop: true, objects: [knife()], url: `http://127.0.0.1:7727/bitcraft/?page=${mode}` });
-    assert.deepEqual(secondary.desktopCalls, [], mode);
+    assert.ok(!secondary.desktopCalls.includes("inventory_metrics"), mode);
   }
 });
 
@@ -1291,6 +1291,49 @@ test("the Settings window shows the connection addresses read-only and runs no s
     assert.equal(field(id).textContent.trim(), text);
     assert.equal(field(id).target, "_blank", `${id} opens outside the Settings window`);
   }
+});
+
+test("desktop Settings reads and changes the Discord sharing preference through the host", async (context) => {
+  let sharing = false;
+  const requests = [];
+  const ui = await page(context, {
+    desktop: true, url: "http://127.0.0.1:7727/bitcraft/?page=settings",
+    invoke: (command, args) => {
+      requests.push([command, args && { ...args }]);
+      if (command === "set_discord_sharing") sharing = args.enabled;
+      return sharing;
+    },
+  });
+  await flush();
+  const section = ui.document.querySelector("#settings-sharing");
+  const checkbox = ui.document.querySelector("#settings-discord-sharing");
+  assert.equal(section.hidden, false);
+  assert.equal(checkbox.checked, false);
+  checkbox.click();
+  await flush();
+  assert.equal(sharing, true);
+  assert.equal(checkbox.checked, true);
+  assert.equal(checkbox.disabled, false);
+  checkbox.click();
+  await flush();
+  assert.equal(sharing, false);
+  assert.deepEqual(requests, [
+    ["discord_sharing", undefined],
+    ["set_discord_sharing", { enabled: true }],
+    ["set_discord_sharing", { enabled: false }],
+  ]);
+});
+
+test("Settings hides Discord sharing without a host, and when the host cannot be reached", async (context) => {
+  const browser = await page(context, { url: "http://127.0.0.1:7727/bitcraft/?page=settings" });
+  await flush();
+  assert.equal(browser.document.querySelector("#settings-sharing").hidden, true);
+  const failing = await page(context, {
+    desktop: true, url: "http://127.0.0.1:7727/bitcraft/?page=settings",
+    invoke: () => { throw new Error("Not allowed"); },
+  });
+  await flush();
+  assert.equal(failing.document.querySelector("#settings-sharing").hidden, true);
 });
 
 test("the top bar and the window title show the Inventory Value of live objects", async (context) => {

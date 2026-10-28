@@ -12,7 +12,7 @@ use anyhow::Result;
 use clap::Parser;
 use tauri::{
     Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent,
-    menu::{CheckMenuItem, Menu, MenuItem, Submenu},
+    menu::{Menu, MenuItem, Submenu},
     tray::TrayIconBuilder,
 };
 use tokio::sync::watch;
@@ -41,7 +41,6 @@ struct Desktop {
     discord: discord::Presence,
     inventory_metrics: watch::Sender<Option<metrics::InventoryMetrics>>,
     metrics_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
-    discord_menu_items: Mutex<Vec<CheckMenuItem<tauri::Wry>>>,
     runtime: Mutex<Option<Arc<runtime::Runtime>>>,
     message: Mutex<String>,
     tray_available: AtomicBool,
@@ -56,7 +55,6 @@ impl Desktop {
             home,
             inventory_metrics: watch::Sender::new(None),
             metrics_task: Mutex::new(None),
-            discord_menu_items: Mutex::new(Vec::new()),
             runtime: Mutex::new(None),
             message: Mutex::new(message),
             tray_available: AtomicBool::new(false),
@@ -113,15 +111,6 @@ fn run_menu_action(app: &tauri::AppHandle, id: &str) {
                 eprintln!("Could not open agent guide: {error:#}");
             }
         }
-        "discord-presence" => {
-            let desktop = app.state::<Desktop>();
-            if let Err(error) = desktop.discord.set_enabled(!desktop.discord.enabled()) {
-                eprintln!("Could not save Discord sharing preference: {error}");
-            }
-            for item in desktop.discord_menu_items.lock().unwrap().iter() {
-                let _ = item.set_checked(desktop.discord.enabled());
-            }
-        }
         "quit" => app.exit(0),
         _ => {}
     }
@@ -130,20 +119,6 @@ fn run_menu_action(app: &tauri::AppHandle, id: &str) {
 fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let open = MenuItem::with_id(app, "open", "Open Bitcraft", true, None::<&str>)?;
     let close = MenuItem::with_id(app, "close", "Close Window", true, Some("CmdOrCtrl+W"))?;
-    let desktop = app.state::<Desktop>();
-    let discord = CheckMenuItem::with_id(
-        app,
-        "discord-presence",
-        "Share activity on Discord",
-        true,
-        desktop.discord.enabled(),
-        None::<&str>,
-    )?;
-    desktop
-        .discord_menu_items
-        .lock()
-        .unwrap()
-        .push(discord.clone());
     let quit = MenuItem::with_id(app, "quit", "Quit Bitcraft", true, Some("CmdOrCtrl+Q"))?;
     let agents = MenuItem::with_id(
         app,
@@ -152,7 +127,7 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         true,
         None::<&str>,
     )?;
-    Menu::with_items(app, &[&open, &agents, &close, &discord, &quit])
+    Menu::with_items(app, &[&open, &agents, &close, &quit])
 }
 
 /// The editing commands, whose items carry the shortcuts that let pages cut,
@@ -206,6 +181,21 @@ fn show_page_title(window: tauri::WebviewWindow, title: String) {
 #[tauri::command]
 fn inventory_metrics(desktop: tauri::State<Desktop>) -> Option<metrics::InventoryMetrics> {
     desktop.inventory_metrics.borrow().clone()
+}
+
+#[tauri::command]
+fn discord_sharing(desktop: tauri::State<Desktop>) -> bool {
+    desktop.discord.enabled()
+}
+
+/// Returns the preference now in effect, which is the requested one even
+/// when saving it fails.
+#[tauri::command]
+fn set_discord_sharing(desktop: tauri::State<Desktop>, enabled: bool) -> bool {
+    if let Err(error) = desktop.discord.set_enabled(enabled) {
+        eprintln!("Could not save Discord sharing preference: {error}");
+    }
+    desktop.discord.enabled()
 }
 
 fn shell_dev_url(app: &tauri::AppHandle) -> Option<tauri::Url> {
@@ -320,7 +310,11 @@ fn main() -> Result<()> {
         .background_pending
         .store(args.background, Ordering::Relaxed);
     let app = tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![inventory_metrics])
+        .invoke_handler(tauri::generate_handler![
+            inventory_metrics,
+            discord_sharing,
+            set_discord_sharing
+        ])
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
             if !args.iter().any(|arg| arg == "--background") {
                 show_window(app);
@@ -479,19 +473,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn inventory_metrics_capability_uses_the_runtime_port() {
+    fn native_capabilities_use_the_runtime_port() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        for identifier in ["inventory-metrics", "discord-sharing"] {
+            let capability = config["app"]["security"]["capabilities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|capability| capability["identifier"] == identifier)
+                .unwrap_or_else(|| panic!("{identifier} capability must exist"));
+            assert_eq!(
+                capability["remote"]["urls"],
+                serde_json::json!([format!("http://127.0.0.1:{}/*", runtime::HTTP_PORT)]),
+                "{identifier}"
+            );
+        }
+    }
+
+    #[test]
+    fn settings_window_calls_are_allowed_under_the_main_window_label() {
+        // On macOS a window the page opens shares the main window's webview
+        // configuration, so its IPC calls arrive labelled as the main window's.
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         let capability = config["app"]["security"]["capabilities"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|capability| capability["identifier"] == "inventory-metrics")
-            .expect("inventory metrics capability must exist");
-        assert_eq!(
-            capability["remote"]["urls"],
-            serde_json::json!([format!("http://127.0.0.1:{}/*", runtime::HTTP_PORT)])
-        );
+            .find(|capability| capability["identifier"] == "discord-sharing")
+            .unwrap();
+        assert_eq!(capability["windows"], serde_json::json!(["main", "page-*"]));
     }
 
     #[test]
