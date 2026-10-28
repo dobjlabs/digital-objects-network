@@ -1,0 +1,44 @@
+{
+  "TOTAL_BIT_VALUES": {
+    "Bit": 1,
+    "Wood": 1,
+    "Stone": 2,
+    "Iron": 5,
+    "Pocketknife": 0,
+    "Stick": 0.5,
+    "WoodAxe": 2,
+    "StoneAxe": 4,
+    "IronAxe": 9,
+    "BucketOfWood": 5,
+    "BucketOfStone": 5,
+    "BucketOfIron": 5
+  },
+  "BUCKET_CONTENT_BIT_VALUES": {
+    "BucketOfWood": 1,
+    "BucketOfStone": 2,
+    "BucketOfIron": 5
+  },
+  "LEVELED_TOTAL_BIT_VALUES": {
+    "Quarry": [
+      40,
+      130,
+      300,
+      630,
+      1280,
+      2570
+    ],
+    "MiningDrill": [
+      135,
+      420,
+      975,
+      2070,
+      4245,
+      8580
+    ]
+  },
+  "FULL_DURABILITY": {
+    "WoodAxe": 100,
+    "StoneAxe": 100,
+    "IronAxe": 100
+  }
+}

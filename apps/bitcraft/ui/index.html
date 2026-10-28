@@ -1283,31 +1283,15 @@
   // Total Bit Value: what an object is worth in bits, counting each raw
   // resource spent to make it at the rate its BitsFrom* recipe pays (Wood 1,
   // Stone 2, Iron 5). Worked out by hand from the recipes, per class.
-  const TOTAL_BIT_VALUES = {
-    Bit: 1,
-    Wood: 1,
-    Stone: 2,
-    Iron: 5,
-    Pocketknife: 0,
-    Stick: 0.5,
-    WoodAxe: 2,
-    StoneAxe: 4,
-    IronAxe: 9,
-    BucketOfWood: 5,
-    BucketOfStone: 5,
-    BucketOfIron: 5,
-  };
+  let TOTAL_BIT_VALUES = {};
   // A bucket is also worth the `n` resources it holds, at these rates.
-  const BUCKET_CONTENT_BIT_VALUES = { BucketOfWood: 1, BucketOfStone: 2, BucketOfIron: 5 };
+  let BUCKET_CONTENT_BIT_VALUES = {};
   // Quarries and drills by level (index 0 is level 1): building one, plus the
   // full buckets every level-up spends.
-  const LEVELED_TOTAL_BIT_VALUES = {
-    Quarry: [40, 130, 300, 630, 1280, 2570],
-    MiningDrill: [135, 420, 975, 2070, 4245, 8580],
-  };
+  let LEVELED_TOTAL_BIT_VALUES = {};
   // Tools that wear out: the `durability` a new one starts with. Such a
   // tool is worth its Total Bit Value times the fraction of that it has left.
-  const FULL_DURABILITY = { WoodAxe: 100, StoneAxe: 100, IronAxe: 100 };
+  let FULL_DURABILITY = {};
 
   // The class whose art heads the Inventory Summary window, which totals the
   // inventory in bits.
@@ -2759,7 +2743,7 @@
     document.body.classList.add("secondary-window");
     document.title = "Bitcraft Inventory Summary";
     summaryView.hidden = false;
-    await Presentation.load();
+    await Promise.all([Presentation.load(), loadInventoryValues()]);
     inventory = watchInventory(renderSummary);
     try {
       await inventory.reload();
@@ -3706,6 +3690,7 @@
     showStartup("Loading inventory...");
     showMessage("Loading...", false);
     try {
+      await loadInventoryValues();
       inventory ??= watchInventory(showObjects, {
         onError: startupInventoryError,
         onReconnect: restoreRuns,
@@ -3931,11 +3916,33 @@
   // inventory change. The whole window is always averaged over, the value
   // before the first sample counting as that sample's, so a new session's
   // first gains do not read as a spike. The samples are kept for the
-  // session, so a reload does not restart the measurement.
+  // session, so a reload does not restart the measurement. The desktop
+  // host keeps its own samples, which a hidden window cannot, and supplies
+  // the rate instead.
   const VALUE_RATE_WINDOW_MS = 5 * 60 * 1000;
   const VALUE_SAMPLES_STORAGE_KEY = "bitcraft.inventory-value-samples";
   let valueSamples = readValueSamples();
   let latestInventoryValue = null;
+  let desktopRateError = null;
+
+  async function loadInventoryValues() {
+    const response = await fetch(new URL("inventory-values.json", document.baseURI).href);
+    if (!response.ok) throw new Error("Could not load inventory values");
+    ({ TOTAL_BIT_VALUES, BUCKET_CONTENT_BIT_VALUES, LEVELED_TOTAL_BIT_VALUES, FULL_DURABILITY } = await response.json());
+  }
+
+  async function readDesktopRate() {
+    let rate = 0;
+    try {
+      rate = (await window.__TAURI__.core.invoke("inventory_metrics"))?.bitsPerSecond ?? 0;
+      desktopRateError = null;
+    } catch (error) {
+      const message = String(error);
+      if (message !== desktopRateError) console.warn("Could not read the native production rate:", error);
+      desktopRateError = message;
+    }
+    renderValueRate(rate);
+  }
 
   function readValueSamples() {
     try {
@@ -3980,7 +3987,14 @@
     if (latestInventoryValue === null) {
       return;
     }
-    const rate = valueRate(Date.now());
+    if (window.bitcraftDesktop) {
+      void readDesktopRate();
+    } else {
+      renderValueRate(valueRate(Date.now()));
+    }
+  }
+
+  function renderValueRate(rate) {
     const shown = Math.abs(rate) >= 0.005;
     const rateText = `${rate.toFixed(2)} BIT/sec`;
     document.getElementById("inventory-rate").textContent = shown ? rateText : "";

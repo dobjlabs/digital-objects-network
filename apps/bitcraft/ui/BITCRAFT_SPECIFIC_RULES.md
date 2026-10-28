@@ -186,12 +186,7 @@ their entries know about bitcraft:
   first gains do not spike. A rate that rounds to 0.00 is not shown. Since crafting converts value
   rather than creating it, this is in effect the player's production rate.
   Generic behavior: no rate.
-- **Total Inventory Value** (top bar, window title and Inventory Summary):
-  the summed
-  Total Bit Value of the live bitcraft objects (pending ones are left out);
-  see below. The Inventory Summary also shows each class's summed value
-  beside its count, and hovering an object row in the main window shows
-  that object's value in a tooltip.
+- **Total Inventory Value** (top bar, window title and Inventory Summary): the summed Total Bit Value of the live bitcraft objects (pending ones are left out); see below. The Inventory Summary also shows each class's summed value beside its count, and hovering an object row in the main window shows that object's value in a tooltip. The valuation tables live in `inventory-values.json`, which the desktop's native host also reads. In the desktop, BIT/sec comes from that host, which keeps sampling while the window is hidden; see the [desktop README](../README.md#discord-rich-presence).
 - **Inventory Summary icon:** `SUMMARY_ICON_CLASS` (`Bit`), the class whose
   art heads the window, since it totals the inventory in bits.
 - **Website and Discord links:** `BITCRAFT_SITE_URL` and
@@ -213,7 +208,7 @@ An object's Total Bit Value is the raw resources spent to make it, each
 counted at the rate its `BitsFrom*` recipe pays: Wood 1, Stone 2, Iron 5.
 A Bit is worth 1. The values are worked out by hand from `../../../examples/bitcraft/plugin.rhai`
 and hardcoded (`TOTAL_BIT_VALUES`, `BUCKET_CONTENT_BIT_VALUES`,
-`LEVELED_TOTAL_BIT_VALUES` in `index.html`). Recompute them whenever a
+`LEVELED_TOTAL_BIT_VALUES` in `inventory-values.json`). Recompute them whenever a
 recipe's inputs or outputs change.
 
 | Class | Total Bit Value | Made from |

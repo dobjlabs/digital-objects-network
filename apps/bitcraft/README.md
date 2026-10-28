@@ -44,11 +44,11 @@ Quit any running Bitcraft instance before switching homes: they share the applic
 
 Quit Bitcraft and stop the local backend stack before running `just reset`. Reset removes `.dev/bitcraft-local` along with the devnet state, since its objects are grounded on that chain. The next `just bitcraft-dev-local` recreates the initial local settings; custom settings in that home are lost. If you wipe the devnet manually, also remove this home (or the custom home used with that devnet). The normal `~/.bitcraft` home is unaffected by `just reset`.
 
-`scripts/prepare.py` builds the exact binaries, checks the plugin manifest with `pexe build --check`, and stages them under `src-tauri/binaries` and `src-tauri/runtime`. It verifies that the daemon embeds this checkout's UI before staging it. If the compiled UI is stale, it cleans and rebuilds only the daemon package; preparation fails if the rebuilt UI still differs. It generates `src-tauri/tauri.bundle.conf.json`; those outputs are ignored by Git. Run it with `--version VERSION` for a release and `--target TRIPLE` for cross-compilation. The plugin builder runs on the native host even for a cross-compiled package.
+`scripts/prepare.py` builds the exact binaries, checks the plugin manifest with `pexe build --check`, and stages them under `src-tauri/binaries` and `src-tauri/runtime`. It verifies that the daemon embeds this checkout's complete UI before staging it, using a SHA-256 fingerprint of every bundled asset's relative path and contents. The build appends that fingerprint to the embedded index as an HTML comment. Added, changed, renamed, and removed assets are detected automatically, including presentation packs. If the compiled UI is stale, it cleans and rebuilds only the daemon package; preparation fails if the rebuilt UI still differs. It generates `src-tauri/tauri.bundle.conf.json`; those outputs are ignored by Git. Run it with `--version VERSION` for a release and `--target TRIPLE` for cross-compilation. The plugin builder runs on the native host even for a cross-compiled package.
 
 `just bitcraft-dev` and `just bitcraft-dev-local` use `prepare.py --dev`. Development preparation selects binaries from the root workspace, matching the feature unification used by `just dev-local`, and omits `--target` to reuse native release artifacts. The launcher binaries use their desktop workspace's native debug artifacts, matching the desktop dev profile. Staged filenames keep the native target suffix. The first build with these settings may compile dependencies; later launches reuse them. Different versions, profiles and host/build dependencies can still require separate compilations. Installer preparation keeps its target-specific release builds; `--dev` supports only the native host target.
 
-The daemon bundles runtime Markdown files alongside other UI assets. Only the named contributor docs `AGENTS.md`, `CLAUDE.md`, and `BITCRAFT_SPECIFIC_RULES.md` are excluded.
+The daemon bundles runtime Markdown files alongside other UI assets. Only the named contributor docs in `services/dobjd/ui-excluded-files.txt` are excluded; the bundler and preparation check share that list.
 
 The startup screen covers cryptography preparation, starter pocketknife
 creation, and network confirmation. Inventory opens once a live pocketknife
@@ -136,6 +136,35 @@ The prompt's text lives in `AGENT_PROMPT.md` in this folder; edit it there. It i
 The skill leads with CLI discovery and long-running shell commands. The CLI exposes inventory fields, recipe outputs and arguments, and `runs list/show/wait` for recovering an interrupted connection without another submission. `run --json` and `runs wait --json` return the final run state on stdout, progress on stderr, and nonzero exit status for a failed run. For agents without local shell access, enable MCP explicitly with `bitcraft-dobj settings set --mcp on` and configure the agent to connect to `http://127.0.0.1:7728/mcp`. The toolbar buttons do not enable MCP or change the agent's configuration.
 
 MCP clients can launch the proxy with no port arguments once MCP is enabled in the running app. `--home PATH` must precede tool arguments. Help/version work without a running app. Endpoint overrides are rejected, as are the CLI's standalone `start`, `stop`, `status`, `logs`, `ui`, and `update` commands, whose pid-file and installation assumptions do not match the desktop host. Manage the daemon through Bitcraft. `bitcraft-pexe` remains the packaging tool; it is not a connection-aware wrapper.
+
+## Discord Rich Presence
+
+The native host can share Bitcraft activity with the Discord desktop client over local IPC. Sharing is off by default. Turn it on with **Share activity on Discord** in the Bitcraft app menu or tray menu. The preference is stored in `<home>/desktop.json`, separate from daemon settings, and follows `--home` and `BITCRAFT_HOME`. Turning it off clears presence immediately; quitting clears presence before stopping the daemon. Closing to the tray keeps presence active. Shell-only launches never connect to Discord.
+
+Presence shows the current Bitcraft action (or a summary for concurrent jobs), Total Inventory Value in BIT, the five-minute production rate in BIT/sec, active job count, and elapsed session time, with links to the website and community Discord. The total includes the value of resources and tools, rather than just counting Bit objects. Both numeric values use the same calculation as the main window's toolbar, and appear once the native host has loaded its inventory. Presence includes zero and negative production rates. Individual objects, file paths, and errors are not published. Discord's own activity-sharing settings control who can see it.
+
+To activate this integration for development or a release:
+
+1. Create a **Bitcraft** application in the [Discord Developer Portal](https://discord.com/developers/applications). No bot user, bot token, client secret, or OAuth redirect is needed.
+2. Copy its numeric **Application ID** from General Information.
+3. In the application's Rich Presence art assets, upload `src-tauri/icons/icon.png` with the asset key **bitcraft**. Set the application icon as well.
+4. Set `BITCRAFT_DISCORD_APPLICATION_ID` to that ID when building the Tauri host, including release builds. For a local launch, for example:
+
+   ```sh
+   BITCRAFT_DISCORD_APPLICATION_ID=YOUR_NUMERIC_APPLICATION_ID just bitcraft-dev
+   ```
+
+   For GitHub release builds, create a repository Actions variable named `BITCRAFT_DISCORD_APPLICATION_ID` with that value under **Settings > Secrets and variables > Actions > Variables**. The `Release Bitcraft` workflow supplies it to every installer build, including manual build-only runs. The public Application ID does not need to be a secret.
+
+   The ID is public and is embedded at compile time. The same environment variable can override it at runtime. Blank runtime values fall back to the compiled ID; blank compiled values leave the integration unconfigured. The sharing preference can always be changed. Without a valid ID, no Discord connection is attempted; the saved preference takes effect when an ID is configured.
+
+5. Run the Discord desktop app and enable sharing in Bitcraft's menu. Check the activity card on your Discord profile and verify disabling sharing removes it. A browser-only Discord session cannot receive local IPC.
+
+The native host keeps inventory metrics whether or not a window is open or sharing is on. It follows the daemon's inventory, values it with `ui/inventory-values.json` (the table the game pages use), and keeps five minutes of history, so BIT/sec stays current while the window is hidden. The main game window takes BIT/sec from the host through the `inventory_metrics` command and computes everything else itself. When the host loses track of the inventory, it starts a fresh rate history rather than counting changes it did not observe as production.
+
+Presence follows the daemon's active runs, sends only changed payloads, and limits how often it updates. A brief daemon outage keeps the last activity; a sustained one clears it. Losing Discord does not affect the game, and presence returns when Discord does, without toggling sharing. No Discord account linking or hosted service is required.
+
+The transport uses Discord's documented [RPC over IPC protocol](https://docs.discord.com/developers/topics/rpc), with Unix sockets on macOS/Linux and named pipes on Windows. The tests use a simulated Discord, so a real profile display still needs the application setup above and a native smoke check on each supported OS.
 
 ## Releases and updates
 

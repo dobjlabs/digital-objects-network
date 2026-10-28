@@ -8,6 +8,7 @@ import { JSDOM, VirtualConsole } from "jsdom";
 const presentationScript = await readFile(new URL("../ui/presentation.js", import.meta.url), "utf8");
 const html = (await readFile(new URL("../ui/index.html", import.meta.url), "utf8"))
   .replace('<script src="presentation.js"></script>', () => `<script>${presentationScript}</script>`);
+const inventoryValues = JSON.parse(await readFile(new URL("../ui/inventory-values.json", import.meta.url), "utf8"));
 const qname = (name, pluginName = "bitcraft") => ({ pluginName, name });
 const recipe = (name = "CraftPocketknife") => ({
   action: qname(name), totalInputs: [], totalOutputs: [{ class: qname("Pocketknife") }],
@@ -34,6 +35,7 @@ async function page(context, options = {}) {
   const holds = new Map();
   const sources = [];
   const errors = [];
+  const desktopCalls = [];
   let nextTimer = 0;
   const virtualConsole = new VirtualConsole();
   virtualConsole.on("jsdomError", (error) => errors.push(error));
@@ -42,6 +44,12 @@ async function page(context, options = {}) {
     url: options.url ?? "http://127.0.0.1:7727/bitcraft/", runScripts: "dangerously", virtualConsole,
     beforeParse(window) {
       window.bitcraftDesktop = options.desktop ?? false;
+      if (options.desktop || options.invoke) {
+        window.__TAURI__ = { core: { invoke: async (command, args) => {
+          desktopCalls.push(command);
+          return options.invoke?.(command, args) ?? null;
+        } } };
+      }
       window.TextEncoder = TextEncoder;
       window.ResizeObserver = class { observe() {} };
       window.Element.prototype.scrollIntoView = () => {};
@@ -86,6 +94,7 @@ async function page(context, options = {}) {
           if (typeof file === "string") return { ok: true, status: 200, json: async () => JSON.parse(file) };
           return respond(file);
         }
+        if (parsed.pathname === "/bitcraft/inventory-values.json") return respond(inventoryValues);
         if (parsed.pathname === "/objects/dir") return respond({ path: "/Users/player/.bitcraft/objects" });
         if (parsed.pathname === "/objects/unspent") {
           backend.inventoryReads++;
@@ -236,7 +245,7 @@ async function page(context, options = {}) {
     await flush();
   };
   return {
-    backend, document, dom, sources, timers, holds, elapse, emit, dropStream, publish, event,
+    backend, document, dom, sources, timers, holds, elapse, emit, dropStream, publish, event, desktopCalls,
     splash: document.querySelector("#startup-screen"),
     app: document.querySelector("#inventory-app"),
     jobs: () => [...document.querySelectorAll(".run-row")],
@@ -1028,6 +1037,45 @@ test("BIT/sec always averages over 5 minutes, and a 0.00 rate is not shown", asy
   assert.equal(recent.document.querySelector("#inventory-rate").textContent, "0.10 BIT/sec");
   assert.equal(rateShown(recent), true);
   assert.equal(recent.document.title, "Bitcraft (300.00 BIT - 0.10 BIT/sec)");
+});
+
+test("desktop values inventory locally and takes only the rate from the host", async (context) => {
+  const ui = await page(context, {
+    desktop: true, objects: [knife(), quarry(3)], invoke: () => ({ totalBits: 630, bitsPerSecond: -0.5 }),
+    sessionStorage: valueSamples([600000, 0]),
+  });
+  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "300.00 BIT");
+  assert.equal(ui.document.querySelector("#inventory-rate").textContent, "-0.50 BIT/sec");
+  assert.ok(ui.desktopCalls.every((command) => command === "inventory_metrics"));
+  await ui.event({ type: "object", ...quarry(4) });
+  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "630.00 BIT");
+  assert.equal(ui.document.querySelector("#inventory-rate").textContent, "-0.50 BIT/sec");
+});
+
+test("browser and secondary pages do not request native metrics", async (context) => {
+  const browser = await page(context, { objects: [knife()], invoke: () => {} });
+  assert.deepEqual(browser.desktopCalls, []);
+  for (const mode of ["summary", "settings", "recipebook", "raw&file=pocketknife.dobj"]) {
+    const secondary = await page(context, { desktop: true, objects: [knife()], url: `http://127.0.0.1:7727/bitcraft/?page=${mode}` });
+    assert.deepEqual(secondary.desktopCalls, [], mode);
+  }
+});
+
+test("an unavailable native rate hides only the rate, and later reads recover", async (context) => {
+  let available = false;
+  const ui = await page(context, {
+    desktop: true, objects: [knife(), quarry(3)],
+    invoke: () => { if (!available) throw new Error("Unavailable"); return { totalBits: 300, bitsPerSecond: 1 }; },
+  });
+  assert.equal(ui.app.hidden, false);
+  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "300.00 BIT");
+  assert.equal(ui.document.querySelector("#inventory-rate").hidden, true);
+  available = true;
+  for (const timer of ui.timers.values()) if (timer.delay === 1000) timer.callback();
+  await flush();
+  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "300.00 BIT");
+  assert.equal(ui.document.querySelector("#inventory-rate").textContent, "1.00 BIT/sec");
+  assert.equal(ui.document.title, "Bitcraft (300.00 BIT - 1.00 BIT/sec)");
 });
 
 test("the summary icon opens the Inventory Summary in one window", async (context) => {
