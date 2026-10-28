@@ -5,13 +5,15 @@ use bitcraft_launchers::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
+    convert::Infallible,
     fs,
-    io::Write,
     path::PathBuf,
     sync::Mutex,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::watch;
+
+use crate::{metrics::InventoryMetrics, runtime};
 
 const UPDATE_INTERVAL: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
@@ -30,8 +32,6 @@ pub struct Presence {
     path: PathBuf,
     application_id: Option<String>,
     enabled: watch::Sender<Option<bool>>,
-    inventory_metrics: watch::Sender<Option<InventoryMetrics>>,
-    receiver: Mutex<Option<watch::Receiver<Option<bool>>>>,
     task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
 }
 
@@ -65,14 +65,10 @@ impl Presence {
                 None
             }
         });
-        let (enabled, receiver) = watch::channel(Some(preferences.share_activity));
-        let (inventory_metrics, _) = watch::channel(None);
         Self {
             path,
             application_id,
-            enabled,
-            inventory_metrics,
-            receiver: Mutex::new(Some(receiver)),
+            enabled: watch::Sender::new(Some(preferences.share_activity)),
             task: Mutex::new(None),
         }
     }
@@ -83,34 +79,31 @@ impl Presence {
 
     pub fn set_enabled(&self, enabled: bool) -> Result<()> {
         self.enabled.send_replace(Some(enabled));
-        let parent = self
-            .path
-            .parent()
-            .context("No desktop preferences directory")?;
-        fs::create_dir_all(parent)?;
-        let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-        temporary.write_all(&serde_json::to_vec_pretty(&Preferences {
-            share_activity: enabled,
-        })?)?;
-        temporary.persist(&self.path)?;
-        Ok(())
+        fs::create_dir_all(
+            self.path
+                .parent()
+                .context("No desktop preferences directory")?,
+        )?;
+        runtime::write_atomic(
+            &self.path,
+            &serde_json::to_vec_pretty(&Preferences {
+                share_activity: enabled,
+            })?,
+        )
     }
 
-    pub fn metrics_sender(&self) -> watch::Sender<Option<InventoryMetrics>> {
-        self.inventory_metrics.clone()
-    }
-
-    pub fn start(&self, connection: Connection) {
+    pub fn start(
+        &self,
+        connection: Connection,
+        inventory_metrics: watch::Receiver<Option<InventoryMetrics>>,
+    ) {
         let Some(application_id) = self.application_id.clone() else {
-            return;
-        };
-        let Some(receiver) = self.receiver.lock().unwrap().take() else {
             return;
         };
         *self.task.lock().unwrap() = Some(tauri::async_runtime::spawn(worker(
             connection,
-            receiver,
-            self.inventory_metrics.subscribe(),
+            self.enabled.subscribe(),
+            inventory_metrics,
             move || {
                 let application_id = application_id.clone();
                 async move { ipc::Client::connect(&application_id).await }
@@ -153,12 +146,8 @@ struct Action {
     name: String,
 }
 
-pub use crate::metrics::InventoryMetrics;
-
 fn format_bits(value: f64) -> String {
-    if value.abs() >= 1e21 {
-        format!("{value:.2e}")
-    } else if value.abs() < 0.005 {
+    if value.abs() < 0.005 {
         "0.00".into()
     } else {
         format!("{value:.2}")
@@ -168,13 +157,7 @@ fn format_bits(value: f64) -> String {
 fn activity(runs: &[Run], started_at: u64, inventory_metrics: Option<&InventoryMetrics>) -> Value {
     let active: Vec<_> = runs
         .iter()
-        .filter(|run| {
-            run.action.plugin_name == "bitcraft"
-                && matches!(
-                    run.status.as_str(),
-                    "queued" | "generateProof" | "committing"
-                )
-        })
+        .filter(|run| run.action.plugin_name == "bitcraft")
         .collect();
     let details = match active.as_slice() {
         [] => "Managing inventory".to_owned(),
@@ -250,11 +233,7 @@ async fn worker<F>(
 ) where
     F: std::future::Future<Output = Result<ipc::Client>>,
 {
-    let client = match reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(2))
-        .build()
-    {
+    let client = match runtime::daemon_client() {
         Ok(client) => client,
         Err(error) => {
             eprintln!("Could not initialize Discord presence: {error}");
@@ -283,11 +262,10 @@ async fn worker<F>(
                 if changed.is_err() { return; }
                 None
             }
-            result = drive(connect(), &connection, &client, &mut ipc, started_at, &inventory_metrics, &mut delay) => Some(result),
+            Err(error) = drive(connect(), &connection, &client, &mut ipc, started_at, &inventory_metrics, &mut delay) => Some(error),
         };
         let retry_after = outcome
             .as_ref()
-            .and_then(|result| result.as_ref().err())
             .and_then(|error| error.downcast_ref::<ipc::Rejected>())
             .map(|error| error.retry_after);
         if retry_after.is_none()
@@ -301,7 +279,7 @@ async fn worker<F>(
             None => {
                 delay = RECONNECT_INITIAL_DELAY;
             }
-            Some(Err(error)) => {
+            Some(error) => {
                 let message = error.to_string();
                 if message != last_error {
                     eprintln!("Discord presence unavailable: {message}");
@@ -316,7 +294,6 @@ async fn worker<F>(
                 }
                 delay = (delay * 2).min(RECONNECT_MAX_DELAY);
             }
-            Some(Ok(())) => return,
         }
     }
 }
@@ -329,24 +306,13 @@ async fn drive(
     started_at: u64,
     inventory_metrics: &watch::Receiver<Option<InventoryMetrics>>,
     retry_delay: &mut Duration,
-) -> Result<()> {
-    *ipc = Some(connect.await?);
-    let ipc = ipc.as_mut().unwrap();
+) -> Result<Infallible> {
+    let ipc = ipc.insert(connect.await?);
     let mut updates = Updates::default();
     let mut daemon_failed_at: Option<Instant> = None;
     loop {
-        let snapshot = async {
-            connection.verify_with_client(client).await?;
-            let runs: Vec<Run> = client
-                .get(format!("{}/runs?status=active", connection.http_url))
-                .send()
-                .await?
-                .error_for_status()?
-                .json()
-                .await?;
-            Ok::<_, anyhow::Error>(runs)
-        }
-        .await;
+        let snapshot =
+            runtime::get_verified_json::<Vec<Run>>(connection, client, "/runs?status=active").await;
         let activity = match snapshot {
             Ok(runs) => {
                 daemon_failed_at = None;
@@ -389,8 +355,7 @@ mod tests {
     fn status_tracks_concurrent_bitcraft_work_without_exposing_inputs() {
         let work = runs(json!([
             {"action": {"pluginName": "other", "name": "Secret"}, "status": "generateProof"},
-            {"action": {"pluginName": "bitcraft", "name": "CraftWoodenAxe"}, "status": "generateProof", "inputObjectPaths": ["private.dobj"]},
-            {"action": {"pluginName": "bitcraft", "name": "GatherWood"}, "status": "succeeded"}
+            {"action": {"pluginName": "bitcraft", "name": "CraftWoodenAxe"}, "status": "generateProof", "inputObjectPaths": ["private.dobj"]}
         ]));
         let single = activity(&work, 42, None);
         assert_eq!(single["details"], "Craft Wooden Axe");
@@ -420,7 +385,6 @@ mod tests {
         let value = InventoryMetrics {
             total_bits: 123.45,
             bits_per_second: 0.37,
-            ..Default::default()
         };
         let busy = activity(&[], 42, Some(&value));
         assert!(!updates.due(start + Duration::from_secs(14), &busy));
@@ -432,12 +396,11 @@ mod tests {
     }
 
     #[test]
-    fn inventory_metrics_are_numeric_and_presence_includes_total_and_rate() {
-        let metrics: InventoryMetrics = serde_json::from_value(json!({
-            "totalBits": 31.125, "bitsPerSecond": -0.375
-        }))
-        .unwrap();
-        metrics.validate().unwrap();
+    fn presence_includes_total_and_rate() {
+        let metrics = InventoryMetrics {
+            total_bits: 31.125,
+            bits_per_second: -0.375,
+        };
         assert_eq!(
             activity(&[], 42, Some(&metrics))["state"],
             "31.12 BIT | -0.38 BIT/sec | No active jobs"
@@ -446,26 +409,12 @@ mod tests {
             let metrics = InventoryMetrics {
                 total_bits: 0.0,
                 bits_per_second: value,
-                ..Default::default()
             };
             assert_eq!(
                 activity(&[], 42, Some(&metrics))["state"],
                 "0.00 BIT | 0.00 BIT/sec | No active jobs"
             );
         }
-        let large = InventoryMetrics {
-            total_bits: f64::MAX,
-            bits_per_second: -f64::MAX,
-            ..Default::default()
-        };
-        large.validate().unwrap();
-        assert!(
-            activity(&[], 42, Some(&large))["state"]
-                .as_str()
-                .unwrap()
-                .len()
-                <= 128
-        );
     }
 
     #[test]
@@ -601,7 +550,6 @@ mod tests {
         let (_metrics_sender, inventory_metrics) = watch::channel(Some(InventoryMetrics {
             total_bits: 31.0,
             bits_per_second: 0.37,
-            ..Default::default()
         }));
         let online = Arc::new(AtomicBool::new(false));
         let discord_online = online.clone();
@@ -686,7 +634,6 @@ mod tests {
         let (inventory_sender, inventory_receiver) = watch::channel(Some(InventoryMetrics {
             total_bits: 12.5,
             bits_per_second: 0.25,
-            ..Default::default()
         }));
         let task = tokio::spawn(worker(
             connection,
@@ -721,7 +668,6 @@ mod tests {
         inventory_sender.send_replace(Some(InventoryMetrics {
             total_bits: 100.125,
             bits_per_second: -0.5,
-            ..Default::default()
         }));
         sharing.send_replace(Some(true));
         let second = tokio::time::timeout(Duration::from_secs(20), activities.recv())

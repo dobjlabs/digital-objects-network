@@ -29,7 +29,7 @@ async function page(context, options = {}) {
   const backend = {
     objects: [], transactions: [], proofJobs: new Map(), submissions: [], actions: [recipe()], states: new Map(), posts: [], discards: [],
     inventoryError: false, listError: false, runError: false, postError: false, syncError: false,
-    inventoryReads: 0, valuationReads: 0, runReads: 0, runGate: null, ...options,
+    inventoryReads: 0, runReads: 0, runGate: null, ...options,
   };
   const timers = new Map();
   const holds = new Map();
@@ -46,8 +46,8 @@ async function page(context, options = {}) {
       window.bitcraftDesktop = options.desktop ?? false;
       if (options.desktop || options.invoke) {
         window.__TAURI__ = { core: { invoke: async (command, args) => {
-          desktopCalls.push({ command, args: args === undefined ? undefined : copy(args) });
-          return options.invoke ? options.invoke(command, args) : options.nativeMetrics ?? null;
+          desktopCalls.push(command);
+          return options.invoke?.(command, args) ?? null;
         } } };
       }
       window.TextEncoder = TextEncoder;
@@ -94,7 +94,7 @@ async function page(context, options = {}) {
           if (typeof file === "string") return { ok: true, status: 200, json: async () => JSON.parse(file) };
           return respond(file);
         }
-        if (parsed.pathname === "/bitcraft/inventory-values.json") { backend.valuationReads++; return respond(inventoryValues); }
+        if (parsed.pathname === "/bitcraft/inventory-values.json") return respond(inventoryValues);
         if (parsed.pathname === "/objects/dir") return respond({ path: "/Users/player/.bitcraft/objects" });
         if (parsed.pathname === "/objects/unspent") {
           backend.inventoryReads++;
@@ -1039,83 +1039,43 @@ test("BIT/sec always averages over 5 minutes, and a 0.00 rate is not shown", asy
   assert.equal(recent.document.title, "Bitcraft (300.00 BIT - 0.10 BIT/sec)");
 });
 
-test("a desktop inventory with no convertible items displays a zero native value", async (context) => {
-  const ui = await page(context, { desktop: true, objects: [knife()], nativeMetrics: { totalBits: 0, bitsPerSecond: 0 } });
-  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "0.00 BIT");
-  assert.equal(ui.document.querySelector("#inventory-rate").hidden, true);
-  assert.equal(ui.document.title, "Bitcraft (0.00 BIT)");
-});
-
-test("desktop reads native metrics independently of local inventory and session samples", async (context) => {
+test("desktop values inventory locally and takes only the rate from the host", async (context) => {
   const ui = await page(context, {
-    desktop: true, objects: [knife(), quarry(3)], nativeMetrics: { totalBits: 630, bitsPerSecond: -0.5 },
+    desktop: true, objects: [knife(), quarry(3)], invoke: () => ({ totalBits: 630, bitsPerSecond: -0.5 }),
     sessionStorage: valueSamples([600000, 0]),
   });
-  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "630.00 BIT");
+  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "300.00 BIT");
   assert.equal(ui.document.querySelector("#inventory-rate").textContent, "-0.50 BIT/sec");
-  assert.ok(ui.desktopCalls.every((call) => call.command === "inventory_metrics" && call.args === undefined));
+  assert.ok(ui.desktopCalls.every((command) => command === "inventory_metrics"));
   await ui.event({ type: "object", ...quarry(4) });
+  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "630.00 BIT");
   assert.equal(ui.document.querySelector("#inventory-rate").textContent, "-0.50 BIT/sec");
 });
 
-test("browser and non-inventory secondary pages do not request native metrics", async (context) => {
+test("browser and secondary pages do not request native metrics", async (context) => {
   const browser = await page(context, { objects: [knife()], invoke: () => {} });
   assert.deepEqual(browser.desktopCalls, []);
-  for (const mode of ["settings", "recipebook", "raw&file=pocketknife.dobj"]) {
+  for (const mode of ["summary", "settings", "recipebook", "raw&file=pocketknife.dobj"]) {
     const secondary = await page(context, { desktop: true, objects: [knife()], url: `http://127.0.0.1:7727/bitcraft/?page=${mode}` });
     assert.deepEqual(secondary.desktopCalls, [], mode);
   }
 });
 
-test("unavailable native metrics clear the display and subsequent reads recover", async (context) => {
+test("an unavailable native rate hides only the rate, and later reads recover", async (context) => {
   let available = false;
   const ui = await page(context, {
     desktop: true, objects: [knife(), quarry(3)],
     invoke: () => { if (!available) throw new Error("Unavailable"); return { totalBits: 300, bitsPerSecond: 1 }; },
   });
   assert.equal(ui.app.hidden, false);
-  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "Unavailable");
+  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "300.00 BIT");
+  assert.equal(ui.document.querySelector("#inventory-rate").hidden, true);
   available = true;
   for (const timer of ui.timers.values()) if (timer.delay === 1000) timer.callback();
   await flush();
   assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "300.00 BIT");
   assert.equal(ui.document.querySelector("#inventory-rate").textContent, "1.00 BIT/sec");
-});
-
-test("desktop toolbar, summary and tooltips share native valuations and clear them together", async (context) => {
-  let snapshot = { totalBits: 73, bitsPerSecond: 0, objectValues: { "wood.dobj": 73 }, classes: { Wood: { count: 1, totalBits: 73 } } };
-  const objects = [knife(), { fileName: "wood.dobj", class: qname("Wood"), status: "live", fields: { kvs: [] } }];
-  const main = await page(context, { desktop: true, objects, invoke: () => snapshot });
-  const summary = await page(context, { desktop: true, objects, invoke: () => snapshot, url: "http://127.0.0.1:7727/bitcraft/?page=summary" });
-  assert.equal(main.document.querySelector("#inventory-value-amount").textContent, "73.00 BIT");
-  assert.equal(summary.document.querySelector(".summary-total").textContent, "73.00 BIT");
-  assert.deepEqual([...summary.document.querySelectorAll("dd")].map((node) => node.textContent), ["1", "73.00 BIT"]);
-  assert.equal(summary.backend.inventoryReads, 0);
-  assert.equal(summary.sources.length, 0);
-  assert.equal(main.backend.valuationReads, 0);
-  assert.equal(summary.backend.valuationReads, 0);
-  main.document.querySelector('.object-row[data-file-name="wood.dobj"]').dispatchEvent(new main.dom.window.MouseEvent("mouseenter", { clientX: 40, clientY: 60 }));
-  await flush();
-  assert.equal(main.document.querySelector("#row-tooltip").textContent, "73.00 BIT");
-  const tick = async () => {
-    for (const ui of [main, summary]) for (const timer of ui.timers.values()) if (timer.delay === 1000) timer.callback();
-    await flush();
-  };
-  snapshot = { ...snapshot, totalBits: 0, objectValues: { "wood.dobj": 0 }, classes: { Wood: { count: 1, totalBits: 0 } } };
-  await tick();
-  assert.equal(main.document.querySelector("#inventory-value-amount").textContent, "0.00 BIT");
-  assert.equal(summary.document.querySelector(".summary-total").textContent, "0.00 BIT");
-  assert.equal(main.document.querySelector("#row-tooltip").textContent, "0.00 BIT");
-  snapshot = null;
-  await tick();
-  assert.equal(main.document.querySelector("#inventory-value-amount").textContent, "Unavailable");
-  assert.equal(summary.document.querySelector(".summary-total").textContent, "Unavailable");
-  assert.equal(main.document.querySelector("#row-tooltip").textContent, "Unavailable");
-  assert.equal(summary.document.querySelectorAll("dd").length, 0);
-  snapshot = { totalBits: 1, bitsPerSecond: 0, objectValues: { "wood.dobj": 1 }, classes: { Wood: { count: 1, totalBits: 1 } } };
-  await tick();
-  assert.equal(summary.document.querySelector(".summary-total").textContent, "1.00 BIT");
-  assert.equal(main.document.querySelector("#row-tooltip").textContent, "1.00 BIT");
+  assert.equal(ui.document.title, "Bitcraft (300.00 BIT - 1.00 BIT/sec)");
 });
 
 test("the summary icon opens the Inventory Summary in one window", async (context) => {

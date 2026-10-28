@@ -1,40 +1,20 @@
 use anyhow::{Context, Result};
 use bitcraft_launchers::Connection;
+use serde::Serialize;
 use serde_json::Value;
 use std::{
-    collections::{BTreeMap, HashMap, VecDeque},
+    collections::{HashMap, VecDeque},
     time::{Duration, Instant},
 };
 use tokio::sync::watch;
 
-use serde::{Deserialize, Serialize};
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+use crate::runtime;
+
+#[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InventoryMetrics {
     pub total_bits: f64,
     pub bits_per_second: f64,
-    #[serde(default)]
-    pub object_values: BTreeMap<String, f64>,
-    #[serde(default)]
-    pub classes: BTreeMap<String, ClassMetrics>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ClassMetrics {
-    pub count: usize,
-    pub total_bits: f64,
-}
-
-impl InventoryMetrics {
-    pub(crate) fn validate(&self) -> Result<()> {
-        anyhow::ensure!(
-            self.total_bits.is_finite() && self.total_bits >= 0.0,
-            "Total BIT must be finite and nonnegative"
-        );
-        anyhow::ensure!(self.bits_per_second.is_finite(), "BIT/sec must be finite");
-        Ok(())
-    }
 }
 
 const WINDOW: Duration = Duration::from_secs(300);
@@ -43,18 +23,14 @@ const WINDOW: Duration = Duration::from_secs(300);
 struct Samples(VecDeque<(Instant, f64)>);
 
 impl Samples {
-    fn update(&mut self, now: Instant, total: f64) -> InventoryMetrics {
+    fn rate(&mut self, now: Instant, total: f64) -> f64 {
         if self.0.back().is_none_or(|(_, previous)| *previous != total) {
             self.0.push_back((now, total));
         }
         while self.0.len() > 1 && now.duration_since(self.0[1].0) >= WINDOW {
             self.0.pop_front();
         }
-        InventoryMetrics {
-            total_bits: total,
-            bits_per_second: (total - self.0[0].1) / WINDOW.as_secs_f64(),
-            ..Default::default()
-        }
+        (total - self.0[0].1) / WINDOW.as_secs_f64()
     }
 }
 
@@ -71,13 +47,7 @@ fn number(object: &Value, name: &str) -> Option<f64> {
     value.as_f64().or_else(|| value.as_str()?.parse().ok())
 }
 
-fn object_value(object: &Value, rules: &Value) -> f64 {
-    if object["status"] != "live" || object["class"]["pluginName"] != "bitcraft" {
-        return 0.0;
-    }
-    let Some(class) = object["class"]["name"].as_str() else {
-        return 0.0;
-    };
+fn object_value(object: &Value, class: &str, rules: &Value) -> f64 {
     if let Some(levels) = rules["LEVELED_TOTAL_BIT_VALUES"][class].as_array() {
         return number(object, "level")
             .filter(|level| *level >= 1.0 && level.fract() == 0.0)
@@ -102,44 +72,52 @@ fn publish(
     samples: &mut Samples,
     sender: &watch::Sender<Option<InventoryMetrics>>,
 ) -> Result<()> {
-    let mut object_values = BTreeMap::new();
-    let mut classes = BTreeMap::<String, ClassMetrics>::new();
-    for (file_name, object) in objects {
+    let mut total_bits = 0.0;
+    for object in objects.values() {
         if object["status"] != "live" || object["class"]["pluginName"] != "bitcraft" {
             continue;
         }
-        let name = object["class"]["name"]
+        let class = object["class"]["name"]
             .as_str()
             .context("Object has no class name")?;
-        let value = object_value(object, rules);
+        let value = object_value(object, class, rules);
         anyhow::ensure!(
             value.is_finite() && value >= 0.0,
             "Invalid object inventory value"
         );
-        object_values.insert(file_name.clone(), value);
-        let class = classes.entry(name.to_owned()).or_default();
-        class.count += 1;
-        class.total_bits += value;
+        total_bits += value;
     }
-    let mut metrics = samples.update(Instant::now(), object_values.values().sum());
-    metrics.object_values = object_values;
-    metrics.classes = classes;
-    metrics.validate()?;
-    sender.send_replace(Some(metrics));
+    sender.send_replace(Some(InventoryMetrics {
+        total_bits,
+        bits_per_second: samples.rate(Instant::now(), total_bits),
+    }));
     Ok(())
 }
 
+fn refresh_rate(samples: &mut Samples, sender: &watch::Sender<Option<InventoryMetrics>>) {
+    sender.send_if_modified(|current| {
+        let Some(metrics) = current else {
+            return false;
+        };
+        let rate = samples.rate(Instant::now(), metrics.total_bits);
+        let changed = rate != metrics.bits_per_second;
+        metrics.bits_per_second = rate;
+        changed
+    });
+}
+
 pub async fn run(connection: Connection, sender: watch::Sender<Option<InventoryMetrics>>) {
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(2))
-        .build()
-        .unwrap();
     let stream_client = reqwest::Client::builder()
         .no_proxy()
         .connect_timeout(Duration::from_secs(2))
-        .build()
-        .unwrap();
+        .build();
+    let (client, stream_client) = match (runtime::daemon_client(), stream_client) {
+        (Ok(client), Ok(stream_client)) => (client, stream_client),
+        (Err(error), _) | (_, Err(error)) => {
+            eprintln!("Could not initialize inventory metrics: {error}");
+            return;
+        }
+    };
     let rules: Value =
         serde_json::from_str(include_str!("../../ui/inventory-values.json")).unwrap();
     loop {
@@ -156,14 +134,8 @@ async fn snapshot(
     connection: &Connection,
     client: &reqwest::Client,
 ) -> Result<HashMap<String, Value>> {
-    connection.verify_with_client(client).await?;
-    let objects: Vec<Value> = client
-        .get(format!("{}/objects/unspent", connection.http_url))
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+    let objects: Vec<Value> =
+        runtime::get_verified_json(connection, client, "/objects/unspent").await?;
     objects
         .into_iter()
         .map(|object| {
@@ -174,6 +146,44 @@ async fn snapshot(
             Ok((name, object))
         })
         .collect()
+}
+
+/// Returns whether the line changed the inventory.
+fn apply_event_line(
+    line: &str,
+    objects: &mut HashMap<String, Value>,
+    sequence: &mut Option<u64>,
+) -> Result<bool> {
+    let Some(data) = line.strip_prefix("data:") else {
+        return Ok(false);
+    };
+    let event: Value = serde_json::from_str(data.trim_start())?;
+    let next = event["seq"].as_u64().context("Missing event sequence")?;
+    anyhow::ensure!(
+        sequence.is_none_or(|last| next == last + 1),
+        "Inventory event sequence gap"
+    );
+    *sequence = Some(next);
+    match event["type"].as_str() {
+        Some("object") => {
+            let name = event["fileName"]
+                .as_str()
+                .context("Missing object name")?
+                .to_owned();
+            if event["status"] == "nullified" {
+                objects.remove(&name);
+            } else {
+                objects.insert(name, event);
+            }
+        }
+        Some("object-removed") => {
+            if let Some(name) = event["fileName"].as_str() {
+                objects.remove(name);
+            }
+        }
+        _ => return Ok(false),
+    }
+    Ok(true)
 }
 
 async fn follow(
@@ -206,34 +216,23 @@ async fn follow(
         tokio::select! {
             _ = tick.tick() => {
                 anyhow::ensure!(last_chunk.elapsed() < Duration::from_secs(35), "Inventory event stream stalled");
+                refresh_rate(&mut samples, sender);
+            }
+            _ = verify.tick() => {
+                objects = snapshot(connection, client).await?;
                 publish(&objects, rules, &mut samples, sender)?;
             }
-            _ = verify.tick() => { objects = snapshot(connection, client).await?; }
             chunk = stream.chunk() => {
                 let bytes = chunk?.context("Inventory event stream closed")?;
                 last_chunk = Instant::now();
                 pending.extend_from_slice(&bytes);
+                let mut changed = false;
                 while let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
                     let line: Vec<_> = pending.drain(..=end).collect();
-                    let line = std::str::from_utf8(&line)?.trim_end();
-                    if let Some(data) = line.strip_prefix("data:") {
-                        let event: Value = serde_json::from_str(data.trim_start())?;
-                        let next = event["seq"].as_u64().context("Missing event sequence")?;
-                        if sequence.is_some_and(|last| next != last + 1) {
-                            anyhow::bail!("Inventory event sequence gap");
-                        }
-                        sequence = Some(next);
-                        match event["type"].as_str() {
-                            Some("object") => {
-                                let name = event["fileName"].as_str().context("Missing object name")?.to_owned();
-                                if event["status"] == "nullified" { objects.remove(&name); }
-                                else { objects.insert(name, event); }
-                            }
-                            Some("object-removed") => { if let Some(name) = event["fileName"].as_str() { objects.remove(name); } }
-                            _ => continue,
-                        }
-                        publish(&objects, rules, &mut samples, sender)?;
-                    }
+                    changed |= apply_event_line(std::str::from_utf8(&line)?.trim_end(), &mut objects, &mut sequence)?;
+                }
+                if changed {
+                    publish(&objects, rules, &mut samples, sender)?;
                 }
             }
         }
@@ -333,7 +332,7 @@ mod tests {
     }
 
     #[test]
-    fn native_snapshot_groups_only_live_bitcraft_objects_and_includes_zero_values() {
+    fn native_total_counts_only_live_bitcraft_objects() {
         let rules = serde_json::from_str(include_str!("../../ui/inventory-values.json")).unwrap();
         let mut objects = HashMap::new();
         for (file, class, status, plugin) in [
@@ -347,54 +346,28 @@ mod tests {
         }
         let (sender, receiver) = watch::channel(None);
         publish(&objects, &rules, &mut Samples::default(), &sender).unwrap();
-        let snapshot = receiver.borrow().clone().unwrap();
-        assert_eq!(snapshot.total_bits, 2.0);
-        assert_eq!(snapshot.object_values.len(), 3);
-        assert_eq!(snapshot.object_values["knife"], 0.0);
-        assert_eq!(snapshot.classes["Pocketknife"].total_bits, 0.0);
-        assert_eq!(snapshot.classes["Wood"].count, 2);
-        assert_eq!(snapshot.classes["Wood"].total_bits, 2.0);
-        assert_eq!(
-            snapshot
-                .classes
-                .values()
-                .map(|class| class.total_bits)
-                .sum::<f64>(),
-            snapshot.total_bits
-        );
+        assert_eq!(receiver.borrow().as_ref().unwrap().total_bits, 2.0);
     }
 
     #[test]
     fn rate_decays_without_a_page_and_resets_after_a_gap() {
         let start = Instant::now();
         let mut samples = Samples::default();
-        assert_eq!(samples.update(start, 0.0).bits_per_second, 0.0);
-        assert_eq!(
-            samples
-                .update(start + Duration::from_secs(1), 300.0)
-                .bits_per_second,
-            1.0
-        );
-        assert_eq!(
-            samples
-                .update(start + Duration::from_secs(301), 300.0)
-                .bits_per_second,
-            0.0
-        );
-        assert_eq!(Samples::default().update(start, 300.0).bits_per_second, 0.0);
+        assert_eq!(samples.rate(start, 0.0), 0.0);
+        assert_eq!(samples.rate(start + Duration::from_secs(1), 300.0), 1.0);
+        assert_eq!(samples.rate(start + Duration::from_secs(301), 300.0), 0.0);
+        assert_eq!(Samples::default().rate(start, 300.0), 0.0);
     }
     #[test]
-    fn shared_rules_value_live_objects_levels_contents_and_wear() {
+    fn shared_rules_value_levels_contents_and_wear() {
         let rules = serde_json::from_str(include_str!("../../ui/inventory-values.json")).unwrap();
         for (class, fields, expected) in [
             ("Quarry", json!([["level", {"Int":"3"}]]), 300.0),
             ("BucketOfIron", json!([["n", {"Int":"10"}]]), 55.0),
             ("IronAxe", json!([["durability", {"Int":"50"}]]), 4.5),
         ] {
-            let mut object = json!({"class":{"pluginName":"bitcraft","name":class},"status":"live","fields":{"kvs":fields}});
-            assert_eq!(object_value(&object, &rules), expected);
-            object["status"] = json!("pending");
-            assert_eq!(object_value(&object, &rules), 0.0);
+            let object = json!({"fields":{"kvs":fields}});
+            assert_eq!(object_value(&object, class, &rules), expected);
         }
     }
 }

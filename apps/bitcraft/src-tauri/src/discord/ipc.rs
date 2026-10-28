@@ -48,21 +48,19 @@ impl Client {
     ) -> Result<Self> {
         let mut last_error = anyhow::anyhow!("Discord is not running");
         for path in candidates {
-            let attempt = async {
-                #[cfg(unix)]
-                let stream = Stream::connect(path).await?;
-                #[cfg(windows)]
-                let stream = tokio::net::windows::named_pipe::ClientOptions::new().open(path)?;
-                let mut client = Self { stream };
-                client.handshake(application_id).await?;
-                Ok::<_, anyhow::Error>(client)
+            #[cfg(unix)]
+            let Ok(stream) = Stream::connect(path).await else {
+                continue;
             };
-            match tokio::time::timeout(Duration::from_secs(2), attempt).await {
-                Ok(Ok(client)) => return Ok(client),
-                Ok(Err(error)) if error.downcast_ref::<std::io::Error>().is_none() => {
-                    last_error = error
-                }
-                Ok(Err(_)) => {}
+            #[cfg(windows)]
+            let Ok(stream) = tokio::net::windows::named_pipe::ClientOptions::new().open(path)
+            else {
+                continue;
+            };
+            let mut client = Self { stream };
+            match tokio::time::timeout(super::IPC_TIMEOUT, client.handshake(application_id)).await {
+                Ok(Ok(())) => return Ok(client),
+                Ok(Err(error)) => last_error = error,
                 Err(error) => last_error = error.into(),
             }
         }

@@ -15,6 +15,7 @@ use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, Submenu},
     tray::TrayIconBuilder,
 };
+use tokio::sync::watch;
 
 mod agents;
 mod discord;
@@ -38,6 +39,7 @@ struct Args {
 struct Desktop {
     home: PathBuf,
     discord: discord::Presence,
+    inventory_metrics: watch::Sender<Option<metrics::InventoryMetrics>>,
     metrics_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     discord_menu_items: Mutex<Vec<CheckMenuItem<tauri::Wry>>>,
     runtime: Mutex<Option<Arc<runtime::Runtime>>>,
@@ -45,6 +47,23 @@ struct Desktop {
     tray_available: AtomicBool,
     #[cfg(target_os = "linux")]
     background_pending: AtomicBool,
+}
+
+impl Desktop {
+    fn new(home: PathBuf, message: String) -> Self {
+        Self {
+            discord: discord::Presence::new(&home),
+            home,
+            inventory_metrics: watch::Sender::new(None),
+            metrics_task: Mutex::new(None),
+            discord_menu_items: Mutex::new(Vec::new()),
+            runtime: Mutex::new(None),
+            message: Mutex::new(message),
+            tray_available: AtomicBool::new(false),
+            #[cfg(target_os = "linux")]
+            background_pending: AtomicBool::new(false),
+        }
+    }
 }
 
 fn show_window(app: &tauri::AppHandle) {
@@ -164,28 +183,8 @@ fn show_page_title(window: tauri::WebviewWindow, title: String) {
 }
 
 #[tauri::command]
-fn inventory_metrics<R: tauri::Runtime>(
-    window: tauri::WebviewWindow<R>,
-) -> Result<Option<discord::InventoryMetrics>, String> {
-    if !window.url().is_ok_and(|url| {
-        is_daemon_url(&url)
-            && url.path().starts_with("/bitcraft/")
-            && (window.label() == "main"
-                || window.label().starts_with("page-")
-                    && url
-                        .query_pairs()
-                        .any(|(key, value)| key == "page" && value == "summary"))
-    }) {
-        return Err(
-            "Inventory metrics must be read from a game or inventory summary window".into(),
-        );
-    }
-    Ok(window
-        .state::<Desktop>()
-        .discord
-        .metrics_sender()
-        .borrow()
-        .clone())
+fn inventory_metrics(desktop: tauri::State<Desktop>) -> Option<metrics::InventoryMetrics> {
+    desktop.inventory_metrics.borrow().clone()
 }
 
 fn shell_dev_url(app: &tauri::AppHandle) -> Option<tauri::Url> {
@@ -287,22 +286,18 @@ fn watch_tray(app: tauri::AppHandle) {
 fn main() -> Result<()> {
     let args = Args::parse();
     let home = bitcraft_launchers::resolve_home(args.home)?;
-    let discord = discord::Presence::new(&home);
-    let desktop = Desktop {
-        home: home.clone(),
-        discord,
-        metrics_task: Mutex::new(None),
-        discord_menu_items: Mutex::new(Vec::new()),
-        runtime: Mutex::new(None),
-        message: Mutex::new(if args.no_runtime {
+    let desktop = Desktop::new(
+        home.clone(),
+        if args.no_runtime {
             "Desktop shell only. Start without --no-runtime to launch the game.".into()
         } else {
             "Preparing artifacts...".into()
-        }),
-        tray_available: AtomicBool::new(false),
-        #[cfg(target_os = "linux")]
-        background_pending: AtomicBool::new(args.background),
-    };
+        },
+    );
+    #[cfg(target_os = "linux")]
+    desktop
+        .background_pending
+        .store(args.background, Ordering::Relaxed);
     let app = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![inventory_metrics])
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
@@ -414,8 +409,8 @@ fn main() -> Result<()> {
                             match runtime.wait_until_ready().await {
                                 Ok(()) => {
                                     let desktop = handle.state::<Desktop>();
-                                    *desktop.metrics_task.lock().unwrap() = Some(tauri::async_runtime::spawn(metrics::run(runtime.connection(), desktop.discord.metrics_sender())));
-                                    desktop.discord.start(runtime.connection());
+                                    *desktop.metrics_task.lock().unwrap() = Some(tauri::async_runtime::spawn(metrics::run(runtime.connection(), desktop.inventory_metrics.clone())));
+                                    desktop.discord.start(runtime.connection(), desktop.inventory_metrics.subscribe());
                                     if let Some(window) = handle.get_webview_window("main") {
                                         let _ = window.navigate(format!("http://127.0.0.1:{}/bitcraft/", runtime::HTTP_PORT).parse().unwrap());
                                     }
@@ -473,91 +468,6 @@ mod tests {
             capability["remote"]["urls"],
             serde_json::json!([format!("http://127.0.0.1:{}/*", runtime::HTTP_PORT)])
         );
-    }
-
-    #[test]
-    fn inventory_metrics_command_is_read_only_and_scoped_to_inventory_views() {
-        let home = tempfile::tempdir().unwrap();
-        let desktop = Desktop {
-            home: home.path().to_path_buf(),
-            discord: discord::Presence::new(home.path()),
-            metrics_task: Mutex::new(None),
-            discord_menu_items: Mutex::new(Vec::new()),
-            runtime: Mutex::new(None),
-            message: Mutex::new(String::new()),
-            tray_available: AtomicBool::new(false),
-            #[cfg(target_os = "linux")]
-            background_pending: AtomicBool::new(false),
-        };
-        desktop
-            .discord
-            .metrics_sender()
-            .send_replace(Some(discord::InventoryMetrics {
-                total_bits: 0.0,
-                bits_per_second: 0.0,
-                ..Default::default()
-            }));
-        let app = tauri::test::mock_builder()
-            .manage(desktop)
-            .invoke_handler(tauri::generate_handler![inventory_metrics])
-            .build(tauri::generate_context!(test = true))
-            .unwrap();
-        let game_url: tauri::Url = "http://127.0.0.1:7727/bitcraft/".parse().unwrap();
-        let main = WebviewWindowBuilder::new(&app, "main", WebviewUrl::External(game_url.clone()))
-            .build()
-            .unwrap();
-        let secondary =
-            WebviewWindowBuilder::new(&app, "page-1", WebviewUrl::External(game_url.clone()))
-                .build()
-                .unwrap();
-        let invoke = |window: &tauri::WebviewWindow<tauri::test::MockRuntime>, url: tauri::Url| {
-            tauri::test::get_ipc_response(
-                window,
-                tauri::webview::InvokeRequest {
-                    cmd: "inventory_metrics".into(),
-                    callback: tauri::ipc::CallbackFn(0),
-                    error: tauri::ipc::CallbackFn(1),
-                    url,
-                    body: tauri::ipc::InvokeBody::Json(serde_json::json!({})),
-                    headers: Default::default(),
-                    invoke_key: tauri::test::INVOKE_KEY.to_owned(),
-                },
-            )
-        };
-        let origin: tauri::Url = format!("http://127.0.0.1:{}/", runtime::HTTP_PORT)
-            .parse()
-            .unwrap();
-        assert_eq!(
-            invoke(&main, origin.clone())
-                .unwrap()
-                .deserialize::<serde_json::Value>()
-                .unwrap(),
-            serde_json::json!({"totalBits": 0.0, "bitsPerSecond": 0.0, "objectValues": {}, "classes": {}})
-        );
-        assert!(invoke(&secondary, origin.clone()).is_err());
-        secondary
-            .navigate(game_url.join("?page=summary").unwrap())
-            .unwrap();
-        assert!(invoke(&secondary, origin.clone()).is_ok());
-        secondary
-            .navigate(game_url.join("?page=settings").unwrap())
-            .unwrap();
-        assert!(invoke(&secondary, origin.clone()).is_err());
-        for url in [
-            "http://127.0.0.1:7717/",
-            "https://example.com/",
-            "tauri://localhost/index.html",
-        ] {
-            assert!(invoke(&main, url.parse().unwrap()).is_err(), "{url}");
-        }
-        for url in [
-            "http://127.0.0.1:7727/",
-            "http://127.0.0.1:7727/objects/a.dobj/raw",
-            "http://127.0.0.1:7727/bitcraft-other/",
-        ] {
-            main.navigate(url.parse().unwrap()).unwrap();
-            assert!(invoke(&main, origin.clone()).is_err(), "{url}");
-        }
     }
 
     #[test]
