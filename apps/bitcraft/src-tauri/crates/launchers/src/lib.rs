@@ -154,11 +154,15 @@ impl Connection {
     }
 
     pub async fn verify(&self) -> Result<()> {
-        self.validate()?;
         let client = reqwest::Client::builder()
             .no_proxy()
             .timeout(Duration::from_secs(2))
             .build()?;
+        self.verify_with_client(&client).await
+    }
+
+    pub async fn verify_with_client(&self, client: &reqwest::Client) -> Result<()> {
+        self.validate()?;
         let response = client
             .get(format!("{}/healthz", self.http_url.trim_end_matches('/')))
             .send()

@@ -8,6 +8,7 @@ import { JSDOM, VirtualConsole } from "jsdom";
 const presentationScript = await readFile(new URL("../ui/presentation.js", import.meta.url), "utf8");
 const html = (await readFile(new URL("../ui/index.html", import.meta.url), "utf8"))
   .replace('<script src="presentation.js"></script>', () => `<script>${presentationScript}</script>`);
+const inventoryValues = JSON.parse(await readFile(new URL("../ui/inventory-values.json", import.meta.url), "utf8"));
 const qname = (name, pluginName = "bitcraft") => ({ pluginName, name });
 const recipe = (name = "CraftPocketknife") => ({
   action: qname(name), totalInputs: [], totalOutputs: [{ class: qname("Pocketknife") }],
@@ -45,8 +46,8 @@ async function page(context, options = {}) {
       window.bitcraftDesktop = options.desktop ?? false;
       if (options.desktop || options.invoke) {
         window.__TAURI__ = { core: { invoke: async (command, args) => {
-          desktopCalls.push({ command, args: copy(args) });
-          return options.invoke?.(command, args);
+          desktopCalls.push({ command, args: args === undefined ? undefined : copy(args) });
+          return options.invoke ? options.invoke(command, args) : options.nativeMetrics ?? null;
         } } };
       }
       window.TextEncoder = TextEncoder;
@@ -93,6 +94,7 @@ async function page(context, options = {}) {
           if (typeof file === "string") return { ok: true, status: 200, json: async () => JSON.parse(file) };
           return respond(file);
         }
+        if (parsed.pathname === "/bitcraft/inventory-values.json") return respond(inventoryValues);
         if (parsed.pathname === "/objects/dir") return respond({ path: "/Users/player/.bitcraft/objects" });
         if (parsed.pathname === "/objects/unspent") {
           backend.inventoryReads++;
@@ -1037,67 +1039,40 @@ test("BIT/sec always averages over 5 minutes, and a 0.00 rate is not shown", asy
   assert.equal(recent.document.title, "Bitcraft (300.00 BIT - 0.10 BIT/sec)");
 });
 
-test("desktop metrics use numeric inventory data independently of rendered text", async (context) => {
+test("desktop reads native metrics independently of local inventory and session samples", async (context) => {
   const ui = await page(context, {
-    desktop: true, objects: [knife(), quarry(3)], sessionStorage: valueSamples([600000, 0]),
+    desktop: true, objects: [knife(), quarry(3)], nativeMetrics: { totalBits: 630, bitsPerSecond: -0.5 },
+    sessionStorage: valueSamples([600000, 0]),
   });
-  const latest = () => ui.desktopCalls.at(-1);
-  assert.deepEqual(latest(), {
-    command: "update_inventory_metrics", args: { metrics: { totalBits: 300, bitsPerSecond: 1 } },
-  });
-  const count = ui.desktopCalls.length;
-  ui.document.title = "A cosmetic title";
-  ui.document.querySelector("#inventory-value-amount").textContent = "999999 BIT";
-  await flush();
-  assert.equal(ui.desktopCalls.length, count);
-  const tick = () => { for (const timer of ui.timers.values()) if (timer.delay === 1000) timer.callback(); };
-  tick();
-  await flush();
-  assert.deepEqual(latest().args.metrics, { totalBits: 300, bitsPerSecond: 1 });
+  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "630.00 BIT");
+  assert.equal(ui.document.querySelector("#inventory-rate").textContent, "-0.50 BIT/sec");
+  assert.ok(ui.desktopCalls.every((call) => call.command === "inventory_metrics" && call.args === undefined));
   await ui.event({ type: "object", ...quarry(4) });
-  assert.deepEqual(latest().args.metrics, { totalBits: 630, bitsPerSecond: 2.1 });
-  const now = Date.now();
-  ui.dom.window.Date.now = () => now + 600000;
-  tick();
-  await flush();
-  assert.deepEqual(latest().args.metrics, { totalBits: 630, bitsPerSecond: 0 });
+  assert.equal(ui.document.querySelector("#inventory-rate").textContent, "-0.50 BIT/sec");
 });
 
-test("desktop metrics preserve rates hidden by display rounding, including negative rates", async (context) => {
-  for (const previous of [0, 2]) {
-    const ui = await page(context, {
-      desktop: true, objects: [knife(), { fileName: "bit.dobj", class: qname("Bit"), status: "live", fields: { kvs: [] } }],
-      sessionStorage: valueSamples([600000, previous]),
-    });
-    assert.equal(ui.document.querySelector("#inventory-rate").hidden, true);
-    assert.deepEqual(ui.desktopCalls.at(-1).args.metrics, { totalBits: 1, bitsPerSecond: (1 - previous) / 300 });
-  }
-});
-
-test("browser and secondary pages do not report desktop inventory metrics", async (context) => {
+test("browser and secondary pages do not request native metrics", async (context) => {
   const browser = await page(context, { objects: [knife()], invoke: () => {} });
   assert.deepEqual(browser.desktopCalls, []);
   for (const mode of ["summary", "settings", "recipebook", "raw&file=pocketknife.dobj"]) {
-    const secondary = await page(context, {
-      desktop: true, objects: [knife()], url: `http://127.0.0.1:7727/bitcraft/?page=${mode}`,
-    });
+    const secondary = await page(context, { desktop: true, objects: [knife()], url: `http://127.0.0.1:7727/bitcraft/?page=${mode}` });
     assert.deepEqual(secondary.desktopCalls, [], mode);
   }
 });
 
-test("a rejected desktop update leaves the inventory usable and the next tick retries", async (context) => {
-  let attempts = 0;
+test("unavailable native metrics clear the display and subsequent reads recover", async (context) => {
+  let available = false;
   const ui = await page(context, {
     desktop: true, objects: [knife(), quarry(3)],
-    invoke: () => { if (++attempts === 1) throw new Error("Desktop unavailable"); },
+    invoke: () => { if (!available) throw new Error("Unavailable"); return { totalBits: 300, bitsPerSecond: 1 }; },
   });
   assert.equal(ui.app.hidden, false);
-  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "300.00 BIT");
-  const before = attempts;
+  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "Unavailable");
+  available = true;
   for (const timer of ui.timers.values()) if (timer.delay === 1000) timer.callback();
   await flush();
-  assert.ok(attempts > before);
-  assert.deepEqual(ui.desktopCalls.at(-1).args.metrics, { totalBits: 300, bitsPerSecond: 0 });
+  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "300.00 BIT");
+  assert.equal(ui.document.querySelector("#inventory-rate").textContent, "1.00 BIT/sec");
 });
 
 test("the summary icon opens the Inventory Summary in one window", async (context) => {

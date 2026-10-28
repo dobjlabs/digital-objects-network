@@ -51,7 +51,12 @@ impl Presence {
         });
         let raw_id = std::env::var("BITCRAFT_DISCORD_APPLICATION_ID")
             .ok()
-            .or_else(|| option_env!("BITCRAFT_DISCORD_APPLICATION_ID").map(str::to_owned));
+            .filter(|id| !id.trim().is_empty())
+            .or_else(|| {
+                option_env!("BITCRAFT_DISCORD_APPLICATION_ID")
+                    .filter(|id| !id.trim().is_empty())
+                    .map(str::to_owned)
+            });
         let application_id = raw_id.and_then(|id| {
             if valid_application_id(&id) {
                 Some(id)
@@ -72,21 +77,12 @@ impl Presence {
         }
     }
 
-    pub fn available(&self) -> bool {
-        self.application_id.is_some()
-    }
-
     pub fn enabled(&self) -> bool {
         self.enabled.borrow().unwrap_or(false)
     }
 
-    pub fn update_inventory_metrics(&self, metrics: InventoryMetrics) -> Result<()> {
-        metrics.validate()?;
-        self.inventory_metrics.send_replace(Some(metrics));
-        Ok(())
-    }
-
     pub fn set_enabled(&self, enabled: bool) -> Result<()> {
+        self.enabled.send_replace(Some(enabled));
         let parent = self
             .path
             .parent()
@@ -97,8 +93,11 @@ impl Presence {
             share_activity: enabled,
         })?)?;
         temporary.persist(&self.path)?;
-        self.enabled.send_replace(Some(enabled));
         Ok(())
+    }
+
+    pub fn metrics_sender(&self) -> watch::Sender<Option<InventoryMetrics>> {
+        self.inventory_metrics.clone()
     }
 
     pub fn start(&self, connection: Connection) {
@@ -154,23 +153,7 @@ struct Action {
     name: String,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct InventoryMetrics {
-    total_bits: f64,
-    bits_per_second: f64,
-}
-
-impl InventoryMetrics {
-    fn validate(&self) -> Result<()> {
-        anyhow::ensure!(
-            self.total_bits.is_finite() && self.total_bits >= 0.0,
-            "Total BIT must be finite and nonnegative"
-        );
-        anyhow::ensure!(self.bits_per_second.is_finite(), "BIT/sec must be finite");
-        Ok(())
-    }
-}
+pub use crate::metrics::InventoryMetrics;
 
 fn format_bits(value: f64) -> String {
     if value.abs() >= 1e21 {
@@ -347,19 +330,40 @@ async fn drive(
     inventory_metrics: &watch::Receiver<Option<InventoryMetrics>>,
     retry_delay: &mut Duration,
 ) -> Result<()> {
-    *ipc = Some(tokio::time::timeout(IPC_TIMEOUT, connect).await??);
+    *ipc = Some(connect.await?);
     let ipc = ipc.as_mut().unwrap();
     let mut updates = Updates::default();
+    let mut daemon_failed_at: Option<Instant> = None;
     loop {
-        connection.verify().await?;
-        let runs: Vec<Run> = client
-            .get(format!("{}/runs?status=active", connection.http_url))
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
-        let activity = activity(&runs, started_at, inventory_metrics.borrow().as_ref());
+        let snapshot = async {
+            connection.verify_with_client(client).await?;
+            let runs: Vec<Run> = client
+                .get(format!("{}/runs?status=active", connection.http_url))
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            Ok::<_, anyhow::Error>(runs)
+        }
+        .await;
+        let activity = match snapshot {
+            Ok(runs) => {
+                daemon_failed_at = None;
+                activity(&runs, started_at, inventory_metrics.borrow().as_ref())
+            }
+            Err(_) => {
+                let since = daemon_failed_at.get_or_insert_with(Instant::now);
+                if since.elapsed() >= UPDATE_INTERVAL && updates.published.is_some() {
+                    tokio::time::timeout(IPC_TIMEOUT, ipc.set_activity(Value::Null)).await??;
+                    updates.published = None;
+                } else {
+                    tokio::time::timeout(IPC_TIMEOUT, ipc.ping()).await??;
+                }
+                tokio::time::sleep(POLL_INTERVAL).await;
+                continue;
+            }
+        };
         let now = Instant::now();
         if updates.due(now, &activity) {
             updates.last_attempt = Some(now);
@@ -462,42 +466,6 @@ mod tests {
     }
 
     #[test]
-    fn invalid_inventory_metrics_do_not_replace_the_last_update() {
-        let home = tempfile::tempdir().unwrap();
-        let presence = Presence::new(home.path());
-        assert_eq!(*presence.inventory_metrics.borrow(), None);
-        let metrics = InventoryMetrics {
-            total_bits: 31.0,
-            bits_per_second: -0.5,
-        };
-        presence.update_inventory_metrics(metrics).unwrap();
-        for total_bits in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            assert!(
-                presence
-                    .update_inventory_metrics(InventoryMetrics {
-                        total_bits,
-                        ..metrics
-                    })
-                    .is_err()
-            );
-            assert_eq!(*presence.inventory_metrics.borrow(), Some(metrics));
-        }
-        for bits_per_second in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            assert!(
-                presence
-                    .update_inventory_metrics(InventoryMetrics {
-                        bits_per_second,
-                        ..metrics
-                    })
-                    .is_err()
-            );
-            assert_eq!(*presence.inventory_metrics.borrow(), Some(metrics));
-        }
-        assert!(!presence.enabled());
-        assert!(!home.path().join("desktop.json").exists());
-    }
-
-    #[test]
     fn sharing_defaults_off_and_persists_in_the_selected_home() {
         let home = tempfile::tempdir().unwrap();
         let presence = Presence::new(home.path());
@@ -513,6 +481,17 @@ mod tests {
             assert!(!valid_application_id(id), "{id}");
         }
         assert!(valid_application_id("123456789012345678"));
+    }
+
+    #[test]
+    fn opting_out_takes_effect_even_when_preferences_cannot_be_saved() {
+        let home = tempfile::tempdir().unwrap();
+        let presence = Presence::new(home.path());
+        presence.set_enabled(true).unwrap();
+        fs::remove_file(home.path().join("desktop.json")).unwrap();
+        fs::create_dir(home.path().join("desktop.json")).unwrap();
+        assert!(presence.set_enabled(false).is_err());
+        assert!(!presence.enabled());
     }
 
     #[cfg(unix)]
@@ -534,6 +513,7 @@ mod tests {
         let connection = Connection::new(home.to_path_buf(), "test-instance".into(), port).unwrap();
         let requests = Arc::new(AtomicUsize::new(0));
         let request_count = requests.clone();
+        let fail_health = home.join("fail-health");
         let daemon = tokio::spawn(async move {
             loop {
                 let (mut stream, _) = listener.accept().await.unwrap();
@@ -548,14 +528,60 @@ mod tests {
                     assert!(request.starts_with(b"GET /runs?status=active "));
                     json!([{"action": {"pluginName": "bitcraft", "name": "GatherWood"}, "status": "generateProof"}])
                 }.to_string();
+                let status = if request.starts_with(b"GET /healthz ") && fail_health.exists() {
+                    "503 Unavailable"
+                } else {
+                    "200 OK"
+                };
                 let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
                 stream.write_all(response.as_bytes()).await.unwrap();
             }
         });
         (connection, requests, daemon)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn transient_daemon_failure_keeps_the_discord_connection_and_activity() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let home = tempfile::tempdir().unwrap();
+        let (connection, requests, daemon) = mock_daemon(home.path()).await;
+        let (sharing, receiver) = watch::channel(Some(true));
+        let (_metrics, metrics) = watch::channel(None);
+        let (sender, mut activities) = tokio::sync::mpsc::unbounded_channel();
+        let connections = Arc::new(AtomicUsize::new(0));
+        let count = connections.clone();
+        let task = tokio::spawn(worker(connection, receiver, metrics, move || {
+            count.fetch_add(1, Ordering::Relaxed);
+            let (client, _) = ipc::mock_client(sender.clone());
+            async move { Ok(client) }
+        }));
+        tokio::time::timeout(Duration::from_secs(3), activities.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let before = requests.load(Ordering::Relaxed);
+        fs::write(home.path().join("fail-health"), b"").unwrap();
+        tokio::time::timeout(Duration::from_secs(8), async {
+            while requests.load(Ordering::Relaxed) == before {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert_eq!(connections.load(Ordering::Relaxed), 1);
+        assert!(activities.try_recv().is_err());
+        fs::remove_file(home.path().join("fail-health")).unwrap();
+        sharing.send_replace(None);
+        task.await.unwrap();
+        daemon.abort();
     }
 
     #[cfg(unix)]

@@ -1,4 +1,4 @@
 [[permission]]
-identifier = "allow-update-inventory-metrics"
-description = "Allow reporting inventory value and production rate to the desktop host."
-commands.allow = ["update_inventory_metrics"]
+identifier = "allow-inventory-metrics"
+description = "Allow reading native inventory metrics."
+commands.allow = ["inventory_metrics"]

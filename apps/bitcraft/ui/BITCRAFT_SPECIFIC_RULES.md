@@ -179,25 +179,8 @@ their entries know about bitcraft:
 - **Bitcraft version** (status bar): `BITCRAFT_VERSION` ("Alpha 1.0"), a
   fixed string in the page; dobjd and the plugin manifest report no game
   version.
-- **BIT/sec** (top bar and window title): how much the Total Inventory
-  Value grew over the last `VALUE_RATE_WINDOW_MS` (5 minutes), divided by
-  the full window, from samples of it taken on every inventory change; the
-  value before the first sample counts as that sample's, so a new session's
-  first gains do not spike. A rate that rounds to 0.00 is not shown. Since crafting converts value
-  rather than creating it, this is in effect the player's production rate.
-  Generic behavior: no rate.
-- **Total Inventory Value** (top bar, window title and Inventory Summary):
-  the summed
-  Total Bit Value of the live bitcraft objects (pending ones are left out);
-  see below. The Inventory Summary also shows each class's summed value
-  beside its count, and hovering an object row in the main window shows
-  that object's value in a tooltip. The main game page reports the numeric
-  total and five-minute production rate through the desktop's
-  `update_inventory_metrics` Tauri command whenever inventory changes and
-  every second. Discord Rich Presence shows both values when sharing is
-  enabled, including zero and negative rates. These updates use the computed
-  numbers, independently of title and toolbar text. Browser and secondary
-  pages do not send them; the host accepts only the main game window.
+- **BIT/sec** (top bar and window title): how much the Total Inventory Value grew over the last `VALUE_RATE_WINDOW_MS` (5 minutes), divided by the full window, from samples of it taken on every inventory change; the value before the first sample counts as that sample's, so a new session's first gains do not spike. A rate that rounds to 0.00 is not shown. Since crafting converts value rather than creating it, this is in effect the player's production rate. Generic behavior: no rate.
+- **Total Inventory Value** (top bar, window title and Inventory Summary): the summed Total Bit Value of live bitcraft objects (pending ones are left out); see below. The Inventory Summary also shows each class's summed value beside its count, and hovering an object row shows that object's value in a tooltip. Valuation tables live in `inventory-values.json`, shared by the browser and native host. In the desktop main window, total value and five-minute rate come from the native inventory metrics service through the read-only `inventory_metrics` command. The service runs while the window is hidden and sharing is off, and clears its metrics and rate history on stream failure or gaps before resnapshotting. The standalone browser calculates its own totals and retains samples in session storage. Discord shows the native metrics when sharing is enabled, including zero and negative rates.
 - **Inventory Summary icon:** `SUMMARY_ICON_CLASS` (`Bit`), the class whose
   art heads the window, since it totals the inventory in bits.
 - **Website and Discord links:** `BITCRAFT_SITE_URL` and

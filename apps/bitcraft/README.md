@@ -139,82 +139,32 @@ MCP clients can launch the proxy with no port arguments once MCP is enabled in t
 
 ## Discord Rich Presence
 
-The native host can share Bitcraft activity with the Discord desktop client
-over local IPC. Sharing is off by default. Turn it on with **Share activity
-on Discord** in the Bitcraft app menu or tray menu. The preference is stored
-in `<home>/desktop.json`, separate from daemon settings, and follows
-`--home` and `BITCRAFT_HOME`. Turning it off clears presence immediately;
-quitting clears presence before stopping the daemon. Closing to the tray
-keeps presence active. Shell-only launches never connect to Discord.
+The native host can share Bitcraft activity with the Discord desktop client over local IPC. Sharing is off by default. Turn it on with **Share activity on Discord** in the Bitcraft app menu or tray menu. The preference is stored in `<home>/desktop.json`, separate from daemon settings, and follows `--home` and `BITCRAFT_HOME`. Turning it off clears presence immediately; quitting clears presence before stopping the daemon. Closing to the tray keeps presence active. Shell-only launches never connect to Discord.
 
-Presence shows the current Bitcraft action (or a summary for concurrent
-jobs), Total Inventory Value in BIT, the five-minute production rate in
-BIT/sec, active job count, and elapsed session time, with links to the website
-and community Discord. The total includes the value of resources and tools,
-rather than just counting Bit objects. Both numeric values use the same
-calculation as the main window's toolbar, and appear once the game has loaded
-its inventory. Presence includes zero and negative production rates.
-Individual objects, file paths, and errors are not published.
-Discord's own activity-sharing settings control who can see it.
+Presence shows the current Bitcraft action (or a summary for concurrent jobs), Total Inventory Value in BIT, the five-minute production rate in BIT/sec, active job count, and elapsed session time, with links to the website and community Discord. The total includes the value of resources and tools, rather than just counting Bit objects. Both numeric values use the same calculation as the main window's toolbar, and appear once the native host has loaded its inventory. Presence includes zero and negative production rates. Individual objects, file paths, and errors are not published. Discord's own activity-sharing settings control who can see it.
 
 To activate this integration for development or a release:
 
-1. Create a **Bitcraft** application in the
-   [Discord Developer Portal](https://discord.com/developers/applications).
-   No bot user, bot token, client secret, or OAuth redirect is needed.
+1. Create a **Bitcraft** application in the [Discord Developer Portal](https://discord.com/developers/applications). No bot user, bot token, client secret, or OAuth redirect is needed.
 2. Copy its numeric **Application ID** from General Information.
-3. In the application's Rich Presence art assets, upload
-   `src-tauri/icons/icon.png` with the asset key **bitcraft**. Set the
-   application icon as well.
-4. Set `BITCRAFT_DISCORD_APPLICATION_ID` to that ID when building the Tauri
-   host, including release builds. For a local launch, for example:
+3. In the application's Rich Presence art assets, upload `src-tauri/icons/icon.png` with the asset key **bitcraft**. Set the application icon as well.
+4. Set `BITCRAFT_DISCORD_APPLICATION_ID` to that ID when building the Tauri host, including release builds. For a local launch, for example:
 
    ```sh
    BITCRAFT_DISCORD_APPLICATION_ID=YOUR_NUMERIC_APPLICATION_ID just bitcraft-dev
    ```
 
-   For GitHub release builds, create a repository Actions variable named
-   `BITCRAFT_DISCORD_APPLICATION_ID` with that value under **Settings >
-   Secrets and variables > Actions > Variables**. The `Release Bitcraft`
-   workflow supplies it to every installer build, including manual
-   build-only runs. The public Application ID does not need to be a secret.
+   For GitHub release builds, create a repository Actions variable named `BITCRAFT_DISCORD_APPLICATION_ID` with that value under **Settings > Secrets and variables > Actions > Variables**. The `Release Bitcraft` workflow supplies it to every installer build, including manual build-only runs. The public Application ID does not need to be a secret.
 
-   The ID is public and is embedded at compile time. The same environment
-   variable can override it at runtime. Without a valid ID, the sharing menu
-   item is disabled and no Discord connection is attempted.
-5. Run the Discord desktop app and enable sharing in Bitcraft's menu. Check
-   the activity card on your Discord profile and verify disabling sharing
-   removes it. A browser-only Discord session cannot receive local IPC.
+   The ID is public and is embedded at compile time. The same environment variable can override it at runtime. Blank runtime values fall back to the compiled ID; blank compiled values leave the integration unconfigured. The sharing preference can always be changed. Without a valid ID, no Discord connection is attempted; the saved preference takes effect when an ID is configured.
 
-The host reads `/runs?status=active` every five seconds while sharing and
-Discord are connected, verifying the managed daemon's identity before each
-snapshot. Within a connection, activity changes are coalesced to at most one
-update every 15 seconds; unchanged payloads are not resent. A new connection
-always publishes the current snapshot immediately. The start timestamp stays fixed
-so Discord advances the timer itself. The main game page calls the
-`update_inventory_metrics` Tauri command with numeric `totalBits` and
-`bitsPerSecond` fields in a `metrics` object whenever inventory changes and
-on the one-second rate timer. The host validates these numbers and formats
-them for presence; it does not read titles, toolbar text, or DOM state.
-Only the main window at the managed daemon's game URL can call this command.
-The command neither enables sharing nor makes additional inventory requests.
-Failed calls leave the game usable and the next tick retries. The 15-second
-interval is an application policy, not a claim about Discord's current rate
-limit. The host pings idle Discord connections on each five-second poll, and
-IPC operations time out after two seconds. Failed connections retry after
-one second, doubling up to five seconds; a successful presence update or
-ping resets the delay. Closing and reopening Discord reconnects and restores
-the current activity without toggling sharing or restarting Bitcraft. RPC
-retry delays are honored even when longer than the connection retry delay.
-Presence failures do not stop the game. No Discord account linking or hosted
-service is required.
+5. Run the Discord desktop app and enable sharing in Bitcraft's menu. Check the activity card on your Discord profile and verify disabling sharing removes it. A browser-only Discord session cannot receive local IPC.
 
-The transport uses Discord's documented
-[RPC over IPC protocol](https://docs.discord.com/developers/topics/rpc), with
-Unix sockets on macOS/Linux and named pipes on Windows. Tests simulate the
-handshake, activity acknowledgements, ping/pong, errors, and clearing without
-a Discord account. A real profile display still requires the application
-setup above and a native smoke check on each supported OS.
+The native host maintains inventory metrics independently of window visibility and Discord sharing. It reads an inventory snapshot, follows the daemon's `/events` stream, and periodically reconciles with a new snapshot. Valuation uses `ui/inventory-values.json`, shared with the standalone browser. The host keeps five minutes of samples in memory and advances the production rate even when inventory does not change. The main game window reads these metrics through the `inventory_metrics` Tauri command; it never supplies metrics to the host. Missing stream heartbeats, sequence gaps, and daemon failures invalidate metrics. Reconnection starts a fresh rate history rather than attributing unobserved changes to production. Host restarts also reset that history; standalone browsers retain their own history in session storage.
+
+Presence reads active runs and coalesces changed payloads according to the timing constants in `src-tauri/src/discord.rs`. Unchanged payloads are not resent, and a new Discord connection publishes immediately. The session timestamp stays fixed. Daemon request failures retain the IPC connection and briefly preserve the previous activity; sustained failures clear it. Socket candidates must complete a bounded handshake before selection. Idle IPC connections are checked with PING/PONG, failed connections retry with capped backoff, and RPC retry delays are honored. Presence failures do not stop the game. No Discord account linking or hosted service is required.
+
+The transport uses Discord's documented [RPC over IPC protocol](https://docs.discord.com/developers/topics/rpc), with Unix sockets on macOS/Linux and named pipes on Windows. Tests simulate the handshake, activity acknowledgements, ping/pong, errors, and clearing without a Discord account. A real profile display still requires the application setup above and a native smoke check on each supported OS.
 
 ## Releases and updates
 

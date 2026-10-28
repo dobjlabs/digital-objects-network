@@ -1068,12 +1068,12 @@
 
   const PLUGIN_NAME = "bitcraft";
 
-  function reportInventoryMetrics(totalBits, bitsPerSecond) {
-    const invoke = window.__TAURI__?.core?.invoke;
-    if (window.bitcraftDesktop && invoke) {
-      invoke("update_inventory_metrics", { metrics: { totalBits, bitsPerSecond } })
-        .catch((error) => console.warn("Could not update desktop inventory metrics:", error));
-    }
+  async function readDesktopMetrics() {
+    if (!window.bitcraftDesktop) return;
+    try {
+      desktopMetrics = await window.__TAURI__.core.invoke("inventory_metrics");
+    } catch { desktopMetrics = null; }
+    renderInventoryMetrics(desktopMetrics?.totalBits ?? null, desktopMetrics?.bitsPerSecond ?? null);
   }
 
   const STARTUP_RUN_STORAGE_KEY = "bitcraft.startup-pocketknife-run";
@@ -1291,31 +1291,15 @@
   // Total Bit Value: what an object is worth in bits, counting each raw
   // resource spent to make it at the rate its BitsFrom* recipe pays (Wood 1,
   // Stone 2, Iron 5). Worked out by hand from the recipes, per class.
-  const TOTAL_BIT_VALUES = {
-    Bit: 1,
-    Wood: 1,
-    Stone: 2,
-    Iron: 5,
-    Pocketknife: 0,
-    Stick: 0.5,
-    WoodAxe: 2,
-    StoneAxe: 4,
-    IronAxe: 9,
-    BucketOfWood: 5,
-    BucketOfStone: 5,
-    BucketOfIron: 5,
-  };
+  let TOTAL_BIT_VALUES = {};
   // A bucket is also worth the `n` resources it holds, at these rates.
-  const BUCKET_CONTENT_BIT_VALUES = { BucketOfWood: 1, BucketOfStone: 2, BucketOfIron: 5 };
+  let BUCKET_CONTENT_BIT_VALUES = {};
   // Quarries and drills by level (index 0 is level 1): building one, plus the
   // full buckets every level-up spends.
-  const LEVELED_TOTAL_BIT_VALUES = {
-    Quarry: [40, 130, 300, 630, 1280, 2570],
-    MiningDrill: [135, 420, 975, 2070, 4245, 8580],
-  };
+  let LEVELED_TOTAL_BIT_VALUES = {};
   // Tools that wear out: the `durability` a new one starts with. Such a
   // tool is worth its Total Bit Value times the fraction of that it has left.
-  const FULL_DURABILITY = { WoodAxe: 100, StoneAxe: 100, IronAxe: 100 };
+  let FULL_DURABILITY = {};
 
   // The class whose art heads the Inventory Summary window, which totals the
   // inventory in bits.
@@ -2767,7 +2751,7 @@
     document.body.classList.add("secondary-window");
     document.title = "Bitcraft Inventory Summary";
     summaryView.hidden = false;
-    await Presentation.load();
+    await Promise.all([Presentation.load(), loadInventoryValues()]);
     inventory = watchInventory(renderSummary);
     try {
       await inventory.reload();
@@ -3714,6 +3698,7 @@
     showStartup("Loading inventory...");
     showMessage("Loading...", false);
     try {
+      await loadInventoryValues();
       inventory ??= watchInventory(showObjects, {
         onError: startupInventoryError,
         onReconnect: restoreRuns,
@@ -3942,8 +3927,15 @@
   // session, so a reload does not restart the measurement.
   const VALUE_RATE_WINDOW_MS = 5 * 60 * 1000;
   const VALUE_SAMPLES_STORAGE_KEY = "bitcraft.inventory-value-samples";
-  let valueSamples = readValueSamples();
+  let valueSamples = window.bitcraftDesktop ? [] : readValueSamples();
   let latestInventoryValue = null;
+  let desktopMetrics = null;
+
+  async function loadInventoryValues() {
+    const response = await fetch(new URL("inventory-values.json", document.baseURI).href);
+    if (!response.ok) throw new Error("Could not load inventory values");
+    ({ TOTAL_BIT_VALUES, BUCKET_CONTENT_BIT_VALUES, LEVELED_TOTAL_BIT_VALUES, FULL_DURABILITY } = await response.json());
+  }
 
   function readValueSamples() {
     try {
@@ -3958,6 +3950,7 @@
 
   function recordValueSample(value) {
     latestInventoryValue = value;
+    if (window.bitcraftDesktop) return;
     const now = Date.now();
     if (valueSamples.at(-1)?.value !== value) {
       valueSamples.push({ atMs: now, value });
@@ -3988,22 +3981,31 @@
     if (latestInventoryValue === null) {
       return;
     }
-    const rate = valueRate(Date.now());
-    reportInventoryMetrics(latestInventoryValue, rate);
+    if (window.bitcraftDesktop) {
+      void readDesktopMetrics();
+      return;
+    }
+    renderInventoryMetrics(latestInventoryValue, valueRate(Date.now()));
+  }
+
+  function renderInventoryMetrics(total, rate) {
+    document.getElementById("inventory-value-amount").textContent = total === null ? "Unavailable" : formatBitValue(total);
+    if (rate === null) rate = 0;
     const shown = Math.abs(rate) >= 0.005;
     const rateText = `${rate.toFixed(2)} BIT/sec`;
     document.getElementById("inventory-rate").textContent = shown ? rateText : "";
     document.getElementById("inventory-rate").hidden = !shown;
     document.getElementById("inventory-rate-divider").hidden = !shown;
     document.title = shown
-      ? `Bitcraft (${formatBitValue(latestInventoryValue)} - ${rateText})`
-      : `Bitcraft (${formatBitValue(latestInventoryValue)})`;
+      ? `Bitcraft (${formatBitValue(total)} - ${rateText})`
+      : total === null ? "Bitcraft" : `Bitcraft (${formatBitValue(total)})`;
   }
 
   function updateInventoryValue() {
     const totalValue = liveListedObjects().reduce((sum, object) => sum + totalBitValue(object), 0);
     recordValueSample(totalValue);
-    document.getElementById("inventory-value-amount").textContent = formatBitValue(totalValue);
+    if (window.bitcraftDesktop) void readDesktopMetrics();
+    else document.getElementById("inventory-value-amount").textContent = formatBitValue(totalValue);
     const icon = document.getElementById("inventory-value-icon");
     const iconPath = Presentation.classInfo({ pluginName: PLUGIN_NAME, name: SUMMARY_ICON_CLASS }).icon;
     if (iconPath && icon.getAttribute("src") !== iconPath) {

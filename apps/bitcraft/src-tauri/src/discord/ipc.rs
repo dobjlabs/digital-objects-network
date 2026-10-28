@@ -35,32 +35,38 @@ impl std::error::Error for Rejected {}
 impl Client {
     pub async fn connect(application_id: &str) -> Result<Self> {
         #[cfg(unix)]
-        let stream = {
-            let mut connected = None;
-            for path in socket_paths() {
-                if let Ok(stream) = Stream::connect(path).await {
-                    connected = Some(stream);
-                    break;
-                }
-            }
-            connected.ok_or_else(|| anyhow::anyhow!("Discord is not running"))?
-        };
+        let candidates = socket_paths();
         #[cfg(windows)]
-        let stream = {
-            let mut connected = None;
-            for index in 0..10 {
-                if let Ok(stream) = tokio::net::windows::named_pipe::ClientOptions::new()
-                    .open(format!(r"\\?\pipe\discord-ipc-{index}"))
-                {
-                    connected = Some(stream);
-                    break;
+        let candidates =
+            (0..10).map(|index| std::path::PathBuf::from(format!(r"\\?\pipe\discord-ipc-{index}")));
+        Self::connect_candidates(application_id, candidates).await
+    }
+
+    async fn connect_candidates(
+        application_id: &str,
+        candidates: impl IntoIterator<Item = std::path::PathBuf>,
+    ) -> Result<Self> {
+        let mut last_error = anyhow::anyhow!("Discord is not running");
+        for path in candidates {
+            let attempt = async {
+                #[cfg(unix)]
+                let stream = Stream::connect(path).await?;
+                #[cfg(windows)]
+                let stream = tokio::net::windows::named_pipe::ClientOptions::new().open(path)?;
+                let mut client = Self { stream };
+                client.handshake(application_id).await?;
+                Ok::<_, anyhow::Error>(client)
+            };
+            match tokio::time::timeout(Duration::from_secs(2), attempt).await {
+                Ok(Ok(client)) => return Ok(client),
+                Ok(Err(error)) if error.downcast_ref::<std::io::Error>().is_none() => {
+                    last_error = error
                 }
+                Ok(Err(_)) => {}
+                Err(error) => last_error = error.into(),
             }
-            connected.ok_or_else(|| anyhow::anyhow!("Discord is not running"))?
-        };
-        let mut client = Self { stream };
-        client.handshake(application_id).await?;
-        Ok(client)
+        }
+        Err(last_error)
     }
 }
 
@@ -108,7 +114,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Client<S> {
             self.stream.read_exact(&mut bytes).await?;
             let payload: Value = serde_json::from_slice(&bytes)?;
             match opcode {
-                CLOSE => bail!("Discord closed the IPC connection"),
+                CLOSE => bail!(
+                    "Discord closed the IPC connection: code={}, message={}",
+                    payload["code"],
+                    payload["message"]
+                ),
                 PING => self.write(PONG, &payload).await?,
                 FRAME | PONG => return Ok((opcode, payload)),
                 _ => bail!("Unknown Discord IPC opcode: {opcode}"),
@@ -209,6 +219,48 @@ pub(super) fn mock_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn discovery_skips_a_stalled_handshake_and_uses_the_next_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let stalled = dir.path().join("stalled");
+        let healthy = dir.path().join("healthy");
+        let first = tokio::net::UnixListener::bind(&stalled).unwrap();
+        let second = tokio::net::UnixListener::bind(&healthy).unwrap();
+        let stalled_server = tokio::spawn(async move {
+            let (_stream, _) = first.accept().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let server = tokio::spawn(async move {
+            let (stream, _) = second.accept().await.unwrap();
+            let mut server = Client { stream };
+            assert_eq!(server.stream.read_u32_le().await.unwrap(), 0);
+            let length = server.stream.read_u32_le().await.unwrap();
+            let mut bytes = vec![0; length as usize];
+            server.stream.read_exact(&mut bytes).await.unwrap();
+            server.write(FRAME, &json!({"evt":"READY"})).await.unwrap();
+        });
+        let client = Client::connect_candidates("123", [stalled, healthy])
+            .await
+            .unwrap();
+        drop(client);
+        server.await.unwrap();
+        stalled_server.abort();
+    }
+
+    #[tokio::test]
+    async fn close_errors_preserve_the_discord_diagnostic() {
+        let (app, discord) = tokio::io::duplex(4096);
+        let mut server = Client { stream: discord };
+        server
+            .write(CLOSE, &json!({"code":4000,"message":"Invalid client ID"}))
+            .await
+            .unwrap();
+        let error = Client { stream: app }.read().await.unwrap_err().to_string();
+        assert!(error.contains("4000"));
+        assert!(error.contains("Invalid client ID"));
+    }
 
     #[tokio::test]
     async fn handshake_activity_ping_and_clear_use_the_rpc_protocol() {
