@@ -326,6 +326,9 @@ jobs:
       - name: Check out genesis-slot script
         uses: actions/checkout@v6
         with:
+          # Checkout empties its target directory first, so it must not be
+          # the workspace root, where the staged server binaries live.
+          path: repo-src
           sparse-checkout: utils/genesis-slot.sh
           sparse-checkout-cone-mode: false
 
@@ -333,7 +336,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          START=$(utils/genesis-slot.sh "$BEACON_URL")
+          START=$(repo-src/utils/genesis-slot.sh "$BEACON_URL")
           echo "synchronizer start slot: $START"
           echo "INIT_START_SLOT=$START" >> "$GITHUB_ENV"
 
