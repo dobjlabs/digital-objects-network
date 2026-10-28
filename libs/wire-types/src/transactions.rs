@@ -134,7 +134,9 @@ impl TransactionRecord {
         !self.state.is_terminal()
     }
 
-    pub fn needs_membership(&self) -> bool {
+    /// Whether settlement must ask the synchronizer for this transaction's status: the
+    /// relayer may hold its payload once a submission was attempted.
+    pub fn needs_tx_status(&self) -> bool {
         self.is_open()
             && (self.submit_attempted_at_ms.is_some() || self.state == TransactionState::Submitted)
     }
