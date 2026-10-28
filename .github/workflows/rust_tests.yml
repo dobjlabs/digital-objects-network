@@ -4,6 +4,11 @@ on:
   pull_request:
     branches: [main]
     types: [ready_for_review, opened, synchronize, reopened]
+    # UI-only PRs are tested by gui.yml; pushes to main still run this.
+    paths-ignore:
+      - "interfaces/gui/**"
+      - "apps/bitcraft/ui/**"
+      - "apps/bitcraft/tests/**"
   push:
     branches: [main]
 
@@ -21,9 +26,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: |
-            interfaces/gui/pnpm-lock.yaml
-            apps/bitcraft/tests/pnpm-lock.yaml
+          cache-dependency-path: interfaces/gui/pnpm-lock.yaml
       - name: Build default browser UI
         working-directory: interfaces/gui
         run: |
@@ -33,10 +36,5 @@ jobs:
         with:
           cache-shared-key: tests-release
           cache-workspace-crates: true
-      - name: Test Bitcraft UI and preparation
-        run: |
-          pnpm --dir apps/bitcraft/tests install --frozen-lockfile
-          pnpm --dir apps/bitcraft/tests test
-          python3 -m unittest discover -s apps/bitcraft/tests -p '*_test.py'
       - name: Run tests
         run: cargo test --release --locked --features dobjd/bundled-ui,dobjd/bundled-bitcraft-ui
