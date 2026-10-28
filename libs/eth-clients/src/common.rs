@@ -340,11 +340,24 @@ pub struct Unavailable {
     pub retries: u32,
 }
 
-/// Whether `err` was caused by a node: unreachable, answering with an error, or not serving
-/// data it should. Such failures are expected to clear up, unlike local ones.
+/// Data a node served that contradicts what it is committed to, such as a different number
+/// of blobs than requested.
+#[derive(Debug, thiserror::Error)]
+#[error("{what} is inconsistent: {reason}")]
+pub struct Inconsistent {
+    pub what: String,
+    pub reason: String,
+}
+
+/// Whether `err` was caused by a node: unreachable, answering with an error, not serving
+/// data it should, or serving inconsistent data. Such failures are expected to clear up,
+/// unlike local ones.
 pub fn is_node_error(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| {
-        cause.is::<ClientError>() || cause.is::<TransportError>() || cause.is::<Unavailable>()
+        cause.is::<ClientError>()
+            || cause.is::<TransportError>()
+            || cause.is::<Unavailable>()
+            || cause.is::<Inconsistent>()
     })
 }
 
@@ -485,6 +498,12 @@ pub(crate) mod tests {
         }
         .into();
         assert!(is_node_error(&unavailable));
+        let inconsistent: anyhow::Error = Inconsistent {
+            what: "archived blobs".to_string(),
+            reason: "requested 2 blobs, got 1".to_string(),
+        }
+        .into();
+        assert!(is_node_error(&inconsistent.context("fetching blobs")));
 
         let disk_error: anyhow::Error = std::io::Error::other("disk full").into();
         assert!(!is_node_error(&disk_error.context("storing a blob")));

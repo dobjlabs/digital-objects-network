@@ -12,7 +12,7 @@ use eth_clients::{
 
 use alloy::{
     consensus::Transaction,
-    eips::eip4844::{kzg_to_versioned_hash, HeapBlob},
+    eips::eip4844::{c_kzg, env_settings::EnvKzgSettings, kzg_to_versioned_hash, HeapBlob},
     primitives::B256,
     providers as alloy_provider,
     rpc::types::BlockTransactionsKind,
@@ -78,6 +78,25 @@ pub struct ProcessedSlot {
     pub derived: Option<DerivedSlot>,
     /// Status of each target transaction of the slot's execution block.
     pub tx_statuses: Vec<TxStatus>,
+}
+
+/// Check that `blob` commits to `commitment` by recomputing its KZG commitment.
+fn verify_blob_commitment(
+    kzg_settings: &c_kzg::KzgSettings,
+    blob: &HeapBlob,
+    commitment: &KzgCommitment,
+) -> std::result::Result<(), String> {
+    let blob = c_kzg::Blob::from_bytes(blob.inner()).map_err(|err| err.to_string())?;
+    let computed = kzg_settings
+        .blob_to_kzg_commitment(&blob)
+        .map_err(|err| err.to_string())?;
+    if *computed.to_bytes() != commitment.0 {
+        return Err(format!(
+            "its KZG commitment is 0x{}, not {commitment}",
+            computed.as_hex_string()
+        ));
+    }
+    Ok(())
 }
 
 impl Node {
@@ -164,6 +183,8 @@ impl Node {
     }
 
     /// Fetch beacon blob sidecars for a slot and retain only requested versioned hashes.
+    /// Fails with `Inconsistent` when a fetched blob does not match its block commitment, so
+    /// the slot is fetched again.
     async fn get_blobs(
         &self,
         slot: u32,
@@ -203,14 +224,26 @@ impl Node {
         );
 
         blobs.reverse();
-        let mut blob_map = HashMap::new();
-        for (vh, _) in block_kzg_blob_commitments {
-            if versioned_hashes.contains(vh) {
-                blob_map.insert(*vh, blobs.pop().expect("not empty"));
+        let block_kzg_blob_commitments = block_kzg_blob_commitments.to_vec();
+        let versioned_hashes = versioned_hashes.to_vec();
+        tokio::task::spawn_blocking(move || {
+            let kzg_settings = EnvKzgSettings::Default.get();
+            let mut blob_map = HashMap::new();
+            for (vh, commitment) in &block_kzg_blob_commitments {
+                if versioned_hashes.contains(vh) {
+                    let blob = blobs.pop().expect("not empty");
+                    verify_blob_commitment(kzg_settings, &blob, commitment).map_err(|reason| {
+                        Inconsistent {
+                            what: format!("blob {vh} of slot {slot}"),
+                            reason,
+                        }
+                    })?;
+                    blob_map.insert(*vh, blob);
+                }
             }
-        }
-
-        Ok(blob_map)
+            Ok(blob_map)
+        })
+        .await?
     }
 
     pub(crate) async fn get_beacon_block(&self, beacon_block_root: B256) -> Result<Block> {
@@ -531,5 +564,31 @@ impl Node {
                 &processed.tx_statuses,
             )
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy::eips::eip4844::BYTES_PER_BLOB;
+
+    use super::*;
+
+    #[test]
+    fn test_verify_blob_commitment() {
+        let kzg_settings = EnvKzgSettings::Default.get();
+        let mut bytes = vec![0u8; BYTES_PER_BLOB];
+        bytes[1] = 7;
+        let blob = HeapBlob::new(&bytes).unwrap();
+        let commitment = KzgCommitment::from(
+            *kzg_settings
+                .blob_to_kzg_commitment(&c_kzg::Blob::from_bytes(&bytes).unwrap())
+                .unwrap()
+                .to_bytes(),
+        );
+        assert!(verify_blob_commitment(kzg_settings, &blob, &commitment).is_ok());
+
+        bytes[1] = 8;
+        let other_blob = HeapBlob::new(&bytes).unwrap();
+        assert!(verify_blob_commitment(kzg_settings, &other_blob, &commitment).is_err());
     }
 }
