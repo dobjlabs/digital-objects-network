@@ -180,7 +180,7 @@ their entries know about bitcraft:
   fixed string in the page; dobjd and the plugin manifest report no game
   version.
 - **BIT/sec** (top bar and window title): how much the Total Inventory Value grew over the last `VALUE_RATE_WINDOW_MS` (5 minutes), divided by the full window, from samples of it taken on every inventory change; the value before the first sample counts as that sample's, so a new session's first gains do not spike. A rate that rounds to 0.00 is not shown. Since crafting converts value rather than creating it, this is in effect the player's production rate. Generic behavior: no rate.
-- **Total Inventory Value** (top bar, window title and Inventory Summary): the summed Total Bit Value of live bitcraft objects (pending ones are left out); see below. The Inventory Summary also shows each class's summed value beside its count, and hovering an object row shows that object's value in a tooltip. Valuation tables live in `inventory-values.json`, shared by the browser and native host. In the desktop main window, total value and five-minute rate come from the native inventory metrics service through the read-only `inventory_metrics` command. The service runs while the window is hidden and sharing is off, and clears its metrics and rate history on stream failure or gaps before resnapshotting. The standalone browser calculates its own totals and retains samples in session storage. Discord shows the native metrics when sharing is enabled, including zero and negative rates.
+- **Total Inventory Value** (top bar, window title and Inventory Summary): the summed Total Bit Value of live bitcraft objects (pending ones are left out); see below. The Inventory Summary also shows each class's summed value beside its count, and hovering an object row shows that object's value in a tooltip. Valuation tables live in `inventory-values.json`, shared by the browser and native host. In the desktop, per-object values, per-class counts and totals, total value and five-minute rate come from the native inventory metrics service through the read-only `inventory_metrics` command. The toolbar, Inventory Summary and object tooltips consume these native values; desktop views do not run the browser calculator or load its valuation tables. Only the main game window and host-created Inventory Summary windows may read the native snapshot. The service runs while the window is hidden and sharing is off, and clears its metrics and rate history on stream failure or gaps before resnapshotting. The standalone browser calculates its own totals and retains samples in session storage. Discord shows the native metrics when sharing is enabled, including zero and negative rates.
 - **Inventory Summary icon:** `SUMMARY_ICON_CLASS` (`Bit`), the class whose
   art heads the window, since it totals the inventory in bits.
 - **Website and Discord links:** `BITCRAFT_SITE_URL` and
@@ -202,7 +202,7 @@ An object's Total Bit Value is the raw resources spent to make it, each
 counted at the rate its `BitsFrom*` recipe pays: Wood 1, Stone 2, Iron 5.
 A Bit is worth 1. The values are worked out by hand from `../../../examples/bitcraft/plugin.rhai`
 and hardcoded (`TOTAL_BIT_VALUES`, `BUCKET_CONTENT_BIT_VALUES`,
-`LEVELED_TOTAL_BIT_VALUES` in `index.html`). Recompute them whenever a
+`LEVELED_TOTAL_BIT_VALUES` in `inventory-values.json`). Recompute them whenever a
 recipe's inputs or outputs change.
 
 | Class | Total Bit Value | Made from |

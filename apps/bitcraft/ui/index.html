@@ -1072,8 +1072,16 @@
     if (!window.bitcraftDesktop) return;
     try {
       desktopMetrics = await window.__TAURI__.core.invoke("inventory_metrics");
-    } catch { desktopMetrics = null; }
-    renderInventoryMetrics(desktopMetrics?.totalBits ?? null, desktopMetrics?.bitsPerSecond ?? null);
+      desktopMetricsError = null;
+    } catch (error) {
+      const message = String(error);
+      if (message !== desktopMetricsError) console.warn("Could not read native inventory metrics:", error);
+      desktopMetricsError = message;
+      desktopMetrics = null;
+    }
+    if (!rowTooltip.hidden && rowTooltipFileName !== null) rowTooltip.textContent = rowTooltipText(rowTooltipFileName);
+    if (isSummaryWindow) renderSummary(desktopMetrics);
+    else renderInventoryMetrics(desktopMetrics?.totalBits ?? null, desktopMetrics?.bitsPerSecond ?? null);
   }
 
   const STARTUP_RUN_STORAGE_KEY = "bitcraft.startup-pocketknife-run";
@@ -1369,6 +1377,7 @@
   // Pending while the pointer rests on a row, and the pointer's last event.
   let rowTooltipTimer = null;
   let rowTooltipPointer = null;
+  let rowTooltipFileName = null;
   const recipeList = document.getElementById("recipe-list");
   const recipeDetailsBody = document.getElementById("recipe-details-body");
   let recipeActions = [];
@@ -2752,7 +2761,14 @@
     document.title = "Bitcraft Inventory Summary";
     summaryView.hidden = false;
     await Promise.all([Presentation.load(), loadInventoryValues()]);
-    inventory = watchInventory(renderSummary);
+    if (window.bitcraftDesktop) {
+      await readDesktopMetrics();
+      const timer = setInterval(readDesktopMetrics, 1000);
+      window.addEventListener("focus", readDesktopMetrics);
+      window.addEventListener("beforeunload", () => clearInterval(timer));
+      return;
+    }
+    inventory = watchInventory((objects) => renderSummary(browserInventoryTotals(objects)));
     try {
       await inventory.reload();
     } catch (error) {
@@ -2763,19 +2779,28 @@
     }
   }
 
-  // Counts this plugin's live objects only, the ones the list shows.
-  function renderSummary(objects) {
-    const liveObjects = objects.filter(isLive);
-    const pluginObjects = liveObjects.filter((object) => object.class.pluginName === PLUGIN_NAME);
-    const totalValue = pluginObjects.reduce((sum, object) => sum + totalBitValue(object), 0);
+  function browserInventoryTotals(objects) {
     const classes = new Map();
-    for (const object of pluginObjects) {
-      const className = qualifiedClassName(object.class);
-      const entry = classes.get(className) ?? { qualifiedName: object.class, count: 0, value: 0 };
+    let totalBits = 0;
+    for (const object of objects.filter((object) => isLive(object) && object.class.pluginName === PLUGIN_NAME)) {
+      const name = object.class.name;
+      const value = browserObjectValue(object);
+      const entry = classes.get(name) ?? { count: 0, totalBits: 0 };
       entry.count++;
-      entry.value += totalBitValue(object);
-      classes.set(className, entry);
+      entry.totalBits += value;
+      classes.set(name, entry);
+      totalBits += value;
     }
+    return { totalBits, classes: Object.fromEntries(classes) };
+  }
+
+  function renderSummary(metrics) {
+    const totalValue = metrics?.totalBits ?? null;
+    const classes = new Map(Object.entries(metrics?.classes ?? {}).map(([name, entry]) => {
+      const qualifiedName = { pluginName: PLUGIN_NAME, name };
+      return [qualifiedClassName(qualifiedName), { qualifiedName, count: entry.count, value: entry.totalBits }];
+    }));
+    const objectCount = [...classes.values()].reduce((sum, entry) => sum + entry.count, 0);
     const wasOpen = new Map([...summaryView.querySelectorAll("details[data-section]")]
       .map((section) => [section.dataset.section, section.open]));
 
@@ -2799,7 +2824,7 @@
     title.textContent = "Inventory";
     const total = document.createElement("span");
     total.className = "summary-total";
-    total.textContent = formatBitValue(totalValue);
+    total.textContent = totalValue === null ? "Unavailable" : formatBitValue(totalValue);
     titleRow.append(title, total);
     heading.append(titleRow);
     header.append(iconTile, heading);
@@ -2832,14 +2857,14 @@
       return details;
     };
     const classNames = [...classes.keys()].sort((left, right) => left.localeCompare(right));
-    const byClass = section("classes", `Objects (${pluginObjects.length.toLocaleString()}):`, classNames.map((className) => {
+    const byClass = section("classes", `Objects (${objectCount.toLocaleString()}):`, classNames.map((className) => {
       const { qualifiedName, count: classCount, value } = classes.get(className);
       return [[classLabel(qualifiedName), ":"], classCount.toLocaleString(), formatBitValue(value)];
     }), 2);
     if (classNames.length === 0) {
       const none = document.createElement("p");
       none.className = "summary-subtitle";
-      none.textContent = "No objects yet.";
+      none.textContent = metrics === null ? "Inventory unavailable." : "No objects yet.";
       byClass.append(none);
     }
     summaryView.replaceChildren(header, byClass);
@@ -3402,7 +3427,9 @@
   // that is not an object.
   function rowTooltipText(fileName) {
     const object = objectsByFileName.get(fileName);
-    return object?.class ? formatBitValue(totalBitValue(object)) : "";
+    if (!object?.class) return "";
+    const value = window.bitcraftDesktop ? desktopMetrics?.objectValues?.[fileName] : browserObjectValue(object);
+    return value == null ? "Unavailable" : formatBitValue(value);
   }
 
   // Shown once the pointer has rested on the row for `ROW_TOOLTIP_DELAY_MS`,
@@ -3414,9 +3441,10 @@
       return;
     }
     rowTooltipPointer = event;
+    rowTooltipFileName = fileName;
     rowTooltipTimer = setTimeout(() => {
       rowTooltipTimer = null;
-      rowTooltip.textContent = text;
+      rowTooltip.textContent = rowTooltipText(fileName);
       rowTooltip.hidden = false;
       placeRowTooltip(rowTooltipPointer);
     }, ROW_TOOLTIP_DELAY_MS);
@@ -3446,6 +3474,7 @@
   function hideRowTooltip() {
     clearTimeout(rowTooltipTimer);
     rowTooltipTimer = null;
+    rowTooltipFileName = null;
     rowTooltip.hidden = true;
   }
 
@@ -3904,7 +3933,7 @@
   }
 
   // An object whose class has no value listed is worth nothing.
-  function totalBitValue(object) {
+  function browserObjectValue(object) {
     const className = object.class.name;
     const valuesByLevel = LEVELED_TOTAL_BIT_VALUES[className];
     if (valuesByLevel !== undefined) {
@@ -3930,8 +3959,10 @@
   let valueSamples = window.bitcraftDesktop ? [] : readValueSamples();
   let latestInventoryValue = null;
   let desktopMetrics = null;
+  let desktopMetricsError = null;
 
   async function loadInventoryValues() {
+    if (window.bitcraftDesktop) return;
     const response = await fetch(new URL("inventory-values.json", document.baseURI).href);
     if (!response.ok) throw new Error("Could not load inventory values");
     ({ TOTAL_BIT_VALUES, BUCKET_CONTENT_BIT_VALUES, LEVELED_TOTAL_BIT_VALUES, FULL_DURABILITY } = await response.json());
@@ -3978,13 +4009,11 @@
   // which the desktop app shows in its title bar. A rate that rounds to
   // 0.00 is left out of both.
   function updateInventoryMetrics() {
-    if (latestInventoryValue === null) {
-      return;
-    }
     if (window.bitcraftDesktop) {
       void readDesktopMetrics();
       return;
     }
+    if (latestInventoryValue === null) return;
     renderInventoryMetrics(latestInventoryValue, valueRate(Date.now()));
   }
 
@@ -4002,10 +4031,13 @@
   }
 
   function updateInventoryValue() {
-    const totalValue = liveListedObjects().reduce((sum, object) => sum + totalBitValue(object), 0);
-    recordValueSample(totalValue);
-    if (window.bitcraftDesktop) void readDesktopMetrics();
-    else document.getElementById("inventory-value-amount").textContent = formatBitValue(totalValue);
+    if (window.bitcraftDesktop) {
+      void readDesktopMetrics();
+    } else {
+      const totalValue = liveListedObjects().reduce((sum, object) => sum + browserObjectValue(object), 0);
+      recordValueSample(totalValue);
+      document.getElementById("inventory-value-amount").textContent = formatBitValue(totalValue);
+    }
     const icon = document.getElementById("inventory-value-icon");
     const iconPath = Presentation.classInfo({ pluginName: PLUGIN_NAME, name: SUMMARY_ICON_CLASS }).icon;
     if (iconPath && icon.getAttribute("src") !== iconPath) {

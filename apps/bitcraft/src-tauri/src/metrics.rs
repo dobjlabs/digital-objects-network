@@ -2,17 +2,28 @@ use anyhow::{Context, Result};
 use bitcraft_launchers::Connection;
 use serde_json::Value;
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     time::{Duration, Instant},
 };
 use tokio::sync::watch;
 
 use serde::{Deserialize, Serialize};
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct InventoryMetrics {
     pub total_bits: f64,
     pub bits_per_second: f64,
+    #[serde(default)]
+    pub object_values: BTreeMap<String, f64>,
+    #[serde(default)]
+    pub classes: BTreeMap<String, ClassMetrics>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ClassMetrics {
+    pub count: usize,
+    pub total_bits: f64,
 }
 
 impl InventoryMetrics {
@@ -42,6 +53,7 @@ impl Samples {
         InventoryMetrics {
             total_bits: total,
             bits_per_second: (total - self.0[0].1) / WINDOW.as_secs_f64(),
+            ..Default::default()
         }
     }
 }
@@ -90,11 +102,28 @@ fn publish(
     samples: &mut Samples,
     sender: &watch::Sender<Option<InventoryMetrics>>,
 ) -> Result<()> {
-    let total = objects
-        .values()
-        .map(|object| object_value(object, rules))
-        .sum();
-    let metrics = samples.update(Instant::now(), total);
+    let mut object_values = BTreeMap::new();
+    let mut classes = BTreeMap::<String, ClassMetrics>::new();
+    for (file_name, object) in objects {
+        if object["status"] != "live" || object["class"]["pluginName"] != "bitcraft" {
+            continue;
+        }
+        let name = object["class"]["name"]
+            .as_str()
+            .context("Object has no class name")?;
+        let value = object_value(object, rules);
+        anyhow::ensure!(
+            value.is_finite() && value >= 0.0,
+            "Invalid object inventory value"
+        );
+        object_values.insert(file_name.clone(), value);
+        let class = classes.entry(name.to_owned()).or_default();
+        class.count += 1;
+        class.total_bits += value;
+    }
+    let mut metrics = samples.update(Instant::now(), object_values.values().sum());
+    metrics.object_values = object_values;
+    metrics.classes = classes;
     metrics.validate()?;
     sender.send_replace(Some(metrics));
     Ok(())
@@ -117,7 +146,7 @@ pub async fn run(connection: Connection, sender: watch::Sender<Option<InventoryM
         let result = follow(&connection, &client, &stream_client, &rules, &sender).await;
         sender.send_replace(None);
         if let Err(error) = result {
-            eprintln!("Inventory metrics unavailable: {error}");
+            eprintln!("Inventory metrics unavailable: {error:#}");
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
@@ -270,13 +299,14 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(receiver.borrow().unwrap().total_bits, 0.0);
+        assert_eq!(receiver.borrow().as_ref().unwrap().total_bits, 0.0);
         events.send(json!({"seq":1,"type":"object","fileName":"bit.dobj","class":{"pluginName":"bitcraft","name":"Bit"},"status":"live","fields":{"kvs":[]}})).unwrap();
         tokio::time::timeout(Duration::from_secs(3), async {
             loop {
                 receiver.changed().await.unwrap();
                 if receiver
                     .borrow()
+                    .as_ref()
                     .is_some_and(|metrics| metrics.total_bits == 1.0)
                 {
                     break;
@@ -300,6 +330,38 @@ mod tests {
         .unwrap();
         task.abort();
         server.abort();
+    }
+
+    #[test]
+    fn native_snapshot_groups_only_live_bitcraft_objects_and_includes_zero_values() {
+        let rules = serde_json::from_str(include_str!("../../ui/inventory-values.json")).unwrap();
+        let mut objects = HashMap::new();
+        for (file, class, status, plugin) in [
+            ("knife", "Pocketknife", "live", "bitcraft"),
+            ("wood1", "Wood", "live", "bitcraft"),
+            ("wood2", "Wood", "live", "bitcraft"),
+            ("pending", "Iron", "pending", "bitcraft"),
+            ("other", "Wood", "live", "other"),
+        ] {
+            objects.insert(file.into(), json!({"class":{"pluginName":plugin,"name":class},"status":status,"fields":{"kvs":[]}}));
+        }
+        let (sender, receiver) = watch::channel(None);
+        publish(&objects, &rules, &mut Samples::default(), &sender).unwrap();
+        let snapshot = receiver.borrow().clone().unwrap();
+        assert_eq!(snapshot.total_bits, 2.0);
+        assert_eq!(snapshot.object_values.len(), 3);
+        assert_eq!(snapshot.object_values["knife"], 0.0);
+        assert_eq!(snapshot.classes["Pocketknife"].total_bits, 0.0);
+        assert_eq!(snapshot.classes["Wood"].count, 2);
+        assert_eq!(snapshot.classes["Wood"].total_bits, 2.0);
+        assert_eq!(
+            snapshot
+                .classes
+                .values()
+                .map(|class| class.total_bits)
+                .sum::<f64>(),
+            snapshot.total_bits
+        );
     }
 
     #[test]

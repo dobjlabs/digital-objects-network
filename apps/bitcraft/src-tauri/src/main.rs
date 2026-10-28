@@ -167,10 +167,25 @@ fn show_page_title(window: tauri::WebviewWindow, title: String) {
 fn inventory_metrics<R: tauri::Runtime>(
     window: tauri::WebviewWindow<R>,
 ) -> Result<Option<discord::InventoryMetrics>, String> {
-    if window.label() != "main" || !window.url().is_ok_and(|url| is_daemon_url(&url)) {
-        return Err("Inventory metrics must be read from the main game window".into());
+    if !window.url().is_ok_and(|url| {
+        is_daemon_url(&url)
+            && url.path().starts_with("/bitcraft/")
+            && (window.label() == "main"
+                || window.label().starts_with("page-")
+                    && url
+                        .query_pairs()
+                        .any(|(key, value)| key == "page" && value == "summary"))
+    }) {
+        return Err(
+            "Inventory metrics must be read from a game or inventory summary window".into(),
+        );
     }
-    Ok(*window.state::<Desktop>().discord.metrics_sender().borrow())
+    Ok(window
+        .state::<Desktop>()
+        .discord
+        .metrics_sender()
+        .borrow()
+        .clone())
 }
 
 fn shell_dev_url(app: &tauri::AppHandle) -> Option<tauri::Url> {
@@ -456,15 +471,12 @@ mod tests {
             .expect("inventory metrics capability must exist");
         assert_eq!(
             capability["remote"]["urls"],
-            serde_json::json!([format!(
-                "http://127.0.0.1:{}/bitcraft/*",
-                runtime::HTTP_PORT
-            )])
+            serde_json::json!([format!("http://127.0.0.1:{}/*", runtime::HTTP_PORT)])
         );
     }
 
     #[test]
-    fn inventory_metrics_command_is_read_only_and_scoped_to_the_main_game() {
+    fn inventory_metrics_command_is_read_only_and_scoped_to_inventory_views() {
         let home = tempfile::tempdir().unwrap();
         let desktop = Desktop {
             home: home.path().to_path_buf(),
@@ -477,6 +489,14 @@ mod tests {
             #[cfg(target_os = "linux")]
             background_pending: AtomicBool::new(false),
         };
+        desktop
+            .discord
+            .metrics_sender()
+            .send_replace(Some(discord::InventoryMetrics {
+                total_bits: 0.0,
+                bits_per_second: 0.0,
+                ..Default::default()
+            }));
         let app = tauri::test::mock_builder()
             .manage(desktop)
             .invoke_handler(tauri::generate_handler![inventory_metrics])
@@ -504,15 +524,39 @@ mod tests {
                 },
             )
         };
-        assert!(invoke(&main, game_url.clone()).is_ok());
-        assert!(invoke(&secondary, game_url).is_err());
+        let origin: tauri::Url = format!("http://127.0.0.1:{}/", runtime::HTTP_PORT)
+            .parse()
+            .unwrap();
+        assert_eq!(
+            invoke(&main, origin.clone())
+                .unwrap()
+                .deserialize::<serde_json::Value>()
+                .unwrap(),
+            serde_json::json!({"totalBits": 0.0, "bitsPerSecond": 0.0, "objectValues": {}, "classes": {}})
+        );
+        assert!(invoke(&secondary, origin.clone()).is_err());
+        secondary
+            .navigate(game_url.join("?page=summary").unwrap())
+            .unwrap();
+        assert!(invoke(&secondary, origin.clone()).is_ok());
+        secondary
+            .navigate(game_url.join("?page=settings").unwrap())
+            .unwrap();
+        assert!(invoke(&secondary, origin.clone()).is_err());
         for url in [
-            "http://127.0.0.1:7727/objects/a.dobj/raw",
-            "http://127.0.0.1:7717/bitcraft/",
-            "https://example.com/bitcraft/",
+            "http://127.0.0.1:7717/",
+            "https://example.com/",
             "tauri://localhost/index.html",
         ] {
             assert!(invoke(&main, url.parse().unwrap()).is_err(), "{url}");
+        }
+        for url in [
+            "http://127.0.0.1:7727/",
+            "http://127.0.0.1:7727/objects/a.dobj/raw",
+            "http://127.0.0.1:7727/bitcraft-other/",
+        ] {
+            main.navigate(url.parse().unwrap()).unwrap();
+            assert!(invoke(&main, origin.clone()).is_err(), "{url}");
         }
     }
 

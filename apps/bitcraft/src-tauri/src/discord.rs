@@ -420,6 +420,7 @@ mod tests {
         let value = InventoryMetrics {
             total_bits: 123.45,
             bits_per_second: 0.37,
+            ..Default::default()
         };
         let busy = activity(&[], 42, Some(&value));
         assert!(!updates.due(start + Duration::from_secs(14), &busy));
@@ -445,6 +446,7 @@ mod tests {
             let metrics = InventoryMetrics {
                 total_bits: 0.0,
                 bits_per_second: value,
+                ..Default::default()
             };
             assert_eq!(
                 activity(&[], 42, Some(&metrics))["state"],
@@ -454,6 +456,7 @@ mod tests {
         let large = InventoryMetrics {
             total_bits: f64::MAX,
             bits_per_second: -f64::MAX,
+            ..Default::default()
         };
         large.validate().unwrap();
         assert!(
@@ -598,6 +601,7 @@ mod tests {
         let (_metrics_sender, inventory_metrics) = watch::channel(Some(InventoryMetrics {
             total_bits: 31.0,
             bits_per_second: 0.37,
+            ..Default::default()
         }));
         let online = Arc::new(AtomicBool::new(false));
         let discord_online = online.clone();
@@ -682,6 +686,7 @@ mod tests {
         let (inventory_sender, inventory_receiver) = watch::channel(Some(InventoryMetrics {
             total_bits: 12.5,
             bits_per_second: 0.25,
+            ..Default::default()
         }));
         let task = tokio::spawn(worker(
             connection,
@@ -716,6 +721,7 @@ mod tests {
         inventory_sender.send_replace(Some(InventoryMetrics {
             total_bits: 100.125,
             bits_per_second: -0.5,
+            ..Default::default()
         }));
         sharing.send_replace(Some(true));
         let second = tokio::time::timeout(Duration::from_secs(20), activities.recv())
