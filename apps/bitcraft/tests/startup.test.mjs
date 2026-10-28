@@ -986,30 +986,30 @@ const valueSamples = (...samples) => ({
 });
 
 test("BIT/sec shows how fast the inventory's value grew over the last 5 minutes", async (context) => {
-  // A level 3 quarry is worth 300; the inventory was worth nothing 10 minutes
-  // ago, so over the 5-minute window it grew 300 BIT in 300 seconds.
+  // A level 3 quarry is worth 280; the inventory was worth 10 BIT 10 minutes
+  // ago, so over the 5-minute window it grew 270 BIT in 300 seconds.
   const ui = await page(context, {
-    objects: [knife(), quarry(3)], sessionStorage: valueSamples([600000, 0]),
+    objects: [knife(), quarry(3)], sessionStorage: valueSamples([600000, 10]),
   });
   const rate = () => ui.document.querySelector("#inventory-rate").textContent;
-  assert.equal(rate(), "1.00 BIT/sec");
-  assert.equal(ui.document.title, "Bitcraft (300.00 BIT - 1.00 BIT/sec)");
+  assert.equal(rate(), "0.90 BIT/sec");
+  assert.equal(ui.document.title, "Bitcraft (280.00 BIT - 0.90 BIT/sec)");
   const ticks = [...ui.timers.values()].filter((timer) => timer.delay === 1000);
   assert.ok(ticks.length > 0, "the rate is refreshed every second");
 
   const stored = JSON.parse(ui.dom.window.sessionStorage.getItem("bitcraft.inventory-value-samples"));
-  assert.deepEqual(stored.map((sample) => sample.value), [0, 300], "the samples are kept for a reload");
+  assert.deepEqual(stored.map((sample) => sample.value), [10, 280], "the samples are kept for a reload");
 });
 
 test("BIT/sec counts only the window, and can fall", async (context) => {
-  // 200 BIT 8 minutes ago is the value the window starts from; 400 a minute
-  // ago, 300 now: 100 BIT more over 300 seconds.
+  // 190 BIT 8 minutes ago is the value the window starts from; 400 a minute
+  // ago, 280 now: 90 BIT more over 300 seconds.
   const ui = await page(context, {
-    objects: [knife(), quarry(3)], sessionStorage: valueSamples([900000, 0], [480000, 200], [60000, 400]),
+    objects: [knife(), quarry(3)], sessionStorage: valueSamples([900000, 0], [480000, 190], [60000, 400]),
   });
-  assert.equal(ui.document.querySelector("#inventory-rate").textContent, "0.33 BIT/sec");
+  assert.equal(ui.document.querySelector("#inventory-rate").textContent, "0.30 BIT/sec");
   const fell = await page(context, {
-    objects: [knife(), quarry(3)], sessionStorage: valueSamples([600000, 450]),
+    objects: [knife(), quarry(3)], sessionStorage: valueSamples([600000, 430]),
   });
   assert.equal(fell.document.querySelector("#inventory-rate").textContent, "-0.50 BIT/sec");
 });
@@ -1019,15 +1019,15 @@ test("BIT/sec always averages over 5 minutes, and a 0.00 rate is not shown", asy
   const rateShown = (page) => !page.document.querySelector("#inventory-rate").hidden
     && !page.document.querySelector("#inventory-rate-divider").hidden;
   assert.equal(rateShown(ui), false, "with one sample nothing has grown, and a 0.00 rate is not shown");
-  assert.equal(ui.document.title, "Bitcraft (300.00 BIT)");
-  // 270 BIT ten seconds ago, 300 now: 30 BIT more, spread over 300 seconds
+  assert.equal(ui.document.title, "Bitcraft (280.00 BIT)");
+  // 250 BIT ten seconds ago, 280 now: 30 BIT more, spread over 300 seconds
   // rather than 10.
   const recent = await page(context, {
-    objects: [knife(), quarry(3)], sessionStorage: valueSamples([10000, 270]),
+    objects: [knife(), quarry(3)], sessionStorage: valueSamples([10000, 250]),
   });
   assert.equal(recent.document.querySelector("#inventory-rate").textContent, "0.10 BIT/sec");
   assert.equal(rateShown(recent), true);
-  assert.equal(recent.document.title, "Bitcraft (300.00 BIT - 0.10 BIT/sec)");
+  assert.equal(recent.document.title, "Bitcraft (280.00 BIT - 0.10 BIT/sec)");
 });
 
 test("the summary icon opens the Inventory Summary in one window", async (context) => {
