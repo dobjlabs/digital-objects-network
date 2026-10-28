@@ -18,16 +18,18 @@ use alloy::{
     rpc::types::BlockTransactionsKind,
 };
 use alloy_provider::{Provider, RootProvider};
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use backoff::ExponentialBackoffBuilder;
 use chrono::{DateTime, Utc};
 use pod2::middleware::Hash;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::config::AppConfig;
 use crate::don_state::{DonState, ExecutionBlock};
 use crate::state_log_db::StateLogDb;
-use crate::state_machine::{DerivedSlot, StateMachine, MAX_STATE_ROOT_AGE_BLOCKS};
+use crate::state_machine::{
+    BlobStatus, DerivedSlot, StateMachine, TargetTx, TxStatus, MAX_STATE_ROOT_AGE_BLOCKS,
+};
 
 /// Runtime integration layer that connects network inputs (beacon/execution),
 /// pure state derivation (`StateMachine`), and the state log (`StateLogDb`).
@@ -47,9 +49,9 @@ pub(crate) struct SlotContext {
     /// `None` when no payload becomes canonical with this block, which from Gloas on happens
     /// when its bid does not build on the parent's payload (withheld or not revealed in time).
     payload: Option<CanonicalPayload>,
-    /// Decoded target blobs of `payload`, each with its index among the committing block's
-    /// blobs. Empty without a payload.
-    blob_payloads: Vec<(u32, Vec<u8>)>,
+    /// Target transactions of `payload` with their decoded blobs; a blob that failed to decode
+    /// is `None`. Empty without a payload.
+    target_txs: Vec<TargetTx<Vec<u8>>>,
 }
 
 /// An execution payload that becomes canonical with a slot's block, together with the beacon
@@ -74,6 +76,8 @@ pub struct ProcessedSlot {
     pub block_root: Option<B256>,
     /// `None` when no execution block became canonical with the slot.
     pub derived: Option<DerivedSlot>,
+    /// Status of each target transaction of the slot's execution block.
+    pub tx_statuses: Vec<TxStatus>,
 }
 
 impl Node {
@@ -314,7 +318,7 @@ impl Node {
         &self,
         slot: u32,
         payload: &CanonicalPayload,
-    ) -> Result<Vec<(u32, Vec<u8>)>> {
+    ) -> Result<Vec<TargetTx<Vec<u8>>>> {
         if payload.target_blob_txs.is_empty() {
             debug!(
                 slot,
@@ -339,21 +343,31 @@ impl Node {
             )
             .await?;
 
-        let mut blob_payloads = Vec::new();
+        let mut target_txs = Vec::with_capacity(payload.target_blob_txs.len());
         for tx in &payload.target_blob_txs {
+            let mut blob_payloads = Vec::with_capacity(tx.versioned_hashes.len());
+            let mut blob_statuses = Vec::with_capacity(tx.versioned_hashes.len());
             for vh in &tx.versioned_hashes {
                 let blob_index = payload
                     .kzg_blob_commitments
                     .iter()
                     .position(|(vh0, _)| vh0 == vh)
                     .expect("vh exists");
-                let bytes =
-                    payload::blob::decode_simple_blob(blobs[vh].inner()).with_context(|| {
-                        format!(
-                            "Invalid byte encoding in blob at slot {slot}, blob_index {blob_index}"
-                        )
-                    })?;
-                blob_payloads.push((blob_index as u32, bytes));
+                let bytes = match payload::blob::decode_simple_blob(blobs[vh].inner()) {
+                    Ok(bytes) => bytes,
+                    Err(err) => {
+                        let error = format!("Invalid byte encoding: {err}");
+                        warn!(slot, blob_index, tx_hash = ?tx.tx_hash, "Skipped blob: {error}");
+                        blob_payloads.push(None);
+                        blob_statuses.push(BlobStatus {
+                            error: Some(error),
+                            ..Default::default()
+                        });
+                        continue;
+                    }
+                };
+                blob_payloads.push(Some((blob_index as u32, bytes)));
+                blob_statuses.push(BlobStatus::default());
                 info!(
                     slot,
                     blob_index = blob_index,
@@ -361,8 +375,15 @@ impl Node {
                     "Decoded target blob"
                 );
             }
+            target_txs.push(TargetTx {
+                blobs: blob_payloads,
+                status: TxStatus {
+                    tx_hash: tx.tx_hash,
+                    blobs: blob_statuses,
+                },
+            });
         }
-        Ok(blob_payloads)
+        Ok(target_txs)
     }
 
     /// Make every network call needed to derive the slot of `beacon_block`. `prev_block`
@@ -377,7 +398,7 @@ impl Node {
         let payload = self
             .canonical_payload(beacon_block_header, beacon_block, prev_block)
             .await?;
-        let blob_payloads = match &payload {
+        let target_txs = match &payload {
             Some(payload) => self.fetch_target_blobs(slot, payload).await?,
             None => Vec::new(),
         };
@@ -385,13 +406,13 @@ impl Node {
             slot,
             beacon_block_root: beacon_block_header.root,
             payload,
-            blob_payloads,
+            target_txs,
         })
     }
 
     /// Parse the slot's blobs, prefetch the array positions of their created
     /// commitments that already exist in committed state, and derive the next
-    /// state.
+    /// state, returning it with the status of each target transaction.
     ///
     /// The prefetch is one batched query against the created index, mirroring how
     /// `recent_state_roots` is prefetched, so the state machine never has to query the
@@ -403,24 +424,30 @@ impl Node {
         recent_state_roots: Vec<(Hash, i64)>,
         slot: u32,
         block: ExecutionBlock,
-        blob_payloads: &[(u32, Vec<u8>)],
-    ) -> Result<DerivedSlot> {
-        let parsed = self
+        target_txs: Vec<TargetTx<Vec<u8>>>,
+    ) -> Result<(DerivedSlot, Vec<TxStatus>)> {
+        let mut target_txs = self
             .state_machine
-            .parse_blobs(blob_payloads, slot, block.number);
-        let candidates: Vec<Hash> = parsed
+            .parse_blobs(target_txs, slot, block.number);
+        let candidates: Vec<Hash> = target_txs
             .iter()
+            .flat_map(|target_tx| target_tx.blobs.iter().flatten())
             .flat_map(|(_, payload)| payload.created.iter().copied())
             .collect();
         let prior_indices = self.state_log.created_indices(&candidates).await?;
-        self.state_machine.derive_slot_state(
+        let derived = self.state_machine.derive_slot_state(
             base_state,
             recent_state_roots,
             slot,
             block,
-            &parsed,
+            &mut target_txs,
             &prior_indices,
-        )
+        )?;
+        let tx_statuses = target_txs
+            .into_iter()
+            .map(|target_tx| target_tx.status)
+            .collect();
+        Ok((derived, tx_statuses))
     }
 
     /// Derive the slot from a fetched `SlotContext` against the committed state. Reads the
@@ -435,6 +462,7 @@ impl Node {
                 slot: slot_ctx.slot,
                 block_root: Some(slot_ctx.beacon_block_root),
                 derived: None,
+                tx_statuses: Vec::new(),
             });
         };
         let base_state = self.state_log.don_state_at_head().await?;
@@ -465,13 +493,13 @@ impl Node {
         });
         let recent_state_roots = self.state_log.recent_state_roots(min_block_number).await?;
 
-        let derived = self
+        let (derived, tx_statuses) = self
             .derive_slot(
                 base_state,
                 recent_state_roots,
                 slot_ctx.slot,
                 payload.execution_block,
-                &slot_ctx.blob_payloads,
+                slot_ctx.target_txs,
             )
             .await?;
 
@@ -479,11 +507,12 @@ impl Node {
             slot: slot_ctx.slot,
             block_root: Some(slot_ctx.beacon_block_root),
             derived: Some(derived),
+            tx_statuses,
         })
     }
 
     /// Commit one processed slot to Postgres as the new head state, writing
-    /// its created-index rows in the same transaction.
+    /// its created-index rows and transaction statuses in the same transaction.
     pub async fn commit_slot(&self, processed: &ProcessedSlot) -> Result<()> {
         // Only a derived state wrote Merkle nodes. Its roots are committed to Postgres next and
         // must not outlive those nodes in a crash, so they are synced to disk first.
@@ -495,6 +524,7 @@ impl Node {
                 processed.slot,
                 processed.block_root,
                 processed.derived.as_ref(),
+                &processed.tx_statuses,
             )
             .await
     }

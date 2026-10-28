@@ -1,6 +1,9 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use alloy::{eips::BlockHashOrNumber, primitives::Address};
+use alloy::{
+    eips::BlockHashOrNumber,
+    primitives::{Address, B256},
+};
 use anyhow::Result;
 use axum::{
     extract::{Path, State},
@@ -16,7 +19,7 @@ use wire_types::synchronizer::{
     GroundingWitnessRequest, GroundingWitnessResponse, MembershipRequest, MembershipResponse,
     NullifierContainsEntry, NullifierContainsRequest, NullifierContainsResponse,
     ObjectContainsEntry, ObjectContainsRequest, ObjectContainsResponse, ObjectProofResponse,
-    StateHeadResponse, SyncProgressResponse,
+    StateHeadResponse, SyncProgressResponse, TxStatusResponse,
 };
 use wire_types::HealthResponse;
 
@@ -66,6 +69,8 @@ pub async fn run_api_server(
             post(post_state_nullifier_contains),
         )
         .route("/v1/txlib/grounding-witness", post(post_grounding_witness))
+        .route("/v1/tx/by_hash/{tx_hash}", get(get_tx_status_by_tx_hash))
+        .route("/v1/tx/by_final/{tx_final}", get(get_tx_status_by_tx_final))
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(AppState {
             containers,
@@ -260,6 +265,52 @@ async fn post_grounding_witness(
             })
             .collect(),
     }))
+}
+
+/// `tx_hash` is a 32-byte Ethereum transaction hash in hex, `0x` prefix optional.
+async fn get_tx_status_by_tx_hash(
+    State(app_state): State<AppState>,
+    Path(tx_hash): Path<String>,
+) -> Result<Json<TxStatusResponse>, (StatusCode, String)> {
+    let parsed_tx_hash = tx_hash.parse::<B256>().map_err(|err| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("invalid transaction hash: {err}"),
+        )
+    })?;
+    let blobs = app_state
+        .state_log
+        .tx_statuses_by_tx_hash(parsed_tx_hash)
+        .await
+        .map_err(internal_error)?;
+    if blobs.is_empty() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("no committed transaction {tx_hash}"),
+        ));
+    }
+    Ok(Json(TxStatusResponse { blobs }))
+}
+
+/// `tx_final` is a `TxFinalized` commitment in hex, `0x` prefix optional.
+async fn get_tx_status_by_tx_final(
+    State(app_state): State<AppState>,
+    Path(tx_final): Path<String>,
+) -> Result<Json<TxStatusResponse>, (StatusCode, String)> {
+    let parsed_tx_final = payload::decode_hash_hex(&tx_final)
+        .map_err(|err| (StatusCode::BAD_REQUEST, format!("invalid tx_final: {err}")))?;
+    let blob = app_state
+        .state_log
+        .tx_status_by_tx_final(parsed_tx_final)
+        .await
+        .map_err(internal_error)?;
+    match blob {
+        Some(blob) => Ok(Json(TxStatusResponse { blobs: vec![blob] })),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            format!("no committed blob carries tx_final {tx_final}"),
+        )),
+    }
 }
 
 async fn load_membership(

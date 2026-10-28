@@ -217,6 +217,22 @@ Reorg rollback does not modify RocksDB. The surviving Postgres `DonState` determ
     - `nullifiersRoot`
     - `priorStateHistoryRoot`
     - `createdProofs` (array of `{ commitment, present, index, proof }`)
+- `GET /v1/tx/by_hash/{tx_hash}`
+  - `tx_hash` is a 32-byte Ethereum transaction hash in hex (`0x` prefix optional)
+  - returns `blobs`: one entry per blob of that transaction, in blob order, each with:
+    - `tx_hash`
+    - `tx_blob_index` (position of the blob within the transaction)
+    - `tx_final` (`null` when the blob did not parse as a `TxFinalized` proof)
+    - `error` (`null` when the blob was applied)
+    - `block_number`, `block_hash` (the execution block that included the transaction)
+  - `400` for a malformed `tx_hash`, `404` when no committed slot holds the transaction
+- `GET /v1/tx/by_final/{tx_final}`
+  - `tx_final` is a `TxFinalized` commitment in hex (`0x` prefix optional)
+  - returns `blobs` with a single entry, in the same format as `/v1/tx/by_hash`: the blob that
+    applied the transaction or, when none did, the most recently rejected blob carrying it.
+    Anyone can resubmit a published proof, so a rejected copy does not mean the transaction
+    failed.
+  - `400` for a malformed `tx_final`, `404` when no committed blob carries it
 
 Membership and grounding-witness requests read the head state and the
 created index from one `REPEATABLE READ` Postgres transaction, so the index
