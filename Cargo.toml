@@ -30,6 +30,7 @@ license = "MIT"
 pod2 = { git = "https://github.com/0xPARC/pod2", rev = "331a1145a8a5679a63058953464969fb960d9955", default-features = false, features = [
     "backend_plonky2",
     "disk_cache",
+    "gpu",
     "zk",
 ] }
 plonky2 = { git = "https://github.com/0xPARC/plonky2.git", rev = "60e32369b7b5c8f0ff1e44265005f7c3c3a0a04b" }
@@ -70,9 +71,14 @@ rand = { version = "0.9.2", features = ["std_rng"] }
 thiserror = "2.0.18"
 wire-types = { path = "libs/wire-types" }
 
-# Uncomment to use a local pod2 dependency
-# [patch."https://github.com/0xPARC/pod2"]
-# pod2 = { path = "../pod2" }
+# pod2 and plonky2 from the GPU forks (the gpu branches of robknight/pod2 and
+# robknight/plonky2). The plonky2 patch also covers the plonky2 that pod2 and
+# plonky2_u32 depend on, since patches in dependencies are ignored.
+[patch."https://github.com/0xPARC/pod2"]
+pod2 = { git = "https://github.com/robknight/pod2", rev = "52e14a99be6b2ec82b102b057095ca259a57312a" }
+
+[patch."https://github.com/0xPARC/plonky2"]
+plonky2 = { git = "https://github.com/robknight/plonky2", rev = "f115955af1fe0bd2064a18040db25205addbb965" }
 
 # Uncomment in order to enable debug information in the release builds.  This allows getting panic backtraces with a performance similar to regular release.
 # [profile.release]
