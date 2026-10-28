@@ -70,9 +70,14 @@ production implementation lives in
 | `list_classes`                                        | Object classes with live counts and producing/consuming actions                |
 | `inspect_object` / `inspect_class` / `inspect_action` | Full detail on one object / class / action, with predicate                     |
 | `check_feasibility`                                   | Whether an action can run with current objects; missing inputs                 |
-| `run_action`                                          | Start an action; returns a `runId` immediately (non-blocking)                  |
+| `start_run`                                          | Start an action; returns a `runId` immediately (non-blocking)                  |
 | `get_run`                                             | Poll a run's status, result/error, and progress log by `runId`                 |
 | `list_runs`                                           | Runs the daemon still holds, oldest first; `active_only` for in-progress runs  |
+| `start_proof_job`                                     | Prove and record an action; returns a `jobId` immediately                      |
+| `get_proof_job` / `list_proof_jobs`                    | Read or list retained proof jobs; a completed job identifies its transaction  |
+| `submit_transactions`                                | Submit recorded transactions to the relayer                                  |
+| `get_transaction` / `list_transactions`               | Read or list durable transaction records                                     |
+| `delete_transaction`                                 | Abandon a record before any submission attempt                               |
 | `get_state_root`                                      | Current state root from the synchronizer                                       |
 | `import_object_file`                                  | Adopt an external `.dobj` from a local path into objects                       |
 | `read_settings` / `write_settings`                    | Synchronizer + relayer URLs and the `mcpEnabled` toggle (partial writes merge) |

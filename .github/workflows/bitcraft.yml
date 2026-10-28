@@ -39,6 +39,15 @@ jobs:
           cargo build --locked --release
           xvfb-run -a dbus-run-session /usr/bin/python3 ../scripts/smoke_linux.py
 
+  presentation:
+    if: github.event.pull_request.draft == false
+    name: Presentation pack
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check the pack is generated from the copy, and test the generator
+        run: python3 examples/bitcraft/presentation/test_generate.py
+
   packaging-linux:
     if: github.event.pull_request.draft == false
     name: Linux AppImage packaging

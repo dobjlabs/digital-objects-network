@@ -5,8 +5,7 @@
 use std::path::PathBuf;
 
 use pod2::middleware::Hash;
-use serde::{Deserialize, Serialize};
-use wire_types::{ActionArgValues, ExecutionPhase, ObjectStatus, QualifiedName};
+use wire_types::{ActionArgValues, ExecutionPhase, ExecutionStage, ObjectStatus, QualifiedName};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverPaths {
@@ -15,6 +14,7 @@ pub struct DriverPaths {
     pub nullified_objects_dir: PathBuf,
     pub discarded_objects_dir: PathBuf,
     pub actions_dir: PathBuf,
+    pub transactions_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -43,21 +43,11 @@ pub struct ExecuteActionInput {
     pub args: ActionArgValues,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ExecuteActionResult {
-    pub old_root: Hash,
-    pub new_root: Hash,
-    pub output_files: Vec<String>,
-    pub nullified_files: Vec<String>,
-    pub relayer_job_id: String,
-    pub tx_hash: Option<String>,
-    pub block_number: Option<i64>,
-}
-
 /// Optional context passed alongside execution progress steps.
 #[derive(Debug, Clone, Default)]
 pub struct ExecutionStepContext {
+    /// Measured substage, independent of the broader proof/commit phase.
+    pub stage: Option<ExecutionStage>,
     /// The state root hash before this execution (available during Commit phase).
     pub old_root: Option<Hash>,
     /// Output files touched by this step, when the step corresponds to a
@@ -68,9 +58,12 @@ pub struct ExecutionStepContext {
     pub output_status: Option<ObjectStatus>,
 }
 
-pub trait ExecutionReporter {
+/// Cloned into SDK callbacks that outlive the borrowed execution context.
+pub trait ExecutionReporter: Clone + Send + Sync + 'static {
+    /// Called after acquiring inputs, before network requests or proving.
+    fn on_inputs_held(&self, _files: &[String]) {}
     fn on_step(&self, _phase: ExecutionPhase, _message: &str, _ctx: &ExecutionStepContext) {}
-    fn on_done(&self, _phase: ExecutionPhase, _result: Option<&ExecuteActionResult>) {}
+    fn on_done(&self, _phase: ExecutionPhase) {}
 }
 
 #[derive(Debug, Default, Clone, Copy)]

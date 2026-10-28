@@ -1,40 +1,35 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::{Arc, Mutex, RwLock, Weak};
 
 use anyhow::{Context, Result, anyhow};
 use payload::{decode_hash_hex, encode_hash_hex};
 use pod2::middleware::Hash;
 use sdk::SpendableObjects;
 use txlib::object_nullifier_hash;
+use wire_types::transactions::{TransactionRecord, TransactionState};
 
 use crate::catalog::{ActionCatalog, CatalogClass};
 use crate::clients::{
-    HttpRelayerClient, HttpSynchronizerClient, RELAYER_CONFIRM_TIMEOUT_SECS,
-    RELAYER_POLL_INTERVAL_MS, RELAYER_TX_HASH_TIMEOUT_SECS, RelayerClient,
-    SYNCHRONIZER_POLL_INTERVAL_MS, SYNCHRONIZER_POLL_TIMEOUT_SECS, SynchronizerClient,
+    HttpRelayerClient, HttpSynchronizerClient, RelayerClient, SynchronizerClient,
 };
 use crate::error::DriverError;
-use crate::execute::{
-    build_relayer_payload, decode_action_args, obj_type_hash, reconcile_objects, resolve_inputs,
-    save_results, update_output_files, validate_execute_request,
-};
-use crate::object_record::{ObjectRecord, parse_object_record_file};
+use crate::execute::{build_relayer_payload, obj_type_hash};
+use crate::holds::HoldTable;
+use crate::object_record::{FileStatus, ObjectRecord, parse_object_record_file};
 use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, object_file_name,
     write_object_file,
 };
 use crate::pexe_catalog::PexeCatalog;
+use crate::pipeline::RecordIndex;
 use crate::settings::{default_settings, read_settings, write_settings};
-use crate::types::{
-    ActionQuery, DriverPaths, ExecuteActionInput, ExecuteActionResult, ExecutionReporter,
-    ExecutionStepContext, NoopExecutionReporter, ObjectQuery,
-};
+use crate::transactions::load_records;
+use crate::types::{ActionQuery, DriverPaths, ObjectQuery};
 use wire_types::{
     ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverSettings,
-    ExecutionPhase, ObjectStatus, ObjectSummary, QualifiedName,
+    ObjectStatus, ObjectSummary, QualifiedName,
 };
 
 pub trait PayloadBuilder: Send + Sync {
@@ -93,28 +88,54 @@ impl DriverDeps {
 
 #[derive(Clone)]
 pub struct Driver {
-    paths: DriverPaths,
-    deps: DriverDeps,
+    pub(crate) paths: DriverPaths,
+    pub(crate) deps: DriverDeps,
+    /// Protects store read-check-write operations. Never held during proof
+    /// generation or network requests.
+    pub(crate) store_lock: Arc<Mutex<()>>,
+    pub(crate) holds: HoldTable,
+    pub(crate) reconciled_transactions: Arc<Mutex<HashMap<String, TransactionRecord>>>,
+    pub(crate) submission_locks: Arc<Mutex<HashMap<Hash, Weak<Mutex<()>>>>>,
 }
 
 impl Driver {
     pub fn open_default() -> Result<Self> {
         let paths = crate::paths::default_paths()?;
-        ensure_store_dirs(&paths)?;
         let deps = DriverDeps::load(&paths)?;
-        Ok(Self { paths, deps })
+        Self::open(paths, deps)
     }
 
     pub fn open(paths: DriverPaths, deps: DriverDeps) -> Result<Self> {
         ensure_store_dirs(&paths)?;
-        Ok(Self { paths, deps })
+        Ok(Self {
+            paths,
+            deps,
+            store_lock: Arc::new(Mutex::new(())),
+            holds: HoldTable::default(),
+            reconciled_transactions: Arc::default(),
+            submission_locks: Arc::default(),
+        })
+    }
+
+    pub(crate) fn submission_lock(&self, tx_final: &Hash) -> Arc<Mutex<()>> {
+        let mut locks = self
+            .submission_locks
+            .lock()
+            .expect("submission lock table poisoned");
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = locks.get(tx_final).and_then(Weak::upgrade) {
+            return lock;
+        }
+        let lock = Arc::new(Mutex::new(()));
+        locks.insert(*tx_final, Arc::downgrade(&lock));
+        lock
     }
 
     pub fn paths(&self) -> &DriverPaths {
         &self.paths
     }
 
-    fn catalog(&self) -> Arc<dyn ActionCatalog> {
+    pub(crate) fn catalog(&self) -> Arc<dyn ActionCatalog> {
         self.deps
             .catalog
             .read()
@@ -199,10 +220,11 @@ impl Driver {
 
     pub fn list_objects(&self, query: Option<&ObjectQuery>) -> Result<Vec<ObjectSummary>> {
         let entries = load_object_files(&self.paths)?;
-        Ok(entries
-            .iter()
-            .filter(|entry| query.is_none_or(|query| matches_query(entry, query)))
-            .map(|entry| self.object_summary(entry))
+        let records = load_records(&self.paths)?;
+        Ok(self
+            .summaries(&entries, &records)
+            .into_iter()
+            .filter(|summary| query.is_none_or(|query| matches_query(summary, query)))
             .collect())
     }
 
@@ -214,13 +236,34 @@ impl Driver {
     /// Missing files produce [`DriverError::ObjectFileNotFound`] (HTTP
     /// 404), not a generic 500.
     pub fn read_object(&self, path: &Path) -> Result<ObjectSummary> {
+        self.summary_of(self.read_object_entry(path)?)
+    }
+
+    /// Read summaries with shared transaction, hold, and catalog snapshots.
+    /// Log and skip unreadable files; propagate transaction-directory errors.
+    pub fn read_available_objects(&self, paths: &[impl AsRef<Path>]) -> Result<Vec<ObjectSummary>> {
+        let records = load_records(&self.paths)?;
+        let entries = paths
+            .iter()
+            .filter_map(|path| {
+                self.read_object_entry(path.as_ref())
+                    .inspect_err(|err| {
+                        log::debug!("no summary for {}: {err:#}", path.as_ref().display())
+                    })
+                    .ok()
+            })
+            .collect::<Vec<_>>();
+        Ok(self.summaries(&entries, &records))
+    }
+
+    fn read_object_entry(&self, path: &Path) -> Result<ObjectFileEntry> {
         let file_name = extract_basename(path)?;
         let resolved = self.resolve_managed_path(&file_name);
         if !resolved.exists() {
             return Err(DriverError::ObjectFileNotFound(file_name).into());
         }
         let record = parse_object_record_file(&resolved)?;
-        Ok(self.object_summary(&ObjectFileEntry { file_name, record }))
+        Ok(ObjectFileEntry { file_name, record })
     }
 
     /// The object file's contents exactly as stored on disk, resolved the
@@ -250,7 +293,7 @@ impl Driver {
             return Err(DriverError::ObjectFileNotFound(file_name).into());
         }
         let record = parse_object_record_file(&source)?;
-        let summary = self.object_summary(&ObjectFileEntry { file_name, record });
+        let summary = self.summary_of(ObjectFileEntry { file_name, record })?;
         fs::create_dir_all(&self.paths.discarded_objects_dir).with_context(|| {
             format!(
                 "failed to create discarded directory {}",
@@ -276,64 +319,6 @@ impl Driver {
         } else {
             self.paths.nullified_objects_dir.join(file_name)
         }
-    }
-
-    pub fn sync_objects(&self, query: Option<&ObjectQuery>) -> Result<Vec<ObjectSummary>> {
-        let mut entries = load_object_files(&self.paths)?;
-        let settings = self.load_settings()?;
-        let object_commitments = entries
-            .iter()
-            .map(|entry| entry.record.obj.commitment())
-            .collect::<HashSet<_>>();
-        let all_nullifiers = entries
-            .iter()
-            .filter_map(|entry| object_nullifier_hash(&entry.record.obj).ok())
-            .collect::<HashSet<_>>();
-
-        let membership = self.deps.synchronizer.fetch_membership_with_nullifiers(
-            &settings.synchronizer_api_url,
-            &object_commitments.iter().copied().collect::<Vec<_>>(),
-            &all_nullifiers.iter().copied().collect::<Vec<_>>(),
-        )?;
-
-        reconcile_objects(
-            &self.paths,
-            &mut entries,
-            &membership.created_objects,
-            &membership.on_chain_nullifiers,
-        )?;
-
-        // Resolve correct Ethereum tx hashes from the relayer for any objects
-        // whose hash may be stale due to fee-bump replacements. One batched
-        // lookup rather than a request per pending object; best-effort, so a
-        // relayer error leaves existing hashes untouched.
-        let pending_tx_finals: Vec<Hash> = entries
-            .iter()
-            .filter(|entry| entry.record.status == ObjectStatus::Pending)
-            .map(|entry| entry.record.tx_final)
-            .collect();
-        let current_hashes = self
-            .deps
-            .relayer
-            .lookup_tx_hashes(&settings.relayer_api_url, &pending_tx_finals)
-            .unwrap_or_default();
-        for entry in entries.iter_mut() {
-            if entry.record.status != ObjectStatus::Pending {
-                continue;
-            }
-            if let Some(relayer_hash) = current_hashes.get(&entry.record.tx_final)
-                && entry.record.tx_hash.as_deref() != Some(relayer_hash.as_str())
-            {
-                entry.record.tx_hash = Some(relayer_hash.clone());
-                let _ = write_object_file(&self.paths, &entry.record, &entry.file_name);
-            }
-        }
-
-        Ok(entries
-            .iter()
-            .filter(|entry| query.is_none_or(|query| matches_query(entry, query)))
-            .map(|entry| self.object_summary(entry))
-            .collect())
     }
 
     pub fn list_actions(&self, query: Option<&ActionQuery>) -> Result<Vec<ActionSummary>> {
@@ -367,7 +352,7 @@ impl Driver {
     pub fn list_classes(&self) -> Result<Vec<ClassSummary>> {
         let live_objects = load_object_files(&self.paths)?
             .into_iter()
-            .filter(|entry| entry.record.status == ObjectStatus::Live)
+            .filter(|entry| entry.record.status == FileStatus::Live)
             .collect::<Vec<_>>();
         Ok(self
             .catalog()
@@ -390,9 +375,7 @@ impl Driver {
             .ok_or_else(|| anyhow!("unknown class: {class}"))?;
         let live_count = load_object_files(&self.paths)?
             .into_iter()
-            .filter(|entry| {
-                entry.record.status == ObjectStatus::Live && entry.record.class == *class
-            })
+            .filter(|entry| entry.record.status == FileStatus::Live && entry.record.class == *class)
             .count();
         Ok(ClassSummary {
             live_count,
@@ -406,9 +389,15 @@ impl Driver {
             .get_action(action)
             .ok_or_else(|| anyhow!("unknown action: {action}"))?;
         let entries = load_object_files(&self.paths)?;
+        let locked = crate::transactions::locked_inputs(&load_records(&self.paths)?);
+        let held = self.holds.labels();
         let live_objects = entries
             .iter()
-            .filter(|entry| entry.record.status == ObjectStatus::Live)
+            .filter(|entry| {
+                entry.record.status == FileStatus::Live
+                    && !locked.contains(&entry.file_name)
+                    && !held.contains_key(&entry.file_name)
+            })
             .collect::<Vec<_>>();
 
         let mut available = Vec::new();
@@ -550,16 +539,16 @@ impl Driver {
                     )
                     .into());
                 } else if membership.created_objects.contains(&commitment) {
-                    ObjectStatus::Live
+                    FileStatus::Live
                 } else {
-                    ObjectStatus::Unknown
+                    FileStatus::Unknown
                 }
             }
             Err(err) => {
                 log::warn!(
                     "import: grounding check failed, importing {file_name} as unknown: {err:#}"
                 );
-                ObjectStatus::Unknown
+                FileStatus::Unknown
             }
         };
         record.status = status;
@@ -568,233 +557,55 @@ impl Driver {
         //    based on status, so a freshly-imported Unknown/Live lands live.
         write_object_file(&self.paths, &record, &file_name)?;
 
-        Ok(self.object_summary(&ObjectFileEntry { file_name, record }))
-    }
-
-    pub fn execute(&self, input: ExecuteActionInput) -> Result<ExecuteActionResult> {
-        self.execute_with_reporter(input, &NoopExecutionReporter)
-    }
-
-    pub fn execute_with_reporter<R: ExecutionReporter>(
-        &self,
-        input: ExecuteActionInput,
-        reporter: &R,
-    ) -> Result<ExecuteActionResult> {
-        let settings = self.load_settings()?;
-        // Pin one catalog snapshot for the whole execute: a concurrent
-        // `dobj install` can hot-swap the catalog, and the action resolved here
-        // must be the one we execute below.
-        let catalog = self.catalog();
-        let action = catalog
-            .get_action(&input.action)
-            .ok_or_else(|| anyhow!("unknown action: {}", input.action))?;
-
-        validate_execute_request(&input, &action)?;
-        let args = decode_action_args(&input.args)?;
-
-        let no_ctx = ExecutionStepContext::default();
-        reporter.on_step(ExecutionPhase::GenerateProof, "Verifying inputs", &no_ctx);
-        let entries = load_object_files(&self.paths)?;
-        let resolved_inputs = resolve_inputs(&entries, &input, &action)?;
-        let input_commitments = resolved_inputs
-            .iter()
-            .map(|entry| entry.record.obj.commitment())
-            .collect::<Vec<_>>();
-        let grounding_witness = self
-            .deps
-            .synchronizer
-            .fetch_grounding_witness(&settings.synchronizer_api_url, &input_commitments)?;
-        let old_root = grounding_witness.state_header.hash();
-
-        reporter.on_step(ExecutionPhase::GenerateProof, "Generating proof", &no_ctx);
-        let execution_inputs = resolved_inputs
-            .iter()
-            .map(|input| input.record.spendable())
-            .collect::<Vec<_>>();
-        let spendable_outputs = catalog.execute_action(
-            input.action.clone(),
-            grounding_witness,
-            execution_inputs,
-            &args,
-        )?;
-        reporter.on_done(ExecutionPhase::GenerateProof, None);
-
-        let mut commit_ctx = ExecutionStepContext {
-            old_root: Some(old_root),
-            output_files: Vec::new(),
-            output_status: None,
-        };
-        reporter.on_step(ExecutionPhase::Commit, "Shrinking proof", &commit_ctx);
-        let payload_bytes = self
-            .deps
-            .payload_builder
-            .build_payload(&old_root, &spendable_outputs)?;
-        // A tx has landed once the union of its effects is committed: every
-        // produced object commitment in the created set and every nullifier in
-        // the nullifier set. Collect both for the confirmation poll below.
-        let output_commitments: Vec<Hash> = spendable_outputs
-            .objs
-            .iter()
-            .map(|spendable| spendable.obj.commitment())
-            .collect();
-        let nullifiers = spendable_outputs.tx.nullifier_hashes()?;
-
-        reporter.on_step(ExecutionPhase::Commit, "Creating files", &commit_ctx);
-        let saved = save_results(&self.paths, &action, &resolved_inputs, &spendable_outputs)?;
-        commit_ctx = file_write_ctx(old_root, &saved.output_files, ObjectStatus::Unknown);
-        reporter.on_step(
-            ExecutionPhase::Commit,
-            "Output object files created with status unknown",
-            &commit_ctx,
-        );
-
-        // Submit to relayer. Output files are kept as Unknown on failure so
-        // the user can retry submission later without regenerating proofs.
-        reporter.on_step(
-            ExecutionPhase::Commit,
-            "Submitting proof to relayer",
-            &commit_ctx,
-        );
-        let submit_response = match self.deps.relayer.submit_proof(
-            &settings.relayer_api_url,
-            &payload_bytes,
-            Some(format!("driver:{}", input.action)),
-        ) {
-            Ok(resp) if resp.status == wire_types::relayer::JobStatus::Failed => {
-                return Err(anyhow!("relayer rejected job {} immediately", resp.job_id));
-            }
-            Ok(resp) => resp,
-            Err(err) => {
-                return Err(err);
-            }
-        };
-
-        // Past this point the proof has been accepted by the relayer and may
-        // land on-chain at any moment. Output files stay as Unknown until the
-        // relayer broadcasts and we have a tx_hash.
-        let waiting_label = format!("Waiting for relayer job {}", submit_response.job_id);
-        reporter.on_step(ExecutionPhase::Commit, &waiting_label, &commit_ctx);
-
-        // Poll until the relayer has broadcast the tx and we have a tx_hash,
-        // then mark output files as Pending.
-        let eth_tx_hash = self.deps.relayer.wait_for_tx_hash(
-            &settings.relayer_api_url,
-            &submit_response.job_id,
-            RELAYER_TX_HASH_TIMEOUT_SECS,
-            RELAYER_POLL_INTERVAL_MS,
-        )?;
-        update_output_files(
-            &self.paths,
-            &saved.output_files,
-            ObjectStatus::Pending,
-            Some(&eth_tx_hash),
-        )?;
-        commit_ctx = file_write_ctx(old_root, &saved.output_files, ObjectStatus::Pending);
-        reporter.on_step(
-            ExecutionPhase::Commit,
-            "Got transaction hash; output object files updated to pending while waiting for submission confirmation",
-            &commit_ctx,
-        );
-
-        let confirmation = self.deps.relayer.wait_for_confirmation(
-            &settings.relayer_api_url,
-            &submit_response.job_id,
-            RELAYER_CONFIRM_TIMEOUT_SECS,
-            RELAYER_POLL_INTERVAL_MS,
-        )?;
-
-        // Use the confirmed tx_hash — it may differ from the initial one if
-        // the relayer performed a fee-bump replacement while waiting.
-        let final_tx_hash = confirmation.tx_hash.as_deref().unwrap_or(&eth_tx_hash);
-
-        if final_tx_hash != eth_tx_hash {
-            // Fee bump replaced the original tx; update .dobj files with the
-            // new hash so they point at the on-chain transaction.
-            update_output_files(
-                &self.paths,
-                &saved.output_files,
-                ObjectStatus::Pending,
-                Some(final_tx_hash),
-            )?;
-            reporter.on_step(
-                ExecutionPhase::Commit,
-                "Got replacement transaction hash; output object files updated to pending",
-                &commit_ctx,
-            );
-        }
-
-        reporter.on_step(
-            ExecutionPhase::Commit,
-            "Waiting for synchronizer to observe commit",
-            &commit_ctx,
-        );
-        let sync_head = match self.deps.synchronizer.wait_for_tx(
-            &settings.synchronizer_api_url,
-            &output_commitments,
-            &nullifiers,
-            SYNCHRONIZER_POLL_TIMEOUT_SECS,
-            SYNCHRONIZER_POLL_INTERVAL_MS,
-        ) {
-            Ok(head) => head,
-            Err(err) => {
-                // Sync failed or timed out — revert outputs to Unknown but
-                // keep the txHash so the chain submission can be inspected.
-                // The next sync_objects will reconcile if the tx lands later.
-                update_output_files(
-                    &self.paths,
-                    &saved.output_files,
-                    ObjectStatus::Unknown,
-                    Some(final_tx_hash),
-                )?;
-                commit_ctx = file_write_ctx(old_root, &saved.output_files, ObjectStatus::Unknown);
-                reporter.on_step(
-                    ExecutionPhase::Commit,
-                    "Synchronizer did not observe commit; output object files reverted to unknown",
-                    &commit_ctx,
-                );
-                return Err(err);
-            }
-        };
-
-        for consumed in &resolved_inputs {
-            let record = ObjectRecord {
-                status: ObjectStatus::Nullified,
-                ..consumed.record.clone()
-            };
-            write_object_file(&self.paths, &record, &consumed.file_name)?;
-        }
-        update_output_files(
-            &self.paths,
-            &saved.output_files,
-            ObjectStatus::Live,
-            Some(final_tx_hash),
-        )?;
-        commit_ctx = file_write_ctx(old_root, &saved.output_files, ObjectStatus::Live);
-        reporter.on_step(
-            ExecutionPhase::Commit,
-            "Commit observed; output object files updated to live",
-            &commit_ctx,
-        );
-
-        let result = ExecuteActionResult {
-            old_root,
-            new_root: sync_head.state_root,
-            output_files: saved.output_files.clone(),
-            nullified_files: saved.nullified_files.clone(),
-            relayer_job_id: confirmation.job_id,
-            tx_hash: Some(final_tx_hash.to_string()),
-            block_number: confirmation.block_number,
-        };
-        reporter.on_done(ExecutionPhase::Commit, Some(&result));
-        Ok(result)
+        self.summary_of(ObjectFileEntry { file_name, record })
     }
 
     pub fn generated_podlang(&self) -> Option<String> {
         self.catalog().generated_podlang()
     }
 
-    fn object_summary(&self, entry: &ObjectFileEntry) -> ObjectSummary {
-        let class_info = self.catalog().get_class(&entry.record.class);
+    fn summary_of(&self, entry: ObjectFileEntry) -> Result<ObjectSummary> {
+        let records = load_records(&self.paths)?;
+        Ok(self
+            .summaries(std::slice::from_ref(&entry), &records)
+            .remove(0))
+    }
+
+    pub(crate) fn summaries<'a>(
+        &self,
+        entries: impl IntoIterator<Item = &'a ObjectFileEntry>,
+        records: &[TransactionRecord],
+    ) -> Vec<ObjectSummary> {
+        let index = RecordIndex::new(records);
+        let held = self.holds.labels();
+        let catalog = self.catalog();
+        entries
+            .into_iter()
+            .map(|entry| self.object_summary(entry, &index, &held, catalog.as_ref()))
+            .collect()
+    }
+
+    /// Derives pending status and tx hash from the producing transaction.
+    /// Reports the proof holding the file or the open transaction spending it.
+    fn object_summary(
+        &self,
+        entry: &ObjectFileEntry,
+        index: &RecordIndex<'_>,
+        held: &HashMap<String, String>,
+        catalog: &dyn ActionCatalog,
+    ) -> ObjectSummary {
+        let class_info = catalog.get_class(&entry.record.class);
+        let record = index.by_tx_final.get(&entry.record.tx_final);
+        let status = match (entry.record.status, record.map(|record| record.state)) {
+            (FileStatus::Unknown, Some(TransactionState::Submitted)) => ObjectStatus::Pending,
+            (status, _) => status.into(),
+        };
+        let held_by_run_id = held.get(&entry.file_name).cloned().or_else(|| {
+            index
+                .locked_by
+                .get(entry.file_name.as_str())
+                .map(|owner| owner.to_string())
+        });
         ObjectSummary {
             content_hash: encode_hash_hex(&entry.record.content_hash),
             file_name: entry.file_name.clone(),
@@ -810,11 +621,13 @@ impl Driver {
                 .as_ref()
                 .map(|c| c.emoji.clone())
                 .unwrap_or_else(|| "📦".to_string()),
-            status: entry.record.status,
-            tx_hash: entry.record.tx_hash.clone(),
+            status,
+            tx_hash: record
+                .and_then(|record| record.tx_hash.clone())
+                .or_else(|| entry.record.tx_hash.clone()),
             description: class_info.as_ref().map(|c| c.description.clone()),
             fields: entry.record.fields_map(),
-            held_by_run_id: None,
+            held_by_run_id,
         }
     }
 
@@ -829,18 +642,6 @@ impl Driver {
             consumed_by: class_info.consumed_by,
             predicate_source: class_info.predicate_source,
         }
-    }
-}
-
-fn file_write_ctx(
-    old_root: Hash,
-    output_files: &[String],
-    output_status: ObjectStatus,
-) -> ExecutionStepContext {
-    ExecutionStepContext {
-        old_root: Some(old_root),
-        output_files: output_files.to_vec(),
-        output_status: Some(output_status),
     }
 }
 

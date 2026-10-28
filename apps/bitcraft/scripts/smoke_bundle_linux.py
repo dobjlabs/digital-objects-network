@@ -79,6 +79,7 @@ def main():
         print("PASS: packaged plugin matches its manifest and all six bundled tools execute", flush=True)
 
         assert port_closed(), "Bitcraft port 7727 is already in use"
+        assert (resources / "skills/bitcraft-play/SKILL.md").is_file(), "Packaged player skill is missing"
         home = directory / "data"
         home.mkdir()
         settings = json.loads((resources / "settings.json").read_text())

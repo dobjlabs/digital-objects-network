@@ -1,6 +1,14 @@
+use std::time::Duration;
+
 use anyhow::{Context, Result, anyhow};
 use reqwest::Client;
 use serde::{Serialize, de::DeserializeOwned};
+
+/// Default bound per request, so a stuck daemon cannot hang the CLI.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(40);
+/// Bound for requests the daemon serves with synchronizer or relayer round
+/// trips of its own; a submission takes one per transaction.
+pub const SLOW_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Thin HTTP client around dobjd's REST API. Constructed once per CLI
 /// invocation; reqwest's connection pool handles keepalive.
@@ -14,12 +22,30 @@ impl DobjdClient {
     pub fn new(base: String) -> Self {
         Self {
             base: base.trim_end_matches('/').to_string(),
-            http: Client::new(),
+            http: http_client(REQUEST_TIMEOUT),
+        }
+    }
+
+    /// The same daemon with a different total bound per request.
+    pub fn with_timeout(&self, timeout: Duration) -> Self {
+        Self {
+            base: self.base.clone(),
+            http: http_client(timeout),
         }
     }
 
     pub fn base_url(&self) -> &str {
         &self.base
+    }
+
+    pub fn event_stream(&self, path: &str) -> Result<reqwest_eventsource::EventSource> {
+        let http = Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .read_timeout(Duration::from_secs(45))
+            .build()?;
+        Ok(reqwest_eventsource::EventSource::new(
+            http.get(self.url(path)),
+        )?)
     }
 
     fn url(&self, path: &str) -> String {
@@ -69,6 +95,17 @@ impl DobjdClient {
         decode_json(res).await
     }
 
+    pub async fn delete_json<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        let url = self.url(path);
+        let res = self
+            .http
+            .delete(&url)
+            .send()
+            .await
+            .with_context(|| format!("DELETE {url}"))?;
+        decode_json(res).await
+    }
+
     /// POST raw bytes (e.g. a `.pexe` archive) and decode the JSON response.
     pub async fn post_bytes<T: DeserializeOwned>(&self, path: &str, bytes: Vec<u8>) -> Result<T> {
         let url = self.url(path);
@@ -82,6 +119,14 @@ impl DobjdClient {
             .with_context(|| format!("POST {url}"))?;
         decode_json(res).await
     }
+}
+
+fn http_client(timeout: Duration) -> Client {
+    Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(timeout)
+        .build()
+        .expect("HTTP client configuration is valid")
 }
 
 async fn decode_json<T: DeserializeOwned>(res: reqwest::Response) -> Result<T> {

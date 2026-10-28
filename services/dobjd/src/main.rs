@@ -8,14 +8,19 @@ mod error;
 mod events;
 mod mcp;
 mod parent_lifetime;
+mod proof_jobs;
+mod registry;
 mod routes;
 mod runs;
+mod settle;
 mod state;
 mod ui;
 mod web_access;
 
+use proof_jobs::ProofJobRegistry;
 use runs::RunRegistry;
-use state::AppState;
+use settle::Settler;
+use state::{AppState, Services};
 
 const DEFAULT_HTTP_PORT: u16 = 7717;
 
@@ -52,23 +57,24 @@ async fn run() -> Result<()> {
 
     let driver = Arc::new(Driver::open_default()?);
     let web_access = web_access::WebAccess::new(port);
-    let (event_tx, _initial_rx) = events::channel();
-    let runs = RunRegistry::new();
+    let events = events::EventHub::new();
+    let runs = RunRegistry::default();
+    let settler = Arc::new(Settler::new(driver.clone(), events.clone()));
+    let services = Services {
+        driver: driver.clone(),
+        events,
+        runs: runs.clone(),
+        proof_jobs: ProofJobRegistry::default(),
+        settler: settler.clone(),
+    };
 
     let mcp_runtime = Arc::new(mcp::McpRuntime::new(
-        driver.clone(),
-        event_tx.clone(),
-        runs.clone(),
+        services.clone(),
         format!("127.0.0.1:{mcp_port}"),
         port,
     ));
 
-    let state = AppState::new(
-        driver.clone(),
-        event_tx.clone(),
-        runs.clone(),
-        mcp_runtime.clone(),
-    );
+    let state = AppState::new(services.clone(), mcp_runtime.clone());
     let app = routes::router(state, web_access);
 
     // Bind both ports up-front (HTTP here, MCP via `prebind`) so startup
@@ -102,16 +108,18 @@ async fn run() -> Result<()> {
     // disabled). Deferred to here so an MCP action can't land mid-warm-up.
     mcp_runtime.apply(mcp_enabled).await?;
 
-    // Reap terminal runs whose retention window has elapsed, bounding the
-    // in-memory registry. Runs that are still in flight are never reaped.
-    let reaper_runs = runs.clone();
+    let reaper = services.clone();
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(runs::REAP_INTERVAL);
+        let mut ticker = tokio::time::interval(registry::REAP_INTERVAL);
         loop {
             ticker.tick().await;
-            reaper_runs.reap();
+            reaper.runs.entries.reap(registry::RETENTION);
+            reaper.proof_jobs.reap(registry::RETENTION);
         }
     });
+
+    // Resume settlement for persisted transactions after a restart.
+    tokio::spawn(settler.run_loop());
 
     tracing::info!("listening on http://{addr}");
     tracing::info!("browser UI: http://{addr}{}", ui::home_path());

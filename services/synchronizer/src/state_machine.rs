@@ -39,9 +39,8 @@ pub struct TargetTx<T> {
     pub status: TxStatus,
 }
 
-/// The maximum age of a state root used as grounding for a transaction.
-/// At one block per 12 seconds, this is one hour.
-pub const MAX_STATE_ROOT_AGE_BLOCKS: i64 = 300;
+use txlib::grounding_aged_out;
+pub use txlib::MAX_STATE_ROOT_AGE_BLOCKS;
 
 /// The base state's containers and counts, mutated while deriving one slot.
 struct WorkingState {
@@ -180,7 +179,7 @@ impl StateMachine {
             ));
         };
         let age = block_number as i64 - state_root_block;
-        if age > MAX_STATE_ROOT_AGE_BLOCKS {
+        if grounding_aged_out(block_number as i64, state_root_block) {
             return Ok(Some(format!("Blob proof state_root is too old: {age} blocks (state root at block {state_root_block})")));
         }
 

@@ -37,6 +37,7 @@
     --progress-track: #e2e2e2;
     --progress-fill: #0a64d8;
     --button-border: #c4c4c4;
+    --faint-text: #a0a0a0;
     /* Blank strip kept below the last row of a full list, so a click on
        empty space to clear the selection always has a target. */
     --list-trailing-space: 48px;
@@ -45,6 +46,8 @@
   html, body {
     height: 100%;
     margin: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
   }
   body {
     background: var(--bg);
@@ -60,6 +63,29 @@
     flex-direction: column;
   }
   #inventory-app[hidden], #startup-screen[hidden] { display: none; }
+  /* A file's stored text, in a window of its own: light whatever the
+     system theme, and selectable although the desktop app turns selection
+     off for its pages. */
+  #raw-view {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 12px 14px;
+    background: var(--bg);
+  }
+  #raw-view[hidden] { display: none; }
+  #raw-text {
+    margin: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    cursor: text;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+  #raw-text.error { color: var(--error); }
   /* Windows opened from the top bar show only their own view. */
   body.secondary-window #startup-screen,
   body.secondary-window #inventory-app,
@@ -80,7 +106,8 @@
   }
   #settings-view[hidden] { display: none; }
   .settings-title {
-    margin: 0 0 12px;
+    grid-column: 1 / -1;
+    margin: 0 0 4px;
     font-size: 13px;
     font-weight: 600;
   }
@@ -91,6 +118,47 @@
     gap: 8px 10px;
   }
   .settings-fields label { color: var(--muted); }
+  /* The game's identity and links, set apart from the settings above like
+     a Mac About window. */
+  .settings-about {
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    text-align: center;
+  }
+  .settings-about-name { font-weight: 600; }
+  .settings-about-version {
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .settings-about-website {
+    display: inline-block;
+    margin-top: 4px;
+    color: var(--link);
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .settings-about-website:hover { text-decoration: underline; }
+  .settings-about-links {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .settings-about-links a {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 12px;
+    border: 1px solid var(--button-border);
+    border-radius: 5px;
+    background: var(--bg);
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.06);
+    color: var(--text);
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .settings-about-links a:active { background: var(--row-hover); }
   .settings-fields input {
     min-width: 0;
     padding: 4px 7px;
@@ -180,6 +248,15 @@
     white-space: nowrap;
   }
   .summary-fields dd { margin: 0; }
+  /* Counts and values line up on their last digit. */
+  .summary-table { column-gap: 16px; }
+  .summary-table dd {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  /* A row's second value, its total BIT value, sits further from the count. */
+  .summary-table dd + dd { padding-left: 24px; }
   /* Laid out like the details pane: a document icon over a title and muted
      text. The desktop shell's preparation screen copies these values. */
   #startup-screen {
@@ -190,23 +267,12 @@
     background: var(--bg);
   }
   .startup-content { width: min(100%, 360px); text-align: center; }
-  .startup-icon {
-    position: relative;
-    width: 96px;
-    height: 120px;
+  .startup-logo {
+    display: block;
+    width: 128px;
+    height: 128px;
     margin: 0 auto 16px;
   }
-  .startup-icon svg { display: block; }
-  /* The 16px art at 4x, centered across the page below its folded corner. */
-  .startup-icon img {
-    position: absolute;
-    left: 16px;
-    top: 34px;
-    width: 64px;
-    height: 64px;
-    image-rendering: pixelated;
-  }
-  .startup-icon img[hidden] { display: none; }
   #startup-status { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.3; }
   #startup-description { margin: 4px 0 0; color: var(--muted); line-height: 1.5; }
   .startup-progress {
@@ -306,7 +372,86 @@
     cursor: default;
   }
   .toolbar-button:hover { background: var(--toolbar-hover); }
+  /* Shown at once on hover, which a native title tooltip, with its system
+     delay, is not. The first icon's tooltip starts at its left edge so it
+     stays inside the window. */
+  .toolbar-button { position: relative; }
+  /* An object row's tooltip. It follows the pointer and sits outside the
+     object list, which would clip it, so it is placed by the script. */
+  #row-tooltip {
+    position: fixed;
+    z-index: 30;
+    padding: 3px 7px;
+    border-radius: 5px;
+    background: rgba(32, 32, 32, 0.92);
+    color: #fff;
+    font-size: 12px;
+    white-space: pre;
+    pointer-events: none;
+  }
+  #row-tooltip[hidden] { display: none; }
+  .toolbar-button[data-tooltip]:hover::after,
+  .toolbar-button[data-tooltip]:focus-visible::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 50%;
+    z-index: 20;
+    transform: translateX(-50%);
+    padding: 3px 7px;
+    border-radius: 5px;
+    background: rgba(32, 32, 32, 0.92);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 400;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  /* The inventory's value, read like a balance at the top bar's right end.
+     It opens the Inventory Summary. */
+  #inventory-rate[hidden] { display: none; }
+  /* Whichever comes first, the rate or the value, holds the group to the
+     right end of the top bar. */
+  #inventory-rate[hidden] ~ #inventory-value { margin-left: auto; }
+  #inventory-rate {
+    align-self: center;
+    margin-left: auto;
+    padding: 0 6px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  #inventory-value {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  #inventory-value:hover { background: var(--toolbar-hover); }
+  #inventory-value:active { background: var(--toolbar-pressed); }
+  #inventory-value img {
+    width: 16px;
+    height: 16px;
+    image-rendering: pixelated;
+  }
+  #inventory-value img[hidden] { display: none; }
+  #inventory-value .inventory-value-label {
+    color: var(--muted);
+    font-weight: 400;
+  }
   .toolbar-button:active { background: var(--toolbar-pressed); }
+  .toolbar-button[hidden], .toolbar-divider[hidden] { display: none; }
   .toolbar-divider {
     align-self: center;
     width: 1px;
@@ -489,6 +634,7 @@
   }
   .class-label { white-space: nowrap; }
   .class-label > .icon-tile,
+  .class-label > .action-icon,
   .class-label > svg {
     display: inline-block;
     vertical-align: middle;
@@ -499,9 +645,11 @@
     flex: none;
   }
   .description-summary { font-weight: 500; }
+  /* A description's paragraphs arrive separated by blank lines. */
   .description-text {
     margin-top: 4px;
     color: var(--muted);
+    white-space: pre-line;
   }
   .icon-tile img {
     display: block;
@@ -514,6 +662,7 @@
     min-width: 0;
     overflow: hidden;
   }
+  .object-row.welcome .object-name { font-weight: 600; }
   .message {
     padding: 8px 10px;
     color: var(--muted);
@@ -554,7 +703,12 @@
     font-size: 12px;
     color: var(--muted);
   }
-  .details-meta a { color: var(--link); }
+  .details-meta a:not(.reference-link) {
+    color: var(--link);
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .details-meta a:not(.reference-link):hover { text-decoration: underline; }
   .field-table {
     margin-top: 12px;
     border-collapse: collapse;
@@ -581,6 +735,7 @@
     word-break: break-all;
   }
   .hidden-value { cursor: pointer; }
+  .empty-note { margin-top: 8px; color: var(--faint-text); }
   .subsection-title {
     margin-top: 16px;
     padding-bottom: 2px;
@@ -709,37 +864,49 @@
     width: 32px;
     height: 32px;
   }
-  .recipe-path {
+  /* A heading row in the reference list, above its classes or actions. */
+  .reference-group {
+    padding: 10px 10px 4px;
+    border-bottom: 1px solid var(--row-hover);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    user-select: none;
+  }
+  .recipe-icon-slot img.class-icon {
+    width: 32px;
+    height: 32px;
+    image-rendering: pixelated;
+  }
+  .reference-summary {
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
-    /* Puts the ellipsis at the start so the file name stays visible. */
-    direction: rtl;
-    text-align: left;
   }
+  /* Links are underlined only on hover, as in native apps. The pointing
+     hand marks them apart from action names elsewhere, which share their
+     color but are not links. */
+  .reference-link {
+    color: var(--action-name);
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .reference-link.class-link { color: var(--link); }
+  .reference-link:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
   <section id="startup-screen" aria-labelledby="startup-status">
     <div class="startup-content">
-      <div class="startup-icon" aria-hidden="true">
-        <svg width="96" height="120" viewBox="0 0 128 160">
-          <defs>
-            <filter id="startup-icon-shadow" x="-10%" y="-10%" width="120%" height="120%">
-              <feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-color="#000" flood-opacity="0.18"/>
-            </filter>
-          </defs>
-          <path d="M6 4h80l36 36v114H6z" fill="#fff" stroke="#d0d0d0" filter="url(#startup-icon-shadow)"/>
-          <path d="M86 4v28a8 8 0 0 0 8 8h28" fill="#f2f2f2" stroke="#d0d0d0"/>
-        </svg>
-        <img id="startup-class-icon" alt="" hidden>
-      </div>
+      <img class="startup-logo" src="assets/bitcraft-logo.png" alt="" width="128" height="128">
       <div role="status" aria-live="polite" aria-atomic="true">
-        <h1 id="startup-status">Opening Bitcraft...</h1>
-        <p id="startup-description">Getting your inventory ready.</p>
+        <h1 id="startup-status">Loading inventory...</h1>
+        <p id="startup-description" hidden></p>
       </div>
-      <progress id="startup-progress" class="startup-progress" max="3" value="0" aria-label="Startup progress" aria-describedby="startup-progress-label startup-status"></progress>
-      <p id="startup-progress-label">Step 1 of 3</p>
+      <progress id="startup-progress" class="startup-progress" max="4" value="1" aria-label="Startup progress" aria-describedby="startup-status"></progress>
+      <p id="startup-progress-label" hidden></p>
       <p id="startup-error" role="alert" hidden></p>
       <div id="startup-actions" hidden>
         <button type="button" id="startup-retry">Try again</button>
@@ -750,12 +917,12 @@
   </section>
   <div id="inventory-app" hidden inert>
   <nav id="top-bar" aria-label="Bitcraft">
-    <span class="toolbar-button selected" role="img" aria-label="Files" title="Files">
+    <span class="toolbar-button selected" role="img" aria-label="Files" data-tooltip="Objects">
       <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
         <path d="M2.5 5.5a1.5 1.5 0 0 1 1.5-1.5h3.2l1.6 1.8h5.2a1.5 1.5 0 0 1 1.5 1.5v6.2a1.5 1.5 0 0 1-1.5 1.5H4a1.5 1.5 0 0 1-1.5-1.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
       </svg>
     </span>
-    <button type="button" id="summary-button" class="toolbar-button" title="Open Inventory Summary" aria-label="Open Inventory Summary">
+    <button type="button" id="summary-button" class="toolbar-button" data-tooltip="Stats" aria-label="Open Inventory Summary">
       <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
         <g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
           <rect x="3" y="9.5" width="3" height="5.5" rx="0.6"/>
@@ -764,32 +931,35 @@
         </g>
       </svg>
     </button>
-    <button type="button" id="reference-button" class="toolbar-button" title="Open Recipe Info" aria-label="Open Recipe Info">
+    <button type="button" id="reference-button" class="toolbar-button" data-tooltip="Reference" aria-label="Open Recipe Info">
       <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
         <path d="M9 5.2C7.6 4.1 5.5 3.6 2.5 3.8v10c3-.2 5.1.3 6.5 1.4 1.4-1.1 3.5-1.6 6.5-1.4v-10c-3-.2-5.1.3-6.5 1.4zM9 5.2v10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
       </svg>
     </button>
     <span class="toolbar-divider" role="separator"></span>
-    <button type="button" id="about-button" class="toolbar-button" title="About Bitcraft" aria-label="About Bitcraft">
-      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-        <circle cx="9" cy="9" r="6.75" fill="none" stroke="currentColor" stroke-width="1.5"/>
-        <path d="M9 8.2v4.3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-        <circle cx="9" cy="5.6" r="1" fill="currentColor"/>
+    <button type="button" id="claude-button" class="toolbar-button" data-tooltip="Automate with Claude" aria-label="Automate with Claude" hidden>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd" aria-hidden="true">
+        <path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z"/>
       </svg>
     </button>
-    <button type="button" id="discord-button" class="toolbar-button" title="Discord" aria-label="Discord">
-      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-        <path d="M5.4 4.3c1-.4 1.9-.7 2.8-.8l.4.8a9.6 9.6 0 0 1 .8 0l.4-.8c.9.1 1.8.4 2.8.8 1.6 2.3 2.2 4.7 2 7.2a10 10 0 0 1-3.3 1.7l-.7-1.2-.1-.1A9.5 9.5 0 0 1 9 12.3a9.5 9.5 0 0 1-1.5-.4l-.1.1-.7 1.2a10 10 0 0 1-3.3-1.7c-.2-2.5.4-4.9 2-7.2z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
-        <circle cx="7.1" cy="8.9" r="1" fill="currentColor"/>
-        <circle cx="10.9" cy="8.9" r="1" fill="currentColor"/>
+    <button type="button" id="codex-button" class="toolbar-button" data-tooltip="Automate with Codex" aria-label="Automate with Codex" hidden>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd" aria-hidden="true">
+        <path d="M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00-.856 0l-5.97 3.473zm10.609 8.8V12.06c0-.333-.143-.57-.429-.737l-5.97-3.473 1.95-1.118a.433.433 0 01.476 0l4.543 2.617c1.309.76 2.189 2.378 2.189 3.948 0 1.808-1.07 3.473-2.76 4.163zM7.802 12.703l-1.95-1.142c-.167-.095-.239-.238-.239-.428V5.899c0-2.545 1.95-4.472 4.591-4.472 1 0 1.927.333 2.712.928L8.23 5.067c-.285.166-.428.404-.428.737v6.898zM12 15.128l-2.795-1.57v-3.33L12 8.658l2.795 1.57v3.33L12 15.128zm1.796 7.23c-1 0-1.927-.332-2.712-.927l4.686-2.712c.285-.166.428-.404.428-.737v-6.898l1.974 1.142c.167.095.238.238.238.428v5.233c0 2.545-1.974 4.472-4.614 4.472zm-5.637-5.303l-4.544-2.617c-1.308-.761-2.188-2.378-2.188-3.948A4.482 4.482 0 014.21 6.327v5.423c0 .333.143.571.428.738l5.947 3.449-1.95 1.118a.432.432 0 01-.476 0zm-.262 3.9c-2.688 0-4.662-2.021-4.662-4.519 0-.19.024-.38.047-.57l4.686 2.71c.286.167.571.167.856 0l5.97-3.448v2.26c0 .19-.07.333-.237.428l-4.543 2.616c-.619.357-1.356.523-2.117.523zm5.899 2.83a5.947 5.947 0 005.827-4.756C22.287 18.339 24 15.84 24 13.296c0-1.665-.713-3.282-1.998-4.448.119-.5.19-.999.19-1.498 0-3.401-2.759-5.947-5.946-5.947-.642 0-1.26.095-1.88.31A5.962 5.962 0 0010.205 0a5.947 5.947 0 00-5.827 4.757C1.713 5.447 0 7.945 0 10.49c0 1.666.713 3.283 1.998 4.448-.119.5-.19 1-.19 1.499 0 3.401 2.759 5.946 5.946 5.946.642 0 1.26-.095 1.88-.309a5.96 5.96 0 004.162 1.713z"/>
       </svg>
     </button>
-    <span class="toolbar-divider" role="separator"></span>
-    <button type="button" id="settings-button" class="toolbar-button" title="Open Settings" aria-label="Open Settings">
+    <span id="agent-divider" class="toolbar-divider" role="separator" hidden></span>
+    <button type="button" id="settings-button" class="toolbar-button" data-tooltip="Settings" aria-label="Open Settings">
       <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
         <path d="M14.22 7.60 L16.09 7.75 L16.09 10.25 L14.22 10.40 L13.68 11.70 L14.90 13.13 L13.13 14.90 L11.70 13.68 L10.40 14.22 L10.25 16.09 L7.75 16.09 L7.60 14.22 L6.30 13.68 L4.87 14.90 L3.10 13.13 L4.32 11.70 L3.78 10.40 L1.91 10.25 L1.91 7.75 L3.78 7.60 L4.32 6.30 L3.10 4.87 L4.87 3.10 L6.30 4.32 L7.60 3.78 L7.75 1.91 L10.25 1.91 L10.40 3.78 L11.70 4.32 L13.13 3.10 L14.90 4.87 L13.68 6.30Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
         <circle cx="9" cy="9" r="2.3" fill="none" stroke="currentColor" stroke-width="1.3"/>
       </svg>
+    </button>
+    <span id="inventory-rate" title="How fast the Total Inventory Value grew over the last 5 minutes" hidden></span>
+    <span id="inventory-rate-divider" class="toolbar-divider" role="separator" hidden></span>
+    <button type="button" id="inventory-value" title="Open the Inventory Summary">
+      <span class="inventory-value-label">Total Inventory Value:</span>
+      <img id="inventory-value-icon" alt="" hidden>
+      <span id="inventory-value-amount"></span>
     </button>
   </nav>
   <div id="objects-view" class="view">
@@ -811,7 +981,7 @@
   </div>
   <div id="recipebook-view" class="view" hidden>
     <section id="recipe-pane" class="pane">
-      <div class="pane-header">Recipe Info</div>
+      <div class="pane-header">Reference</div>
       <ul id="recipe-list"></ul>
     </section>
     <section id="recipe-details-pane" class="pane">
@@ -820,13 +990,29 @@
     </section>
   </div>
   <div id="summary-view" hidden></div>
+  <div id="raw-view" hidden><pre id="raw-text"></pre></div>
   <div id="settings-view" hidden>
-    <h1 class="settings-title">Connections</h1>
     <div class="settings-fields">
+      <h1 class="settings-title">Connections</h1>
       <label for="settings-synchronizer">Synchronizer address</label>
       <input id="settings-synchronizer" type="text" readonly spellcheck="false">
       <label for="settings-relayer">Relayer address</label>
       <input id="settings-relayer" type="text" readonly spellcheck="false">
+    </div>
+    <div class="settings-about">
+      <div class="settings-about-name">Bitcraft</div>
+      <div class="settings-about-version">Version <span id="settings-version"></span></div>
+      <a id="settings-website" class="settings-about-website" target="_blank" rel="noopener"></a>
+      <div class="settings-about-links">
+        <a id="settings-discord" target="_blank" rel="noopener">
+          <svg width="14" height="14" viewBox="0 0 18 18" aria-hidden="true">
+            <path d="M5.4 4.3c1-.4 1.9-.7 2.8-.8l.4.8a9.6 9.6 0 0 1 .8 0l.4-.8c.9.1 1.8.4 2.8.8 1.6 2.3 2.2 4.7 2 7.2a10 10 0 0 1-3.3 1.7l-.7-1.2-.1-.1A9.5 9.5 0 0 1 9 12.3a9.5 9.5 0 0 1-1.5-.4l-.1.1-.7 1.2a10 10 0 0 1-3.3-1.7c-.2-2.5.4-4.9 2-7.2z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+            <circle cx="7.1" cy="8.9" r="1" fill="currentColor"/>
+            <circle cx="10.9" cy="8.9" r="1" fill="currentColor"/>
+          </svg>
+          Discord
+        </a>
+      </div>
     </div>
   </div>
   <footer id="status-bar">
@@ -869,6 +1055,7 @@
   </svg>
 </template>
 
+<div id="row-tooltip" role="tooltip" hidden></div>
 <script src="presentation.js"></script>
 <script>
   const DOBJD_URL = new URL(
@@ -884,14 +1071,15 @@
   const STARTUP_RUN_STORAGE_KEY = "bitcraft.startup-pocketknife-run";
   let startupPocketknifeActive = false;
   let startupPocketknifeRun = null;
-  let startupPocketknifeTimer = null;
+  let startupPocketknifeTxFinal = null;
+  let startupPocketknifeSubmitError = null;
 
   function isPocketknife(className) {
     return className.pluginName === PLUGIN_NAME && className.name === "Pocketknife";
   }
 
-  function pocketknifeIcon() {
-    return Presentation.classInfo({ pluginName: PLUGIN_NAME, name: "Pocketknife" }).icon;
+  function activityInScope(action) {
+    return action?.pluginName === PLUGIN_NAME;
   }
 
   function rememberStartupRun(runId) {
@@ -907,21 +1095,20 @@
     } catch {
       return;
     }
-    const run = runs.find((candidate) => candidate.runId === runId);
+    if (!runId) return;
+    const run = runs.find((candidate) => candidate.runId === runId || candidate.transaction?.owner === runId);
     if (run) run.showInJobs = false;
   }
 
   function stopStartupPocketknife() {
     startupPocketknifeActive = false;
-    clearInterval(startupPocketknifeTimer);
-    startupPocketknifeTimer = null;
   }
 
   function updateStartupPocketknife(run = startupPocketknifeRun) {
     if (!startupPocketknifeActive) return;
     startupPocketknifeRun = run;
     if ([...objectsByFileName.values()].some((object) => isPocketknife(object.class) && isLive(object))) {
-      setStartupProgress(3);
+      setStartupProgress(4);
       stopStartupPocketknife();
       finishStartup();
       return;
@@ -929,20 +1116,32 @@
     if (run?.state?.status === "committing" || run?.state?.status === "succeeded"
       || run?.state?.progress?.some((event) => event.phase === "generateProof" && event.status === "done")
       || [...objectsByFileName.values()].some((object) => isPocketknife(object.class))) {
-      setStartupProgress(2);
+      setStartupProgress(3);
     }
-    if (run?.requestError || run?.state?.status === "failed") {
-      showStartupError(run.requestError ?? run.state.error ?? "Pocketknife creation failed.");
+    const transaction = inventory?.records().find((record) =>
+      record.txFinal === startupPocketknifeTxFinal || run?.runId && record.owner === run.runId);
+    if (transaction) startupPocketknifeTxFinal = transaction.txFinal;
+    if (transaction?.state === "expired" || startupPocketknifeTxFinal && !transaction) {
+      showStartupError(transaction?.reason ?? "The pocketknife transaction is no longer available.");
+      return;
+    }
+    if (transaction?.state === "recorded" && startupPocketknifeSubmitError) {
+      showStartupError(startupErrorText(startupPocketknifeSubmitError));
+      return;
+    }
+    if (!transaction && (run?.requestError || run?.state?.status === "failed")) {
+      showStartupError(run.requestError ?? run.state.error ?? "Setup failed.");
       return;
     }
     if (run?.transportError) {
       showStartupError(startupErrorText(run.transportError, "Could not check progress: "));
       return;
     }
-    if (run?.state?.status === "committing" || run?.state?.status === "succeeded") {
-      showStartup("Waiting for confirmation...", "Your pocketknife is being confirmed by the network. This can take a little while.", pocketknifeIcon());
+    if (transaction || run?.state?.status === "committing" || run?.state?.status === "succeeded") {
+      setStartupProgress(3);
+      showStartup("Connecting to Bitcraft network...");
     } else {
-      showStartup("Creating your first pocketknife...", "Bitcraft is making a cryptographic proof for your starter tool. You will be ready to gather resources soon.", pocketknifeIcon());
+      showStartup("Loading cryptography engine...");
     }
   }
 
@@ -956,6 +1155,12 @@
       + (dobjHome ? ` Its log is dobjd.log in ${dobjHome}.` : "");
   }
 
+  function startupInventoryError(error) {
+    if (startupPocketknifeActive) {
+      showStartupError(startupErrorText(error, "Could not refresh inventory: "));
+    }
+  }
+
   async function discardObjectUnsafe(fileName) {
     try {
       await postJson(`/objects/${encodeURIComponent(fileName)}/discard_unsafe`, {});
@@ -967,17 +1172,18 @@
   async function ensureStartupPocketknife() {
     stopStartupPocketknife();
     startupPocketknifeRun = null;
+    startupPocketknifeTxFinal = null;
+    startupPocketknifeSubmitError = null;
     hideRestoredStartupRun();
     renderRuns();
-    const objects = await fetchJson("/objects/unspent");
-    showObjects(objects);
+    const objects = await inventory.reload();
     if (objects.some((object) => isPocketknife(object.class) && isLive(object))) {
-      setStartupProgress(3);
+      setStartupProgress(4);
       finishStartup();
       return;
     }
     startupPocketknifeActive = true;
-    const activeRun = runs.find((run) => isRunInProgress(run) && (
+    const activeRun = runs.find((run) => (run.runId || run.proofJob && !["done", "failed"].includes(run.proofJob.status)) && isRunInProgress(run) && (
       run.action.action.name === "CraftPocketknife"
       || run.action.totalOutputs?.some((output) => isPocketknife(output.class))
     ));
@@ -985,25 +1191,42 @@
       activeRun.onUpdate = updateStartupPocketknife;
       updateStartupPocketknife(activeRun);
     } else {
-      // No run is left to finish these. The object listing reports local
-      // state when it cannot reach the synchronizer, so reaching it here is
-      // what shows the listing really found them off chain.
+      const transaction = inventory.records().find((record) =>
+        ["recorded", "submitted"].includes(record.state) && (
+          record.action.pluginName === PLUGIN_NAME && record.action.name === "CraftPocketknife"
+          || record.outputFiles.some((fileName) => objects.some((object) =>
+            object.fileName === fileName && isPocketknife(object.class)))
+        ));
+      if (transaction) {
+        startupPocketknifeTxFinal = transaction.txFinal;
+        updateStartupPocketknife();
+        if (transaction.state === "recorded" && transaction.submitAttemptedAtMs == null) {
+          try {
+            const records = await postJson("/transactions/submit", { txFinals: [transaction.txFinal] });
+            records.forEach((record) => inventory.accept({ type: "transaction", ...record }));
+          } catch (error) {
+            startupPocketknifeSubmitError = error;
+            throw error;
+          }
+        }
+        return;
+      }
+      // The listing can fall back to local state. Check the synchronizer
+      // before discarding outputs that have no run or open transaction.
       const staleKnives = objects.filter((object) => isPocketknife(object.class));
       if (staleKnives.length > 0) {
         try {
           await fetchJson("/state-root");
         } catch (error) {
-          throw new Error(`Could not check your pocketknife on the network: ${error.message}`);
+          throw new Error(`Could not reach the Bitcraft network: ${error.message}`);
         }
       }
       for (const knife of staleKnives) {
         await discardObjectUnsafe(knife.fileName);
-      }
-      if (staleKnives.length > 0) {
-        showObjects(objects.filter((object) => !staleKnives.includes(object)));
+        inventory.accept({ type: "object-removed", fileName: knife.fileName });
       }
       const action = pluginActions.find((candidate) => candidate.action.name === "CraftPocketknife");
-      if (!action) throw new Error("The starter pocketknife recipe is unavailable. Check that the Bitcraft plugin is installed.");
+      if (!action) throw new Error("A recipe Bitcraft needs to start is unavailable. Check that the Bitcraft plugin is installed.");
       await startRun(action, [], {
         showInJobs: false,
         onUpdate(run) {
@@ -1011,13 +1234,6 @@
           updateStartupPocketknife(run);
         },
       });
-    }
-    if (startupPocketknifeActive) {
-      startupPocketknifeTimer = setInterval(() => {
-        if (!startupPocketknifeRun || !isRunInProgress(startupPocketknifeRun) || startupPocketknifeRun.transportError) {
-          return reloadObjects();
-        }
-      }, 1500);
     }
   }
 
@@ -1089,13 +1305,27 @@
     Quarry: [40, 130, 300, 630, 1280, 2570],
     MiningDrill: [135, 420, 975, 2070, 4245, 8580],
   };
+  // Tools that wear out: the `durability` a new one starts with. Such a
+  // tool is worth its Total Bit Value times the fraction of that it has left.
+  const FULL_DURABILITY = { WoodAxe: 100, StoneAxe: 100, IronAxe: 100 };
 
   // The class whose art heads the Inventory Summary window, which totals the
   // inventory in bits.
   const SUMMARY_ICON_CLASS = "Bit";
 
-  // The game's website, opened in the player's browser from the top bar.
+  // The order Recipe Info lists the classes in: the starter tool, the
+  // resources and what they make, then the tools, machines and buckets.
+  // Classes not listed follow, by name.
+  const REFERENCE_CLASS_ORDER = [
+    "Pocketknife", "Wood", "Stone", "Iron", "Bit", "Stick",
+    "WoodAxe", "StoneAxe", "IronAxe", "Quarry", "MiningDrill",
+    "BucketOfWood", "BucketOfStone", "BucketOfIron",
+  ];
+
+  // The game's website and Discord server, linked from the Settings window
+  // and opened in the player's browser.
   const BITCRAFT_SITE_URL = "https://bitcraft.sh/";
+  const BITCRAFT_DISCORD_URL = "https://discord.gg/cWtZZYrer";
 
   // ---- End of bitcraft-specific rules.
 
@@ -1108,16 +1338,19 @@
   const docIconTemplate = document.getElementById("doc-icon");
 
   // `?page=recipebook` loads this page as the Recipe Info window, opened from
-  // the main window's top bar. Its address tracks the selected action, so
-  // `?page=recipebook&action=bitcraft::GatherWood` links to that action.
+  // the main window's top bar. Its address tracks the selected class or
+  // action, so `?page=recipebook&class=bitcraft::Wood` or
+  // `?page=recipebook&action=bitcraft::GatherWood` links to it.
   const PAGE_PARAM = "page";
   const RECIPEBOOK_PAGE = "recipebook";
-  const RECIPE_ACTION_PARAM = "action";
+  const REFERENCE_PARAMS = { class: "class", action: "action" };
   const REFERENCE_WINDOW_NAME = "bitcraft-recipe-info";
+  const REFERENCE_WINDOW_FEATURES = "popup,width=1000,height=720";
   // `?page=summary` loads this page as the Inventory Summary window.
   const SUMMARY_PAGE = "summary";
   const SUMMARY_WINDOW_NAME = "bitcraft-inventory-summary";
-  const SUMMARY_REFRESH_MS = 10000;
+  const SUMMARY_WINDOW_FEATURES = "popup,width=420,height=560";
+  const INVENTORY_RECONCILE_MS = 10000;
   const initialParams = new URLSearchParams(location.search);
   const isReferenceWindow = initialParams.get(PAGE_PARAM) === RECIPEBOOK_PAGE;
   const isSummaryWindow = initialParams.get(PAGE_PARAM) === SUMMARY_PAGE;
@@ -1125,19 +1358,34 @@
   const SETTINGS_PAGE = "settings";
   const SETTINGS_WINDOW_NAME = "bitcraft-settings";
   const isSettingsWindow = initialParams.get(PAGE_PARAM) === SETTINGS_PAGE;
+  // `?page=raw&file=NAME` loads this page as a window showing a file's
+  // stored text: an object's, or that of a text file served beside this page.
+  const RAW_PAGE = "raw";
+  const RAW_FILE_PARAM = "file";
+  const isRawWindow = initialParams.get(PAGE_PARAM) === RAW_PAGE;
+  // The file window's size, and the title bar's font and the room its window
+  // buttons take on each side of the centered title.
+  const FILE_WINDOW_MIN_WIDTH = 480;
+  const FILE_WINDOW_HEIGHT = 420;
+  const FILE_WINDOW_TITLE_FONT = '600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  const FILE_WINDOW_TITLE_MARGIN = 90;
   // Windows opened from the top bar, by name.
   const openedWindows = new Map();
   const summaryView = document.getElementById("summary-view");
-  let summaryRefreshInFlight = false;
-  let summaryRefreshQueued = false;
-  // Set while the summary polls, which it does only while some object is
-  // not yet live.
-  let summaryPoll = null;
+  const rowTooltip = document.getElementById("row-tooltip");
+  const ROW_TOOLTIP_DELAY_MS = 250;
+  // Pending while the pointer rests on a row, and the pointer's last event.
+  let rowTooltipTimer = null;
+  let rowTooltipPointer = null;
   const recipeList = document.getElementById("recipe-list");
   const recipeDetailsBody = document.getElementById("recipe-details-body");
   let recipeActions = [];
-  let selectedRecipeName = null;
-  const recipeRowsByName = new Map();
+  let referenceClasses = [];
+  // The selected list entry, `{ kind: "class" | "action", name }` with a
+  // qualified name, or null.
+  let selectedReference = null;
+  // List rows by `referenceKey`.
+  const referenceRows = new Map();
 
   const NOT_AVAILABLE = "n/a";
   const SERVICE_STATUS_INTERVAL_MS = 10000;
@@ -1154,13 +1402,16 @@
   // time, or a file's shown state changing.
   const flashStartedAt = new Map();
   const ROW_FLASH_MS = 1500;
-  let objectReloadInFlight = false;
-  let objectReloadQueued = false;
+  let inventory = null;
   let pluginActions = [];
   let objectsDirPath = "";
-  // Runs started from this page, newest first. A selected run is always the
-  // only selection: selecting one clears the object selection.
+  // One displayed job per action, including work started by other clients.
+  // Selecting a job clears the object selection.
   let runs = [];
+  const discoveringRuns = new Map();
+  const discoveringTransactions = new Map();
+  let restoringActivity = null;
+  let activityEventsDuringRestore = null;
   let nextRunClientId = 1;
   let selectedRunId = null;
   const rowsByFileName = new Map();
@@ -1301,18 +1552,80 @@
     return [subsection("Description"), body];
   }
 
-  // A class's qualified name with its small icon to the left.
-  function classLabel(qualifiedName) {
+  // A class's qualified name with its small icon to the left. A `linked`
+  // name opens the class in Recipe Info.
+  function classLabel(qualifiedName, linked = false) {
     const label = document.createElement("span");
     label.className = "class-label";
-    label.append(smallClassIcon(qualifiedName), qualifiedClassName(qualifiedName));
+    label.append(smallClassIcon(qualifiedName),
+      linked ? referenceLink("class", qualifiedName) : qualifiedClassName(qualifiedName));
     return label;
+  }
+
+  // Recipe Info's address with a class or action selected.
+  function referenceUrl(reference) {
+    const url = new URL(location.href);
+    url.search = new URLSearchParams({
+      [PAGE_PARAM]: RECIPEBOOK_PAGE,
+      [REFERENCE_PARAMS[reference.kind]]: reference.name,
+    }).toString();
+    return url;
+  }
+
+  // A class's or action's name that shows it in Recipe Info: in that window
+  // by selecting it, elsewhere by opening or focusing the window at it.
+  function referenceLink(kind, qualifiedName) {
+    const reference = { kind, name: qualifiedClassName(qualifiedName) };
+    const link = document.createElement("a");
+    link.className = `reference-link ${kind}-link`;
+    link.href = referenceUrl(reference).href;
+    link.textContent = reference.name;
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      if (isReferenceWindow) {
+        showReferenceEntry(reference);
+      } else {
+        openReference(reference);
+      }
+    });
+    return link;
+  }
+
+  // Selects the entry in this Recipe Info window's list. False when the list
+  // does not have it, as before the list has loaded.
+  function showReferenceEntry(reference) {
+    const row = referenceRows.get(referenceKey(reference));
+    if (row === undefined) {
+      return false;
+    }
+    selectReference(reference);
+    row.scrollIntoView({ block: "nearest" });
+    return true;
+  }
+
+  // An open Recipe Info window is asked to select the entry, and is sent to
+  // its address when it cannot.
+  function openReference(reference) {
+    const url = referenceUrl(reference);
+    const opened = openedWindows.get(REFERENCE_WINDOW_NAME);
+    if (opened && !opened.closed) {
+      let shown = false;
+      try {
+        shown = opened.showReferenceEntry(reference) === true;
+      } catch {}
+      if (!shown) {
+        opened.location.href = url.href;
+      }
+      opened.focus();
+      return;
+    }
+    openedWindows.set(REFERENCE_WINDOW_NAME, window.open(url, REFERENCE_WINDOW_NAME, REFERENCE_WINDOW_FEATURES));
   }
 
   function summaryLine(object, leadingParts) {
     return fileSummaryLine(object.fileName, [
       ...leadingParts,
-      object.class ? classLabel(object.class) : NOT_AVAILABLE,
+      object.class ? classLabel(object.class, true) : NOT_AVAILABLE,
       formatFileSize(object.fileSize),
       object.status ?? NOT_AVAILABLE,
     ]);
@@ -1338,9 +1651,11 @@
     }
     const rawLink = document.createElement("a");
     rawLink.href = fileUrl(fileName);
-    rawLink.target = "_blank";
-    rawLink.rel = "noopener";
     rawLink.textContent = "View raw";
+    rawLink.addEventListener("click", (event) => {
+      event.preventDefault();
+      openFileWindow(fileName);
+    });
     line.append(rawLink);
     return line;
   }
@@ -1423,7 +1738,7 @@
         label: fileNames.length === 1 ? "Open" : "Open all",
         onSelect: () => {
           for (const fileName of fileNames) {
-            window.open(fileUrl(fileName), "_blank", "noopener");
+            openFileWindow(fileName);
           }
         },
       });
@@ -1446,7 +1761,7 @@
         label: qualifiedClassName(action.action),
         labelClass: "action-name",
         icon: actionIcon(action.action, 16),
-        isDisabled: () => runs.some(isRunInProgress),
+        isDisabled: () => !inputsAvailable(fileNames),
         onSelect: () => startRun(action, fileNames),
       });
     }
@@ -1556,7 +1871,7 @@
   }
 
   function isRunInProgress(run) {
-    if (run.requestError !== null) {
+    if (run.requestError !== null && !run.transaction) {
       return false;
     }
     const status = run.state?.status;
@@ -1570,6 +1885,12 @@
       inputFileNames,
       runId: null,
       state: null,
+      runSnapshot: null,
+      proofJob: null,
+      proofProgress: [],
+      transaction: null,
+      transactionDeleted: false,
+      mergedInto: null,
       requestError: null,
       transportError: null,
       eventSource: null,
@@ -1588,9 +1909,224 @@
     };
   }
 
+  function canonicalActivity(run) {
+    while (run.mergedInto) run = run.mergedInto;
+    return run;
+  }
+
+  function activityAction(action) {
+    return pluginActions.find((candidate) => qualifiedClassName(candidate.action) === qualifiedClassName(action))
+      ?? { action };
+  }
+
+  // Owner labels alone are not identities: several direct driver actions can
+  // share one. Link an owner only to a known run or proof-job ID.
+  function activityFor(action, inputs, { runId, jobId, txFinal, owner } = {}, preferred = null) {
+    const matches = runs.filter((run) =>
+      runId && (run.runId === runId || run.transaction?.owner === runId)
+      || jobId && (run.proofJob?.jobId === jobId || run.transaction?.owner === jobId)
+      || txFinal && (run.transaction?.txFinal === txFinal || run.proofJob?.txFinal === txFinal)
+      || owner && (run.runId === owner || run.proofJob?.jobId === owner));
+    const run = preferred ? canonicalActivity(preferred) : matches[0] ?? newRun(activityAction(action), inputs);
+    if (!runs.includes(run)) runs.unshift(run);
+    for (const other of matches) {
+      if (other === run) continue;
+      other.eventSource?.close();
+      run.runId ??= other.runId;
+      run.runSnapshot ??= other.runSnapshot;
+      run.proofJob ??= other.proofJob;
+      run.proofProgress.push(...other.proofProgress);
+      run.transaction ??= other.transaction;
+      run.transactionDeleted ||= other.transactionDeleted;
+      run.showInJobs &&= other.showInJobs;
+      run.onUpdate ??= other.onUpdate;
+      run.clientStartedAt = Math.min(run.clientStartedAt, other.clientStartedAt);
+      if (selectedRunId === other.id) selectedRunId = run.id;
+      if (startupPocketknifeRun === other) startupPocketknifeRun = run;
+      other.mergedInto = run;
+      runs = runs.filter((candidate) => candidate !== other);
+    }
+    run.runId ??= runId ?? null;
+    run.action = activityAction(action);
+    run.inputFileNames = inputs.map((path) => path.split(/[\\/]/).at(-1));
+    return run;
+  }
+
+  function transactionProgress(record) {
+    return [
+      [record.recordedAtMs, "Transaction recorded", "running"],
+      [record.submitAttemptedAtMs, "Submission attempted", "running"],
+      [record.submittedAtMs, "Waiting for confirmation", "running"],
+      [record.settledAtMs, record.state === "landed" ? "Transaction landed" : record.reason ?? "Transaction expired",
+        record.state === "landed" ? "done" : "failed"],
+    ].filter(([atMs]) => atMs != null).map(([atMs, message, status]) => ({
+      atMs, message, status, phase: "commit", outputFiles: record.outputFiles,
+    }));
+  }
+
+  function updateActivityState(run) {
+    const proof = run.proofJob;
+    const record = run.transaction;
+    const state = { status: "queued", progress: [], error: null, result: null, ...run.runSnapshot };
+    if (!run.runSnapshot && proof) {
+      Object.assign(state, {
+        status: proof.status === "failed" ? "failed" : ["recording", "done"].includes(proof.status) ? "committing"
+          : proof.status === "queued" ? "queued" : "generateProof",
+        createdAtMs: proof.createdAtMs, startedAtMs: proof.startedAtMs,
+        finishedAtMs: proof.status === "failed" ? proof.finishedAtMs : null,
+        error: proof.error, inputObjectPaths: proof.inputObjectPaths,
+        progress: run.proofProgress,
+      });
+    }
+    if (record) {
+      const terminal = ["landed", "expired"].includes(record.state);
+      Object.assign(state, {
+        status: record.state === "landed" ? "succeeded" : record.state === "expired" ? "failed" : "committing",
+        createdAtMs: state.createdAtMs ?? record.recordedAtMs,
+        finishedAtMs: terminal ? record.settledAtMs : null,
+        inputObjectPaths: record.inputFiles,
+        error: record.state === "expired" ? record.reason ?? "Transaction expired without landing" : null,
+        result: record.state === "landed" ? {
+          oldRoot: record.groundingRoot, inputFiles: record.inputFiles, outputFiles: record.outputFiles,
+        } : null,
+      });
+      if (!run.runSnapshot) state.progress = [...run.proofProgress, ...transactionProgress(record)]
+        .sort((left, right) => left.atMs - right.atMs);
+      else if (terminal && !["succeeded", "failed"].includes(run.runSnapshot.status)) {
+        state.progress = [...state.progress, ...transactionProgress(record)
+          .filter((event) => event.atMs === record.settledAtMs)];
+      }
+    }
+    if (run.transactionDeleted) {
+      state.status = "failed";
+      state.error = "Transaction was deleted before submission";
+      state.finishedAtMs ??= run.clientEndedAt ?? Date.now();
+    }
+    run.state = state;
+    run.clientEndedAt = ["succeeded", "failed"].includes(state.status)
+      ? state.finishedAtMs ?? run.clientEndedAt ?? Date.now() : null;
+    if (["succeeded", "failed"].includes(state.status)) run.eventSource?.close();
+    hideRestoredStartupRun();
+  }
+
+  function trackRun(state, preferred = null) {
+    const run = activityFor(state.action, state.inputObjectPaths ?? [], { runId: state.runId }, preferred);
+    const previous = run.runSnapshot;
+    const rank = { queued: 0, generateProof: 1, committing: 2, succeeded: 3, failed: 3 };
+    if (!previous || rank[state.status] >= rank[previous.status]
+      && (state.progress?.length ?? 0) >= (previous.progress?.length ?? 0)) {
+      run.runSnapshot = state;
+    }
+    run.requestError = null;
+    updateActivityState(run);
+    return run;
+  }
+
+  function trackProofJob(proof) {
+    let run = activityFor(proof.action, proof.inputObjectPaths ?? [], { jobId: proof.jobId, txFinal: proof.txFinal });
+    const rank = { queued: 0, proving: 1, recording: 2, done: 3, failed: 3 };
+    if (!run.proofJob || rank[proof.status] >= rank[run.proofJob.status]) {
+      if (proof.message && (proof.message !== run.proofJob?.message || proof.status !== run.proofJob?.status)) {
+        run.proofProgress.push({
+          phase: ["recording", "done"].includes(proof.status) ? "commit" : "generateProof",
+          status: proof.status === "failed" ? "failed" : proof.status === "done" ? "done" : "running",
+          message: proof.message, atMs: proof.finishedAtMs ?? Date.now(),
+        });
+      }
+      run.proofJob = proof;
+    }
+    run.requestError = null;
+    updateActivityState(run);
+    if (proof.txFinal && !run.transaction && !run.transactionDeleted) {
+      const record = inventory?.records().find((record) => record.txFinal === proof.txFinal);
+      if (record) run = trackTransaction(record);
+      else discoverTransaction(proof.txFinal);
+    }
+    if (run.runSnapshot) followRun(run);
+    return run;
+  }
+
+  function trackTransaction(record, create = true) {
+    if (!create && !["recorded", "submitted"].includes(record.state)
+      && !runs.some((run) => run.transaction?.txFinal === record.txFinal || run.proofJob?.txFinal === record.txFinal
+        || run.runId === record.owner || run.proofJob?.jobId === record.owner)) return;
+    const run = activityFor(record.action, record.inputFiles, { txFinal: record.txFinal, owner: record.owner });
+    const rank = { recorded: 0, submitted: 1, landed: 2, expired: 2 };
+    if (!run.transaction || rank[record.state] > rank[run.transaction.state]
+      || record.state === run.transaction.state) run.transaction = record;
+    run.requestError = null;
+    updateActivityState(run);
+    if (run.runSnapshot) followRun(run);
+    return run;
+  }
+
+  function refreshActivity(run) {
+    showSelection();
+    run?.onUpdate?.(run);
+  }
+
+  function discoverRun(runId) {
+    if (discoveringRuns.has(runId)) return discoveringRuns.get(runId);
+    const request = fetchJson(`/runs/${encodeURIComponent(runId)}`).then((state) => {
+      if (!activityInScope(state.action)) return;
+      const run = trackRun(state);
+      followRun(run);
+      refreshActivity(run);
+    }).catch((error) => console.warn("Could not discover run:", error))
+      .finally(() => discoveringRuns.delete(runId));
+    discoveringRuns.set(runId, request);
+    return request;
+  }
+
+  function discoverTransaction(txFinal) {
+    if (discoveringTransactions.has(txFinal)) return discoveringTransactions.get(txFinal);
+    const request = fetchJson(`/transactions/${encodeURIComponent(txFinal)}`).then((record) => {
+      inventory.accept({ type: "transaction", ...record });
+    }).catch((error) => {
+      if (error.status === 404) activityEvent({ type: "transaction-deleted", txFinal });
+      else console.warn("Could not discover transaction:", error);
+    }).finally(() => discoveringTransactions.delete(txFinal));
+    discoveringTransactions.set(txFinal, request);
+    return request;
+  }
+
+  function activityEvent(event) {
+    if (!["run-action-progress", "proof-job", "transaction", "transaction-deleted"].includes(event.type)) return;
+    activityEventsDuringRestore?.push(event);
+    let run;
+    if (event.type === "run-action-progress") {
+      run = runs.find((run) => run.runId === event.runId);
+      if (!run) discoverRun(event.runId);
+    } else if (event.type === "proof-job" && activityInScope(event.action)) {
+      run = trackProofJob(event);
+    } else if (event.type === "transaction" && activityInScope(event.action)) {
+      run = trackTransaction(event);
+    } else if (event.type === "transaction-deleted") {
+      run = runs.find((run) => run.transaction?.txFinal === event.txFinal || run.proofJob?.txFinal === event.txFinal);
+      if (run) {
+        run.transactionDeleted = true;
+        updateActivityState(run);
+      }
+    }
+    if (run && event.type !== "run-action-progress") refreshActivity(run);
+  }
+
+  function inputRun(fileName) {
+    return runs.find((run) => isRunInProgress(run) && run.inputFileNames.includes(fileName));
+  }
+
+  function inputsAvailable(fileNames) {
+    return fileNames.every((fileName) => {
+      const object = objectsByFileName.get(fileName);
+      return object?.status === "live" && object.heldByRunId == null
+        && !inputRun(fileName);
+    });
+  }
+
   async function startRun(action, fileNames, { showInJobs = true, onUpdate = null } = {}) {
+    if (!inputsAvailable(fileNames)) return null;
     const inputFileNames = assignInputSlots(action, fileNames).map((object) => object.fileName);
-    const run = newRun(action, inputFileNames);
+    let run = newRun(action, inputFileNames);
     run.showInJobs = showInJobs;
     run.onUpdate = onUpdate;
     runs.unshift(run);
@@ -1598,11 +2134,10 @@
     run.onUpdate?.(run);
 
     try {
-      const accepted = await postJson("/actions/run", {
+      const accepted = await postJson("/runs", {
         input: { action: action.action, inputObjectPaths: inputFileNames },
       });
-      run.runId = accepted.runId;
-      run.state = { status: accepted.status, progress: [], createdAtMs: accepted.createdAtMs };
+      run = trackRun({ ...accepted, action: action.action, inputObjectPaths: inputFileNames, progress: [] }, run);
       run.onUpdate?.(run);
       followRun(run);
     } catch (error) {
@@ -1610,10 +2145,7 @@
       run.clientEndedAt = Date.now();
       run.onUpdate?.(run);
     }
-    renderRuns();
-    if (run.id === selectedRunId) {
-      renderDetails();
-    }
+    showSelection();
     return run;
   }
 
@@ -1621,7 +2153,9 @@
   // The terminal status is not an event: it arrives through the re-read
   // prompted by dobjd closing the stream once the run has finished.
   function followRun(run) {
-    const runPath = `/actions/runs/${encodeURIComponent(run.runId)}`;
+    run = canonicalActivity(run);
+    if (!run.runId || run.eventSource || ["succeeded", "failed"].includes(run.runSnapshot?.status)) return;
+    const runPath = `/runs/${encodeURIComponent(run.runId)}`;
     let source = null;
     try {
       source = new EventSource(`${DOBJD_URL}${runPath}/events`);
@@ -1631,10 +2165,11 @@
     run.eventSource = source;
 
     const readState = async () => {
+      run = canonicalActivity(run);
       if (!isRunInProgress(run)) return;
-      const previous = run.state;
       try {
-        run.state = await fetchJson(runPath);
+        const state = await fetchJson(runPath);
+        run = trackRun(state, canonicalActivity(run));
         run.transportError = null;
       } catch (error) {
         if (error.status !== 404) {
@@ -1642,23 +2177,19 @@
           run.onUpdate?.(run);
           return;
         }
-        run.requestError = "dobjd no longer has this run.";
+        source?.close();
+        if (run.transaction || run.proofJob) {
+          run.runSnapshot = null;
+          updateActivityState(run);
+        } else {
+          run.requestError = "dobjd no longer has this run.";
+        }
       }
       if (!isRunInProgress(run)) {
         run.clientEndedAt ??= Date.now();
         source?.close();
       }
-      // Inputs become held and outputs appear (pending, then live) only at
-      // a status change or a new progress step.
-      if (run.state?.status !== previous?.status
-        || run.state?.progress?.length !== previous?.progress?.length
-        || !isRunInProgress(run)) {
-        reloadObjects();
-      }
-      renderRuns();
-      if (run.id === selectedRunId) {
-        renderDetails();
-      }
+      showSelection();
       run.onUpdate?.(run);
     };
 
@@ -1714,35 +2245,54 @@
     return `${Math.floor(hours / 24)}d ago`;
   }
 
-  // Rebuilds the job list from the runs dobjd still has in
-  // progress, so a reload does not lose them. Runs that finished before the
-  // page loaded are left out, as are runs this page already tracks.
+  // Recover retained activity, including actions that finished during a
+  // disconnect. Events received during the reads supersede their snapshots.
   async function restoreRuns() {
-    let retainedRuns;
-    try {
-      retainedRuns = await fetchJson("/actions/runs?status=active");
-    } catch (error) {
-      console.warn("Could not list runs:", error);
-      return false;
-    }
-    for (const state of retainedRuns) {
-      const alreadyTracked = runs.some((run) => run.runId === state.runId);
-      if (state.action.pluginName !== PLUGIN_NAME || alreadyTracked) {
-        continue;
+    if (restoringActivity) return restoringActivity;
+    const events = [];
+    const knownRuns = new Set(runs.map((run) => run.runId).filter(Boolean));
+    const knownProofs = new Set(runs.map((run) => run.proofJob?.jobId).filter(Boolean));
+    activityEventsDuringRestore = events;
+    restoringActivity = (async () => {
+      try {
+        const [retainedRuns, proofJobs] = await Promise.all([fetchJson("/runs"), fetchJson("/proof-jobs")]);
+        for (const state of retainedRuns) {
+          if (!activityInScope(state.action)) continue;
+          const run = trackRun(state);
+          followRun(run);
+        }
+        for (const proof of proofJobs) {
+          if (activityInScope(proof.action)) trackProofJob(proof);
+        }
+        for (const run of runs) {
+          if (knownRuns.has(run.runId) && !retainedRuns.some((state) => state.runId === run.runId)
+            && !events.some((event) => event.runId === run.runId) && isRunInProgress(run)) {
+            run.eventSource?.close();
+            run.runSnapshot = null;
+            if (!run.transaction && !run.proofJob) run.requestError = "dobjd no longer has this run.";
+            updateActivityState(run);
+          }
+          if (knownProofs.has(run.proofJob?.jobId) && !proofJobs.some((proof) => proof.jobId === run.proofJob.jobId)
+            && !events.some((event) => event.jobId === run.proofJob.jobId)
+            && !run.transaction && !run.runSnapshot && isRunInProgress(run)) {
+            run.requestError = "dobjd no longer has this proof job.";
+          }
+          if (run.requestError) {
+            run.clientEndedAt ??= Date.now();
+            run.onUpdate?.(run);
+          }
+        }
+        return true;
+      } catch (error) {
+        console.warn("Could not restore activity:", error);
+        return false;
+      } finally {
+        activityEventsDuringRestore = null;
+        for (const event of events) activityEvent(event);
+        showSelection();
       }
-      const action = pluginActions.find(
-        (candidate) => qualifiedClassName(candidate.action) === qualifiedClassName(state.action),
-      ) ?? { action: state.action };
-      const run = newRun(action, state.inputObjectPaths ?? []);
-      run.runId = state.runId;
-      run.state = state;
-      runs.unshift(run);
-      if (isRunInProgress(run)) {
-        followRun(run);
-      }
-    }
-    renderRuns();
-    return true;
+    })().finally(() => { restoringActivity = null; });
+    return restoringActivity;
   }
 
   setInterval(() => {
@@ -1824,7 +2374,7 @@
       run.elapsedElement = document.createElement("span");
       run.elapsedElement.textContent = elapsedText(run);
       runDetail.append(
-        ` ${run.runId === null ? "Job" : `Job ${run.runId.slice(0, 4)}`} \u00b7 `,
+        ` ${activityId(run) === null ? "Job" : `Job ${activityId(run).slice(0, 4)}`} \u00b7 `,
         run.elapsedElement,
       );
       run.finishedAgoElement = null;
@@ -1923,15 +2473,12 @@
     const hashTable = document.createElement("table");
     hashTable.className = "field-table";
     appendFieldRow(hashTable, "hash", action.hash || null);
-
-    const source = document.createElement("pre");
-    source.className = "action-source";
-    source.textContent = formatPredicateSource(action.predicateSource);
+    appendFieldRow(hashTable, "defined in", action.sourcePath || null);
 
     const classLines = (slots) => numberedLines(slots.map((slot) => (prefix) => {
       const line = document.createElement("div");
       line.className = "details-meta";
-      line.append(prefix, " \u00b7 ", classLabel(slot.class));
+      line.append(prefix, " \u00b7 ", classLabel(slot.class, true));
       return line;
     }));
 
@@ -1963,13 +2510,41 @@
     if (newOutputs.length > 0) {
       container.append(subsection("Outputs"), outputs);
     }
-    const sourceSection = document.createElement("details");
-    sourceSection.className = "collapsible-section";
-    const sourceTitle = document.createElement("summary");
-    sourceTitle.className = "subsection-title";
-    sourceTitle.textContent = "Action Source";
-    sourceSection.append(sourceTitle, source);
-    container.append(sourceSection);
+    container.append(collapsibleSource("Action Source", formatPredicateSource(action.predicateSource)));
+  }
+
+  // A collapsed section titled `titleText` holding PODlang source.
+  function collapsibleSource(titleText, sourceText) {
+    const section = document.createElement("details");
+    section.className = "collapsible-section";
+    const title = document.createElement("summary");
+    title.className = "subsection-title";
+    title.textContent = titleText;
+    const source = document.createElement("pre");
+    source.className = "action-source";
+    source.textContent = sourceText;
+    section.append(title, source);
+    return section;
+  }
+
+  // The Details pane's icon for a class: the blank page with the class's art
+  // on it, or the blank page alone when it has none.
+  function largeClassIcon(qualifiedName) {
+    const icon = document.createElement("div");
+    icon.className = "details-icon";
+    const page = document.createElement("div");
+    page.className = "large-page-icon";
+    page.append(largeFileIconTemplate.content.cloneNode(true));
+    const classIconPath = Presentation.classInfo(qualifiedName).icon;
+    if (classIconPath) {
+      const classIcon = document.createElement("img");
+      classIcon.className = "large-class-icon";
+      classIcon.src = classIconPath;
+      classIcon.alt = "";
+      page.append(classIcon);
+    }
+    icon.append(page);
+    return icon;
   }
 
   // Probes the synchronizer and relayer dobjd is configured to use. The page
@@ -2032,18 +2607,19 @@
     openedWindows.set(name, window.open(url, name, features));
   }
 
-  // The Inventory Summary window reads only the inventory; it runs none of
-  // the main window's startup. Jobs announce their changes on the event
-  // stream, so it refreshes on every event and when the stream reconnects
-  // after missing some. A pending or unknown object settles only when the
-  // inventory is read, with no event, so it polls while one exists.
-  // The Settings window shows the connection addresses from dobjd's settings.
-  // They cannot be edited yet, so the fields are read-only.
+  // The Settings window shows the connection addresses from dobjd's settings,
+  // which cannot be edited yet, so the fields are read-only, and the game's
+  // version, website and Discord server.
   async function loadSettingsWindow() {
     document.body.classList.add("secondary-window");
     document.title = "Bitcraft Settings";
     const view = document.getElementById("settings-view");
     view.hidden = false;
+    document.getElementById("settings-version").textContent = BITCRAFT_VERSION;
+    const website = document.getElementById("settings-website");
+    website.href = BITCRAFT_SITE_URL;
+    website.textContent = BITCRAFT_SITE_URL.replace(/\/$/, "");
+    document.getElementById("settings-discord").href = BITCRAFT_DISCORD_URL;
     try {
       const settings = await fetchJson("/settings");
       document.getElementById("settings-synchronizer").value = settings.synchronizerApiUrl ?? "";
@@ -2056,58 +2632,146 @@
     }
   }
 
+  // The window is titled with the file's name, which the desktop app shows
+  // in its title bar.
+  async function loadRawWindow() {
+    document.body.classList.add("secondary-window");
+    const fileName = initialParams.get(RAW_FILE_PARAM) ?? "";
+    document.title = fileName;
+    document.getElementById("raw-view").hidden = false;
+    const text = document.getElementById("raw-text");
+    try {
+      const response = await fetch(fileName === WELCOME_FILE ? WELCOME_FILE : rawObjectUrl(fileName));
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      text.textContent = await response.text();
+    } catch (error) {
+      text.classList.add("error");
+      text.textContent = `Could not read ${fileName}: ${error.message}`;
+    }
+  }
+
+  // Buffer changes during a snapshot read so its older response cannot
+  // overwrite events received while the request was in flight.
+  function watchInventory(onChange, { onError = () => {}, onReconnect = () => {}, onActivity = () => {} } = {}) {
+    let objects = new Map();
+    let transactions = new Map();
+    let buffered = null;
+    let reading = null;
+    let readAgain = false;
+    let lastSeq = null;
+    let poll = null;
+    const source = new EventSource(`${DOBJD_URL}/events`);
+    const values = () => [...objects.values()];
+    const records = () => [...transactions.values()];
+    const reconcile = () => reload().catch((error) => {
+      console.warn("Could not refresh inventory:", error);
+      onError(error);
+    });
+    const notify = () => {
+      const recordedOutputs = new Set(records()
+        .filter((record) => ["recorded", "submitted"].includes(record.state))
+        .flatMap((record) => record.outputFiles));
+      const needsReconcile = values().some((object) => object.status !== "live"
+        && !recordedOutputs.has(object.fileName));
+      if (needsReconcile && poll === null) poll = setInterval(reconcile, INVENTORY_RECONCILE_MS);
+      if (!needsReconcile && poll !== null) {
+        clearInterval(poll);
+        poll = null;
+      }
+      onChange(values());
+    };
+    const apply = (event) => {
+      if (event.type === "object") {
+        const { type, seq, ...object } = event;
+        if (object.status === "nullified") objects.delete(object.fileName);
+        else objects.set(object.fileName, object);
+      } else if (event.type === "object-removed") {
+        objects.delete(event.fileName);
+      } else if (event.type === "transaction") {
+        const { type, seq, ...record } = event;
+        transactions.set(record.txFinal, record);
+      } else if (["transaction-deleted", "transaction-pruned"].includes(event.type)) {
+        transactions.delete(event.txFinal);
+      }
+    };
+    const accept = (event) => {
+      if (!["object", "object-removed", "transaction", "transaction-deleted", "transaction-pruned"].includes(event.type)) {
+        onActivity(event);
+        return;
+      }
+      buffered?.push(event);
+      apply(event);
+      onActivity(event);
+      notify();
+    };
+    async function reload() {
+      if (reading) {
+        readAgain = true;
+        return reading;
+      }
+      reading = (async () => {
+        do {
+          readAgain = false;
+          buffered = [];
+          const [snapshot, recordSnapshot] = await Promise.all([
+            fetchJson("/objects/unspent"), fetchJson("/transactions"),
+          ]);
+          objects = new Map(snapshot.map((object) => [object.fileName, object]));
+          transactions = new Map(recordSnapshot.map((record) => [record.txFinal, record]));
+          buffered.forEach(apply);
+          buffered = null;
+          notify();
+        } while (readAgain);
+        return values();
+      })();
+      try {
+        return await reading;
+      } finally {
+        buffered = null;
+        reading = null;
+      }
+    }
+    source.onmessage = ({ data }) => {
+      let event;
+      try { event = JSON.parse(data); } catch { reconcile(); return; }
+      const gap = lastSeq !== null && event.seq !== lastSeq + 1;
+      lastSeq = event.seq;
+      accept(event);
+      if (gap) reconcile().then(onReconnect);
+    };
+    // The initial snapshot may precede the connection, so the first open
+    // needs reconciliation too. Later opens also cover daemon restarts.
+    source.onopen = () => {
+      lastSeq = null;
+      reconcile().then(onReconnect);
+    };
+    window.addEventListener("focus", () => { reconcile().then(onReconnect); });
+    window.addEventListener("beforeunload", () => {
+      source.close();
+      clearInterval(poll);
+    });
+    return { reload, records, accept, values };
+  }
+
   async function loadSummaryWindow() {
     document.body.classList.add("secondary-window");
     document.title = "Bitcraft Inventory Summary";
     summaryView.hidden = false;
     await Presentation.load();
-    await refreshSummary();
-    const events = new EventSource(`${DOBJD_URL}/events`);
-    let eventsOpened = false;
-    events.onopen = () => {
-      if (eventsOpened) refreshSummary();
-      eventsOpened = true;
-    };
-    events.onmessage = () => refreshSummary();
-    window.addEventListener("focus", () => refreshSummary());
-  }
-
-  function updateSummaryPolling(objects) {
-    const unsettled = objects.some((object) => !isLive(object));
-    if (unsettled && summaryPoll === null) {
-      summaryPoll = setInterval(refreshSummary, SUMMARY_REFRESH_MS);
-    } else if (!unsettled && summaryPoll !== null) {
-      clearInterval(summaryPoll);
-      summaryPoll = null;
-    }
-  }
-
-  async function refreshSummary() {
-    if (summaryRefreshInFlight) {
-      summaryRefreshQueued = true;
-      return;
-    }
-    summaryRefreshInFlight = true;
+    inventory = watchInventory(renderSummary);
     try {
-      const objects = await fetchJson("/objects/unspent");
-      renderSummary(objects);
-      updateSummaryPolling(objects);
+      await inventory.reload();
     } catch (error) {
       const message = document.createElement("div");
       message.className = "message error";
       message.textContent = `Could not read the inventory: ${error.message}`;
       summaryView.replaceChildren(message);
-    } finally {
-      summaryRefreshInFlight = false;
-      if (summaryRefreshQueued) {
-        summaryRefreshQueued = false;
-        refreshSummary();
-      }
     }
   }
 
-  // Counts only live objects. The total covers every plugin's objects; the
-  // value and the per-class counts cover this plugin's.
+  // Counts this plugin's live objects only, the ones the list shows.
   function renderSummary(objects) {
     const liveObjects = objects.filter(isLive);
     const pluginObjects = liveObjects.filter((object) => object.class.pluginName === PLUGIN_NAME);
@@ -2115,11 +2779,11 @@
     const classes = new Map();
     for (const object of pluginObjects) {
       const className = qualifiedClassName(object.class);
-      const entry = classes.get(className) ?? { qualifiedName: object.class, count: 0 };
+      const entry = classes.get(className) ?? { qualifiedName: object.class, count: 0, value: 0 };
       entry.count++;
+      entry.value += totalBitValue(object);
       classes.set(className, entry);
     }
-    const count = (number, noun) => `${number.toLocaleString()} ${noun}${number === 1 ? "" : "s"}`;
     const wasOpen = new Map([...summaryView.querySelectorAll("details[data-section]")]
       .map((section) => [section.dataset.section, section.open]));
 
@@ -2143,15 +2807,13 @@
     title.textContent = "Inventory";
     const total = document.createElement("span");
     total.className = "summary-total";
-    total.textContent = count(totalValue, "bit");
+    total.textContent = formatBitValue(totalValue);
     titleRow.append(title, total);
-    const subtitle = document.createElement("div");
-    subtitle.className = "summary-subtitle";
-    subtitle.textContent = `${count(liveObjects.length, "live object")} in total`;
-    heading.append(titleRow, subtitle);
+    heading.append(titleRow);
     header.append(iconTile, heading);
 
-    const section = (key, titleText, rows) => {
+    // Each row is a label followed by its values, one column each.
+    const section = (key, titleText, rows, valueColumns = 1) => {
       const details = document.createElement("details");
       details.className = "summary-section";
       details.dataset.section = key;
@@ -2160,122 +2822,190 @@
       summary.textContent = titleText;
       const fields = document.createElement("dl");
       fields.className = "summary-fields";
-      for (const [label, value] of rows) {
+      if (valueColumns > 1) {
+        fields.classList.add("summary-table");
+        fields.style.gridTemplateColumns = `max-content repeat(${valueColumns}, max-content)`;
+      }
+      for (const [label, ...values] of rows) {
         const term = document.createElement("dt");
         term.append(...label);
-        const definition = document.createElement("dd");
-        definition.textContent = value;
-        fields.append(term, definition);
+        fields.append(term);
+        for (const value of values) {
+          const definition = document.createElement("dd");
+          definition.textContent = value;
+          fields.append(definition);
+        }
       }
       details.append(summary, fields);
       return details;
     };
-    const general = section("general", "General:", [
-      [["Total Bit Value:"], formatBitValue(totalValue)],
-      [["Total objects:"], liveObjects.length.toLocaleString()],
-    ]);
     const classNames = [...classes.keys()].sort((left, right) => left.localeCompare(right));
-    const byClass = section("classes", "Live objects:", classNames.map((className) => {
-      const { qualifiedName, count: classCount } = classes.get(className);
-      return [[classLabel(qualifiedName), ":"], classCount.toLocaleString()];
-    }));
+    const byClass = section("classes", `Objects (${pluginObjects.length.toLocaleString()}):`, classNames.map((className) => {
+      const { qualifiedName, count: classCount, value } = classes.get(className);
+      return [[classLabel(qualifiedName), ":"], classCount.toLocaleString(), formatBitValue(value)];
+    }), 2);
     if (classNames.length === 0) {
       const none = document.createElement("p");
       none.className = "summary-subtitle";
-      none.textContent = "No live objects yet.";
+      none.textContent = "No objects yet.";
       byClass.append(none);
     }
-    summaryView.replaceChildren(header, general, byClass);
+    summaryView.replaceChildren(header, byClass);
   }
 
-  // The Recipe Info window loads only the actions; it runs none of the main
-  // window's startup.
+  // The Recipe Info window loads only the classes and actions; it runs none
+  // of the main window's startup.
   async function loadReferenceWindow() {
     document.body.classList.add("secondary-window", "reference-window");
     document.title = "Bitcraft reference";
     document.getElementById("recipebook-view").hidden = false;
     renderRecipeDetails();
     try {
-      const [actions] = await Promise.all([fetchJson("/actions"), Presentation.load()]);
-      showRecipes(actions.filter((action) => action.action.pluginName === PLUGIN_NAME));
+      const [actions, classes] = await Promise.all([
+        fetchJson("/actions"),
+        fetchJson("/classes"),
+        Presentation.load(),
+      ]);
+      showReference(
+        classes.filter((entry) => entry.class.pluginName === PLUGIN_NAME).sort(compareReferenceClasses),
+        actions.filter((action) => action.action.pluginName === PLUGIN_NAME),
+      );
     } catch (error) {
       const message = document.createElement("li");
       message.className = "message error";
-      message.textContent = `Could not load recipes: ${error.message}`;
+      message.textContent = `Could not load the reference: ${error.message}`;
       recipeList.replaceChildren(message);
     }
   }
 
+  function referenceKey(reference) {
+    return `${reference.kind}:${reference.name}`;
+  }
+
+  function isSelectedReference(reference) {
+    return selectedReference !== null && referenceKey(selectedReference) === referenceKey(reference);
+  }
+
   function updateAddress() {
     const url = new URL(location.href);
-    if (selectedRecipeName === null) {
-      url.searchParams.delete(RECIPE_ACTION_PARAM);
-    } else {
-      url.searchParams.set(RECIPE_ACTION_PARAM, selectedRecipeName);
+    for (const param of Object.values(REFERENCE_PARAMS)) {
+      url.searchParams.delete(param);
+    }
+    if (selectedReference !== null) {
+      url.searchParams.set(REFERENCE_PARAMS[selectedReference.kind], selectedReference.name);
     }
     history.replaceState(null, "", url);
   }
 
-  function showRecipes(actions) {
+  function compareReferenceClasses(left, right) {
+    const rank = (entry) => {
+      const position = REFERENCE_CLASS_ORDER.indexOf(entry.class.name);
+      return position === -1 ? REFERENCE_CLASS_ORDER.length : position;
+    };
+    return rank(left) - rank(right) || left.class.name.localeCompare(right.class.name);
+  }
+
+  function showReference(classes, actions) {
+    referenceClasses = classes;
     recipeActions = actions;
-    renderRecipeList();
-    const linkedName = initialParams.get(RECIPE_ACTION_PARAM);
-    const linkedRow = recipeRowsByName.get(linkedName);
-    if (linkedRow !== undefined) {
-      selectRecipe(linkedName);
-      linkedRow.scrollIntoView({ block: "center" });
+    renderReferenceList();
+    for (const [kind, param] of Object.entries(REFERENCE_PARAMS)) {
+      const linked = { kind, name: initialParams.get(param) };
+      const linkedRow = referenceRows.get(referenceKey(linked));
+      if (linkedRow !== undefined) {
+        selectReference(linked);
+        linkedRow.scrollIntoView({ block: "center" });
+        return;
+      }
     }
   }
 
-  function renderRecipeList() {
+  function renderReferenceList() {
     recipeList.replaceChildren();
-    recipeRowsByName.clear();
-    for (const action of recipeActions) {
-      const actionName = qualifiedClassName(action.action);
-      const row = document.createElement("li");
-      row.className = "recipe-row";
-      row.classList.toggle("selected", actionName === selectedRecipeName);
-      row.addEventListener("mousedown", (event) => {
-        if (event.button !== 0 || (IS_MAC && event.ctrlKey)) {
-          return;
-        }
-        const toggleKeyHeld = IS_MAC ? event.metaKey : event.ctrlKey;
-        if (actionName === selectedRecipeName && !toggleKeyHeld) {
-          return;
-        }
-        selectRecipe(actionName === selectedRecipeName ? null : actionName);
-      });
+    referenceRows.clear();
+    const appendGroup = (titleText) => {
+      const heading = document.createElement("li");
+      heading.className = "reference-group";
+      heading.textContent = titleText;
+      recipeList.append(heading);
+    };
 
-      const iconSlot = document.createElement("span");
-      iconSlot.className = "recipe-icon-slot";
-      const icon = actionIcon(action.action, 32);
-      if (icon) {
-        iconSlot.append(icon);
+    if (referenceClasses.length > 0) appendGroup("Classes");
+    for (const entry of referenceClasses) {
+      const info = Presentation.classInfo(entry.class);
+      let icon = null;
+      if (info.icon) {
+        icon = document.createElement("img");
+        icon.className = "class-icon";
+        icon.src = info.icon;
+        icon.alt = "";
       }
+      const name = document.createElement("div");
+      name.textContent = qualifiedClassName(entry.class);
+      const summary = document.createElement("div");
+      summary.className = "action-detail reference-summary";
+      summary.textContent = referenceSummary(info, entry.description, "object class");
+      appendReferenceRow({ kind: "class", name: name.textContent }, icon, name, summary);
+    }
 
+    if (recipeActions.length > 0) appendGroup("Actions");
+    for (const action of recipeActions) {
       const name = document.createElement("div");
       name.className = "action-name";
-      name.textContent = actionName;
-
-      const path = document.createElement("div");
-      path.className = "action-detail recipe-path";
-      path.title = action.sourcePath ?? "";
-      // Marks keep the leading "/" in place under right-to-left layout.
-      path.textContent = `\u200e${action.sourcePath || NOT_AVAILABLE}\u200e`;
-
-      const text = document.createElement("div");
-      text.className = "row-text";
-      text.append(name, path);
-      row.append(iconSlot, text);
-      recipeRowsByName.set(actionName, row);
-      recipeList.append(row);
+      name.textContent = qualifiedClassName(action.action);
+      const summary = document.createElement("div");
+      summary.className = "action-detail reference-summary";
+      summary.textContent = referenceSummary(Presentation.actionInfo(action.action), action.description,
+        "executable action");
+      appendReferenceRow({ kind: "action", name: name.textContent }, actionIcon(action.action, 32), name, summary);
     }
   }
 
-  function selectRecipe(actionName) {
-    selectedRecipeName = actionName;
-    for (const [rowName, row] of recipeRowsByName) {
-      row.classList.toggle("selected", rowName === selectedRecipeName);
+  // A list row's second line: the pack's summary, else the manifest's
+  // description unless it is the "-" placeholder, else `fallback`.
+  function referenceSummary(info, manifestDescription, fallback) {
+    return info.summary
+      ?? (manifestDescription && manifestDescription !== "-" ? manifestDescription : fallback);
+  }
+
+  // Classes and actions come from their plugin's `.pexe`; dobjd reports its
+  // path with each action, not with classes.
+  function pluginSourcePath(pluginName) {
+    return recipeActions.find((action) => action.action.pluginName === pluginName)?.sourcePath || null;
+  }
+
+  function appendReferenceRow(reference, icon, name, detail) {
+    const row = document.createElement("li");
+    row.className = "recipe-row";
+    row.classList.toggle("selected", isSelectedReference(reference));
+    row.addEventListener("mousedown", (event) => {
+      if (event.button !== 0 || (IS_MAC && event.ctrlKey)) {
+        return;
+      }
+      const toggleKeyHeld = IS_MAC ? event.metaKey : event.ctrlKey;
+      const selected = isSelectedReference(reference);
+      if (selected && !toggleKeyHeld) {
+        return;
+      }
+      selectReference(selected ? null : reference);
+    });
+    const iconSlot = document.createElement("span");
+    iconSlot.className = "recipe-icon-slot";
+    if (icon) {
+      iconSlot.append(icon);
+    }
+    const text = document.createElement("div");
+    text.className = "row-text";
+    text.append(name, detail);
+    row.append(iconSlot, text);
+    referenceRows.set(referenceKey(reference), row);
+    recipeList.append(row);
+  }
+
+  function selectReference(reference) {
+    selectedReference = reference;
+    for (const [key, row] of referenceRows) {
+      row.classList.toggle("selected", reference !== null && key === referenceKey(reference));
     }
     updateAddress();
     renderRecipeDetails();
@@ -2283,17 +3013,86 @@
 
   function renderRecipeDetails() {
     recipeDetailsBody.replaceChildren();
-    const action = recipeActions.find(
-      (candidate) => qualifiedClassName(candidate.action) === selectedRecipeName,
-    );
-    if (action === undefined) {
-      const message = document.createElement("div");
-      message.className = "message";
-      message.textContent = "Select an action to view details.";
-      recipeDetailsBody.append(message);
-      return;
+    if (selectedReference?.kind === "class") {
+      const entry = referenceClasses.find(
+        (candidate) => qualifiedClassName(candidate.class) === selectedReference.name,
+      );
+      if (entry !== undefined) {
+        renderClassInfo(entry, recipeDetailsBody);
+        return;
+      }
+    } else if (selectedReference?.kind === "action") {
+      const action = recipeActions.find(
+        (candidate) => qualifiedClassName(candidate.action) === selectedReference.name,
+      );
+      if (action !== undefined) {
+        renderActionInfo(action, recipeDetailsBody);
+        return;
+      }
     }
-    renderActionInfo(action, recipeDetailsBody);
+    const message = document.createElement("div");
+    message.className = "message";
+    message.textContent = "Select a class or action to view details.";
+    recipeDetailsBody.append(message);
+  }
+
+  // A line naming an action, with its icon, that shows the action in
+  // Recipe Info when clicked.
+  function referenceActionLine(qualifiedName) {
+    const line = document.createElement("div");
+    line.className = "class-label";
+    const icon = actionIcon(qualifiedName, 16);
+    if (icon) {
+      line.append(icon);
+    }
+    line.append(referenceLink("action", qualifiedName));
+    return line;
+  }
+
+  // The class's own predicate, an OR over every way to arrive at the class,
+  // then the predicate of each action that outputs it.
+  function classSourceText(entry) {
+    const parts = [formatPredicateSource(entry.predicateSource)];
+    for (const producer of entry.producedBy) {
+      const name = qualifiedClassName(producer);
+      const action = recipeActions.find((candidate) => qualifiedClassName(candidate.action) === name);
+      parts.push(`// ${name}\n${action ? formatPredicateSource(action.predicateSource) : "// Source not available."}`);
+    }
+    return parts.join("\n\n");
+  }
+
+  function renderClassInfo(entry, container) {
+    const title = document.createElement("div");
+    title.className = "details-title";
+    title.textContent = qualifiedClassName(entry.class);
+
+    const meta = document.createElement("div");
+    meta.className = "details-meta";
+    meta.textContent = "object class";
+
+    const hashTable = document.createElement("table");
+    hashTable.className = "field-table";
+    appendFieldRow(hashTable, "hash", entry.hash || null);
+    appendFieldRow(hashTable, "defined in", pluginSourcePath(entry.class.pluginName));
+
+    const actionList = (names) => {
+      const list = document.createElement("div");
+      list.className = "subsection-list";
+      list.append(...names.map(referenceActionLine));
+      if (names.length === 0) {
+        const none = document.createElement("div");
+        none.className = "details-meta";
+        none.textContent = "None";
+        list.append(none);
+      }
+      return list;
+    };
+
+    container.append(largeClassIcon(entry.class), title, meta, hashTable,
+      ...descriptionSection(Presentation.classInfo(entry.class), entry.description),
+      subsection("Output of"), actionList(entry.producedBy),
+      subsection("Input to"), actionList(entry.consumedBy),
+      collapsibleSource("Class Source", classSourceText(entry)));
   }
 
   function formatDuration(milliseconds) {
@@ -2316,7 +3115,19 @@
   }
 
   function runStatus(run) {
-    return run.requestError !== null ? "failed" : run.state?.status;
+    if (run.requestError !== null && !run.transaction) return "failed";
+    if (!run.runId && !run.transactionDeleted) {
+      if (run.transaction?.state === "submitted") return "Waiting for confirmation";
+      if (run.transaction?.state === "recorded") {
+        return run.transaction.submitAttemptedAtMs == null ? "Ready to submit" : "Submission outcome unknown";
+      }
+      if (!run.transaction && run.proofJob?.status === "done") return "Ready to submit";
+    }
+    return run.state?.status;
+  }
+
+  function activityId(run) {
+    return run.runId ?? run.proofJob?.jobId ?? run.transaction?.txFinal ?? null;
   }
 
   function formatTimestamp(milliseconds) {
@@ -2326,14 +3137,16 @@
   // Spent inputs move into the hidden `.nullified/` folder once the run has
   // succeeded and its nullifiers are on-chain.
   function inputFilePath(run, fileName) {
+    fileName = fileName.split(/[\\/]/).at(-1);
     const spent = run.state?.status === "succeeded"
-      && (run.state.result?.nullifiedFiles ?? []).includes(fileName);
+      && (run.state.result?.inputFiles ?? []).includes(fileName);
     return `${objectsDirPath}/${spent ? ".nullified/" : ""}${fileName}`;
   }
 
   // The result names the outputs once the run succeeds; before that, the
   // commit phase's progress events report them as they are written.
   function runOutputFiles(run) {
+    if (run.transaction) return run.transaction.outputFiles;
     if (run.state?.result) {
       return run.state.result.outputFiles;
     }
@@ -2367,13 +3180,14 @@
 
     const title = document.createElement("div");
     title.className = "details-title";
-    title.textContent = run.runId === null ? "Job" : `Job ${run.runId}`;
+    title.textContent = activityId(run) === null ? "Job" : `Job ${activityId(run)}`;
 
     const meta = document.createElement("div");
     meta.className = "details-meta";
-    meta.textContent = [qualifiedClassName(run.action.action), runStatus(run)]
-      .filter((part) => part)
-      .join(" \u00b7 ");
+    meta.append(referenceLink("action", run.action.action));
+    if (runStatus(run)) {
+      meta.append(` \u00b7 ${runStatus(run)}`);
+    }
 
     const properties = document.createElement("table");
     properties.className = "field-table";
@@ -2383,10 +3197,19 @@
       formatTimestamp(run.state?.createdAtMs || run.clientStartedAt),
     );
     run.detailsElapsedElement = appendFieldRow(properties, "duration", elapsedText(run));
+    if (run.proofJob) appendFieldRow(properties, "proof job", run.proofJob.jobId);
+    if (run.transaction) {
+      appendFieldRow(properties, "transaction", run.transaction.txFinal);
+      appendFieldRow(properties, "transaction state", run.transaction.state);
+      if (run.transaction.txHash) appendFieldRow(properties, "transaction hash", run.transaction.txHash);
+      if (run.transaction.relayerFailure) appendFieldRow(properties, "relayer error", run.transaction.relayerFailure);
+    }
+    if (run.runSnapshot?.error && run.runSnapshot.error !== run.state?.error) {
+      appendFieldRow(properties, "run error", run.runSnapshot.error);
+    }
     const result = run.state?.result;
     if (result) {
-      appendFieldRow(properties, "old root", result.oldRoot);
-      appendFieldRow(properties, "new root", result.newRoot);
+      appendFieldRow(properties, "grounding root", result.oldRoot);
     }
     const error = run.requestError ?? run.state?.error;
     if (error) {
@@ -2468,20 +3291,7 @@
     const [fileName] = selectedFileNames;
     const object = objectsByFileName.get(fileName);
 
-    const icon = document.createElement("div");
-    icon.className = "details-icon";
-    const page = document.createElement("div");
-    page.className = "large-page-icon";
-    page.append(largeFileIconTemplate.content.cloneNode(true));
-    const classIconPath = Presentation.classInfo(object.class).icon;
-    if (classIconPath) {
-      const classIcon = document.createElement("img");
-      classIcon.className = "large-class-icon";
-      classIcon.src = classIconPath;
-      classIcon.alt = "";
-      page.append(classIcon);
-    }
-    icon.append(page);
+    const icon = largeClassIcon(object.class);
 
     const title = document.createElement("div");
     title.className = "details-title";
@@ -2492,8 +3302,6 @@
     const identityTable = document.createElement("table");
     identityTable.className = "field-table";
     appendFieldRow(identityTable, "stable_identifier", fieldValue(object, "stable_identifier"));
-    appendFieldRow(identityTable, "contentHash", object.contentHash);
-    appendFieldRow(identityTable, "classHash", object.classHash || null);
 
     const key = fieldValue(object, "key");
     const keyCell = appendFieldRow(identityTable, "key", key);
@@ -2516,10 +3324,16 @@
         appendFieldRow(propertiesTable, name, displayValue(value));
       }
     }
+    let properties = propertiesTable;
+    if (propertiesTable.rows.length === 0) {
+      properties = document.createElement("div");
+      properties.className = "empty-note";
+      properties.textContent = "No properties to show.";
+    }
 
     const classDescription = descriptionSection(Presentation.classInfo(object.class), null);
     detailsBody.append(icon, title, meta, identityTable, ...classDescription, propertiesTitle,
-      propertiesTable);
+      properties);
   }
 
   // An error with `noResponse` set got no HTTP response from dobjd at all.
@@ -2574,7 +3388,7 @@
     objectList.replaceChildren();
     rowsByFileName.clear();
     if (welcomeText !== null) {
-      appendFileRow(WELCOME_FILE, docIconTemplate.content.cloneNode(true));
+      appendFileRow(WELCOME_FILE, docIconTemplate.content.cloneNode(true)).classList.add("welcome");
     }
     for (const object of objects) {
       const row = appendFileRow(object.fileName, smallClassIcon(object.class));
@@ -2592,10 +3406,61 @@
     fitObjectNames();
   }
 
+  // The object's Total Bit Value, for its row's tooltip. Empty for a row
+  // that is not an object.
+  function rowTooltipText(fileName) {
+    const object = objectsByFileName.get(fileName);
+    return object?.class ? formatBitValue(totalBitValue(object)) : "";
+  }
+
+  // Shown once the pointer has rested on the row for `ROW_TOOLTIP_DELAY_MS`,
+  // where it then is.
+  function showRowTooltip(fileName, event) {
+    hideRowTooltip();
+    const text = rowTooltipText(fileName);
+    if (text === "") {
+      return;
+    }
+    rowTooltipPointer = event;
+    rowTooltipTimer = setTimeout(() => {
+      rowTooltipTimer = null;
+      rowTooltip.textContent = text;
+      rowTooltip.hidden = false;
+      placeRowTooltip(rowTooltipPointer);
+    }, ROW_TOOLTIP_DELAY_MS);
+  }
+
+  // Below and to the right of the pointer, kept inside the window.
+  function placeRowTooltip(event) {
+    rowTooltipPointer = event;
+    if (rowTooltip.hidden) {
+      return;
+    }
+    const margin = 4;
+    const width = rowTooltip.offsetWidth;
+    const height = rowTooltip.offsetHeight;
+    let left = event.clientX + 12;
+    let top = event.clientY + 18;
+    if (left + width > window.innerWidth - margin) {
+      left = Math.max(margin, window.innerWidth - margin - width);
+    }
+    if (top + height > window.innerHeight - margin) {
+      top = event.clientY - height - 8;
+    }
+    rowTooltip.style.left = `${left}px`;
+    rowTooltip.style.top = `${top}px`;
+  }
+
+  function hideRowTooltip() {
+    clearTimeout(rowTooltipTimer);
+    rowTooltipTimer = null;
+    rowTooltip.hidden = true;
+  }
+
   function appendFileRow(fileName, icon) {
     const row = document.createElement("li");
     row.className = "object-row";
-    row.title = fileName;
+    row.dataset.fileName = fileName;
     row.classList.toggle("selected", selectedFileNames.has(fileName));
     const name = document.createElement("span");
     name.className = "object-name";
@@ -2609,8 +3474,11 @@
       }
     });
     row.addEventListener("dblclick", () => {
-      window.open(fileUrl(fileName), "_blank", "noopener");
+      openFileWindow(fileName);
     });
+    row.addEventListener("mouseenter", (event) => showRowTooltip(fileName, event));
+    row.addEventListener("mousemove", placeRowTooltip);
+    row.addEventListener("mouseleave", hideRowTooltip);
     // As in Finder, a right-click on an unselected row selects only that
     // row; on a selected row it keeps the whole selection.
     row.addEventListener("contextmenu", (event) => {
@@ -2636,8 +3504,25 @@
   }
 
   // Where Open and View raw take a listed file.
+  // Opens the file's text in a window wide enough for its title bar to show
+  // the whole file name: the name measured in the title bar's font, plus
+  // room on each side for the window buttons, as the title is centered.
+  function openFileWindow(fileName) {
+    const context = document.createElement("canvas").getContext("2d");
+    context.font = FILE_WINDOW_TITLE_FONT;
+    const titleWidth = Math.ceil(context.measureText(fileName).width);
+    const width = Math.min(
+      Math.max(FILE_WINDOW_MIN_WIDTH, titleWidth + 2 * FILE_WINDOW_TITLE_MARGIN),
+      screen.availWidth || Infinity,
+    );
+    window.open(fileUrl(fileName), "_blank", `noopener,popup,width=${width},height=${FILE_WINDOW_HEIGHT}`);
+  }
+
+  // The window that shows the file's text.
   function fileUrl(fileName) {
-    return fileName === WELCOME_FILE ? WELCOME_FILE : rawObjectUrl(fileName);
+    const url = new URL(location.href);
+    url.search = new URLSearchParams({ [PAGE_PARAM]: RAW_PAGE, [RAW_FILE_PARAM]: fileName }).toString();
+    return url.href;
   }
 
   // Renders the Markdown subset the welcome guide uses: headings,
@@ -2727,13 +3612,9 @@
 
   // Writes each row's file name, cut in the middle to fit its row.
   function fitObjectNames() {
-    const firstName = objectList.querySelector(".object-name");
-    if (firstName === null) {
-      return;
-    }
-    nameMeasureContext.font = getComputedStyle(firstName).font;
     for (const [fileName, row] of rowsByFileName) {
       const name = row.querySelector(".object-name");
+      nameMeasureContext.font = getComputedStyle(name).font;
       name.textContent = fitFileName(fileName, name.clientWidth);
     }
   }
@@ -2808,6 +3689,12 @@
   function showSelection() {
     for (const [rowFileName, row] of rowsByFileName) {
       row.classList.toggle("selected", selectedFileNames.has(rowFileName));
+      const object = objectsByFileName.get(rowFileName);
+      if (!object) continue;
+      const state = shownState(object);
+      for (const status of ["live", "held", "pending", "unknown"]) {
+        row.classList.toggle(status, state === status);
+      }
     }
     renderRuns();
     renderDetails();
@@ -2815,25 +3702,30 @@
 
   async function load() {
     stopStartupPocketknife();
-    setStartupProgress(0);
-    showStartup("Opening Bitcraft...", "Getting your inventory ready.");
+    setStartupProgress(1);
+    showStartup("Loading inventory...");
     showMessage("Loading...", false);
     try {
-      const [objectsDir, objects, actions, welcome] = await Promise.all([
+      inventory ??= watchInventory(showObjects, {
+        onError: startupInventoryError,
+        onReconnect: restoreRuns,
+        onActivity: activityEvent,
+      });
+      const [objectsDir, , actions, welcome] = await Promise.all([
         fetchJson("/objects/dir"),
-        fetchJson("/objects/unspent"),
+        inventory.reload(),
         fetchJson("/actions"),
         loadUiTextFile(WELCOME_FILE),
         Presentation.load(),
       ]);
-      setStartupProgress(1);
+      setStartupProgress(2);
       welcomeText = welcome;
       welcomeFileSize = welcome === null ? null : new TextEncoder().encode(welcome).length;
       pluginActions = actions.filter((action) => action.action.pluginName === PLUGIN_NAME);
       objectsDirPath = objectsDir.path;
       objectsDirHeader.textContent = objectsDir.path;
       objectsDirHeader.title = objectsDir.path;
-      showObjects(objects);
+      showObjects(inventory.values());
       if (!await restoreRuns()) throw new Error("Could not check active jobs. Please try again.");
       await ensureStartupPocketknife();
     } catch (error) {
@@ -2844,8 +3736,9 @@
   // Each step of the startup screen stays up at least this long, so a step
   // that finishes quickly is still seen.
   const STARTUP_STEP_MIN_MS = 1000;
-  // Milestones completed, as of the latest startup check.
-  let startupCompleted = 0;
+  // Milestones completed, as of the latest startup check. The desktop
+  // shell's preparation step is done before this page loads.
+  let startupCompleted = 1;
   // The latest screen asked for at each milestone count, from the one on
   // display onwards. A finished screen reveals the inventory.
   const startupScreens = new Map();
@@ -2858,16 +3751,15 @@
     startupCompleted = completed;
   }
 
-  function showStartup(title, description, icon = null) {
-    requestStartupScreen({ completed: startupCompleted, title, description, icon, error: null });
+  function showStartup(title) {
+    requestStartupScreen({ completed: startupCompleted, title, description: null, error: null });
   }
 
   function showStartupError(message) {
     requestStartupScreen({
       completed: startupCompleted,
       title: "Bitcraft could not finish setup",
-      description: "Your inventory opens once you have a starter pocketknife. Try again to continue.",
-      icon: null,
+      description: "Your inventory opens once setup finishes. Try again to continue.",
       error: message,
     });
   }
@@ -2939,10 +3831,8 @@
       status.textContent = screen.title;
       copyStatus.hidden = true;
     }
-    if (detail.textContent !== screen.description) detail.textContent = screen.description;
-    const icon = document.getElementById("startup-class-icon");
-    if (screen.icon && icon.getAttribute("src") !== screen.icon) icon.src = screen.icon;
-    icon.hidden = !screen.icon;
+    detail.textContent = screen.description ?? "";
+    detail.hidden = screen.description === null;
     const error = document.getElementById("startup-error");
     if (screen.error !== null && error.textContent !== screen.error) {
       error.textContent = screen.error;
@@ -2950,14 +3840,19 @@
     }
     error.hidden = screen.error === null;
     document.getElementById("startup-actions").hidden = screen.error === null;
-    updateStartupProgressLabel();
+    updateStartupProgressLabel(screen.error !== null);
   }
 
-  function updateStartupProgressLabel() {
+  // The step number is read out with the heading, and shown only on an
+  // error, as where setup stopped.
+  function updateStartupProgressLabel(stopped) {
     const progress = document.getElementById("startup-progress");
-    const label = `Step ${Math.min(progress.value + 1, progress.max)} of ${progress.max}`;
-    progress.setAttribute("aria-valuetext", `${label}: ${document.getElementById("startup-status").textContent}`);
-    document.getElementById("startup-progress-label").textContent = label;
+    const step = Math.min(progress.value + 1, progress.max);
+    progress.setAttribute("aria-valuetext",
+      `Step ${step} of ${progress.max}: ${document.getElementById("startup-status").textContent}`);
+    const label = document.getElementById("startup-progress-label");
+    label.textContent = `Stopped at step ${step} of ${progress.max}`;
+    label.hidden = !stopped;
   }
 
   document.getElementById("startup-retry").addEventListener("click", load);
@@ -2992,36 +3887,13 @@
     }
   }
 
-  // Keeps the current list on failure; the next completed run retries.
-  async function reloadObjects() {
-    if (objectReloadInFlight) {
-      objectReloadQueued = true;
-      return;
-    }
-    objectReloadInFlight = true;
-    try {
-      showObjects(await fetchJson("/objects/unspent"));
-    } catch (error) {
-      console.warn("Could not reload objects:", error);
-      if (isStartupUnfinished()) {
-        showStartupError(`Could not refresh inventory: ${error.message}`);
-      }
-    } finally {
-      objectReloadInFlight = false;
-      if (objectReloadQueued) {
-        objectReloadQueued = false;
-        reloadObjects();
-      }
-    }
-  }
-
   // The state a row's colour shows. `pending` takes precedence over being
   // held by a run, which takes precedence over the remaining statuses.
   function shownState(object) {
     if (object.status === "pending") {
       return "pending";
     }
-    return object.heldByRunId != null ? "held" : object.status;
+    return object.heldByRunId != null || inputRun(object.fileName) ? "held" : object.status;
   }
 
   // Pending objects are left out of every count and value until they are
@@ -3035,7 +3907,7 @@
   }
 
   function formatBitValue(value) {
-    return Number.isInteger(value) ? String(value) : value.toFixed(1);
+    return `${value.toFixed(2)} BIT`;
   }
 
   // An object whose class has no value listed is worth nothing.
@@ -3046,13 +3918,89 @@
       return valuesByLevel[Number(fieldValue(object, "level")) - 1] ?? 0;
     }
     const contentValue = BUCKET_CONTENT_BIT_VALUES[className] ?? 0;
-    return (TOTAL_BIT_VALUES[className] ?? 0) + contentValue * Number(fieldValue(object, "n") ?? 0);
+    const value = (TOTAL_BIT_VALUES[className] ?? 0) + contentValue * Number(fieldValue(object, "n") ?? 0);
+    const fullDurability = FULL_DURABILITY[className];
+    if (fullDurability === undefined) return value;
+    return value * Number(fieldValue(object, "durability") ?? fullDurability) / fullDurability;
   }
 
-  // The desktop app shows this title in the main window's title bar.
-  function updateWindowTitle() {
+  // Shown in the top bar, and in the window's title, which the desktop app
+  // shows in its title bar.
+  // BIT/sec: how much the Total Inventory Value grew over the last
+  // `VALUE_RATE_WINDOW_MS`, per second, from samples of it taken on every
+  // inventory change. The whole window is always averaged over, the value
+  // before the first sample counting as that sample's, so a new session's
+  // first gains do not read as a spike. The samples are kept for the
+  // session, so a reload does not restart the measurement.
+  const VALUE_RATE_WINDOW_MS = 5 * 60 * 1000;
+  const VALUE_SAMPLES_STORAGE_KEY = "bitcraft.inventory-value-samples";
+  let valueSamples = readValueSamples();
+  let latestInventoryValue = null;
+
+  function readValueSamples() {
+    try {
+      const samples = JSON.parse(sessionStorage.getItem(VALUE_SAMPLES_STORAGE_KEY) ?? "[]");
+      return Array.isArray(samples)
+        ? samples.filter((sample) => Number.isFinite(sample?.atMs) && Number.isFinite(sample?.value))
+        : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function recordValueSample(value) {
+    latestInventoryValue = value;
+    const now = Date.now();
+    if (valueSamples.at(-1)?.value !== value) {
+      valueSamples.push({ atMs: now, value });
+    }
+    // Only the last sample before the window is still needed: it is the
+    // value the window starts from.
+    const windowStart = now - VALUE_RATE_WINDOW_MS;
+    const baseline = valueSamples.findLastIndex((sample) => sample.atMs <= windowStart);
+    if (baseline > 0) {
+      valueSamples = valueSamples.slice(baseline);
+    }
+    try {
+      sessionStorage.setItem(VALUE_SAMPLES_STORAGE_KEY, JSON.stringify(valueSamples));
+    } catch {}
+    showValueRate();
+  }
+
+  function valueRate(now) {
+    const windowStart = now - VALUE_RATE_WINDOW_MS;
+    const baseline = valueSamples.findLast((sample) => sample.atMs <= windowStart) ?? valueSamples[0];
+    return (valueSamples.at(-1).value - baseline.value) / (VALUE_RATE_WINDOW_MS / 1000);
+  }
+
+  // The rate in the top bar and, with the value, in the window's title,
+  // which the desktop app shows in its title bar. A rate that rounds to
+  // 0.00 is left out of both.
+  function showValueRate() {
+    if (latestInventoryValue === null) {
+      return;
+    }
+    const rate = valueRate(Date.now());
+    const shown = Math.abs(rate) >= 0.005;
+    const rateText = `${rate.toFixed(2)} BIT/sec`;
+    document.getElementById("inventory-rate").textContent = shown ? rateText : "";
+    document.getElementById("inventory-rate").hidden = !shown;
+    document.getElementById("inventory-rate-divider").hidden = !shown;
+    document.title = shown
+      ? `Bitcraft (${formatBitValue(latestInventoryValue)} - ${rateText})`
+      : `Bitcraft (${formatBitValue(latestInventoryValue)})`;
+  }
+
+  function updateInventoryValue() {
     const totalValue = liveListedObjects().reduce((sum, object) => sum + totalBitValue(object), 0);
-    document.title = `Bitcraft (Total Bit Value: ${formatBitValue(totalValue)})`;
+    recordValueSample(totalValue);
+    document.getElementById("inventory-value-amount").textContent = formatBitValue(totalValue);
+    const icon = document.getElementById("inventory-value-icon");
+    const iconPath = Presentation.classInfo({ pluginName: PLUGIN_NAME, name: SUMMARY_ICON_CLASS }).icon;
+    if (iconPath && icon.getAttribute("src") !== iconPath) {
+      icon.src = iconPath;
+    }
+    icon.hidden = !iconPath;
   }
 
   // Replaces the object list, keeping the selection of any objects that are
@@ -3060,6 +4008,17 @@
   // the page or its shown state changed; nothing flashes on the first load,
   // or for changes made while the setup screen covers the list.
   function showObjects(objects) {
+    const records = inventory?.records() ?? [];
+    for (const record of records) {
+      if (activityInScope(record.action)) trackTransaction(record, false);
+    }
+    for (const run of runs) {
+      if (run.transaction && ["recorded", "submitted"].includes(run.transaction.state)
+        && !records.some((record) => record.txFinal === run.transaction.txFinal)) {
+        run.transactionDeleted = true;
+        updateActivityState(run);
+      }
+    }
     const heldObjects = objects
       .filter((object) => object.class.pluginName === PLUGIN_NAME)
       .sort((left, right) => left.fileName.localeCompare(right.fileName));
@@ -3079,7 +4038,7 @@
     for (const object of heldObjects) {
       objectsByFileName.set(object.fileName, object);
     }
-    updateWindowTitle();
+    updateInventoryValue();
     for (const fileName of [...selectedFileNames]) {
       if (!isListedFile(fileName)) {
         selectedFileNames.delete(fileName);
@@ -3120,6 +4079,8 @@
 
   // A right-click on empty space clears the selection, so the menu offers
   // the actions that take no inputs.
+  objectList.addEventListener("scroll", hideRowTooltip);
+  objectList.addEventListener("contextmenu", hideRowTooltip);
   objectList.addEventListener("contextmenu", (event) => {
     if (event.target.closest(".object-row") !== null) {
       return;
@@ -3157,8 +4118,8 @@
   new ResizeObserver(() => fitObjectNames()).observe(objectList);
 
   recipeList.addEventListener("mousedown", (event) => {
-    if (event.target === recipeList && isPlainPress(event) && selectedRecipeName !== null) {
-      selectRecipe(null);
+    if (event.target === recipeList && isPlainPress(event) && selectedReference !== null) {
+      selectReference(null);
     }
   });
 
@@ -3168,18 +4129,31 @@
     loadSummaryWindow();
   } else if (isSettingsWindow) {
     loadSettingsWindow();
+  } else if (isRawWindow) {
+    loadRawWindow();
   } else {
+    if (window.bitcraftDesktop) {
+      for (const agent of ["claude", "codex"]) {
+        const button = document.getElementById(`${agent}-button`);
+        button.hidden = false;
+        button.addEventListener("click",
+          () => window.open(`bitcraft://agent/${agent}`, "_blank", "noopener"));
+      }
+      document.getElementById("agent-divider").hidden = false;
+    }
     document.getElementById("reference-button").addEventListener("click",
-      () => openPageWindow(RECIPEBOOK_PAGE, REFERENCE_WINDOW_NAME, "popup,width=1000,height=720"));
+      () => openPageWindow(RECIPEBOOK_PAGE, REFERENCE_WINDOW_NAME, REFERENCE_WINDOW_FEATURES));
     document.getElementById("summary-button").addEventListener("click",
-      () => openPageWindow(SUMMARY_PAGE, SUMMARY_WINDOW_NAME, "popup,width=420,height=560"));
-    document.getElementById("about-button").addEventListener("click",
-      () => window.open(BITCRAFT_SITE_URL, "_blank", "noopener"));
+      () => openPageWindow(SUMMARY_PAGE, SUMMARY_WINDOW_NAME, SUMMARY_WINDOW_FEATURES));
+    document.getElementById("inventory-value").addEventListener("click",
+      () => openPageWindow(SUMMARY_PAGE, SUMMARY_WINDOW_NAME, SUMMARY_WINDOW_FEATURES));
     document.getElementById("settings-button").addEventListener("click",
-      () => openPageWindow(SETTINGS_PAGE, SETTINGS_WINDOW_NAME, "popup,width=480,height=200"));
+      () => openPageWindow(SETTINGS_PAGE, SETTINGS_WINDOW_NAME, "popup,width=480,height=300"));
     document.getElementById("bitcraft-version").textContent = BITCRAFT_VERSION;
     refreshServiceStatus();
     setInterval(refreshServiceStatus, SERVICE_STATUS_INTERVAL_MS);
+    // The rate falls as the window moves past growth, with no new event.
+    setInterval(showValueRate, 1000);
     renderDetails();
     load();
   }

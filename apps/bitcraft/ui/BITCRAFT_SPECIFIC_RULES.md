@@ -14,8 +14,7 @@ that block should be plugin-agnostic.
 
 ### Only bitcraft objects are listed
 
-- **Where:** `PLUGIN_NAME`, applied in `load()` to the result of
-  `GET /objects/unspent`.
+- **Where:** `PLUGIN_NAME`, applied in `showObjects()` to inventory snapshots and object events.
 - **Generic behavior:** list unspent objects from every installed plugin.
 - **Why:** this is a bitcraft inventory; other plugins' objects (e.g.
   `craft-basics`, `craft-rocket`, `nanoverse`) are out of scope.
@@ -29,63 +28,69 @@ that block should be plugin-agnostic.
   no-input actions, would also show other plugins' no-input actions.
 - **Why:** same scope as the object list.
 
-### Only bitcraft actions are listed in the Recipe Info window
+### Only bitcraft classes and actions are listed in the Recipe Info window
 
-- **Where:** `PLUGIN_NAME`, applied to the result of `GET /actions` in
-  `loadReferenceWindow()`, the same filter `load()` applies to the actions
-  the context menu offers from.
-- **Generic behavior:** list every installed plugin's actions.
+- **Where:** `PLUGIN_NAME`, applied to the results of `GET /classes` and
+  `GET /actions` in `loadReferenceWindow()`, the same filter `load()`
+  applies to the actions the context menu offers from.
+- **Generic behavior:** list every installed plugin's classes and actions.
 - **Why:** same scope as the object list.
 
-### Only bitcraft runs are restored on page load
+### Recipe Info lists the classes in game order
 
-- **Where:** `PLUGIN_NAME`, applied in `restoreRuns()` to the result of
-  `GET /actions/runs?status=active`.
-- **Generic behavior:** restore every run dobjd has in progress, whichever
-  plugin's action it runs (runs can also be started by the CLI or an MCP
-  agent).
+- **Where:** `REFERENCE_CLASS_ORDER`, applied in `loadReferenceWindow()`
+  through `compareReferenceClasses()`.
+- **What:** Pocketknife, Wood, Stone, Iron, Bit, Stick, WoodAxe, StoneAxe,
+  IronAxe, Quarry, MiningDrill, BucketOfWood, BucketOfStone, BucketOfIron.
+  Classes not listed follow, by name.
+- **Generic behavior:** the order `GET /classes` reports, which is by name.
+- **Why:** the starter tool, the resources and what they make, then the
+  tools, machines and buckets, roughly in the order a player meets them.
+
+### Only bitcraft activity appears in Jobs
+
+- **Where:** `activityInScope()`, applied to retained `/runs`, `/proof-jobs`, open transaction records and activity arriving on `/events`.
+- **Generic behavior:** show actions for every plugin, including work started by the CLI, MCP or another window. A run, proof job and transaction linked by IDs describe one action and share one row; independent actions stay separate. Retained completed work also appears when recovering missed events.
 - **Why:** same scope as the object list.
 
 ## Startup pocketknife
 
-- **Where:** `ensureStartupPocketknife()`, called by `load()` after active
-  runs have been restored successfully.
+- **Where:** `ensureStartupPocketknife()`, called by `load()` after retained activity has been restored successfully.
 - **What:** if no live `bitcraft::Pocketknife` exists, start
   `bitcraft::CraftPocketknife` with no inputs. Live knives, including knives
   held by a run, count as existing. An active crafting run or another active
   action that outputs a pocketknife suppresses creation. Re-read inventory
   after restoring runs so a run that finished during startup does not cause
   another knife to be crafted.
-- **Stale knives:** with no live knife and no such active run, a pending or
-  unknown knife is one whose commit failed. The inventory re-read has already
-  checked it against the synchronizer, so it is moved aside with
-  `POST /objects/{file_name}/discard_unsafe`, which keeps none of dobjd's
-  object-state guarantees, and a new knife is crafted. This
-  happens on "Try again" after a failed commit and on reopening the app.
-  Discarding first requires the synchronizer to answer `GET /state-root`,
-  because the inventory falls back to local state when it is unreachable;
-  otherwise setup shows an error and keeps the knife.
+- **Durable transactions:** if the run registry was lost, an open transaction that creates a pocketknife suppresses another craft. Startup follows its transaction and object events, keeping its outputs. A recorded transaction with no submission attempt is submitted using `/transactions/submit`; an attempted submission with an unknown outcome is followed until landing or expiry. Failure to read transaction records stops setup. Expiry or deletion shows an error and requires an explicit retry before creating another knife.
+- **Stale knives:** with no live knife, active crafting run, or open pocketknife transaction, a pending or unknown knife has no work left that could make it live. The inventory re-read has already checked it against the synchronizer, so it is moved aside with `POST /objects/{file_name}/discard_unsafe`, which keeps none of dobjd's object-state guarantees, and a new knife is crafted. This happens on "Try again" after a failed commit and on reopening the app. Discarding first requires the synchronizer to answer `GET /state-root`, because the inventory falls back to local state when it is unreachable; otherwise setup shows an error and keeps the knife.
 - **Startup screen:** keep inventory hidden and inert until a live
-  pocketknife is listed. Show whether Bitcraft is creating the knife or
-  waiting for network confirmation. Existing live knives, including held
-  knives, open the inventory directly once the first step has been up for
-  its minimum (below). The desktop's cryptography startup screen
-  has the same layout, so initial preparation leads into pocketknife setup.
-  Both screens are laid out like the details pane: a centered document
-  icon over a 16px heading and muted description, then the progress bar
-  and step number, in the app's colors (the blue accent of its selection
-  and menus). The pocketknife steps show the pocketknife's icon from the
-  presentation pack on the page; preparation and setup errors show a blank
-  page. The bar counts three completed milestones: cryptography ready,
-  pocketknife proof generated, and network confirmation. Preparation starts
-  at zero in the desktop shell; successful daemon requests complete the
-  first milestone. A committing run, a completed proof event, or an existing
-  knife that has not been discarded completes the second; a live knife completes the third. Progress
-  stays at the last completed milestone during errors; retry starts a fresh
-  check.
-  Show the current step number and describe the work in progress in the
-  heading, rather than labeling the bar with the last completed milestone.
-  Errors replace the activity description while preserving the bar's value.
+  pocketknife is listed. Existing live knives, including held knives, open
+  the inventory directly once the step on display has been up for its
+  minimum (below). Setup runs in four steps, each shown by its heading
+  alone:
+  1. "Preparing artifacts..." on the desktop shell's screen, while dobjd
+     prepares its cryptography (the host can replace the heading with its
+     own message);
+  2. "Loading inventory..." on this page, while it reads the inventory and
+     actions;
+  3. "Loading cryptography engine..." while the starter knife's proof is
+     made;
+  4. "Connecting to Bitcraft network..." while the knife waits for network
+     confirmation.
+  Both screens share one layout, so the shell leads into this page: the
+  Bitcraft logo (the wood axe on a blue folder, the app icon), a 16px
+  heading and the progress bar in the app's blue accent. There is no
+  description or step number while setup works. The bar counts completed
+  steps out of four: the shell shows none done, with a small sliver (0.2 of
+  a step) filled so the bar reads as one, successful daemon requests
+  complete the second, a committing run, a completed proof event, or an
+  existing knife that has not been discarded completes the third, and a
+  live knife the fourth. Progress stays at the last completed step during
+  errors; retry starts a fresh check from step 2.
+  An error replaces the heading with "Bitcraft could not finish setup" and
+  adds a description, "Stopped at step N of 4" under the bar, the error
+  itself, and "Try again" and "Copy error".
   Each step stays up for at least one second, even when its work finishes
   sooner; the work itself is not delayed. The screen then moves one step at
   a time, skipping steps the startup never reached, and opens the inventory
@@ -101,30 +106,8 @@ that block should be plugin-agnostic.
   Object changes made while the setup screen is up do not flash in the
   object list, so the starter knife is already settled when inventory
   opens.
-- **Jobs:** automatic startup runs are tracked but omitted from Jobs.
-  Remember their run ID in session storage so reloading the page keeps
-  them hidden. Manual pocketknife jobs, including restored jobs without
-  that marker, remain visible. The Jobs pane is hidden when no visible
-  jobs exist; starting a manual job reveals it.
-- **Failures:** show the cause with "Try again" and "Copy error" controls
-  if setup fails, active runs cannot be read, the synchronizer cannot be
-  reached before discarding a stale knife, or the recipe is unavailable.
-  There is no way into the inventory from a setup error: it opens only
-  once a live knife exists. Retry re-reads active jobs and inventory before
-  discarding or creating anything.
-  When a setup request or progress read gets no HTTP response at all, the
-  daemon is not running, so the error says the background service isn't
-  responding, suggests quitting and reopening Bitcraft, and names
-  `dobjd.log` in the data directory (the parent of the objects directory)
-  once that directory is known. An HTTP error is shown as it is.
-  "Copy error" copies the full displayed error, including line breaks, and
-  reports success or failure. The error text can also be selected manually.
-  A failed run is never retried automatically while the page is open;
-  reopening the app retries after discarding its stale knife. The startup
-  job is followed through its event stream like any other job; the
-  terminal status arrives through the read prompted by dobjd closing the
-  stream. Inventory is polled after success until the knife is live.
-  Inventory refreshes alone do not trigger creation.
+- **Jobs:** automatic startup runs are tracked but omitted from Jobs. Remember their run ID in session storage so reloading the page keeps them hidden, including when only their owned transaction remains. Manual pocketknife jobs, including externally started proofs and restored transactions without that marker, remain visible. A proof already creating a pocketknife suppresses another automatic craft. The Jobs pane is hidden when no visible jobs exist; starting a manual job reveals it.
+- **Failures:** show the cause with "Try again" and "Copy error" controls if setup fails, active runs cannot be read, the synchronizer cannot be reached before discarding a stale knife, or the recipe is unavailable. There is no way into the inventory from a setup error: it opens only once a live knife exists. Retry re-reads active jobs and inventory before discarding or creating anything. When a setup request or progress read gets no HTTP response at all, the daemon is not running, so the error says the background service isn't responding, suggests quitting and reopening Bitcraft, and names `dobjd.log` in the data directory (the parent of the objects directory) once that directory is known. An HTTP error is shown as it is. "Copy error" copies the full displayed error, including line breaks, and reports success or failure. The error text can also be selected manually. A failed run is never retried automatically while the page is open; reopening the app retries after discarding its stale knife. The startup job is followed through its event stream like any other job; the terminal status arrives through the read prompted by dobjd closing the stream. Transaction and object events advance setup, including after the run registry is lost. Inventory changes alone do not trigger creation.
 - **Generic behavior:** loading the UI never starts actions or discards objects automatically.
 
 ## Action input constraints
@@ -155,8 +138,9 @@ the selected objects.
 
 ## Cosmetic
 
-- **Page title:** "Bitcraft", which becomes "Bitcraft (Total Bit Value:
-  N)" once the inventory loads (see below).
+- **Page title:** "Bitcraft", which becomes "Bitcraft (N.NN BIT - N.NN
+  BIT/sec)" once the inventory loads, or "Bitcraft (N.NN BIT)" while the
+  rate is 0.00 (see below).
 - **Presentation pack:** class and action icons, summaries and
   descriptions come from the bitcraft presentation pack
   (`../../../examples/bitcraft/presentation/`), which the app ships by
@@ -168,34 +152,57 @@ the selected objects.
     every class name, and at 6x (96x96 CSS px) on the large page icon in a
     single object's Details pane, centered across it and just below its
     folded corner;
-  - action icons at 16x16 in the context menu and jobs list, 32x32 in the
-    Recipe Info list, and 128x128 in Recipe Info's and a job's Details pane;
+  - class icons also at 2x (32x32) in the Recipe Info list, and on the
+    large page icon in Recipe Info's Details pane for a class;
+  - action icons at 16x16 in the context menu, jobs list and a class's
+    action lists in Recipe Info, 32x32 in the Recipe Info list, and
+    128x128 in Recipe Info's and a job's Details pane;
+  - class and action summaries as the second line of each entry in the
+    Recipe Info list (falling back to the manifest's description, then to
+    "object class" or "executable action");
   - a "Description" section (summary and description) in Recipe Info's
     Details pane and, for the object's class, in a single object's Details
     pane.
 - **Generic behavior:** no pack, so plain page icons, no action icons, and
   only the manifest's descriptions.
 
-## Window title, Inventory Summary and status bar
+## Inventory value, Inventory Summary and status bar
 
-The main window's title ("Bitcraft (Total Bit Value: 31)", which the
-desktop app shows in its title bar), the Inventory Summary window opened
+The inventory's value, shown at the right end of the main window's top bar
+("Total Inventory Value:", the `SUMMARY_ICON_CLASS` icon and "31.00 BIT", which
+opens the Inventory Summary) and in its title ("Bitcraft (31.00 BIT - 0.37 BIT/sec)",
+which the desktop app shows in its title bar), the Inventory Summary window
+opened
 from the top bar, and the status bar along the bottom of the page. Three of
 their entries know about bitcraft:
 
 - **Bitcraft version** (status bar): `BITCRAFT_VERSION` ("Alpha 1.0"), a
   fixed string in the page; dobjd and the plugin manifest report no game
   version.
-- **Total Bit Value** (window title and Inventory Summary): the summed value of
-  the live bitcraft objects (pending ones are left out); see below.
+- **BIT/sec** (top bar and window title): how much the Total Inventory
+  Value grew over the last `VALUE_RATE_WINDOW_MS` (5 minutes), divided by
+  the full window, from samples of it taken on every inventory change; the
+  value before the first sample counts as that sample's, so a new session's
+  first gains do not spike. A rate that rounds to 0.00 is not shown. Since crafting converts value
+  rather than creating it, this is in effect the player's production rate.
+  Generic behavior: no rate.
+- **Total Inventory Value** (top bar, window title and Inventory Summary):
+  the summed
+  Total Bit Value of the live bitcraft objects (pending ones are left out);
+  see below. The Inventory Summary also shows each class's summed value
+  beside its count, and hovering an object row in the main window shows
+  that object's value in a tooltip.
 - **Inventory Summary icon:** `SUMMARY_ICON_CLASS` (`Bit`), the class whose
   art heads the window, since it totals the inventory in bits.
-- **Website link:** `BITCRAFT_SITE_URL`, opened by the top bar's info
-  icon. Generic behavior: no site link.
-- **Generic behavior:** no version, Total Bit Value or summary icon. The
-  Inventory Summary's live object total and per-class counts are generic:
-  the total covers every plugin's live objects, the per-class counts this
-  plugin's. The other entries
+- **Website and Discord links:** `BITCRAFT_SITE_URL` and
+  `BITCRAFT_DISCORD_URL`, shown as the website's address and a Discord
+  button under the name and version (`BITCRAFT_VERSION`) at the foot of the
+  Settings window, and opened in the player's browser.
+  Generic behavior: no links.
+- **Generic behavior:** no version, Total Inventory Value, per-class values
+  or summary icon. The
+  Inventory Summary's object count and per-class counts are generic: both
+  cover this plugin's live objects. The other entries
   are generic: the synchronizer and relayer statuses and addresses in the
   status bar (the page probes each service's `/healthz` at the URLs
   `GET /settings` reports, every 10 seconds).
@@ -224,10 +231,15 @@ recipe's inputs or outputs change.
 
 A level-up spends full buckets, each worth 1 Iron plus its contents:
 `LevelUpQuarryK` adds 10 + 40 x 2^K, and `LevelUpMiningDrillK` adds
-15 + 135 x 2^K. Wear and rekeying do not change the value: an axe is worth
-what it cost to make whatever its durability, and a `Rekey<Class>` action
-leaves every value field alone. A total that is not whole shows one
-decimal place.
+15 + 135 x 2^K.
+
+Wear lowers the value: an axe is worth its value above times the fraction
+of its durability it has left, out of the 100 a new wood axe starts with
+(`FULL_DURABILITY`; upgrading to a stone or iron axe carries the durability
+over). An axe at 60 durability is worth 60% of a new one, and a spent axe
+nothing. Rekeying does not change the value: a `Rekey<Class>` action leaves
+every value field alone. Values are shown with two decimal places and the
+unit, as in "31.00 BIT".
 
 ## Welcome guide
 

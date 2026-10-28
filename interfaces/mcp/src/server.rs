@@ -171,8 +171,39 @@ pub struct ListRunsParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetRunParams {
-    /// The `runId` returned by `run_action`.
+    /// The `runId` returned by `start_run`.
     pub run_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetProofJobParams {
+    /// The `jobId` returned by `start_proof_job`.
+    pub job_id: String,
+    /// Maximum wait for job completion, capped by the server. Omit to return immediately.
+    #[serde(default)]
+    pub wait_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListProofJobsParams {
+    /// When true, list only jobs that have not finished.
+    #[serde(default)]
+    pub active_only: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetTransactionParams {
+    /// The transaction's `txFinal`, from `start_proof_job`'s job or `list_transactions`.
+    pub tx_final: String,
+    /// Maximum wait for landing or expiry, capped by the server. Omit to return immediately.
+    #[serde(default)]
+    pub wait_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DeleteTransactionParams {
+    /// The transaction's `txFinal`.
+    pub tx_final: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -299,23 +330,23 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Start an action. Returns immediately with a runId and status=queued; proof generation and commit run in the background. Poll get_run(runId) until status is succeeded or failed (then read result / error). The daemon rejects requests while another action is running. `args` optionally supplies caller data by name in POD2 JSON form, e.g. {\"count\": {\"Int\": \"42\"}, \"label\": \"hello\"}. Scripts read these values with arg(name) inside unsafe blocks. Argument names read during loading are listed on list_actions items. Omitted values are absent; the script chooses any defaults."
+        description = "Start an action end to end. Returns immediately with a runId and status=queued; the background worker proves, records and submits the transaction, then follows it until it lands on the chain. Poll get_run(runId) until status is succeeded or failed (then read result / error). Runs can prove concurrently; limit how many you start according to CPU/GPU and memory capacity. For separate control over proving and submitting, use start_proof_job and submit_transactions instead. `args` optionally supplies caller data by name in POD2 JSON form, e.g. {\"count\": {\"Int\": \"42\"}, \"label\": \"hello\"}. Scripts read these values with arg(name) inside unsafe blocks. Argument names read during loading are listed on list_actions items. Omitted values are absent; the script chooses any defaults."
     )]
-    fn run_action(
+    fn start_run(
         &self,
-        Parameters(params): Parameters<RunActionInput>,
+        Parameters(params): Parameters<ActionInput>,
     ) -> Result<Json<RunAccepted>, String> {
         // Returns as soon as the run is registered + spawned; the heavy work
         // happens on a background task, so this tool call never holds the
         // connection open for the proof.
         self.ops
-            .run_action(params)
+            .start_run(params)
             .map(Json)
             .map_err(|e| e.to_string())
     }
 
     #[tool(
-        description = "Get the current state of a run started by run_action. Returns its status (queued, generateProof, committing, succeeded, failed), the result (old/new root + output and nullified files) once succeeded, an error message if failed, and the ordered progress log. Poll this after run_action."
+        description = "Get the current state of a run started by start_run. Returns its status (queued, generateProof, committing, succeeded, failed), the result (grounding root, output files and the input files it spent) once the transaction landed, an error message if it failed or expired, and the ordered progress log. Poll this after start_run."
     )]
     fn get_run(
         &self,
@@ -337,6 +368,94 @@ impl<T: DobjOps> DobjMcpService<T> {
         self.ops
             .list_runs(params.active_only)
             .map(|runs| Json(RunList { runs }))
+            .map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        description = "Prove an action without submitting it. Returns immediately with a jobId; the job proves, then records a transaction on disk (status done, txFinal set) whose outputs are held as unknown until it lands. Nothing is posted to the relayer: call submit_transactions when ready, or delete_transaction to abandon it. Proof jobs and runs can prove concurrently; limit how many you start according to CPU/GPU and memory capacity. Same parameters as start_run."
+    )]
+    fn start_proof_job(
+        &self,
+        Parameters(params): Parameters<ActionInput>,
+    ) -> Result<Json<ProofJobState>, String> {
+        self.ops
+            .start_proof_job(params)
+            .map(Json)
+            .map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        description = "Get a proof job's state: queued, proving, recording, done (txFinal set) or failed (error set). Pass wait_ms to have the daemon hold the call until the job finishes, up to its cap; the answer is the current state either way, so call again while it is not terminal."
+    )]
+    fn get_proof_job(
+        &self,
+        Parameters(params): Parameters<GetProofJobParams>,
+    ) -> Result<Json<ProofJobState>, String> {
+        self.ops
+            .get_proof_job(&params.job_id, params.wait_ms)
+            .map(Json)
+            .map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        description = "List the proof jobs the daemon still holds, oldest first. Set active_only to list just the unfinished ones. Jobs live in memory; the transactions they recorded are on disk, see list_transactions."
+    )]
+    fn list_proof_jobs(
+        &self,
+        Parameters(params): Parameters<ListProofJobsParams>,
+    ) -> Result<Json<ProofJobList>, String> {
+        self.ops
+            .list_proof_jobs(params.active_only)
+            .map(|jobs| Json(ProofJobList { jobs }))
+            .map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        description = "Post recorded transactions to the relayer, in order. Returns their records with the relayer job ids. A transaction already submitted is returned unchanged; one whose grounding the synchronizer has aged out is refused. Stops at the first refusal."
+    )]
+    fn submit_transactions(
+        &self,
+        Parameters(params): Parameters<SubmitTransactionsRequest>,
+    ) -> Result<Json<TransactionList>, String> {
+        self.ops
+            .submit_transactions(params.tx_finals)
+            .map(|transactions| Json(TransactionList { transactions }))
+            .map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        description = "List retained transaction records, oldest first: recorded (proved, not yet posted), submitted (at the relayer), and landed or expired within the last ten minutes. Open records survive a daemon restart; use this to recover unfinished work."
+    )]
+    fn list_transactions(&self) -> Result<Json<TransactionList>, String> {
+        self.ops
+            .list_transactions()
+            .map(|transactions| Json(TransactionList { transactions }))
+            .map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        description = "Get a transaction's record by txFinal: its state, input and output files, grounding block, relayer job id and tx hash once known, and a reason once expired. Pass wait_ms to have the daemon hold the call until the transaction lands or expires, up to its cap."
+    )]
+    fn get_transaction(
+        &self,
+        Parameters(params): Parameters<GetTransactionParams>,
+    ) -> Result<Json<TransactionRecord>, String> {
+        self.ops
+            .get_transaction(&params.tx_final, params.wait_ms)
+            .map(Json)
+            .map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        description = "Abandon a recorded transaction that was never offered to the relayer: removes its record and output files and frees its inputs. Refused once a submission was attempted, since the relayer may hold the payload; such a transaction ends when it lands or expires."
+    )]
+    fn delete_transaction(
+        &self,
+        Parameters(params): Parameters<DeleteTransactionParams>,
+    ) -> Result<Json<TransactionRecord>, String> {
+        self.ops
+            .delete_transaction(&params.tx_final)
+            .map(Json)
             .map_err(|e| e.to_string())
     }
 
@@ -625,7 +744,7 @@ mod tests {
         assert!(tools.contains(&"inspect_object".to_string()));
         assert!(tools.contains(&"inspect_class".to_string()));
         assert!(tools.contains(&"inspect_action".to_string()));
-        assert!(tools.contains(&"run_action".to_string()));
+        assert!(tools.contains(&"start_run".to_string()));
         assert!(tools.contains(&"get_run".to_string()));
         assert!(tools.contains(&"list_runs".to_string()));
         assert!(tools.contains(&"check_feasibility".to_string()));
@@ -640,7 +759,18 @@ mod tests {
         assert!(tools.contains(&"delete_command".to_string()));
         assert!(tools.contains(&"get_command".to_string()));
         assert!(tools.contains(&"invoke_prompt".to_string()));
-        assert_eq!(tools.len(), 21);
+        for tool in [
+            "start_proof_job",
+            "get_proof_job",
+            "list_proof_jobs",
+            "submit_transactions",
+            "list_transactions",
+            "get_transaction",
+            "delete_transaction",
+        ] {
+            assert!(tools.contains(&tool.to_string()), "{tool}");
+        }
+        assert_eq!(tools.len(), 28);
     }
 
     #[test]
@@ -903,10 +1033,10 @@ mod tests {
     }
 
     #[test]
-    fn test_run_action_via_handler() {
+    fn test_start_run_via_handler() {
         let service = make_service();
         let Json(accepted) = service
-            .run_action(Parameters(RunActionInput {
+            .start_run(Parameters(ActionInput {
                 action: craft_basics("FindLog"),
                 input_object_paths: vec![],
                 args: Default::default(),

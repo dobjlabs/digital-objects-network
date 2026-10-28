@@ -1,25 +1,28 @@
 //! Pure-data wire types shared across the driver, dobjd, MCP, and CLI.
 //!
 //! Anything that travels over a process boundary (HTTP body, MCP tool
-//! parameter, SSE event, CLI arg) belongs here — but only if it has no
+//! parameter, SSE event, CLI arg) belongs here -- but only if it has no
 //! logic that depends on ZK proofs or chain state. Keeping this crate
 //! dependency-light is the entire point: `cli` and `mcp` should be able
 //! to use it without compiling pod2/plonky2/rocksdb/sqlx.
 //!
 //! ## Submodules
 //!
-//! - [`relayer`] — DTOs for the relayer's HTTP API. The status/request
+//! - [`relayer`] -- DTOs for the relayer's HTTP API. The status/request
 //!   types are pure serde; the two proof-bearing response types carry pod2
 //!   `Hash` (`tx_final`, `state_root`), so they live behind the
 //!   `chain` feature. The relayer server and the driver enable it.
-//! - [`synchronizer`] — DTOs for the synchronizer's HTTP API. Every type
+//! - [`synchronizer`] -- DTOs for the synchronizer's HTTP API. Every type
 //!   carries pod2 `Hash` values directly, so the whole module lives behind
 //!   the `chain` feature. Only the synchronizer server and the driver speak
 //!   this API, and both enable the feature; `cli` and `mcp` don't.
+//! - [`transactions`] -- Durable transaction records. Hashes are hex strings,
+//!   so these types require no chain dependencies.
 
 pub mod relayer;
 #[cfg(feature = "chain")]
 pub mod synchronizer;
+pub mod transactions;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -292,11 +295,11 @@ pub struct CheckActionReport {
     pub missing_inputs: Vec<ClassRef>,
 }
 
-/// `POST /actions/run` body.
+/// Action parameters shared by run and proof-job requests.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct RunActionInput {
+pub struct ActionInput {
     pub action: QualifiedName,
     pub input_object_paths: Vec<String>,
     /// Optional caller data by name, in POD2 JSON form.
@@ -304,26 +307,27 @@ pub struct RunActionInput {
     pub args: ActionArgValues,
 }
 
-/// Action request body: `{ "input": { ... } }`.
+/// `POST /runs` request body: `{ "input": { ... } }`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
-pub struct RunActionRequest {
-    pub input: RunActionInput,
+pub struct StartRunRequest {
+    pub input: ActionInput,
 }
 
-/// `POST /actions/run` response.
+/// Result of a successful run.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct RunActionResult {
     /// Daemon-assigned id for this run (also the key for
-    /// `GET /actions/runs/{run_id}` and the scope of its `run-action-progress`
+    /// `GET /runs/{run_id}` and the scope of its `run-action-progress`
     /// events).
     pub run_id: String,
+    /// Grounding state root against which the transaction was proved.
     pub old_root: String,
-    pub new_root: String,
     pub output_files: Vec<String>,
-    pub nullified_files: Vec<String>,
+    /// The objects the transaction spends; nullified once it lands.
+    pub input_files: Vec<String>,
 }
 
 /// Lifecycle state of a run tracked in the daemon's run registry.
@@ -335,7 +339,7 @@ pub enum RunStatus {
     Queued,
     /// Building the local ZK proof.
     GenerateProof,
-    /// Submitting the proof, then waiting for on-chain confirmation + sync.
+    /// Shrinking, recording, submission, and waiting for chain inclusion.
     Committing,
     /// Finished successfully; `RunState::result` is populated.
     Succeeded,
@@ -343,7 +347,7 @@ pub enum RunStatus {
     Failed,
 }
 
-/// `GET /actions/runs` query: `?status=active` limits the list to runs that
+/// `GET /runs` query: `?status=active` limits the list to runs that
 /// have not yet succeeded or failed.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
@@ -360,9 +364,9 @@ pub enum RunListFilter {
     Active,
 }
 
-/// `POST /actions/run` response. The run was accepted and now executes in the
-/// background; follow it via `GET /actions/runs/{runId}` (poll) or
-/// `GET /actions/runs/{runId}/events` (SSE, replayable via `Last-Event-ID`).
+/// `POST /runs` response. The run was accepted and now executes in the
+/// background; follow it via `GET /runs/{runId}` (poll) or
+/// `GET /runs/{runId}/events` (SSE, replayable via `Last-Event-ID`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -374,7 +378,7 @@ pub struct RunAccepted {
     pub created_at_ms: u64,
 }
 
-/// `GET /actions/runs/{runId}` response: the current state of a run. The
+/// `GET /runs/{runId}` response: the current state of a run. The
 /// poll-and-recover counterpart to the SSE stream — a client that lost its
 /// connection re-reads the outcome here for as long as the run is retained.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -397,6 +401,12 @@ pub struct RunState {
     /// When the run reached `succeeded` or `failed`. Absent until then.
     #[serde(default)]
     pub finished_at_ms: Option<u64>,
+    /// Monotonic time since acceptance, frozen at completion. No ETA is implied.
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    /// Ordered, non-overlapping stage intervals. A resumed stage has a new entry.
+    #[serde(default)]
+    pub stage_timings: Vec<RunStageTiming>,
     /// Populated once `status` is `succeeded`.
     pub result: Option<RunActionResult>,
     /// Populated once `status` is `failed`.
@@ -405,6 +415,87 @@ pub struct RunState {
     /// its SSE event id, so a poller sees the same history a `Last-Event-ID`
     /// SSE reconnect would replay.
     pub progress: Vec<RunActionProgress>,
+}
+
+/// Proof job lifecycle. `Done` and `Failed` are terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum ProofJobStatus {
+    Queued,
+    Proving,
+    Recording,
+    /// Transaction recorded; `tx_final` identifies it.
+    Done,
+    /// Proof generation or recording failed; see `error`.
+    Failed,
+}
+
+impl ProofJobStatus {
+    pub fn is_terminal(self) -> bool {
+        matches!(self, ProofJobStatus::Done | ProofJobStatus::Failed)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ProofJobStatus::Queued => "queued",
+            ProofJobStatus::Proving => "proving",
+            ProofJobStatus::Recording => "recording",
+            ProofJobStatus::Done => "done",
+            ProofJobStatus::Failed => "failed",
+        }
+    }
+}
+
+impl fmt::Display for ProofJobStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.pad(self.as_str())
+    }
+}
+
+/// `POST /proof-jobs` response and `GET /proof-jobs/{jobId}` body.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ProofJobState {
+    pub job_id: String,
+    pub action: QualifiedName,
+    pub input_object_paths: Vec<String>,
+    pub status: ProofJobStatus,
+    /// The latest progress message.
+    #[serde(default)]
+    pub message: Option<String>,
+    /// Set once the job is `done`.
+    #[serde(default)]
+    pub tx_final: Option<String>,
+    /// Set once the job is `failed`.
+    #[serde(default)]
+    pub error: Option<String>,
+    pub created_at_ms: u64,
+    #[serde(default)]
+    pub started_at_ms: Option<u64>,
+    #[serde(default)]
+    pub finished_at_ms: Option<u64>,
+}
+
+/// Recorded transactions to submit to the relayer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitTransactionsRequest {
+    pub tx_finals: Vec<String>,
+}
+
+/// Optional wait for proof completion or transaction landing/expiry.
+/// At timeout, return the current state.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct WaitQuery {
+    #[serde(default)]
+    pub wait: bool,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
 }
 
 // ===========================================================================
@@ -432,6 +523,50 @@ pub enum ProofProgressStatus {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum ExecutionStage {
+    VerifyingInputs,
+    LoadingModule,
+    Building,
+    Mining,
+    Solving,
+    Proving,
+    Shrinking,
+    WritingFiles,
+    Submitting,
+    AwaitingSynchronization,
+}
+
+impl ExecutionStage {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::VerifyingInputs => "Verifying inputs and fetching grounding witness",
+            Self::LoadingModule => "Loading action module",
+            Self::Building => "Building action and proof statements",
+            Self::Mining => "Searching for a proof-of-work key",
+            Self::Solving => "Solving proof layout",
+            Self::Proving => "Generating ZK proof",
+            Self::Shrinking => "Shrinking proof",
+            Self::WritingFiles => "Writing output files",
+            Self::Submitting => "Submitting proof to relayer",
+            Self::AwaitingSynchronization => "Waiting for synchronizer",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RunStageTiming {
+    pub stage: ExecutionStage,
+    pub status: ProofProgressStatus,
+    pub started_at_ms: u64,
+    /// Monotonic duration of this interval; advances while status is running.
+    pub elapsed_ms: u64,
+}
+
 /// Wire shape for a single `run-action-progress` SSE event. Subscribers
 /// filter by `run_id` to scope events to their own action.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -443,13 +578,17 @@ pub struct RunActionProgress {
     pub status: ProofProgressStatus,
     pub message: String,
     pub old_root: Option<String>,
-    pub new_root: Option<String>,
     pub output_files: Option<Vec<String>>,
     pub output_status: Option<ObjectStatus>,
-    pub nullified_files: Option<Vec<String>>,
+    pub input_files: Option<Vec<String>>,
     /// When the event was recorded, in Unix epoch milliseconds.
     #[serde(default)]
     pub at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage: Option<ExecutionStage>,
+    /// Monotonic time since the run was accepted, at this event.
+    #[serde(default)]
+    pub elapsed_ms: u64,
 }
 
 // ===========================================================================

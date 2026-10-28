@@ -32,11 +32,25 @@ Two flavors of commands.
 | `import <path>`                                 | `POST /objects/import` (reads the `.dobj` file locally, sends contents)                                             |
 | `settings get`                                  | `GET /settings`                                                                                                     |
 | `settings set [--synchronizer URL] [--relayer URL] [--mcp on\|off]` | `PUT /settings` (omitted flags left unchanged; the MCP toggle starts/stops the server immediately) |
-| `run <action> [paths...]`                       | `POST /actions/run`, then follows `/actions/runs/{id}/events` and polls `/actions/runs/{id}` to the terminal result |
+| `run <action> [paths...]`                       | `POST /runs`, then follows `/runs/{id}/events` and polls `/runs/{id}` to the terminal result |
+| `prove <action> [paths...] [--wait]`             | `POST /proof-jobs`; with `--wait`, follows the job through recording |
+| `proof-jobs [--active]`                          | `GET /proof-jobs`; lists retained proof jobs |
+| `submit <txFinal>...`                            | `POST /transactions/submit`; submits recorded transactions in order |
+| `transactions`                                  | `GET /transactions`; lists durable records |
+| `inspect-transaction <txFinal> [--wait]`          | `GET /transactions/{txFinal}`; optionally waits for landing or expiry |
+| `delete-transaction <txFinal>`                   | `DELETE /transactions/{txFinal}`; abandons a record before any submission attempt |
+| `runs list [--active]`                         | `GET /runs`, optionally filtered to active runs |
+| `runs show <run-id>`                           | `GET /runs/{id}` |
+| `runs wait <run-id>`                           | Follows an existing run through SSE and a final state read; never submits an action |
 | `events`                                        | `GET /events` SSE — prints every event as JSON lines                                                                |
 
-Each command renders human-friendly output by default. Pass `--json`
-for the raw payload (suitable for `jq`).
+Each command renders human-friendly output by default. Pass `--json` for machine-readable output (suitable for `jq`). Inventory includes object fields and `heldByRunId`; actions include outputs, mutation slots, and argument names.
+
+`run --json` and `runs wait --json` print the final `RunState` to stdout, with progress on stderr. Failed runs print their state and exit nonzero. `runs show` can inspect a failed run without treating that status as a CLI failure. Run IDs are printed to stderr when submitting; `--quiet` suppresses progress and the ID announcement.
+
+Keep the CLI process running while an action executes. Shell-capable agents can use their host's background-process support and collect the result when the process exits. If interrupted, use `runs list --active --json` and `runs wait <run-id> --json` to reattach. Disconnecting does not cancel an action; inspect runs and inventory before resubmitting. Runs are in memory and retained for about ten minutes after completion, until daemon restart. SSE carries progress; bounded HTTP requests and a reconnect/poll fallback recover the final state when the stream is interrupted.
+
+Progress includes total elapsed seconds at each boundary. Final states and `runs show --json` include `elapsedMs` and `stageTimings`, separating mining, building, solving, proving, shrinking, and network waits. Active intervals advance in snapshots; completed durations are fixed. These measurements do not estimate time remaining.
 
 ### Daemon lifecycle — operates on local files, not HTTP
 
@@ -105,8 +119,7 @@ dobj run craft-basics::FindLog
 # [commit/done]          Commit complete
 # action:   craft-basics::FindLog
 # run id:   3f8c…
-# old root: 0xabcd...
-# new root: 0xefgh...
+# grounding root: 0xabcd...
 # outputs:
 #   + craft-basics_log_0x70e35...c96b.dobj
 
@@ -114,6 +127,8 @@ dobj run craft-basics::FindLog
 dobj events
 # {"type":"run-action-progress","runId":"CraftWood",...}
 ```
+
+The grounding root is the state used to prove the transaction. Run completion checks the transaction's membership in synchronized state; it does not return a post-transaction state root. Use `dobj state-root` to read the current head, which may also include other transactions.
 
 ## Relationship to other crates
 

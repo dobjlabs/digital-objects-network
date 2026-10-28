@@ -19,7 +19,7 @@ use crate::state::AppState;
 
 /// `GET /classes` — full list of every class the loaded plugins declare.
 pub async fn list_classes(State(state): State<AppState>) -> ApiResult<Json<Vec<ClassSummary>>> {
-    let driver = state.driver.clone();
+    let driver = state.services.driver.clone();
     let classes = tokio::task::spawn_blocking(move || driver.list_classes())
         .await
         .map_err(|err| anyhow::anyhow!("list_classes task panicked: {err}"))??;
@@ -32,7 +32,7 @@ pub async fn inspect_class(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> ApiResult<Json<ClassSummary>> {
-    let driver = state.driver.clone();
+    let driver = state.services.driver.clone();
     let qname = QualifiedName::parse(&name).map_err(|err| anyhow!("{err}"))?;
     let class = tokio::task::spawn_blocking(move || driver.get_class(&qname))
         .await

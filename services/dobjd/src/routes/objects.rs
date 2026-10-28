@@ -10,10 +10,11 @@ use driver::ObjectQuery;
 use wire_types::{ImportObjectRequest, ObjectSummary, ObjectsDirInfo};
 
 use crate::error::ApiResult;
+use crate::events::Event;
 use crate::state::AppState;
 
 pub async fn get_objects_dir(State(state): State<AppState>) -> ApiResult<Json<ObjectsDirInfo>> {
-    let path = state.driver.paths().objects_dir.clone();
+    let path = state.services.driver.paths().objects_dir.clone();
     Ok(Json(ObjectsDirInfo {
         path: path.to_string_lossy().to_string(),
     }))
@@ -28,14 +29,10 @@ pub async fn inspect_object(
     State(state): State<AppState>,
     Path(file_name): Path<String>,
 ) -> ApiResult<Json<ObjectSummary>> {
-    let driver = state.driver.clone();
-    let mut summary =
-        tokio::task::spawn_blocking(move || driver.read_object(&PathBuf::from(&file_name)))
-            .await
-            .map_err(|err| anyhow::anyhow!("inspect_object task panicked: {err}"))??;
-    state
-        .runs
-        .fill_held_by_run_ids(std::slice::from_mut(&mut summary));
+    let services = state.services.clone();
+    let summary = tokio::task::spawn_blocking(move || services.object_summary(&file_name))
+        .await
+        .map_err(|err| anyhow::anyhow!("inspect_object task panicked: {err}"))??;
     Ok(Json(summary))
 }
 
@@ -45,7 +42,7 @@ pub async fn read_object_raw(
     State(state): State<AppState>,
     Path(file_name): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
-    let driver = state.driver.clone();
+    let driver = state.services.driver.clone();
     let contents =
         tokio::task::spawn_blocking(move || driver.read_object_raw(&PathBuf::from(&file_name)))
             .await
@@ -68,9 +65,15 @@ pub async fn discard_object_unsafe(
     State(state): State<AppState>,
     Path(file_name): Path<String>,
 ) -> ApiResult<Json<ObjectSummary>> {
-    let driver = state.driver.clone();
+    let services = state.services.clone();
     let summary = tokio::task::spawn_blocking(move || {
-        driver.discard_object_unsafe(&PathBuf::from(&file_name))
+        let summary = services
+            .driver
+            .discard_object_unsafe(&PathBuf::from(&file_name))?;
+        services.events.publish(Event::ObjectRemoved {
+            file_name: summary.file_name.clone(),
+        });
+        anyhow::Ok(summary)
     })
     .await
     .map_err(|err| anyhow::anyhow!("discard_object_unsafe task panicked: {err}"))??;
@@ -86,14 +89,18 @@ pub async fn import_object(
     State(state): State<AppState>,
     Json(req): Json<ImportObjectRequest>,
 ) -> ApiResult<Json<ObjectSummary>> {
-    let driver = state.driver.clone();
-    let summary = tokio::task::spawn_blocking(move || driver.import_object(&req.dobj))
-        .await
-        .map_err(|err| anyhow::anyhow!("import_object task panicked: {err}"))??;
+    let services = state.services.clone();
+    let summary = tokio::task::spawn_blocking(move || {
+        let summary = services.driver.import_object(&req.dobj)?;
+        services.events.publish(Event::Object(summary.clone()));
+        anyhow::Ok(summary)
+    })
+    .await
+    .map_err(|err| anyhow::anyhow!("import_object task panicked: {err}"))??;
     Ok(Json(summary))
 }
 
-/// `GET /objects` — local objects synced against the chain, each already
+/// `GET /objects` -- local objects synced against the chain, each already
 /// carrying its class's emoji/description (the driver folds that in). The
 /// action catalog comes from `GET /actions` separately, so clients can
 /// fetch the two in parallel.
@@ -117,16 +124,11 @@ async fn synced_objects(
     state: AppState,
     query: Option<ObjectQuery>,
 ) -> ApiResult<Json<Vec<ObjectSummary>>> {
-    let driver = state.driver.clone();
-    let mut objects = tokio::task::spawn_blocking(move || {
-        driver.sync_objects(query.as_ref()).unwrap_or_else(|err| {
-            tracing::warn!("sync_objects failed, falling back to local: {err:#}");
-            driver.list_objects(query.as_ref()).unwrap_or_default()
-        })
-    })
-    .await
-    .map_err(|err| anyhow::anyhow!("load_objects task panicked: {err}"))?;
-    state.runs.fill_held_by_run_ids(&mut objects);
+    let services = state.services.clone();
+    let objects =
+        tokio::task::spawn_blocking(move || services.settler.sync_objects(query.as_ref()))
+            .await
+            .map_err(|err| anyhow::anyhow!("load_objects task panicked: {err}"))??;
 
     Ok(Json(objects))
 }

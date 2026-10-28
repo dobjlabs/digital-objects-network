@@ -1,0 +1,38 @@
+name: Quint models
+
+on:
+  pull_request:
+    branches: [main]
+    types: [ready_for_review, opened, synchronize, reopened, converted_to_draft]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  model:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    name: Quint checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: devtools/models
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.34.8
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: devtools/models/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm run check

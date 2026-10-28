@@ -4,18 +4,22 @@
 The pack gives every bitcraft class and action an icon, a one-line summary
 and a longer description, for apps to show. Nothing in dobjd or the .pexe
 reads it. Each action's icon is drawn here, once, as a finished SVG, so an
-app only has to load the file.
+app only has to load the file. The summaries and descriptions are written
+by hand in copy/classes.md and copy/actions.md (see README.md).
 
-Run it after changing a recipe, adding a class or action, or editing the
-art or text below:
+Run it after editing the copy or the art, or changing the plugin's classes
+or actions:
 
     python3 examples/bitcraft/presentation/generate.py
 
-It reads the class and action names from ../manifest.toml and refuses to
-write anything if one of them has no entry here. Needs only the Python 3.9
-standard library.
+With --check it writes nothing, and fails if pack.json or an action icon is
+not what it would write. It reads the class and action names from
+../manifest.toml and refuses to write anything if one of them has no art or
+copy, or the copy is malformed. Needs only the Python 3.9 standard library.
 """
 
+import argparse
+import ast
 import json
 import re
 import struct
@@ -27,166 +31,55 @@ PACK = Path(__file__).resolve().parent
 PLUGIN = PACK.parent
 CLASS_ART = PACK / "assets" / "classes"
 ACTION_ICONS = PACK / "assets" / "actions"
+COPY = PACK / "copy"
 
-# ---- Classes: art and text. Text is read by players; keep it in step with
-# ../src/main.rs, which generates the recipes.
+# ---- Classes: the art for each, also drawn on its actions' icons.
 
-CLASSES = {
-    "Wood": ("wood.png", "A basic building material.",
-             "Gathered with a pocketknife or chopped with an axe. Goes into sticks, axes, "
-             "quarries and mining drills, and can be stored in a bucket of wood."),
-    "Stone": ("stone.png", "Rock for heavier tools and machines.",
-              "Gathered with a pocketknife or mined with a quarry. Goes into stone axes, "
-              "quarries and mining drills, and can be stored in a bucket of stone."),
-    "Iron": ("iron.png", "The rarest raw resource.",
-             "Gathered with a pocketknife, which takes the most work of any resource, or "
-             "drilled with a mining drill. Goes into iron axes, buckets and mining drills."),
-    "Stick": ("stick.png", "Half a piece of wood.",
-              "Made by splitting wood. Two sticks and a piece of wood make a wood axe."),
-    "BucketOfWood": ("bucket.png", "Holds any amount of wood in one item.",
-                     "Keeps your inventory short. Full buckets are spent to level up "
-                     "quarries and mining drills."),
-    "BucketOfStone": ("bucket.png", "Holds any amount of stone in one item.",
-                      "Keeps your inventory short. Full buckets are spent to level up "
-                      "quarries and mining drills."),
-    "BucketOfIron": ("bucket.png", "Holds any amount of iron in one item.",
-                     "Keeps your inventory short. Full buckets are spent to level up "
-                     "mining drills."),
-    "Pocketknife": ("pocketknife.png", "Your first tool.",
-                    "Made from nothing. You need one to gather wood, stone and iron, and "
-                    "gathering gives it back, so one lasts forever."),
-    "WoodAxe": ("wood-axe.png", "Chops 2 wood per use.",
-                "Starts with 100 durability and loses 1 per use; at 0 it can no longer be "
-                "used. Can be upgraded to a stone axe."),
-    "StoneAxe": ("stone-axe.png", "Chops 3 wood per use.",
-                 "Made by upgrading a wood axe, keeping its durability. Loses 1 durability "
-                 "per use. Can be upgraded to an iron axe."),
-    "IronAxe": ("iron-axe.png", "Chops 4 wood per use.",
-                "Made by upgrading a stone axe, keeping its durability. Loses 1 durability "
-                "per use."),
-    "Quarry": ("quarry.png", "Mines stone without wearing out.",
-               "Makes one more stone per use than its level, up to level 6. Level it up with "
-               "full buckets of wood and stone."),
-    "MiningDrill": ("mining-drill.png", "Drills iron from wood.",
-                    "Spends 5 wood per use and makes one more iron than its level, up to "
-                    "level 6. Level it up with full buckets of wood, stone and iron."),
-    "Bit": ("bit.png", "The game's finest-grained material.",
-            "Made from wood, stone or iron. No recipe uses bits yet."),
+CLASS_ART_FILES = {
+    "Wood": "wood.png",
+    "Stone": "stone.png",
+    "Iron": "iron.png",
+    "Stick": "stick.png",
+    "BucketOfWood": "bucket.png",
+    "BucketOfStone": "bucket.png",
+    "BucketOfIron": "bucket.png",
+    "Pocketknife": "pocketknife.png",
+    "WoodAxe": "wood-axe.png",
+    "StoneAxe": "stone-axe.png",
+    "IronAxe": "iron-axe.png",
+    "Quarry": "quarry.png",
+    "MiningDrill": "mining-drill.png",
+    "Bit": "bit.png",
 }
 
 # The art drawn on the rekey icon, which is the same for every class.
 REKEY_ART = PACK / "source" / "refresh.svg"
 
-# ---- Actions: the art and badge drawn on each icon, and the text. Each rule
-# matches a family of action names; the first match applies.
+# ---- Actions: the art and badge drawn on each icon. Each rule matches a
+# family of action names; the first match applies. The art is a class name,
+# whose art is used, or a path to other art.
 
-RESOURCES = {"Wood": "wood", "Stone": "stone", "Iron": "iron"}
-GATHER_EFFORT = {"Wood": "a little", "Stone": "a moderate amount of", "Iron": "a lot of"}
-AXE_YIELD = {"WoodAxe": 2, "StoneAxe": 3, "IronAxe": 4}
-AXE_NAME = {"WoodAxe": "wood axe", "StoneAxe": "stone axe", "IronAxe": "iron axe"}
-BITS_YIELD = {"Wood": 1, "Stone": 2, "Iron": 5}
-
-
-def lower(name):
-    return re.sub(r"(?<!^)([A-Z])", r" \1", name).lower()
-
-
-def quarry_levelup(level):
-    return 20 * 2 ** level, 10 * 2 ** level
-
-
-def drill_levelup(level):
-    return 10 * 2 ** level, 50 * 2 ** level, 5 * 2 ** level
-
-
-ACTION_RULES = [
-    (r"CraftPocketknife", lambda m: (
-        "Pocketknife", "plus",
-        "Make a pocketknife from nothing.",
-        "Your first tool. It takes no materials, and you need it to gather wood, stone "
-        "and iron.")),
-    (r"Gather(Wood|Stone|Iron)", lambda m: (
-        m[1], "plus",
-        f"Gather 1 {RESOURCES[m[1]]} with your pocketknife.",
-        f"Your computer does {GATHER_EFFORT[m[1]]} work first. The pocketknife comes back "
-        f"with a fresh key, ready to use again.")),
-    (r"Craft(BucketOf(Wood|Stone|Iron))", lambda m: (
-        m[1], "plus",
-        f"Make an empty bucket for {RESOURCES[m[2]]} from 1 iron.",
-        f"A bucket holds any amount of {RESOURCES[m[2]]} in one item. Fill it with the "
-        f"Add actions.")),
-    (r"(BucketOf(Wood|Stone|Iron))Add(\d+)", lambda m: (
-        m[1], "up",
-        f"Put {m[3]} {RESOURCES[m[2]]} into a bucket.",
-        f"Spends {m[3]} {RESOURCES[m[2]]} and adds them to the bucket's count.")),
-    (r"(BucketOf(Wood|Stone|Iron))Take(\d+)", lambda m: (
-        m[1], "down",
-        f"Take {m[3]} {RESOURCES[m[2]]} out of a bucket.",
-        f"Lowers the bucket's count by {m[3]} and gives you {m[3]} {RESOURCES[m[2]]}. The "
-        f"bucket must hold at least that many.")),
-    (r"CraftStick", lambda m: (
-        "Stick", "plus",
-        "Split 1 wood into 2 sticks.",
-        "Sticks go into wood axes.")),
-    (r"CraftWoodAxe", lambda m: (
-        "WoodAxe", "plus",
-        "Make a wood axe from 1 wood and 2 sticks.",
-        "A new axe has 100 durability and loses 1 per use. It chops 2 wood per use.")),
-    (r"Craft(StoneAxe|IronAxe)", lambda m: (
-        m[1], "plus",
-        f"Upgrade your {'wood' if m[1] == 'StoneAxe' else 'stone'} axe with 1 "
-        f"{'stone' if m[1] == 'StoneAxe' else 'iron'}.",
-        f"Uses up the old axe and keeps its remaining durability. The {AXE_NAME[m[1]]} "
-        f"chops {AXE_YIELD[m[1]]} wood per use.")),
-    (r"Use(WoodAxe|StoneAxe|IronAxe)", lambda m: (
-        m[1], None,
-        f"Chop {AXE_YIELD[m[1]]} wood with your {AXE_NAME[m[1]]}.",
-        "Takes 1 durability; an axe at 0 can no longer be used. Your computer does a "
-        "little work first.")),
-    (r"BuildQuarry", lambda m: (
-        "Quarry", "plus",
-        "Build a level 1 quarry from 20 wood and 10 stone.",
-        "Quarries mine stone without wearing out, and make more at higher levels.")),
-    (r"BuildMiningDrill", lambda m: (
-        "MiningDrill", "plus",
-        "Build a level 1 mining drill from 10 wood, 50 stone and 5 iron.",
-        "Mining drills turn wood into iron without wearing out, and make more at higher "
-        "levels.")),
-    (r"UseQuarry(\d+)", lambda m: (
-        "Quarry", None,
-        f"Mine {int(m[1]) + 1} stone with a level {m[1]} quarry.",
-        f"Only works on a quarry at exactly level {m[1]}. Your computer does some work "
-        f"first.")),
-    (r"UseMiningDrill(\d+)", lambda m: (
-        "MiningDrill", None,
-        f"Drill {int(m[1]) + 1} iron from 5 wood with a level {m[1]} mining drill.",
-        f"Only works on a mining drill at exactly level {m[1]}. Your computer does a lot "
-        f"of work first.")),
-    (r"LevelUpQuarry(\d+)", lambda m: (
-        "Quarry", "up",
-        f"Raise a level {m[1]} quarry to level {int(m[1]) + 1}.",
-        "Only works on a quarry at exactly level {}. Spends a bucket holding exactly {} "
-        "wood and a bucket holding exactly {} stone."
-        .format(m[1], *quarry_levelup(int(m[1]))))),
-    (r"LevelUpMiningDrill(\d+)", lambda m: (
-        "MiningDrill", "up",
-        f"Raise a level {m[1]} mining drill to level {int(m[1]) + 1}.",
-        "Only works on a mining drill at exactly level {}. Spends buckets holding exactly "
-        "{} wood, {} stone and {} iron."
-        .format(m[1], *drill_levelup(int(m[1]))))),
-    (r"BitsFrom(Wood|Stone|Iron)", lambda m: (
-        "Bit", "plus",
-        f"Turn 1 {RESOURCES[m[1]]} into {BITS_YIELD[m[1]]} "
-        f"bit{'s' if BITS_YIELD[m[1]] != 1 else ''}.",
-        "Takes a short, fixed amount of computing time.")),
+ACTION_ART_RULES = [
+    (r"CraftPocketknife", lambda m: ("Pocketknife", "plus")),
+    (r"Gather(Wood|Stone|Iron)", lambda m: (m[1], "plus")),
+    (r"Craft(BucketOf(Wood|Stone|Iron))", lambda m: (m[1], "plus")),
+    (r"(BucketOf(Wood|Stone|Iron))Add(\d+)", lambda m: (m[1], "up")),
+    (r"(BucketOf(Wood|Stone|Iron))Take(\d+)", lambda m: (m[1], "down")),
+    (r"CraftStick", lambda m: ("Stick", "plus")),
+    (r"Craft(WoodAxe|StoneAxe|IronAxe)", lambda m: (m[1], "plus")),
+    (r"Use(WoodAxe|StoneAxe|IronAxe)", lambda m: (m[1], None)),
+    (r"BuildQuarry", lambda m: ("Quarry", "plus")),
+    (r"BuildMiningDrill", lambda m: ("MiningDrill", "plus")),
+    (r"UseQuarry(\d+)", lambda m: ("Quarry", None)),
+    (r"UseMiningDrill(\d+)", lambda m: ("MiningDrill", None)),
+    (r"LevelUpQuarry(\d+)", lambda m: ("Quarry", "up")),
+    (r"LevelUpMiningDrill(\d+)", lambda m: ("MiningDrill", "up")),
+    (r"BitsFrom(Wood|Stone|Iron)", lambda m: ("Bit", "plus")),
 ]
 
 # Built-in actions every class gets from the SDK, listed in no manifest.
-BUILTIN_RULES = [
-    (r"Rekey(\w+)", lambda m: (
-        REKEY_ART, None,
-        f"Give a {lower(m[1])} a fresh key.",
-        "Changes nothing else about it. You won't need this for crafting.")),
+BUILTIN_ART_RULES = [
+    (r"Rekey(\w+)", lambda m: (REKEY_ART, None)),
 ]
 
 # ---- Badges, drawn on the 32-unit icon grid in the top-right corner, with a
@@ -204,6 +97,152 @@ BADGES = {
             '<path d="M22.5 4.5l4 4 4-4" fill="none" stroke="#dc2626" stroke-width="2.5" '
             'stroke-linecap="round" stroke-linejoin="round"/>',
 }
+
+
+# ---- Copy: the hand-written summaries and descriptions.
+
+
+class Copy:
+    """One copy file's entries. An entry's heading is a name, or a family
+    pattern with {placeholders} that covers every name it fits; an exact
+    name overrides a family."""
+
+    HEADING = re.compile(r"(?:[A-Za-z0-9]+|\{[a-z_]+\})+")
+
+    def __init__(self, path, errors):
+        self.path = path
+        self.errors = errors
+        # Heading -> (line number, summary, description or None).
+        self.entries = {}
+        self.families = []
+        self.used = set()
+        self.read()
+
+    def error(self, line, message):
+        self.errors.append(f"copy/{self.path.name}:{line}: {message}")
+
+    def read(self):
+        heading, heading_line, body = None, 0, []
+        for number, line in enumerate(self.path.read_text().splitlines() + ["## "], 1):
+            if line.startswith("## "):
+                if heading is not None:
+                    self.add(heading, heading_line, body)
+                heading, heading_line, body = line[3:].strip(), number, []
+            elif heading is None:
+                continue
+            elif line.startswith("#"):
+                self.error(number, "only '## Name' headings are allowed after the first entry")
+            else:
+                body.append((number, line))
+
+    def add(self, heading, line, body):
+        if not self.HEADING.fullmatch(heading):
+            self.error(line, f"'{heading}' is not a name or a family like UseQuarry{{level}}")
+            return
+        if heading in self.entries:
+            self.error(line, f"'{heading}' already has an entry, at line {self.entries[heading][0]}")
+            return
+        paragraphs, current = [], []
+        for _, text in body + [(0, "")]:
+            if text.strip():
+                current.append(text.strip())
+            elif current:
+                paragraphs.append(" ".join(current))
+                current = []
+        if not paragraphs:
+            self.error(line, f"'{heading}' has no summary")
+            return
+        description = "\n\n".join(paragraphs[1:]) or None
+        self.entries[heading] = (line, paragraphs[0], description)
+        if "{" in heading:
+            placeholders = re.findall(r"\{([a-z_]+)\}", heading)
+            if len(placeholders) != len(set(placeholders)):
+                self.error(line, f"'{heading}' uses a placeholder twice")
+                return
+            pattern = re.sub(r"\\\{([a-z_]+)\\\}", r"(?P<\1>[A-Za-z0-9]+?)", re.escape(heading))
+            self.families.append((heading, re.compile(pattern)))
+
+    def text_for(self, name):
+        """The summary and description for `name`, or None when no entry fits."""
+        if name in self.entries:
+            self.used.add(name)
+            _, summary, description = self.entries[name]
+            return summary, description
+        fits = [(heading, match) for heading, pattern in self.families
+                for match in [pattern.fullmatch(name)] if match]
+        if len(fits) > 1:
+            self.error(self.entries[fits[0][0]][0],
+                       f"'{name}' fits more than one family: "
+                       + ", ".join(heading for heading, _ in fits)
+                       + "; give it an entry of its own")
+            return None
+        if not fits:
+            return None
+        heading, match = fits[0]
+        self.used.add(heading)
+        line, summary, description = self.entries[heading]
+        values = match.groupdict()
+        render = lambda text: fill_in(text, values, lambda message: self.error(line, message))
+        return render(summary), None if description is None else render(description)
+
+    def report_unused(self):
+        for heading, (line, _, _) in self.entries.items():
+            if heading not in self.used:
+                self.error(line, f"'{heading}' matches nothing in ../manifest.toml")
+
+
+# Ways to write a placeholder's value: {resource|lower} gives "wood" for Wood,
+# {class|words} gives "bucket of wood" for BucketOfWood.
+FILTERS = {
+    "lower": str.lower,
+    "words": lambda value: re.sub(r"(?<!^)([A-Z])", r" \1", value).lower(),
+}
+
+
+def fill_in(text, values, error):
+    """Replaces each {field} in `text`: a placeholder, a placeholder|filter, or
+    whole-number arithmetic on placeholders, like {level + 1} or
+    {20 * 2 ** level}. {{ and }} stand for literal braces."""
+    def field(match):
+        if match[0] in ("{{", "}}"):
+            return match[0][0]
+        inner = match[1].strip()
+        if "|" in inner:
+            name, filter_name = (part.strip() for part in inner.split("|", 1))
+            if name not in values:
+                error(f"{{{inner}}}: no placeholder '{name}' in the heading")
+            elif filter_name not in FILTERS:
+                error(f"{{{inner}}}: no filter '{filter_name}'; use " + " or ".join(FILTERS))
+            else:
+                return FILTERS[filter_name](values[name])
+            return match[0]
+        if inner in values:
+            return values[inner]
+        try:
+            return str(evaluate(ast.parse(inner, mode="eval").body, values))
+        except (SyntaxError, ValueError) as problem:
+            error(f"{{{inner}}}: {problem}")
+            return match[0]
+    return re.sub(r"\{\{|\}\}|\{([^{}]*)\}", field, text)
+
+
+ARITHMETIC = {ast.Add: lambda a, b: a + b, ast.Sub: lambda a, b: a - b,
+              ast.Mult: lambda a, b: a * b, ast.Pow: lambda a, b: a ** b,
+              ast.FloorDiv: lambda a, b: a // b}
+
+
+def evaluate(node, values):
+    if isinstance(node, ast.Constant) and type(node.value) is int:
+        return node.value
+    if isinstance(node, ast.Name):
+        if node.id not in values:
+            raise ValueError(f"no placeholder '{node.id}' in the heading")
+        if not values[node.id].isdigit():
+            raise ValueError(f"'{node.id}' is '{values[node.id]}', not a whole number")
+        return int(values[node.id])
+    if isinstance(node, ast.BinOp) and type(node.op) in ARITHMETIC:
+        return ARITHMETIC[type(node.op)](evaluate(node.left, values), evaluate(node.right, values))
+    raise ValueError("only placeholders, whole numbers and + - * ** // are allowed")
 
 
 def manifest_names(manifest_text):
@@ -281,7 +320,7 @@ def action_icon_svg(art, badge):
         inner = re.search(r"<svg[^>]*>(.*)</svg>", art.read_text(), re.S)[1].strip()
         art_markup = f'<svg x="8" y="8" width="16" height="16" viewBox="0 0 16 16">{inner}</svg>'
     else:
-        art_markup = pixel_art_svg(read_rgba_png(CLASS_ART / CLASSES[art][0]), 8, 8)
+        art_markup = pixel_art_svg(read_rgba_png(CLASS_ART / CLASS_ART_FILES[art]), 8, 8)
     return (
         '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">'
         '<defs><filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">'
@@ -294,58 +333,90 @@ def action_icon_svg(art, badge):
     )
 
 
-def describe_action(name, classes):
-    for pattern, describe in ACTION_RULES:
+def action_art(name, classes):
+    """The art and badge for the action's icon, or None when no rule fits."""
+    for pattern, art in ACTION_ART_RULES:
         match = re.fullmatch(pattern, name)
         if match:
-            return describe(match)
-    for pattern, describe in BUILTIN_RULES:
+            return art(match)
+    for pattern, art in BUILTIN_ART_RULES:
         match = re.fullmatch(pattern, name)
         if match and match[1] in classes:
-            return describe(match)
+            return art(match)
     return None
 
 
+def entry(icon, text):
+    summary, description = text
+    fields = {"icon": icon, "summary": summary}
+    if description is not None:
+        fields["description"] = description
+    return fields
+
+
 def main():
+    parser = argparse.ArgumentParser(description="Generate the bitcraft presentation pack.")
+    parser.add_argument("--check", action="store_true",
+                        help="write nothing; fail if pack.json or an icon is out of date")
+    check = parser.parse_args().check
+
     plugin, module_hash, names = manifest_names((PLUGIN / "manifest.toml").read_text())
     # Built-in actions are not in the manifest; the SDK adds one per class.
     actions = names["actions"] + [f"Rekey{name}" for name in names["classes"]]
 
-    missing = [f"class {name}" for name in names["classes"] if name not in CLASSES]
-    missing += [f"action {name}" for name in actions if describe_action(name, CLASSES) is None]
-    missing += [f"art {CLASS_ART / art}" for art, _, _ in CLASSES.values()
+    errors = []
+    class_copy = Copy(COPY / "classes.md", errors)
+    action_copy = Copy(COPY / "actions.md", errors)
+    class_text = {name: class_copy.text_for(name) for name in names["classes"]}
+    action_text = {name: action_copy.text_for(name) for name in actions}
+    class_copy.report_unused()
+    action_copy.report_unused()
+
+    missing = [f"copy for class {name} in copy/classes.md"
+               for name, text in class_text.items() if text is None]
+    missing += [f"copy for action {name} in copy/actions.md"
+                for name, text in action_text.items() if text is None]
+    missing += [f"art for class {name} in CLASS_ART_FILES"
+                for name in names["classes"] if name not in CLASS_ART_FILES]
+    missing += [f"art {CLASS_ART / art}" for art in set(CLASS_ART_FILES.values())
                 if not (CLASS_ART / art).is_file()]
-    if missing:
-        sys.exit("No presentation for:\n  " + "\n  ".join(missing))
+    missing += [f"an icon rule for action {name}"
+                for name in actions if action_art(name, CLASS_ART_FILES) is None]
+    if errors or missing:
+        sys.exit("\n".join(["The pack was not written."] + errors
+                           + [f"No {item}." for item in missing]))
 
     pack = {
         "format": 1,
         "plugin": plugin,
         "writtenFor": {"moduleHash": module_hash},
-        "classes": {},
+        "classes": {name: entry(f"assets/classes/{CLASS_ART_FILES[name]}", class_text[name])
+                    for name in names["classes"]},
         "actions": {},
     }
-    for name in names["classes"]:
-        art, summary, description = CLASSES[name]
-        pack["classes"][name] = {
-            "icon": f"assets/classes/{art}", "summary": summary, "description": description,
-        }
+    icons = {}
+    for name in actions:
+        icons[f"{name}.svg"] = action_icon_svg(*action_art(name, CLASS_ART_FILES))
+        pack["actions"][name] = entry(f"assets/actions/{name}.svg", action_text[name])
+    files = {PACK / "pack.json": json.dumps(pack, indent=2) + "\n"}
+    files.update({ACTION_ICONS / icon: svg for icon, svg in icons.items()})
+    stale = [path for path in ACTION_ICONS.glob("*.svg") if path.name not in icons]
+
+    if check:
+        changed = [path for path, text in files.items()
+                   if not path.is_file() or path.read_text() != text]
+        if changed or stale:
+            sys.exit("The presentation pack is out of date; run "
+                     "`just bitcraft-presentation` and commit the result:\n  "
+                     + "\n  ".join(str(path.relative_to(PACK)) for path in changed + stale))
+        print("The presentation pack is up to date.")
+        return
 
     ACTION_ICONS.mkdir(parents=True, exist_ok=True)
-    written = set()
-    for name in actions:
-        art, badge, summary, description = describe_action(name, CLASSES)
-        icon = ACTION_ICONS / f"{name}.svg"
-        icon.write_text(action_icon_svg(art, badge))
-        written.add(icon.name)
-        pack["actions"][name] = {
-            "icon": f"assets/actions/{icon.name}", "summary": summary, "description": description,
-        }
-    for stale in ACTION_ICONS.glob("*.svg"):
-        if stale.name not in written:
-            stale.unlink()
-
-    (PACK / "pack.json").write_text(json.dumps(pack, indent=2) + "\n")
+    for path, text in files.items():
+        path.write_text(text)
+    for path in stale:
+        path.unlink()
     print(f"Wrote {len(pack['classes'])} classes and {len(pack['actions'])} actions to "
           f"{PACK / 'pack.json'}")
 

@@ -1,41 +1,15 @@
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
 import test from "node:test";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { JSDOM } from "jsdom";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { build } from "vite";
+import { buildModule, importModule } from "./buildModule.mjs";
 
-const require = createRequire(import.meta.url);
-const result = await build({
-  configFile: false,
-  root: fileURLToPath(new URL("..", import.meta.url)),
-  logLevel: "silent",
-  build: {
-    write: false,
-    minify: false,
-    lib: {
-      entry: fileURLToPath(new URL("../src/features/context/ContextPanel.tsx", import.meta.url)),
-      formats: ["es"],
-      fileName: "ContextPanel",
-    },
-    rollupOptions: {
-      external: ["react", "react/jsx-runtime"],
-      output: {
-        paths: Object.fromEntries(["react", "react/jsx-runtime"].map((name) => [
-          name, pathToFileURL(require.resolve(name)).href,
-        ])),
-      },
-    },
-  },
-});
-const builds = Array.isArray(result) ? result : [result];
-const code = builds.flatMap((build) => build.output)
-  .find((output) => output.type === "chunk" && output.isEntry).code;
-const { ContextPanel } = await import(
-  `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`
+const code = await buildModule(
+  new URL("../src/features/context/ContextPanel.tsx", import.meta.url),
+  { external: ["react", "react/jsx-runtime"] },
 );
+const { ContextPanel } = await importModule(code);
 
 test("inventory updates invalidate bound inputs without restoring them later", async (context) => {
   const dom = new JSDOM("<!doctype html><div id='root'></div>");

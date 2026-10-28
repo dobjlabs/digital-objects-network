@@ -13,7 +13,7 @@ procs:
   anvil:
     shell: exec anvil --block-time 2 --port 8545 --state data/anvil-state.json --state-interval 5
   beacon-shim:
-    shell: exec cargo run -p beacon-shim --release
+    shell: exec cargo run --bin beacon-shim --release
     env:
       RUST_LOG: info
   archiver:
