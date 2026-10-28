@@ -10,9 +10,14 @@ fn main() {
 }
 
 fn bundle_ui() {
+    use sha2::{Digest, Sha256};
     use std::{env, fs, path::Path};
 
-    let output = Path::new(&env::var("OUT_DIR").unwrap()).join("bundled_ui.rs");
+    let output_directory = env::var("OUT_DIR").unwrap();
+    let output_directory = Path::new(&output_directory);
+    let output = output_directory.join("bundled_ui.rs");
+    let excluded: Vec<_> = include_str!("ui-excluded-files.txt").lines().collect();
+    println!("cargo:rerun-if-changed=ui-excluded-files.txt");
     let mut source = String::new();
     for (feature, constant, directory) in [
         (
@@ -39,22 +44,41 @@ fn bundle_ui() {
             println!("cargo:rerun-if-changed={}", root.display());
             let mut files = Vec::new();
             collect_assets(&root, &mut files);
-            files.sort();
-            for path in files.into_iter().filter(|path| {
-                !matches!(
-                    path.file_name().and_then(|name| name.to_str()),
-                    Some("AGENTS.md" | "CLAUDE.md" | "BITCRAFT_SPECIFIC_RULES.md")
-                )
-            }) {
-                let name = path
-                    .strip_prefix(&root)
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .replace('\\', "/");
+            let mut assets: Vec<_> = files
+                .into_iter()
+                .filter(|path| !excluded.contains(&path.file_name().unwrap().to_str().unwrap()))
+                .map(|path| {
+                    let name = path
+                        .strip_prefix(&root)
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .replace('\\', "/");
+                    (name, path)
+                })
+                .collect();
+            assets.sort_by(|left, right| left.0.cmp(&right.0));
+            let mut fingerprint = Sha256::new();
+            fingerprint.update(b"dobjd-ui-v1\0");
+            for (name, path) in &assets {
+                fingerprint.update((name.len() as u64).to_le_bytes());
+                fingerprint.update(name.as_bytes());
+                fingerprint.update(Sha256::digest(fs::read(path).unwrap()));
+            }
+            let marker = format!("dobjd-{constant}-sha256-v1:{:x}", fingerprint.finalize());
+            let mut index = fs::read(root.join("index.html")).unwrap();
+            index.extend_from_slice(format!("\n<!-- {marker} -->\n").as_bytes());
+            let bundled_index = output_directory.join(format!("{constant}_index.html"));
+            fs::write(&bundled_index, index).unwrap();
+            for (name, path) in assets {
+                let embedded = if name == "index.html" {
+                    &bundled_index
+                } else {
+                    &path
+                };
                 source.push_str(&format!(
                     "    ({name:?}, include_bytes!({:?})),\n",
-                    path.to_str().unwrap()
+                    embedded.to_str().unwrap()
                 ));
             }
         }
