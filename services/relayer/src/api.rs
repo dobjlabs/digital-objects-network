@@ -14,10 +14,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tracing::{debug, error, info};
 use uuid::Uuid;
-use wire_types::relayer::{
-    JobStatusResponse, SubmitProofRequest, SubmitProofResponse, TxHashEntry,
-    TxHashesByTxFinalRequest, TxHashesByTxFinalResponse,
-};
+use wire_types::relayer::{JobStatusResponse, SubmitProofRequest, SubmitProofResponse};
 use wire_types::HealthResponse;
 
 use payload::{blob::MAX_SIMPLE_BLOB_PAYLOAD_BYTES, proof::BlobParser};
@@ -27,10 +24,6 @@ use crate::{
     model::{JobStatus, RelayJob},
     time_utils::now_ts,
 };
-
-/// Per-request cap on `tx_finals` accepted by `POST /api/v1/proofs/tx-hashes`.
-/// Clients chunk their lookups at or below this.
-const MAX_TX_HASH_QUERY_ITEMS: usize = 256;
 
 /// Shared API dependencies.
 #[derive(Clone)]
@@ -113,7 +106,6 @@ pub fn build_router(state: AppState) -> Router {
         .route("/info", get(get_info))
         .route("/api/v1/proofs", post(submit_proof))
         .route("/api/v1/proofs/{job_id}", get(get_proof))
-        .route("/api/v1/proofs/tx-hashes", post(get_tx_hashes))
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state)
 }
@@ -244,33 +236,6 @@ async fn get_proof(
         "Returning relay job status"
     );
     Ok(Json(to_status_response(job)))
-}
-
-async fn get_tx_hashes(
-    State(app_state): State<AppState>,
-    Json(body): Json<TxHashesByTxFinalRequest>,
-) -> Result<Json<TxHashesByTxFinalResponse>, ApiError> {
-    if body.tx_finals.len() > MAX_TX_HASH_QUERY_ITEMS {
-        return Err(ApiError::BadRequest(format!(
-            "tx_finals exceeds maximum item count: {} > {MAX_TX_HASH_QUERY_ITEMS}",
-            body.tx_finals.len()
-        )));
-    }
-    debug!(
-        count = body.tx_finals.len(),
-        "Handling relay tx-hash batch lookup"
-    );
-
-    let results = app_state
-        .db
-        .tx_hashes_by_tx_finals(&body.tx_finals)
-        .await
-        .map_err(ApiError::Internal)?
-        .into_iter()
-        .map(|(tx_final, tx_hash)| TxHashEntry { tx_final, tx_hash })
-        .collect();
-
-    Ok(Json(TxHashesByTxFinalResponse { results }))
 }
 
 fn to_submit_response(job: RelayJob) -> SubmitProofResponse {

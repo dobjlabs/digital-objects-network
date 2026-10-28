@@ -29,7 +29,7 @@ It is intentionally a library, not a daemon and not a CLI.
   - `record`: writes the outputs as `unknown`, the payload, then the record, whose file is the commit point. Refuses an input another record spends and an output file that already exists. Releases the holds either way.
   - `submit`: posts a recorded payload to the relayer, refusing a grounding the synchronizer has aged out. Overlapping calls for the same `txFinal` wait on a shared per-transaction lock and reread the record after acquiring it. Accepted submissions return the existing job; failed calls release the lock for retry. Different transactions can submit concurrently.
   - `delete_transaction`: removes a recorded transaction that was never offered to the relayer, with its output files.
-  - `settle`: query membership for transactions with a submission attempt, using that response's head for expiry. Never-submitted records need only a head check; mixed passes reuse the membership head. Mark records landed or expired and update object files. A submission that starts during a head-only query waits for a membership query before any terminal decision.
+  - `settle`: read the synchronizer head, then the status of every transaction with a submission attempt: landed when the synchronizer applied its proof, expired when it rejected the proof or the head has aged the grounding out. Never-submitted records need only the head check. Mark records landed or expired and update object files. A submission that starts during a pass waits for the next pass before any terminal decision.
   - `execute`: `prove`, `record` and `submit` in one call. Landing is reported by settlement.
 
 Because the API is blocking, GUI callers should run it on a worker thread, for example with `spawn_blocking`.
@@ -73,7 +73,7 @@ Transaction APIs:
 - `delete_transaction(tx_final)`
 - `settle()`, or `fetch_relayer_jobs()` then `settle_with_relayer_jobs(relayer_jobs)` to poll the relayer outside the caller's own locks
 - `list_transactions()`, `get_transaction(tx_final)`
-- `prune_transactions(current_time_ms)`, `backfill_transaction_hashes()`
+- `prune_transactions(current_time_ms)`
 - `execute(input)`
 
 Important public types are defined in [`src/types.rs`](src/types.rs):
@@ -128,7 +128,7 @@ An object file says only what the chain has said about the object: `unknown`, `l
 
 Each proved transaction has a directory under `~/.dobj/transactions/<txFinal>/` holding `payload.bin`, the protocol artifact that goes to the relayer, and `record.json`, the record served by dobjd. The record is written last, by rename, so a crash mid-write leaves at most inert output files and a directory without a record, which the driver ignores. Input holds are in memory only; a restart loses every proof in progress and nothing on disk depends on them.
 
-`prune_transactions` repairs settled object files from durable terminal records before removing records and payloads ten minutes after settlement. Successful reconciliation is cached for unchanged terminal records during retention; a restart clears the cache, record changes invalidate it, and pruning always revalidates the files. Open transactions remain durable. Unreadable files or failed metadata writes defer pruning for retry; cleanup does not discard the evidence needed to finish local reconciliation. `backfill_transaction_hashes` uses the relayer's batch lookup (at most 256 commitments per request) to recover missing hashes for retained landed records, including those without a relayer job ID. It copies recovered hashes to output files without changing the transaction outcome or retention deadline. The daemon runs this work separately every 30 seconds, and schedules the next cleanup deadline even when no transactions are open. Pruning keeps object files and their hashes and removes only the completed transaction directory.
+`prune_transactions` repairs settled object files from durable terminal records before removing records and payloads ten minutes after settlement. Successful reconciliation is cached for unchanged terminal records during retention; a restart clears the cache, record changes invalidate it, and pruning always revalidates the files. Open transactions remain durable. Unreadable files or failed metadata writes defer pruning for retry; cleanup does not discard the evidence needed to finish local reconciliation. A landed record takes its Ethereum transaction hash from the synchronizer's status, so it has one even when the relayer's acknowledgement and job ID were lost. The daemon schedules the next cleanup deadline even when no transactions are open. Pruning keeps object files and their hashes and removes only the completed transaction directory.
 
 Live objects are stored in:
 

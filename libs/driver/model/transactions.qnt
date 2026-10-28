@@ -34,7 +34,8 @@ module transactions {
   // Its ID becomes the transaction ID if recording succeeds.
   type Job = { inputs: Set[int], outputs: Set[int], grounding: int }
 
-  type Chain = { head: int, created: Set[int], nullifiers: Set[int], landed: Set[int] }
+  // `rejected` holds transactions whose included proof the synchronizer refused.
+  type Chain = { head: int, created: Set[int], nullifiers: Set[int], landed: Set[int], rejected: Set[int] }
   type RelayerJob = {
     inputs: Set[int],
     outputs: Set[int],
@@ -45,7 +46,7 @@ module transactions {
   type SettlementSnapshot = {
     pending: bool,
     transactions: Set[int],
-    membershipTransactions: Set[int],
+    statusTransactions: Set[int],
     chain: Chain,
     relayer: int -> RelayerJob,
   }
@@ -81,9 +82,10 @@ module transactions {
     | RelayerBroadcast({ tx: int })
     | RelayerFail({ tx: int })
     | ChainLand({ tx: int })
+    | ChainReject({ tx: int })
     | ChainAdvance
     | QuerySettlement
-    | ApplySettlement({ transactions: Set[int], membershipTransactions: Set[int] })
+    | ApplySettlement({ transactions: Set[int], statusTransactions: Set[int] })
     | Restart
 
   // Exploration bounds
@@ -120,7 +122,7 @@ module transactions {
 
   pure def isOpen(state: RecordState): bool = state == Recorded or state == Submitted
 
-  pure def needsMembership(record: Record): bool =
+  pure def needsTxStatus(record: Record): bool =
     isOpen(record.state) and (record.attempted or record.state == Submitted)
 
   // Removing keys creates a new map; entries outside the removal set survive.
@@ -201,8 +203,8 @@ module transactions {
   pure val noSettlement: SettlementSnapshot = {
     pending: false,
     transactions: Set(),
-    membershipTransactions: Set(),
-    chain: { head: 0, created: Set(), nullifiers: Set(), landed: Set() },
+    statusTransactions: Set(),
+    chain: { head: 0, created: Set(), nullifiers: Set(), landed: Set(), rejected: Set() },
     relayer: Map(),
   }
 
@@ -221,7 +223,7 @@ module transactions {
       settlement: noSettlement,
       nextId: 1,
     },
-    chain' = { head: 0, created: genesisObjects, nullifiers: Set(), landed: Set() },
+    chain' = { head: 0, created: genesisObjects, nullifiers: Set(), landed: Set(), rejected: Set() },
     relayer' = Map(),
     deleted' = Set(),
     strays' = Set(),
@@ -460,20 +462,40 @@ module transactions {
 
   // Chain acceptance is the environmental safety assumption: grounding must
   // still be valid, inputs must not be spent, and outputs must not already exist.
+  // Each condition only gets worse as the chain grows, so a refused payload stays refused.
+  pure def acceptable(job: RelayerJob, c: Chain): bool = all {
+    c.head - job.grounding <= maxAge,
+    job.inputs.intersect(c.nullifiers).size() == 0,
+    job.outputs.intersect(c.created).size() == 0,
+  }
+
   // Landing does not depend on the relayer's broadcast or failure flags; local
   // status must never be sufficient evidence that a payload cannot land.
   action chainLand(tx: int): bool = all {
     relayer.keys().contains(tx),
     not(chain.landed.contains(tx)),
-    chain.head - relayer.get(tx).grounding <= maxAge,
-    relayer.get(tx).inputs.intersect(chain.nullifiers).size() == 0,
-    relayer.get(tx).outputs.intersect(chain.created).size() == 0,
+    acceptable(relayer.get(tx), chain),
     command' = ChainLand({ tx: tx }),
     chain' = { ...chain,
       created: chain.created.union(relayer.get(tx).outputs),
       nullifiers: chain.nullifiers.union(relayer.get(tx).inputs),
       landed: chain.landed.union(Set(tx)),
     },
+    node' = node,
+    relayer' = relayer,
+    unchangedGhosts,
+    previousObjects' = node.objects,
+    previousRecords' = node.records,
+  }
+
+  // An included payload the chain refuses is recorded as rejected; a rejected
+  // copy can be included again, with the same result.
+  action chainReject(tx: int): bool = all {
+    relayer.keys().contains(tx),
+    not(chain.landed.contains(tx)),
+    not(acceptable(relayer.get(tx), chain)),
+    command' = ChainReject({ tx: tx }),
+    chain' = { ...chain, rejected: chain.rejected.union(Set(tx)) },
     node' = node,
     relayer' = relayer,
     unchangedGhosts,
@@ -498,29 +520,31 @@ module transactions {
   //
   // Terminal records stay terminal. For an open record, check chain inclusion
   // before age: a transaction that landed at the age limit remains Landed even
-  // when settlement happens at a later head. Relayer flags are annotations only.
-  pure def settleRecord(record: Record, c: Chain, broadcast: bool, failed: bool): Record =
+  // when settlement happens at a later head. A rejection expires the record
+  // before its grounding ages out. Relayer flags are annotations only.
+  pure def settleRecord(tx: int, record: Record, c: Chain, broadcast: bool, failed: bool): Record =
     if (not(isOpen(record.state))) record
     else {
       val annotated = { ...record, broadcast: broadcast, relayerFailed: failed }
-      if (record.outputs.subseteq(c.created) and record.inputs.subseteq(c.nullifiers))
+      if (c.landed.contains(tx))
         { ...annotated, state: Landed }
-      else if (c.head - record.grounding > maxAge)
+      else if (c.rejected.contains(tx) or c.head - record.grounding > maxAge)
         { ...annotated, state: Expired }
       else annotated
     }
 
   pure def captureSettlement(localNode: Node, currentChain: Chain, relayerJobs: int -> RelayerJob): SettlementSnapshot = {
     val transactions = localNode.records.keys().filter(tx => isOpen(localNode.records.get(tx).state))
-    val membershipTransactions = transactions.filter(tx => needsMembership(localNode.records.get(tx)))
-    val commitments = membershipTransactions.map(tx => localNode.records.get(tx).outputs).flatten().union(localNode.objects.keys())
-    val nullifiers = membershipTransactions.map(tx => localNode.records.get(tx).inputs).flatten().union(localNode.objects.keys())
+    val statusTransactions = transactions.filter(tx => needsTxStatus(localNode.records.get(tx)))
+    val objectFiles = localNode.objects.keys()
     val submittedTransactions = transactions.filter(tx => localNode.records.get(tx).state == Submitted).intersect(relayerJobs.keys())
     {
       pending: true,
       transactions: transactions,
-      membershipTransactions: membershipTransactions,
-      chain: { ...currentChain, created: currentChain.created.intersect(commitments), nullifiers: currentChain.nullifiers.intersect(nullifiers) },
+      statusTransactions: statusTransactions,
+      chain: { ...currentChain,
+        created: currentChain.created.intersect(objectFiles),
+        nullifiers: currentChain.nullifiers.intersect(objectFiles) },
       relayer: submittedTransactions.mapBy(tx => relayerJobs.get(tx)),
     }
   }
@@ -530,11 +554,11 @@ module transactions {
       val record = localNode.records.get(tx)
       val atRelayer = snapshot.relayer.keys().contains(tx)
       if (not(snapshot.transactions.contains(tx))) record
-      else if (snapshot.membershipTransactions.contains(tx))
-        settleRecord(record, snapshot.chain,
+      else if (snapshot.statusTransactions.contains(tx))
+        settleRecord(tx, record, snapshot.chain,
           if (atRelayer) snapshot.relayer.get(tx).broadcast else record.broadcast,
           if (atRelayer) snapshot.relayer.get(tx).failed else record.relayerFailed)
-      else if (needsMembership(record)) record
+      else if (needsTxStatus(record)) record
       else if (snapshot.chain.head - record.grounding > maxAge) { ...record, state: Expired }
       else record
     })
@@ -565,7 +589,7 @@ module transactions {
     node.settlement.pending,
     command' = ApplySettlement({
       transactions: node.settlement.transactions,
-      membershipTransactions: node.settlement.membershipTransactions,
+      statusTransactions: node.settlement.statusTransactions,
     }),
     node' = settledNode(node, node.settlement),
     unchangedEnvironment,
@@ -578,7 +602,7 @@ module transactions {
     not(node.settlement.pending),
     command' = ApplySettlement({
       transactions: openRecords,
-      membershipTransactions: openRecords.filter(tx => needsMembership(node.records.get(tx))),
+      statusTransactions: openRecords.filter(tx => needsTxStatus(node.records.get(tx))),
     }),
     node' = settledNode(node, captureSettlement(node, chain, relayer)),
     unchangedEnvironment,
@@ -621,6 +645,7 @@ module transactions {
       relayerBroadcast(id),
       relayerFail(id),
       chainLand(id),
+      chainReject(id),
       chainAdvance,
       querySettlement,
       applySettlement,
@@ -751,8 +776,8 @@ module transactions {
   }
 
   val headOnlyQueriesPreserveConcurrentAttempts = match command {
-    | ApplySettlement(snapshot) => previousRecords.keys().exclude(snapshot.membershipTransactions)
-        .filter(tx => needsMembership(previousRecords.get(tx)))
+    | ApplySettlement(snapshot) => previousRecords.keys().exclude(snapshot.statusTransactions)
+        .filter(tx => needsTxStatus(previousRecords.get(tx)))
         .forall(tx => node.records.keys().contains(tx) and node.records.get(tx) == previousRecords.get(tx))
     | _ => true
   }
