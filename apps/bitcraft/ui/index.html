@@ -1251,18 +1251,36 @@
       accepts: (inputs, match) => inputFieldEquals(inputs, "MiningDrill", "level", match[1]),
     },
     {
-      actions: /^(BucketOf(?:Wood|Stone|Iron))Take1$/,
+      actions: /^MineCoal(\d+)$/,
+      accepts: (inputs, match) => inputFieldEquals(inputs, "MiningDrill", "level", match[1]),
+    },
+    {
+      actions: /^MineGem(\d+)$/,
+      accepts: (inputs, match) => inputFieldEquals(inputs, "MiningDrill", "level", match[1]),
+    },
+    {
+      actions: /^CrackGeode(\w+)$/,
+      accepts: (inputs, match) => geodeCracksInto(inputs, match[1]),
+    },
+    {
+      actions: /^(BucketOf(?:Wood|Stone|Iron|Bits|Coal|Quartz))Take1$/,
       accepts: (inputs, match) => inputFieldAtLeast(inputs, match[1], "n", 1),
     },
     {
-      actions: /^LevelUp(Quarry|MiningDrill)(\d+)$/,
+      actions: /^BuildPumpjack$/,
+      accepts: (inputs) => inputFieldAtLeast(inputs, "BucketOfStone", "n", 50)
+        && inputFieldAtLeast(inputs, "BucketOfIron", "n", 100),
+    },
+    {
+      actions: /^LevelUp(Quarry|MiningDrill|Pumpjack)(\d+)$/,
       accepts: (inputs, match) => inputFieldEquals(inputs, match[1], "level", match[2])
         && Object.entries(LEVEL_UP_BUCKETS[match[1]](Number(match[2]))).every(
-          ([bucket, amount]) => inputFieldEquals(inputs, bucket, "n", String(amount))),
+          ([bucket, amount]) => inputFieldAtLeast(inputs, bucket, "n", amount)),
     },
   ];
 
-  // The exact amount each bucket must hold to level a tool up from `level`.
+  // How much a level-up from `level` takes out of each bucket. The buckets
+  // must hold at least that much, and are kept.
   const LEVEL_UP_BUCKETS = {
     Quarry: (level) => ({ BucketOfWood: 20 * 2 ** level, BucketOfStone: 10 * 2 ** level }),
     MiningDrill: (level) => ({
@@ -1270,7 +1288,17 @@
       BucketOfStone: 50 * 2 ** level,
       BucketOfIron: 5 * 2 ** level,
     }),
+    Pumpjack: (level) => ({
+      BucketOfStone: 50 * 2 ** level,
+      BucketOfIron: 100 * 2 ** level,
+      BucketOfQuartz: 2 ** level,
+    }),
   };
+
+  // Most common first. A geode records, under each gem's name in lower case
+  // and for every gem but the first, the highest mined value (its
+  // `stable_identifier`) that cracks into that gem or a rarer one.
+  const GEMS = ["Quartz", "Amethyst", "Sapphire", "Emerald", "Ruby", "Diamond"];
 
   // A getting-started guide shown as the first row of the object list: its
   // file name, which is also its URL relative to this page. It is served
@@ -1282,7 +1310,8 @@
 
   // Total Bit Value: what an object is worth in bits, counting each raw
   // resource spent to make it at the rate its BitsFrom* recipe pays (Wood 1,
-  // Stone 2, Iron 5). Worked out by hand from the recipes, per class.
+  // Stone 2, Iron 5, and a gem what it adds to a bucket of bits). Worked out
+  // by hand from the recipes, per class.
   const TOTAL_BIT_VALUES = {
     Bit: 1,
     Wood: 1,
@@ -1296,14 +1325,36 @@
     BucketOfWood: 5,
     BucketOfStone: 5,
     BucketOfIron: 5,
+    BucketOfBits: 5,
+    BucketOfCoal: 5,
+    BucketOfQuartz: 5,
+    BarrelOfOil: 25,
+    Coal: 5,
+    Geode: 0,
+    // What BitsFrom<Gem> adds to a bucket of bits.
+    Quartz: 100,
+    Amethyst: 2000,
+    Sapphire: 40000,
+    Emerald: 800000,
+    Ruby: 16000000,
+    Diamond: 320000000,
   };
-  // A bucket is also worth the `n` resources it holds, at these rates.
-  const BUCKET_CONTENT_BIT_VALUES = { BucketOfWood: 1, BucketOfStone: 2, BucketOfIron: 5 };
+  // A bucket or barrel is also worth the `n` resources it holds, at these rates.
+  const BUCKET_CONTENT_BIT_VALUES = {
+    BucketOfWood: 1,
+    BucketOfStone: 2,
+    BucketOfIron: 5,
+    BucketOfBits: 1,
+    BucketOfCoal: 5,
+    BucketOfQuartz: 100,
+    BarrelOfOil: 50,
+  };
   // Quarries and drills by level (index 0 is level 1): building one, plus the
-  // full buckets every level-up spends.
+  // resources every level-up takes out of its buckets.
   const LEVELED_TOTAL_BIT_VALUES = {
-    Quarry: [40, 130, 300, 630, 1280, 2570],
-    MiningDrill: [135, 420, 975, 2070, 4245, 8580],
+    Quarry: [40, 120, 280, 600, 1240, 2520, 5080, 10200, 20440, 40920],
+    MiningDrill: [135, 405, 945, 2025, 4185, 8505, 17145, 34425, 68985, 138105],
+    Pumpjack: [700, 2100, 4900, 10500, 21700, 44100, 88900, 178500, 357700, 716100],
   };
   // Tools that wear out: the `durability` a new one starts with. Such a
   // tool is worth its Total Bit Value times the fraction of that it has left.
@@ -1314,12 +1365,14 @@
   const SUMMARY_ICON_CLASS = "Bit";
 
   // The order Recipe Info lists the classes in: the starter tool, the
-  // resources and what they make, then the tools, machines and buckets.
+  // resources and what they make, then the tools, machines, buckets and barrels.
   // Classes not listed follow, by name.
   const REFERENCE_CLASS_ORDER = [
-    "Pocketknife", "Wood", "Stone", "Iron", "Bit", "Stick",
-    "WoodAxe", "StoneAxe", "IronAxe", "Quarry", "MiningDrill",
+    "Pocketknife", "Wood", "Stone", "Iron", "Coal", "Bit", "Stick",
+    "Geode", ...GEMS,
+    "WoodAxe", "StoneAxe", "IronAxe", "Quarry", "MiningDrill", "Pumpjack",
     "BucketOfWood", "BucketOfStone", "BucketOfIron",
+    "BucketOfBits", "BucketOfCoal", "BucketOfQuartz", "BarrelOfOil",
   ];
 
   // The game's website and Discord server, linked from the Settings window
@@ -1455,6 +1508,25 @@
   function inputFieldAtLeast(inputs, className, fieldName, minimum) {
     const input = inputs.find((object) => object.class.name === className);
     return input !== undefined && Number(fieldValue(input, fieldName)) >= minimum;
+  }
+
+  // A raw field as a number, or null if it is missing or not raw.
+  function rawFieldValue(object, fieldName) {
+    const hex = fieldValue(object, fieldName);
+    return hex !== null && /^[0-9a-f]{64}$/i.test(hex) ? BigInt(`0x${hex}`) : null;
+  }
+
+  function geodeCracksInto(inputs, gem) {
+    const geode = inputs.find((object) => object.class.name === "Geode");
+    const tier = GEMS.indexOf(gem);
+    if (geode === undefined || tier === -1) return false;
+    const mined = rawFieldValue(geode, "stable_identifier");
+    if (mined === null) return false;
+    const threshold = (index) => rawFieldValue(geode, GEMS[index].toLowerCase());
+    const atMostOwn = tier === 0 || (threshold(tier) !== null && mined <= threshold(tier));
+    const atLeastRarer = tier === GEMS.length - 1
+      || (threshold(tier + 1) !== null && threshold(tier + 1) <= mined);
+    return atMostOwn && atLeastRarer;
   }
 
   function passesActionInputRules(action, inputs) {

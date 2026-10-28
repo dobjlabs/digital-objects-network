@@ -112,27 +112,27 @@ the main icon and the badge differently.
 ### Tool interaction
 
 Creating, filling, emptying, using and upgrading tools: pocketknives,
-buckets, axes, quarries and drills.
+buckets, barrels, axes, quarries, drills and pumpjacks.
 
-- **Main icon:** the tool being interacted with (pocketknife, bucket, axe,
-  quarry or drill).
+- **Main icon:** the tool being interacted with (pocketknife, bucket, barrel, axe,
+  quarry, drill or pumpjack).
 - **Badge:**
 
 | Interaction | Badge | Actions |
 | --- | --- | --- |
-| Creating the tool | green plus | `CraftPocketknife`, `CraftBucketOfWood`, `CraftBucketOfStone`, `CraftBucketOfIron`, `CraftWoodAxe`, `CraftStoneAxe`, `CraftIronAxe`, `BuildQuarry`, `BuildMiningDrill` |
-| Adding to a bucket | green up chevron (^) | `BucketOf{Wood,Stone,Iron}Add{1,5,10,50}` |
-| Taking from a bucket | red down chevron (v) | `BucketOf{Wood,Stone,Iron}Take1` |
+| Creating the tool | green plus | `CraftPocketknife`, `CraftBucketOf{Wood,Stone,Iron,Bits,Coal,Quartz}`, `CraftBarrelOfOil`, `CraftWoodAxe`, `CraftStoneAxe`, `CraftIronAxe`, `BuildQuarry`, `BuildMiningDrill`, `BuildPumpjack` |
+| Adding to a bucket | green up chevron (^) | `BucketOf{Wood,Stone,Iron,Bits,Coal,Quartz}Add{1,5,10,50}`, and `BitsFrom{Quartz,Amethyst,Sapphire,Emerald,Ruby,Diamond}`, which add a gem's bits to a bucket of bits |
+| Taking from a bucket | red down chevron (v) | `BucketOf{Wood,Stone,Iron,Bits,Coal,Quartz}Take1` |
 | Using an axe to produce wood | none | `UseWoodAxe`, `UseStoneAxe`, `UseIronAxe` |
-| Using a quarry or drill to produce stone or iron | none | `UseQuarry1`-`6`, `UseMiningDrill1`-`6` |
-| Upgrading a quarry or drill | green up chevron (^) | `LevelUpQuarry1`-`5`, `LevelUpMiningDrill1`-`5` |
+| Using a quarry or drill to produce stone, iron, coal or geodes, or a pumpjack to fill a barrel of oil | none | `UseQuarry1`-`10`, `UseMiningDrill1`-`10`, `MineCoal1`-`10`, `MineGem1`-`10`, `PumpOil` |
+| Upgrading a quarry, drill or pumpjack | green up chevron (^) | `LevelUpQuarry1`-`9`, `LevelUpMiningDrill1`-`9`, `LevelUpPumpjack1`-`9` |
 
-Using a tool shows nothing in either corner. Every level of a quarry or
-drill uses the one icon for its class, since level is a field, not a class.
+Using a tool shows nothing in either corner. Every level of a quarry,
+drill or pumpjack uses the one icon for its class, since level is a field, not a class.
 
 ### Material creation
 
-Turning resources into intermediate materials.
+Turning resources into intermediate materials, or a geode into its gem.
 
 - **Main icon:** the material created.
 - **Badge:** green plus. All current actions in this category create
@@ -142,6 +142,7 @@ Turning resources into intermediate materials.
 | --- | --- |
 | `CraftStick` | Stick |
 | `BitsFromWood`, `BitsFromStone`, `BitsFromIron` | Bit |
+| `CrackGeode{Quartz,Amethyst,Sapphire,Emerald,Ruby,Diamond}` | the gem cracked out |
 
 ### Raw resource gathering
 
@@ -193,3 +194,9 @@ to, then add or extend a rule in `generate.py`, update the tables above,
 write its copy in `copy/actions.md`, and regenerate. A new class also needs
 its art in `assets/classes/`, an entry in `CLASS_ART_FILES`, and its copy in
 `copy/classes.md`.
+
+Bucket classes and their actions are named `BucketOf<Resource>`, except the
+bucket of bits, which is `BucketOfBits` (with `CraftBucketOfBits`,
+`BucketOfBitsAdd<n>` and `BucketOfBitsTake1`). Patterns that list bucket
+resources must spell it `Bits`; copy families like `BucketOf{resource}` read
+it as "bits".

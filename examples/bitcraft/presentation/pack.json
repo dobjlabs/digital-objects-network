@@ -2,7 +2,7 @@
   "format": 1,
   "plugin": "bitcraft",
   "writtenFor": {
-    "moduleHash": "b5c071928abf9a47dc36dc1643a37455da656f583c2d32d4146f47d84c4074fe"
+    "moduleHash": "5b8d067f17380dc87ecef5bf3a85eb3795dd09369c387a070250cd02c31e1cd1"
   },
   "classes": {
     "Wood": {
@@ -19,6 +19,46 @@
       "icon": "assets/classes/iron.png",
       "summary": "A basic building material.",
       "description": "Requires proof-of-work to produce, as well as a pocketknife or a mining drill. Slightly more expensive to produce than wood or stone, and used as an ingredient into higher-level tools and upgrades. Can be converted directly to bits at a rate of 5 bits per iron."
+    },
+    "Coal": {
+      "icon": "assets/classes/coal.png",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "Geode": {
+      "icon": "assets/classes/geode.png",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "Quartz": {
+      "icon": "assets/classes/quartz.png",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "Amethyst": {
+      "icon": "assets/classes/amethyst.png",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "Sapphire": {
+      "icon": "assets/classes/sapphire.png",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "Emerald": {
+      "icon": "assets/classes/emerald.png",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "Ruby": {
+      "icon": "assets/classes/ruby.png",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "Diamond": {
+      "icon": "assets/classes/diamond.png",
+      "summary": "TODO",
+      "description": "TODO"
     },
     "Stick": {
       "icon": "assets/classes/stick.png",
@@ -39,6 +79,26 @@
       "icon": "assets/classes/bucket.png",
       "summary": "Holds a stack of iron.",
       "description": "Holds any amount of iron. You can add 1, 5, 10, or 50 iron at a time to the bucket. You can remove iron from the bucket so long as the bucket is not empty."
+    },
+    "BucketOfBits": {
+      "icon": "assets/classes/bucket.png",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "BucketOfCoal": {
+      "icon": "assets/classes/bucket.png",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "BucketOfQuartz": {
+      "icon": "assets/classes/bucket.png",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "BarrelOfOil": {
+      "icon": "assets/classes/barrel-of-oil.png",
+      "summary": "TODO",
+      "description": "TODO"
     },
     "Pocketknife": {
       "icon": "assets/classes/pocketknife.png",
@@ -69,6 +129,11 @@
       "icon": "assets/classes/mining-drill.png",
       "summary": "Mines iron in bulk.",
       "description": "Requires wood, stone, and iron to build or upgrade: 10 wood, 50 stone, and 5 iron for a level 1 mining drill, with upgrade costs doubling at every level. Mines 2 iron per action at level 1, 3 iron per action at level 2, etc. Consumes 5 wood per mining action."
+    },
+    "Pumpjack": {
+      "icon": "assets/classes/pumpjack.png",
+      "summary": "TODO",
+      "description": "TODO"
     },
     "Bit": {
       "icon": "assets/classes/bit.png",
@@ -111,6 +176,26 @@
       "icon": "assets/actions/CraftBucketOfIron.svg",
       "summary": "Make an empty bucket for iron from 1 iron.",
       "description": "A bucket holds a stack of iron. You can add and remove iron to it via the appropriate actions."
+    },
+    "CraftBucketOfBits": {
+      "icon": "assets/actions/CraftBucketOfBits.svg",
+      "summary": "Make an empty bucket for bits from 1 iron.",
+      "description": "A bucket holds a stack of bits. You can add and remove bits to it via the appropriate actions."
+    },
+    "CraftBucketOfCoal": {
+      "icon": "assets/actions/CraftBucketOfCoal.svg",
+      "summary": "Make an empty bucket for coal from 1 iron.",
+      "description": "A bucket holds a stack of coal. You can add and remove coal to it via the appropriate actions."
+    },
+    "CraftBucketOfQuartz": {
+      "icon": "assets/actions/CraftBucketOfQuartz.svg",
+      "summary": "Make an empty bucket for quartz from 1 iron.",
+      "description": "A bucket holds a stack of quartz. You can add and remove quartz to it via the appropriate actions."
+    },
+    "CraftBarrelOfOil": {
+      "icon": "assets/actions/CraftBarrelOfOil.svg",
+      "summary": "TODO",
+      "description": "TODO"
     },
     "BucketOfWoodAdd1": {
       "icon": "assets/actions/BucketOfWoodAdd1.svg",
@@ -187,6 +272,81 @@
       "summary": "Take 1 iron out of a bucket.",
       "description": "Lowers the bucket's count by 1 and gives you 1 iron. The bucket must hold at least that many."
     },
+    "BucketOfBitsAdd1": {
+      "icon": "assets/actions/BucketOfBitsAdd1.svg",
+      "summary": "Put 1 bits into a bucket.",
+      "description": "Spends 1 bits and adds them to the bucket's count."
+    },
+    "BucketOfBitsAdd5": {
+      "icon": "assets/actions/BucketOfBitsAdd5.svg",
+      "summary": "Put 5 bits into a bucket.",
+      "description": "Spends 5 bits and adds them to the bucket's count."
+    },
+    "BucketOfBitsAdd10": {
+      "icon": "assets/actions/BucketOfBitsAdd10.svg",
+      "summary": "Put 10 bits into a bucket.",
+      "description": "Spends 10 bits and adds them to the bucket's count."
+    },
+    "BucketOfBitsAdd50": {
+      "icon": "assets/actions/BucketOfBitsAdd50.svg",
+      "summary": "Put 50 bits into a bucket.",
+      "description": "Spends 50 bits and adds them to the bucket's count."
+    },
+    "BucketOfBitsTake1": {
+      "icon": "assets/actions/BucketOfBitsTake1.svg",
+      "summary": "Take 1 bits out of a bucket.",
+      "description": "Lowers the bucket's count by 1 and gives you 1 bits. The bucket must hold at least that many."
+    },
+    "BucketOfCoalAdd1": {
+      "icon": "assets/actions/BucketOfCoalAdd1.svg",
+      "summary": "Put 1 coal into a bucket.",
+      "description": "Spends 1 coal and adds them to the bucket's count."
+    },
+    "BucketOfCoalAdd5": {
+      "icon": "assets/actions/BucketOfCoalAdd5.svg",
+      "summary": "Put 5 coal into a bucket.",
+      "description": "Spends 5 coal and adds them to the bucket's count."
+    },
+    "BucketOfCoalAdd10": {
+      "icon": "assets/actions/BucketOfCoalAdd10.svg",
+      "summary": "Put 10 coal into a bucket.",
+      "description": "Spends 10 coal and adds them to the bucket's count."
+    },
+    "BucketOfCoalAdd50": {
+      "icon": "assets/actions/BucketOfCoalAdd50.svg",
+      "summary": "Put 50 coal into a bucket.",
+      "description": "Spends 50 coal and adds them to the bucket's count."
+    },
+    "BucketOfCoalTake1": {
+      "icon": "assets/actions/BucketOfCoalTake1.svg",
+      "summary": "Take 1 coal out of a bucket.",
+      "description": "Lowers the bucket's count by 1 and gives you 1 coal. The bucket must hold at least that many."
+    },
+    "BucketOfQuartzAdd1": {
+      "icon": "assets/actions/BucketOfQuartzAdd1.svg",
+      "summary": "Put 1 quartz into a bucket.",
+      "description": "Spends 1 quartz and adds them to the bucket's count."
+    },
+    "BucketOfQuartzAdd5": {
+      "icon": "assets/actions/BucketOfQuartzAdd5.svg",
+      "summary": "Put 5 quartz into a bucket.",
+      "description": "Spends 5 quartz and adds them to the bucket's count."
+    },
+    "BucketOfQuartzAdd10": {
+      "icon": "assets/actions/BucketOfQuartzAdd10.svg",
+      "summary": "Put 10 quartz into a bucket.",
+      "description": "Spends 10 quartz and adds them to the bucket's count."
+    },
+    "BucketOfQuartzAdd50": {
+      "icon": "assets/actions/BucketOfQuartzAdd50.svg",
+      "summary": "Put 50 quartz into a bucket.",
+      "description": "Spends 50 quartz and adds them to the bucket's count."
+    },
+    "BucketOfQuartzTake1": {
+      "icon": "assets/actions/BucketOfQuartzTake1.svg",
+      "summary": "Take 1 quartz out of a bucket.",
+      "description": "Lowers the bucket's count by 1 and gives you 1 quartz. The bucket must hold at least that many."
+    },
     "CraftStick": {
       "icon": "assets/actions/CraftStick.svg",
       "summary": "Craft 2 sticks from 1 wood.",
@@ -232,6 +392,11 @@
       "summary": "Use a level 1 mining drill to produce 2 iron.",
       "description": "Produce 2 iron using a mining drill. Consumes 5 wood, and requires performing a small amount of proof-of-work hash mining, approximately ~60 seconds on a modern CPU."
     },
+    "MineCoal1": {
+      "icon": "assets/actions/MineCoal1.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
     "UseQuarry2": {
       "icon": "assets/actions/UseQuarry2.svg",
       "summary": "Use a level 2 quarry to produce 3 stone.",
@@ -241,6 +406,11 @@
       "icon": "assets/actions/UseMiningDrill2.svg",
       "summary": "Use a level 2 mining drill to produce 3 iron.",
       "description": "Produce 3 iron using a mining drill. Consumes 5 wood, and requires performing a small amount of proof-of-work hash mining, approximately ~60 seconds on a modern CPU."
+    },
+    "MineCoal2": {
+      "icon": "assets/actions/MineCoal2.svg",
+      "summary": "TODO",
+      "description": "TODO"
     },
     "UseQuarry3": {
       "icon": "assets/actions/UseQuarry3.svg",
@@ -252,6 +422,11 @@
       "summary": "Use a level 3 mining drill to produce 4 iron.",
       "description": "Produce 4 iron using a mining drill. Consumes 5 wood, and requires performing a small amount of proof-of-work hash mining, approximately ~60 seconds on a modern CPU."
     },
+    "MineCoal3": {
+      "icon": "assets/actions/MineCoal3.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
     "UseQuarry4": {
       "icon": "assets/actions/UseQuarry4.svg",
       "summary": "Use a level 4 quarry to produce 5 stone.",
@@ -261,6 +436,11 @@
       "icon": "assets/actions/UseMiningDrill4.svg",
       "summary": "Use a level 4 mining drill to produce 5 iron.",
       "description": "Produce 5 iron using a mining drill. Consumes 5 wood, and requires performing a small amount of proof-of-work hash mining, approximately ~60 seconds on a modern CPU."
+    },
+    "MineCoal4": {
+      "icon": "assets/actions/MineCoal4.svg",
+      "summary": "TODO",
+      "description": "TODO"
     },
     "UseQuarry5": {
       "icon": "assets/actions/UseQuarry5.svg",
@@ -272,6 +452,11 @@
       "summary": "Use a level 5 mining drill to produce 6 iron.",
       "description": "Produce 6 iron using a mining drill. Consumes 5 wood, and requires performing a small amount of proof-of-work hash mining, approximately ~60 seconds on a modern CPU."
     },
+    "MineCoal5": {
+      "icon": "assets/actions/MineCoal5.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
     "UseQuarry6": {
       "icon": "assets/actions/UseQuarry6.svg",
       "summary": "Use a level 6 quarry to produce 7 stone.",
@@ -281,6 +466,71 @@
       "icon": "assets/actions/UseMiningDrill6.svg",
       "summary": "Use a level 6 mining drill to produce 7 iron.",
       "description": "Produce 7 iron using a mining drill. Consumes 5 wood, and requires performing a small amount of proof-of-work hash mining, approximately ~60 seconds on a modern CPU."
+    },
+    "MineCoal6": {
+      "icon": "assets/actions/MineCoal6.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "UseQuarry7": {
+      "icon": "assets/actions/UseQuarry7.svg",
+      "summary": "Use a level 7 quarry to produce 8 stone.",
+      "description": "Produce 8 stone using a quarry. Requires performing a small amount of proof-of-work hash mining, approximately ~30 seconds on a modern CPU."
+    },
+    "UseMiningDrill7": {
+      "icon": "assets/actions/UseMiningDrill7.svg",
+      "summary": "Use a level 7 mining drill to produce 8 iron.",
+      "description": "Produce 8 iron using a mining drill. Consumes 5 wood, and requires performing a small amount of proof-of-work hash mining, approximately ~60 seconds on a modern CPU."
+    },
+    "MineCoal7": {
+      "icon": "assets/actions/MineCoal7.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "UseQuarry8": {
+      "icon": "assets/actions/UseQuarry8.svg",
+      "summary": "Use a level 8 quarry to produce 9 stone.",
+      "description": "Produce 9 stone using a quarry. Requires performing a small amount of proof-of-work hash mining, approximately ~30 seconds on a modern CPU."
+    },
+    "UseMiningDrill8": {
+      "icon": "assets/actions/UseMiningDrill8.svg",
+      "summary": "Use a level 8 mining drill to produce 9 iron.",
+      "description": "Produce 9 iron using a mining drill. Consumes 5 wood, and requires performing a small amount of proof-of-work hash mining, approximately ~60 seconds on a modern CPU."
+    },
+    "MineCoal8": {
+      "icon": "assets/actions/MineCoal8.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "UseQuarry9": {
+      "icon": "assets/actions/UseQuarry9.svg",
+      "summary": "Use a level 9 quarry to produce 10 stone.",
+      "description": "Produce 10 stone using a quarry. Requires performing a small amount of proof-of-work hash mining, approximately ~30 seconds on a modern CPU."
+    },
+    "UseMiningDrill9": {
+      "icon": "assets/actions/UseMiningDrill9.svg",
+      "summary": "Use a level 9 mining drill to produce 10 iron.",
+      "description": "Produce 10 iron using a mining drill. Consumes 5 wood, and requires performing a small amount of proof-of-work hash mining, approximately ~60 seconds on a modern CPU."
+    },
+    "MineCoal9": {
+      "icon": "assets/actions/MineCoal9.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "UseQuarry10": {
+      "icon": "assets/actions/UseQuarry10.svg",
+      "summary": "Use a level 10 quarry to produce 11 stone.",
+      "description": "Produce 11 stone using a quarry. Requires performing a small amount of proof-of-work hash mining, approximately ~30 seconds on a modern CPU."
+    },
+    "UseMiningDrill10": {
+      "icon": "assets/actions/UseMiningDrill10.svg",
+      "summary": "Use a level 10 mining drill to produce 11 iron.",
+      "description": "Produce 11 iron using a mining drill. Consumes 5 wood, and requires performing a small amount of proof-of-work hash mining, approximately ~60 seconds on a modern CPU."
+    },
+    "MineCoal10": {
+      "icon": "assets/actions/MineCoal10.svg",
+      "summary": "TODO",
+      "description": "TODO"
     },
     "BuildQuarry": {
       "icon": "assets/actions/BuildQuarry.svg",
@@ -292,6 +542,11 @@
       "summary": "Make a level 1 mining drill using 10 wood, 50 stone, and 5 iron.",
       "description": "A level 1 mining drill mines iron twice as fast as a pocketknife. Mining drills have infinite durability, and can be upgraded to produce iron even faster."
     },
+    "BuildPumpjack": {
+      "icon": "assets/actions/BuildPumpjack.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
     "LevelUpQuarry1": {
       "icon": "assets/actions/LevelUpQuarry1.svg",
       "summary": "Upgrades a level 1 quarry to level 2.",
@@ -301,6 +556,11 @@
       "icon": "assets/actions/LevelUpMiningDrill1.svg",
       "summary": "Upgrades a level 1 mining drill to level 2.",
       "description": "Only works on a mining drill at exactly level 1. Spends buckets holding exactly 20 wood, 100 stone and 10 iron. A level 2 mining drill mines iron 3 times as fast as a pocketknife."
+    },
+    "LevelUpPumpjack1": {
+      "icon": "assets/actions/LevelUpPumpjack1.svg",
+      "summary": "TODO",
+      "description": "TODO"
     },
     "LevelUpQuarry2": {
       "icon": "assets/actions/LevelUpQuarry2.svg",
@@ -312,6 +572,11 @@
       "summary": "Upgrades a level 2 mining drill to level 3.",
       "description": "Only works on a mining drill at exactly level 2. Spends buckets holding exactly 40 wood, 200 stone and 20 iron. A level 3 mining drill mines iron 4 times as fast as a pocketknife."
     },
+    "LevelUpPumpjack2": {
+      "icon": "assets/actions/LevelUpPumpjack2.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
     "LevelUpQuarry3": {
       "icon": "assets/actions/LevelUpQuarry3.svg",
       "summary": "Upgrades a level 3 quarry to level 4.",
@@ -321,6 +586,11 @@
       "icon": "assets/actions/LevelUpMiningDrill3.svg",
       "summary": "Upgrades a level 3 mining drill to level 4.",
       "description": "Only works on a mining drill at exactly level 3. Spends buckets holding exactly 80 wood, 400 stone and 40 iron. A level 4 mining drill mines iron 5 times as fast as a pocketknife."
+    },
+    "LevelUpPumpjack3": {
+      "icon": "assets/actions/LevelUpPumpjack3.svg",
+      "summary": "TODO",
+      "description": "TODO"
     },
     "LevelUpQuarry4": {
       "icon": "assets/actions/LevelUpQuarry4.svg",
@@ -332,6 +602,11 @@
       "summary": "Upgrades a level 4 mining drill to level 5.",
       "description": "Only works on a mining drill at exactly level 4. Spends buckets holding exactly 160 wood, 800 stone and 80 iron. A level 5 mining drill mines iron 6 times as fast as a pocketknife."
     },
+    "LevelUpPumpjack4": {
+      "icon": "assets/actions/LevelUpPumpjack4.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
     "LevelUpQuarry5": {
       "icon": "assets/actions/LevelUpQuarry5.svg",
       "summary": "Upgrades a level 5 quarry to level 6.",
@@ -341,6 +616,156 @@
       "icon": "assets/actions/LevelUpMiningDrill5.svg",
       "summary": "Upgrades a level 5 mining drill to level 6.",
       "description": "Only works on a mining drill at exactly level 5. Spends buckets holding exactly 320 wood, 1600 stone and 160 iron. A level 6 mining drill mines iron 7 times as fast as a pocketknife."
+    },
+    "LevelUpPumpjack5": {
+      "icon": "assets/actions/LevelUpPumpjack5.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "LevelUpQuarry6": {
+      "icon": "assets/actions/LevelUpQuarry6.svg",
+      "summary": "Upgrades a level 6 quarry to level 7.",
+      "description": "Only works on a quarry at exactly level 6. Spends a bucket holding exactly 1280 wood and a bucket holding exactly 640 stone. A level 7 quarry mines stone 8 times as fast as a pocketknife."
+    },
+    "LevelUpMiningDrill6": {
+      "icon": "assets/actions/LevelUpMiningDrill6.svg",
+      "summary": "Upgrades a level 6 mining drill to level 7.",
+      "description": "Only works on a mining drill at exactly level 6. Spends buckets holding exactly 640 wood, 3200 stone and 320 iron. A level 7 mining drill mines iron 8 times as fast as a pocketknife."
+    },
+    "LevelUpPumpjack6": {
+      "icon": "assets/actions/LevelUpPumpjack6.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "LevelUpQuarry7": {
+      "icon": "assets/actions/LevelUpQuarry7.svg",
+      "summary": "Upgrades a level 7 quarry to level 8.",
+      "description": "Only works on a quarry at exactly level 7. Spends a bucket holding exactly 2560 wood and a bucket holding exactly 1280 stone. A level 8 quarry mines stone 9 times as fast as a pocketknife."
+    },
+    "LevelUpMiningDrill7": {
+      "icon": "assets/actions/LevelUpMiningDrill7.svg",
+      "summary": "Upgrades a level 7 mining drill to level 8.",
+      "description": "Only works on a mining drill at exactly level 7. Spends buckets holding exactly 1280 wood, 6400 stone and 640 iron. A level 8 mining drill mines iron 9 times as fast as a pocketknife."
+    },
+    "LevelUpPumpjack7": {
+      "icon": "assets/actions/LevelUpPumpjack7.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "LevelUpQuarry8": {
+      "icon": "assets/actions/LevelUpQuarry8.svg",
+      "summary": "Upgrades a level 8 quarry to level 9.",
+      "description": "Only works on a quarry at exactly level 8. Spends a bucket holding exactly 5120 wood and a bucket holding exactly 2560 stone. A level 9 quarry mines stone 10 times as fast as a pocketknife."
+    },
+    "LevelUpMiningDrill8": {
+      "icon": "assets/actions/LevelUpMiningDrill8.svg",
+      "summary": "Upgrades a level 8 mining drill to level 9.",
+      "description": "Only works on a mining drill at exactly level 8. Spends buckets holding exactly 2560 wood, 12800 stone and 1280 iron. A level 9 mining drill mines iron 10 times as fast as a pocketknife."
+    },
+    "LevelUpPumpjack8": {
+      "icon": "assets/actions/LevelUpPumpjack8.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "LevelUpQuarry9": {
+      "icon": "assets/actions/LevelUpQuarry9.svg",
+      "summary": "Upgrades a level 9 quarry to level 10.",
+      "description": "Only works on a quarry at exactly level 9. Spends a bucket holding exactly 10240 wood and a bucket holding exactly 5120 stone. A level 10 quarry mines stone 11 times as fast as a pocketknife."
+    },
+    "LevelUpMiningDrill9": {
+      "icon": "assets/actions/LevelUpMiningDrill9.svg",
+      "summary": "Upgrades a level 9 mining drill to level 10.",
+      "description": "Only works on a mining drill at exactly level 9. Spends buckets holding exactly 5120 wood, 25600 stone and 2560 iron. A level 10 mining drill mines iron 11 times as fast as a pocketknife."
+    },
+    "LevelUpPumpjack9": {
+      "icon": "assets/actions/LevelUpPumpjack9.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "PumpOil": {
+      "icon": "assets/actions/PumpOil.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "MineGem1": {
+      "icon": "assets/actions/MineGem1.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "MineGem2": {
+      "icon": "assets/actions/MineGem2.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "MineGem3": {
+      "icon": "assets/actions/MineGem3.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "MineGem4": {
+      "icon": "assets/actions/MineGem4.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "MineGem5": {
+      "icon": "assets/actions/MineGem5.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "MineGem6": {
+      "icon": "assets/actions/MineGem6.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "MineGem7": {
+      "icon": "assets/actions/MineGem7.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "MineGem8": {
+      "icon": "assets/actions/MineGem8.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "MineGem9": {
+      "icon": "assets/actions/MineGem9.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "MineGem10": {
+      "icon": "assets/actions/MineGem10.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "CrackGeodeQuartz": {
+      "icon": "assets/actions/CrackGeodeQuartz.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "CrackGeodeAmethyst": {
+      "icon": "assets/actions/CrackGeodeAmethyst.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "CrackGeodeSapphire": {
+      "icon": "assets/actions/CrackGeodeSapphire.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "CrackGeodeEmerald": {
+      "icon": "assets/actions/CrackGeodeEmerald.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "CrackGeodeRuby": {
+      "icon": "assets/actions/CrackGeodeRuby.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "CrackGeodeDiamond": {
+      "icon": "assets/actions/CrackGeodeDiamond.svg",
+      "summary": "TODO",
+      "description": "TODO"
     },
     "BitsFromWood": {
       "icon": "assets/actions/BitsFromWood.svg",
@@ -357,6 +782,36 @@
       "summary": "Generate bits from iron.",
       "description": "Converts 1 iron into 5 bits."
     },
+    "BitsFromQuartz": {
+      "icon": "assets/actions/BitsFromQuartz.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "BitsFromAmethyst": {
+      "icon": "assets/actions/BitsFromAmethyst.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "BitsFromSapphire": {
+      "icon": "assets/actions/BitsFromSapphire.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "BitsFromEmerald": {
+      "icon": "assets/actions/BitsFromEmerald.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "BitsFromRuby": {
+      "icon": "assets/actions/BitsFromRuby.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
+    "BitsFromDiamond": {
+      "icon": "assets/actions/BitsFromDiamond.svg",
+      "summary": "TODO",
+      "description": "TODO"
+    },
     "RekeyWood": {
       "icon": "assets/actions/RekeyWood.svg",
       "summary": "Refreshes this file, invalidating all other copies on the network.",
@@ -369,6 +824,46 @@
     },
     "RekeyIron": {
       "icon": "assets/actions/RekeyIron.svg",
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
+    },
+    "RekeyCoal": {
+      "icon": "assets/actions/RekeyCoal.svg",
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
+    },
+    "RekeyGeode": {
+      "icon": "assets/actions/RekeyGeode.svg",
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
+    },
+    "RekeyQuartz": {
+      "icon": "assets/actions/RekeyQuartz.svg",
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
+    },
+    "RekeyAmethyst": {
+      "icon": "assets/actions/RekeyAmethyst.svg",
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
+    },
+    "RekeySapphire": {
+      "icon": "assets/actions/RekeySapphire.svg",
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
+    },
+    "RekeyEmerald": {
+      "icon": "assets/actions/RekeyEmerald.svg",
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
+    },
+    "RekeyRuby": {
+      "icon": "assets/actions/RekeyRuby.svg",
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
+    },
+    "RekeyDiamond": {
+      "icon": "assets/actions/RekeyDiamond.svg",
       "summary": "Refreshes this file, invalidating all other copies on the network.",
       "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
     },
@@ -389,6 +884,26 @@
     },
     "RekeyBucketOfIron": {
       "icon": "assets/actions/RekeyBucketOfIron.svg",
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
+    },
+    "RekeyBucketOfBits": {
+      "icon": "assets/actions/RekeyBucketOfBits.svg",
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
+    },
+    "RekeyBucketOfCoal": {
+      "icon": "assets/actions/RekeyBucketOfCoal.svg",
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
+    },
+    "RekeyBucketOfQuartz": {
+      "icon": "assets/actions/RekeyBucketOfQuartz.svg",
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
+    },
+    "RekeyBarrelOfOil": {
+      "icon": "assets/actions/RekeyBarrelOfOil.svg",
       "summary": "Refreshes this file, invalidating all other copies on the network.",
       "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
     },
@@ -419,6 +934,11 @@
     },
     "RekeyMiningDrill": {
       "icon": "assets/actions/RekeyMiningDrill.svg",
+      "summary": "Refreshes this file, invalidating all other copies on the network.",
+      "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
+    },
+    "RekeyPumpjack": {
+      "icon": "assets/actions/RekeyPumpjack.svg",
       "summary": "Refreshes this file, invalidating all other copies on the network.",
       "description": "By rekeying this item, all copies of the file on other machines (except for this one) will be marked as stale and unusable."
     },

@@ -23,6 +23,54 @@ A basic building material.
 
 Requires proof-of-work to produce, as well as a pocketknife or a mining drill. Slightly more expensive to produce than wood or stone, and used as an ingredient into higher-level tools and upgrades. Can be converted directly to bits at a rate of 5 bits per iron.
 
+## Coal
+
+TODO
+
+TODO
+
+## Geode
+
+TODO
+
+TODO
+
+## Quartz
+
+TODO
+
+TODO
+
+## Amethyst
+
+TODO
+
+TODO
+
+## Sapphire
+
+TODO
+
+TODO
+
+## Emerald
+
+TODO
+
+TODO
+
+## Ruby
+
+TODO
+
+TODO
+
+## Diamond
+
+TODO
+
+TODO
+
 ## Stick
 
 A stick.
@@ -46,6 +94,30 @@ Holds any amount of stone. You can add 1, 5, 10, or 50 stone at a time to the bu
 Holds a stack of iron.
 
 Holds any amount of iron. You can add 1, 5, 10, or 50 iron at a time to the bucket. You can remove iron from the bucket so long as the bucket is not empty.
+
+## BucketOfBits
+
+TODO
+
+TODO
+
+## BucketOfCoal
+
+TODO
+
+TODO
+
+## BucketOfQuartz
+
+TODO
+
+TODO
+
+## BarrelOfOil
+
+TODO
+
+TODO
 
 ## Pocketknife
 
@@ -82,6 +154,12 @@ Requires wood and stone to build or upgrade: 20 wood and 10 stone for a level 1 
 Mines iron in bulk.
 
 Requires wood, stone, and iron to build or upgrade: 10 wood, 50 stone, and 5 iron for a level 1 mining drill, with upgrade costs doubling at every level. Mines 2 iron per action at level 1, 3 iron per action at level 2, etc. Consumes 5 wood per mining action.
+
+## Pumpjack
+
+TODO
+
+TODO
 
 ## Bit
 
