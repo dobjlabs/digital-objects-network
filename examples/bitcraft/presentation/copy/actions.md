@@ -51,6 +51,12 @@ Take {amount} {resource|lower} out of a bucket.
 Lowers the bucket's count by {amount} and gives you {amount}
 {resource|lower}. The bucket must hold at least that many.
 
+## CraftBarrelOfOil
+
+TODO
+
+TODO
+
 ## CraftStick
 
 Craft 2 sticks from 1 wood.
@@ -105,6 +111,30 @@ Use a level {level} mining drill to produce {level + 1} iron.
 
 Produce {level + 1} iron using a mining drill. Consumes 5 wood, and requires performing a small amount of proof-of-work hash mining, approximately ~60 seconds on a modern CPU.
 
+## MineCoal{level}
+
+TODO
+
+TODO
+
+## MineGem{level}
+
+TODO
+
+TODO
+
+## CrackGeode{gem}
+
+TODO
+
+TODO
+
+## PumpOil
+
+TODO
+
+TODO
+
 ## BuildQuarry
 
 Make a level 1 quarry using 20 wood and 10 stone.
@@ -116,6 +146,12 @@ A level 1 quarry mines stone twice as fast as a pocketknife. Quarries have infin
 Make a level 1 mining drill using 10 wood, 50 stone, and 5 iron.
 
 A level 1 mining drill mines iron twice as fast as a pocketknife. Mining drills have infinite durability, and can be upgraded to produce iron even faster.
+
+## BuildPumpjack
+
+TODO
+
+TODO
 
 ## LevelUpQuarry{level}
 
@@ -132,6 +168,12 @@ Upgrades a level {level} mining drill to level {level + 1}.
 Only works on a mining drill at exactly level {level}. Spends buckets
 holding exactly {10 * 2 ** level} wood, {50 * 2 ** level} stone and {5 * 2
 ** level} iron. A level {level + 1} mining drill mines iron {level + 2} times as fast as a pocketknife.
+
+## LevelUpPumpjack{level}
+
+TODO
+
+TODO
 
 ## BitsFromWood
 
@@ -150,6 +192,12 @@ Converts 1 stone into 2 bits.
 Generate bits from iron.
 
 Converts 1 iron into 5 bits.
+
+## BitsFrom{gem}
+
+TODO
+
+TODO
 
 ## Rekey{class}
 

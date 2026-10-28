@@ -2,7 +2,7 @@
 name = "bitcraft"
 version = "0.1.0"
 # Rewritten by `cargo run -p pexe -- build game`.
-module_hash = "b5c071928abf9a47dc36dc1643a37455da656f583c2d32d4146f47d84c4074fe"
+module_hash = "5b8d067f17380dc87ecef5bf3a85eb3795dd09369c387a070250cd02c31e1cd1"
 
 [[classes]]
 name = "Wood"
@@ -16,6 +16,46 @@ description = "-"
 
 [[classes]]
 name = "Iron"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Coal"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Geode"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Quartz"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Amethyst"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Sapphire"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Emerald"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Ruby"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Diamond"
 emoji = "🌲"
 description = "-"
 
@@ -36,6 +76,26 @@ description = "-"
 
 [[classes]]
 name = "BucketOfIron"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "BucketOfBits"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "BucketOfCoal"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "BucketOfQuartz"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "BarrelOfOil"
 emoji = "🌲"
 description = "-"
 
@@ -66,6 +126,11 @@ description = "-"
 
 [[classes]]
 name = "MiningDrill"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Pumpjack"
 emoji = "🌲"
 description = "-"
 
@@ -106,6 +171,26 @@ description = "-"
 
 [[actions]]
 name = "CraftBucketOfIron"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "CraftBucketOfBits"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "CraftBucketOfCoal"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "CraftBucketOfQuartz"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "CraftBarrelOfOil"
 emoji = "⛏️"
 description = "-"
 
@@ -185,6 +270,81 @@ emoji = "⛏️"
 description = "-"
 
 [[actions]]
+name = "BucketOfBitsAdd1"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfBitsAdd5"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfBitsAdd10"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfBitsAdd50"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfBitsTake1"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfCoalAdd1"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfCoalAdd5"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfCoalAdd10"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfCoalAdd50"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfCoalTake1"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfQuartzAdd1"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfQuartzAdd5"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfQuartzAdd10"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfQuartzAdd50"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BucketOfQuartzTake1"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
 name = "CraftStick"
 emoji = "⛏️"
 description = "-"
@@ -230,12 +390,22 @@ emoji = "⛏️"
 description = "-"
 
 [[actions]]
+name = "MineCoal1"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
 name = "UseQuarry2"
 emoji = "⛏️"
 description = "-"
 
 [[actions]]
 name = "UseMiningDrill2"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "MineCoal2"
 emoji = "⛏️"
 description = "-"
 
@@ -250,12 +420,22 @@ emoji = "⛏️"
 description = "-"
 
 [[actions]]
+name = "MineCoal3"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
 name = "UseQuarry4"
 emoji = "⛏️"
 description = "-"
 
 [[actions]]
 name = "UseMiningDrill4"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "MineCoal4"
 emoji = "⛏️"
 description = "-"
 
@@ -270,12 +450,82 @@ emoji = "⛏️"
 description = "-"
 
 [[actions]]
+name = "MineCoal5"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
 name = "UseQuarry6"
 emoji = "⛏️"
 description = "-"
 
 [[actions]]
 name = "UseMiningDrill6"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "MineCoal6"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseQuarry7"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseMiningDrill7"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "MineCoal7"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseQuarry8"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseMiningDrill8"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "MineCoal8"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseQuarry9"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseMiningDrill9"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "MineCoal9"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseQuarry10"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "UseMiningDrill10"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "MineCoal10"
 emoji = "⛏️"
 description = "-"
 
@@ -290,12 +540,22 @@ emoji = "⛏️"
 description = "-"
 
 [[actions]]
+name = "BuildPumpjack"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
 name = "LevelUpQuarry1"
 emoji = "⛏️"
 description = "-"
 
 [[actions]]
 name = "LevelUpMiningDrill1"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpPumpjack1"
 emoji = "⛏️"
 description = "-"
 
@@ -310,12 +570,22 @@ emoji = "⛏️"
 description = "-"
 
 [[actions]]
+name = "LevelUpPumpjack2"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
 name = "LevelUpQuarry3"
 emoji = "⛏️"
 description = "-"
 
 [[actions]]
 name = "LevelUpMiningDrill3"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpPumpjack3"
 emoji = "⛏️"
 description = "-"
 
@@ -330,12 +600,167 @@ emoji = "⛏️"
 description = "-"
 
 [[actions]]
+name = "LevelUpPumpjack4"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
 name = "LevelUpQuarry5"
 emoji = "⛏️"
 description = "-"
 
 [[actions]]
 name = "LevelUpMiningDrill5"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpPumpjack5"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpQuarry6"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpMiningDrill6"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpPumpjack6"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpQuarry7"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpMiningDrill7"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpPumpjack7"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpQuarry8"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpMiningDrill8"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpPumpjack8"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpQuarry9"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpMiningDrill9"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "LevelUpPumpjack9"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "PumpOil"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "MineGem1"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "MineGem2"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "MineGem3"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "MineGem4"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "MineGem5"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "MineGem6"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "MineGem7"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "MineGem8"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "MineGem9"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "MineGem10"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "CrackGeodeQuartz"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "CrackGeodeAmethyst"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "CrackGeodeSapphire"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "CrackGeodeEmerald"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "CrackGeodeRuby"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "CrackGeodeDiamond"
 emoji = "⛏️"
 description = "-"
 
@@ -351,6 +776,36 @@ description = "-"
 
 [[actions]]
 name = "BitsFromIron"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BitsFromQuartz"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BitsFromAmethyst"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BitsFromSapphire"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BitsFromEmerald"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BitsFromRuby"
+emoji = "⛏️"
+description = "-"
+
+[[actions]]
+name = "BitsFromDiamond"
 emoji = "⛏️"
 description = "-"
 

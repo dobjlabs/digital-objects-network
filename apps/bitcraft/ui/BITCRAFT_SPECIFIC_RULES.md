@@ -40,12 +40,14 @@ that block should be plugin-agnostic.
 
 - **Where:** `REFERENCE_CLASS_ORDER`, applied in `loadReferenceWindow()`
   through `compareReferenceClasses()`.
-- **What:** Pocketknife, Wood, Stone, Iron, Bit, Stick, WoodAxe, StoneAxe,
-  IronAxe, Quarry, MiningDrill, BucketOfWood, BucketOfStone, BucketOfIron.
+- **What:** Pocketknife, Wood, Stone, Iron, Coal, Bit, Stick, Geode,
+  Quartz, Amethyst, Sapphire, Emerald, Ruby, Diamond, WoodAxe, StoneAxe,
+  IronAxe, Quarry, MiningDrill, Pumpjack, BucketOfWood, BucketOfStone, BucketOfIron,
+  BucketOfBits, BucketOfCoal, BucketOfQuartz, BarrelOfOil.
   Classes not listed follow, by name.
 - **Generic behavior:** the order `GET /classes` reports, which is by name.
 - **Why:** the starter tool, the resources and what they make, then the
-  tools, machines and buckets, roughly in the order a player meets them.
+  tools, machines, buckets and barrels, roughly in the order a player meets them.
 
 ### Only bitcraft activity appears in Jobs
 
@@ -121,15 +123,21 @@ the selected objects.
 
 | Actions | Rule | Source in `plugin.rhai` |
 | --- | --- | --- |
-| `UseQuarry1` .. `UseQuarry6` | the selected `Quarry`'s `level` equals the number in the action name | `action.st_equal(quarry.level, N)` |
-| `UseMiningDrill1` .. `UseMiningDrill6` | the selected `MiningDrill`'s `level` equals the number in the action name | `action.st_equal(miningdrill.level, N)` |
-| `BucketOfWoodTake1`, `BucketOfStoneTake1`, `BucketOfIronTake1` | the selected bucket's `n` is at least 1, so an empty bucket offers no take | `action.st_gt_eq(woodbucket.n, 1)` (and the stone and iron buckets) |
-| `LevelUpQuarry1` .. `LevelUpQuarry5` | the selected `Quarry`'s `level` equals the number N in the action name, the wood bucket's `n` is exactly 20 x 2^N and the stone bucket's exactly 10 x 2^N (`LEVEL_UP_BUCKETS`) | `action.st_equal(quarry.level, N)`, `action.st_equal(woodbucket.n, ...)` and the stone bucket |
-| `LevelUpMiningDrill1` .. `LevelUpMiningDrill5` | the selected `MiningDrill`'s `level` equals N, and the wood, stone and iron buckets hold exactly 10, 50 and 5 x 2^N | `action.st_equal(miningdrill.level, N)` and one `st_equal` per bucket |
+| `UseQuarry1` .. `UseQuarry10` | the selected `Quarry`'s `level` equals the number in the action name | `action.st_equal(quarry.level, N)` |
+| `UseMiningDrill1` .. `UseMiningDrill10` | the selected `MiningDrill`'s `level` equals the number in the action name | `action.st_equal(miningdrill.level, N)` |
+| `MineCoal1` .. `MineCoal10` | the selected `MiningDrill`'s `level` equals the number in the action name | `action.st_equal(miningdrill.level, N)` |
+| `MineGem1` .. `MineGem10` | the selected `MiningDrill`'s `level` equals the number in the action name | `action.st_equal(miningdrill.level, N)` |
+| `CrackGeodeQuartz` .. `CrackGeodeDiamond` | the selected `Geode`'s `stable_identifier`, read as a 256-bit number, lies in that gem's band (`GEMS`, `geodeCracksInto()`): at most the geode's field named after the gem (none for Quartz), and at least the field named after the next rarer gem (none for Diamond). Exactly one crack is offered per geode | `action.intro_lt_eq_u256(geode000.stable_identifier, geode000.<gem>)` and `action.intro_lt_eq_u256(geode000.<rarer gem>, geode000.stable_identifier)` |
+| `BucketOf{Wood,Stone,Iron,Bits,Coal,Quartz}Take1` | the selected bucket's `n` is at least 1, so an empty bucket offers no take | `action.st_gt_eq(woodbucket.n, 1)` (and the other buckets) |
+| `LevelUpQuarry1` .. `LevelUpQuarry9` | the selected `Quarry`'s `level` equals the number N in the action name, the wood bucket's `n` is at least 20 x 2^N and the stone bucket's at least 10 x 2^N (`LEVEL_UP_BUCKETS`) | `action.st_equal(quarry.level, N)`, `action.st_gt_eq(woodbucket.n, ...)` and the stone bucket |
+| `LevelUpMiningDrill1` .. `LevelUpMiningDrill9` | the selected `MiningDrill`'s `level` equals N, and the wood, stone and iron buckets hold at least 10, 50 and 5 x 2^N | `action.st_equal(miningdrill.level, N)` and one `st_gt_eq` per bucket |
+| `BuildPumpjack` | the stone bucket's `n` is at least 50 and the iron bucket's at least 100 | `action.st_gt_eq(stonebucket.n, 50)` and the iron bucket |
+| `LevelUpPumpjack1` .. `LevelUpPumpjack9` | the selected `Pumpjack`'s `level` equals N, and the stone, iron and quartz buckets hold at least 50, 100 and 1 x 2^N | `action.st_equal(pumpjack.level, N)` and one `st_gt_eq` per bucket |
 
 - **Generic behavior:** offer every action whose input classes match the
   selection. A level-1 drill with 5 wood would show all six
-  `UseMiningDrillN` actions.
+  `UseMiningDrillN`, all six `MineCoalN` and all six `MineGemN` actions, and any geode all six
+  `CrackGeode` actions.
 
 ### Known constraints not yet encoded
 
@@ -210,8 +218,9 @@ their entries know about bitcraft:
 ### Total Bit Value
 
 An object's Total Bit Value is the raw resources spent to make it, each
-counted at the rate its `BitsFrom*` recipe pays: Wood 1, Stone 2, Iron 5.
-A Bit is worth 1. The values are worked out by hand from `../../../examples/bitcraft/plugin.rhai`
+counted at the rate its `BitsFrom*` recipe pays: Wood 1, Stone 2, Iron 5,
+and each gem what its `BitsFrom<Gem>` adds to a bucket of bits. A Bit is
+worth 1. The values are worked out by hand from `../../../examples/bitcraft/plugin.rhai`
 and hardcoded (`TOTAL_BIT_VALUES`, `BUCKET_CONTENT_BIT_VALUES`,
 `LEVELED_TOTAL_BIT_VALUES` in `index.html`). Recompute them whenever a
 recipe's inputs or outputs change.
@@ -225,13 +234,20 @@ recipe's inputs or outputs change.
 | WoodAxe | 2 | 1 Wood + 2 Sticks |
 | StoneAxe | 4 | WoodAxe + 1 Stone |
 | IronAxe | 9 | StoneAxe + 1 Iron |
-| BucketOfWood / Stone / Iron | 5 + n x 1 / 2 / 5 | 1 Iron, plus the `n` resources it holds |
-| Quarry, by level 1-6 | 40, 130, 300, 630, 1280, 2570 | 20 Wood + 10 Stone, plus each level-up's buckets |
-| MiningDrill, by level 1-6 | 135, 420, 975, 2070, 4245, 8580 | 10 Wood + 50 Stone + 5 Iron, plus each level-up's buckets |
+| BucketOfWood / Stone / Iron, BucketOfBits | 5 + n x 1 / 2 / 5 / 1 | 1 Iron, plus the `n` resources it holds |
+| BucketOfQuartz | 5 + n x 100 | 1 Iron, plus the `n` quartz it holds |
+| BucketOfCoal | 5 + n x 5 | 1 Iron, plus the `n` coal it holds |
+| BarrelOfOil | 25 + n x 50 | 5 Iron, plus the `n` units of oil it holds |
+| Quarry, by level 1-10 | 40, 120, 280, 600, 1240, 2520, 5080, 10200, 20440, 40920 | 20 Wood + 10 Stone, plus what each level-up takes from its buckets |
+| MiningDrill, by level 1-10 | 135, 405, 945, 2025, 4185, 8505, 17145, 34425, 68985, 138105 | 10 Wood + 50 Stone + 5 Iron, plus what each level-up takes from its buckets |
+| Pumpjack, by level 1-10 | 700, 2100, 4900, 10500, 21700, 44100, 88900, 178500, 357700, 716100 | 50 Stone + 100 Iron + 1 Quartz, plus what each level-up takes from its buckets |
+| Quartz, Amethyst, Sapphire, Emerald, Ruby, Diamond | 100, 2000, 40000, 800000, 16000000, 320000000 | what `BitsFrom<Gem>` adds to a bucket of bits |
+| Geode | 0 | not valued until cracked |
+| Coal | 5 | set directly; no recipe turns coal into bits |
 
-A level-up spends full buckets, each worth 1 Iron plus its contents:
-`LevelUpQuarryK` adds 10 + 40 x 2^K, and `LevelUpMiningDrillK` adds
-15 + 135 x 2^K.
+A level-up keeps its buckets and takes resources out of them:
+`LevelUpQuarryK` adds 40 x 2^K, `LevelUpMiningDrillK` adds 135 x 2^K, and
+`LevelUpPumpjackK` adds 700 x 2^K.
 
 Wear lowers the value: an axe is worth its value above times the fraction
 of its durability it has left, out of the 100 a new wood axe starts with
