@@ -1,49 +1,23 @@
-use twilight_model::{
-    application::{
-        command::{Command, CommandType},
-        interaction::{
-            InteractionContextType,
-            application_command::{CommandData, CommandDataOption, CommandOptionValue},
-        },
-    },
-    id::{Id, marker::UserMarker},
+use twilight_model::application::{
+    command::{Command, CommandType},
+    interaction::{InteractionContextType, application_command::CommandData},
 };
-use twilight_util::builder::command::{CommandBuilder, UserBuilder};
+use twilight_util::builder::command::CommandBuilder;
 
 const RANK: &str = "rank";
-
-/// A `/rank` request: the player to rank, or whoever asked.
-#[derive(Debug, PartialEq)]
-pub struct Rank(pub Option<Id<UserMarker>>);
 
 pub fn definitions() -> [Command; 1] {
     [CommandBuilder::new(
         RANK,
-        "Show a player's place on the Bitcraft leaderboard",
+        "Show your place on the Bitcraft leaderboard",
         CommandType::ChatInput,
     )
     .contexts([InteractionContextType::Guild])
-    .option(UserBuilder::new(
-        "player",
-        "Player to look up; you, if left out",
-    ))
     .build()]
 }
 
-pub fn rank(data: &CommandData) -> Option<Rank> {
-    match (data.name.as_str(), data.options.as_slice()) {
-        (RANK, []) => Some(Rank(None)),
-        (
-            RANK,
-            [
-                CommandDataOption {
-                    value: CommandOptionValue::User(player),
-                    ..
-                },
-            ],
-        ) => Some(Rank(Some(*player))),
-        _ => None,
-    }
+pub fn is_rank(data: &CommandData) -> bool {
+    data.name == RANK && data.options.is_empty()
 }
 
 #[cfg(test)]
@@ -72,14 +46,13 @@ mod tests {
 
     #[test]
     fn reads_rank() {
-        let player = json!([{"name": "player", "type": 6, "value": "42"}]);
-        assert_eq!(rank(&data("rank", json!([]))), Some(Rank(None)));
-        assert_eq!(
-            rank(&data("rank", player.clone())),
-            Some(Rank(Some(Id::new(42))))
-        );
+        assert!(is_rank(&data("rank", json!([]))));
+        assert!(!is_rank(&data(
+            "rank",
+            json!([{"name": "player", "type": 6, "value": "42"}])
+        )));
         for name in ["leaderboard", "leaderboard-mod", "other"] {
-            assert_eq!(rank(&data(name, json!([]))), None, "{name}");
+            assert!(!is_rank(&data(name, json!([]))), "{name}");
         }
     }
 }

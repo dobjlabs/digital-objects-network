@@ -239,10 +239,10 @@ impl Bot {
         let Some(InteractionData::ApplicationCommand(data)) = &interaction.data else {
             return;
         };
-        let Some(commands::Rank(player)) = commands::rank(data) else {
+        if !commands::is_rank(data) {
             return;
-        };
-        let Some(player) = player.or(interaction.author_id()) else {
+        }
+        let Some(player) = interaction.author_id() else {
             return;
         };
         let reply = messages::rank(&self.state.lock().unwrap().published, player);

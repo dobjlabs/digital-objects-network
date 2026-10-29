@@ -44,7 +44,7 @@ Each publication is also posted to the leaderboard channel: a "Bitcraft leaderbo
 
 ## Commands
 
-- `/rank player:` shows a player's place and score on the last published leaderboard, and how long ago it was published, in a Discord timestamp each reader sees in their own time. Without `player:` it shows the place of whoever used it. A player outside the top 50 is told so, with how players get counted. After a restart it answers from the public file until the next publication.
+- `/rank` shows your place and score on the last published leaderboard, and how long ago it was published, in a Discord timestamp each reader sees in their own time. A player outside the top 50 is told so, with how players get counted. After a restart it answers from the public file until the next publication.
 
 It replies in the channel for everyone to see, with mentions that notify nobody.
 
