@@ -184,7 +184,7 @@ impl Driver {
                 },
             );
         });
-        let proving_pool = self.proving_pool.get(settings.cpu_usage);
+        let proving_pool = self.proving_pool.get(settings.cpu_usage)?;
         let (spendable_outputs, payload_bytes) = proving_pool.install(|| {
             let spendable_outputs = catalog.execute_action_with_progress(
                 input.action.clone(),

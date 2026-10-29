@@ -208,21 +208,7 @@ port is already taken. The MCP tool instead persists first and
 reconciles in the background, so a self-disabling agent's final
 response can flush before the server stops.
 
-`cpuUsage` (`light`, `medium` or `full`, default `medium`) sets how hard
-proving may work the machine, and each level means the same thing on every
-platform: `full` proves as fast as it can and may slow other applications
-or spin up fans; `medium` gives way to other applications and runs cooler,
-at a moderate cost in speed; `light` proves only on spare capacity, near
-silently and several times slower. Proofs, including their single-threaded
-parts such as PoW grinding, and the startup circuit warm-up run in one
-thread pool shaped by the level. How a platform delivers it differs: a
-thread QoS class on macOS, a thread priority plus EcoQoS on Windows, a
-thread priority on Linux, and fewer threads wherever those alone do not
-lower power enough (see
-[`libs/driver/src/cpu_usage.rs`](../../libs/driver/src/cpu_usage.rs)). A
-change applies from the next proof; proofs already running finish at the
-level they started with. `just cpu-scaling` measures the levels on a given
-machine.
+`cpuUsage` (`light`, `medium` or `full`, default `medium`) sets how hard proving may work the machine, and each level means the same thing on every platform: `full` proves as fast as it can and may slow other applications or spin up fans; `medium` gives way to other applications and runs cooler, at a moderate cost in speed; `light` proves only on spare capacity, near silently and several times slower. Proofs, including their single-threaded parts such as PoW grinding, run in one thread pool shaped by the level; the startup circuit warm-up always runs at `full`. How a platform delivers a level differs: a thread QoS class on macOS, a thread priority plus EcoQoS on Windows, a thread priority on Linux, and fewer threads wherever those alone do not lower power enough (see [`libs/driver/src/cpu_usage.rs`](../../libs/driver/src/cpu_usage.rs)). A change applies from the next proof; proofs already running finish at the level they started with. `just cpu-scaling` measures the levels on a given machine.
 
 Both `PUT /settings` and the MCP `write_settings` tool take a partial
 body and merge it onto the current settings: any field you omit keeps
