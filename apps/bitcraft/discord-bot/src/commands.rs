@@ -1,23 +1,22 @@
 use twilight_model::application::{
     command::{Command, CommandType},
-    interaction::{InteractionContextType, application_command::CommandData},
+    interaction::application_command::CommandData,
 };
 use twilight_util::builder::command::CommandBuilder;
 
 const RANK: &str = "rank";
 
-pub fn definitions() -> [Command; 1] {
-    [CommandBuilder::new(
+pub fn rank() -> Command {
+    CommandBuilder::new(
         RANK,
         "Show your place on the Bitcraft leaderboard",
         CommandType::ChatInput,
     )
-    .contexts([InteractionContextType::Guild])
-    .build()]
+    .build()
 }
 
 pub fn is_rank(data: &CommandData) -> bool {
-    data.name == RANK && data.options.is_empty()
+    data.name == RANK
 }
 
 #[cfg(test)]
@@ -26,33 +25,14 @@ mod tests {
 
     use super::*;
 
-    fn data(name: &str, options: serde_json::Value) -> CommandData {
-        serde_json::from_value(json!({
-            "id": "1",
-            "name": name,
-            "type": 1,
-            "options": options,
-        }))
-        .unwrap()
+    fn data(name: &str) -> CommandData {
+        serde_json::from_value(json!({"id": "1", "name": name, "type": 1})).unwrap()
     }
 
     #[test]
-    fn definitions_are_valid_and_open_to_everyone() {
-        for command in definitions() {
-            twilight_validate::command::command(&command).unwrap();
-            assert_eq!(command.default_member_permissions, None, "{}", command.name);
-        }
-    }
-
-    #[test]
-    fn reads_rank() {
-        assert!(is_rank(&data("rank", json!([]))));
-        assert!(!is_rank(&data(
-            "rank",
-            json!([{"name": "player", "type": 6, "value": "42"}])
-        )));
-        for name in ["leaderboard", "leaderboard-mod", "other"] {
-            assert!(!is_rank(&data(name, json!([]))), "{name}");
-        }
+    fn rank_is_valid_and_read_by_name() {
+        twilight_validate::command::command(&rank()).unwrap();
+        assert!(is_rank(&data("rank")));
+        assert!(!is_rank(&data("other")));
     }
 }

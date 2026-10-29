@@ -1198,7 +1198,11 @@ test("the summary icon opens the Inventory Summary in one window", async (contex
 });
 
 test("in the desktop app a window already open is raised through the host", async (context) => {
-  const ui = await page(context, { desktop: true, objects: [knife()] });
+  const raised = [];
+  const ui = await page(context, {
+    desktop: true, objects: [knife()],
+    invoke: (command, args) => { if (command === "raise_window") raised.push(args.page); },
+  });
   const opened = [];
   ui.dom.window.open = (url) => {
     opened.push(String(url));
@@ -1210,13 +1214,14 @@ test("in the desktop app a window already open is raised through the host", asyn
     const control = ui.document.querySelector(`#${button}-button`);
     control.click();
     control.click();
-    assert.deepEqual(opened.splice(0),
-      [`http://127.0.0.1:7727/bitcraft/?page=${page}`, `bitcraft://window/${page}`], button);
+    assert.deepEqual(opened.splice(0), [`http://127.0.0.1:7727/bitcraft/?page=${page}`], button);
+    assert.deepEqual(raised.splice(0), [page], button);
   }
   ui.document.querySelector('.object-row[data-file-name="pocketknife.dobj"]')
     .dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
   ui.document.querySelector("#details-body .class-link").click();
-  assert.deepEqual(opened, ["bitcraft://window/recipebook"], "a Recipe Info link raises the open window");
+  assert.deepEqual(opened, []);
+  assert.deepEqual(raised, ["recipebook"], "a Recipe Info link raises the open window");
 });
 
 test("the trophy opens the Leaderboard in one window", async (context) => {
@@ -1247,7 +1252,6 @@ test("the Leaderboard lists players by score with their names as text, and runs 
         player("Ada", 31.12), player("<b>Bo</b>", 5), player("Cy", 1.5), player("Dee", 0.25),
         { name: 7, bits: 1 }, { name: "No score" },
       ],
-      banned: ["1400000000000000456"],
     },
   });
   const { document } = ui;

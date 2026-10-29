@@ -151,27 +151,6 @@ fn edit_menu(app: &tauri::AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
     )
 }
 
-/// Labels the windows the page opens.
-const PAGE_WINDOW_LABEL_PREFIX: &str = "page-";
-
-/// The page named by a `bitcraft://window/<page>` request, which raises the
-/// window showing that page.
-fn window_request(url: &tauri::Url) -> Option<&str> {
-    if url.scheme() != "bitcraft"
-        || url.host_str() != Some("window")
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.port().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return None;
-    }
-    url.path()
-        .strip_prefix('/')
-        .filter(|page| !page.is_empty() && page.bytes().all(|byte| byte.is_ascii_lowercase()))
-}
-
 fn shows_page(url: &tauri::Url, page: &str) -> bool {
     is_daemon_url(url)
         && url
@@ -179,13 +158,14 @@ fn shows_page(url: &tauri::Url, page: &str) -> bool {
             .any(|(key, value)| key == "page" && value == page)
 }
 
-/// A window's own `focus()` from another page leaves it behind the main
-/// window, so the page asks the host to raise it.
-fn raise_page_window(app: &tauri::AppHandle, page: &str) {
-    let window = app.webview_windows().into_values().find(|window| {
-        window.label().starts_with(PAGE_WINDOW_LABEL_PREFIX)
-            && window.url().is_ok_and(|url| shows_page(&url, page))
-    });
+/// Brings the window showing `page` to the front, which the page's own
+/// `focus()` on that window does not.
+#[tauri::command]
+fn raise_window(app: tauri::AppHandle, page: String) {
+    let window = app
+        .webview_windows()
+        .into_values()
+        .find(|window| window.url().is_ok_and(|url| shows_page(&url, &page)));
     if let Some(window) = window {
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -354,7 +334,8 @@ fn main() -> Result<()> {
         .invoke_handler(tauri::generate_handler![
             inventory_metrics,
             discord_sharing,
-            set_discord_sharing
+            set_discord_sharing,
+            raise_window
         ])
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
             if !args.iter().any(|arg| arg == "--background") {
@@ -393,10 +374,6 @@ fn main() -> Result<()> {
                         agents::request(&new_window_app, agent);
                         return tauri::webview::NewWindowResponse::Deny;
                     }
-                    if let Some(page) = window_request(&url) {
-                        raise_page_window(&new_window_app, page);
-                        return tauri::webview::NewWindowResponse::Deny;
-                    }
                     if is_external_link(&url) {
                         open_in_browser(&url);
                         return tauri::webview::NewWindowResponse::Deny;
@@ -404,7 +381,7 @@ fn main() -> Result<()> {
                     if !is_daemon_url(&url) {
                         return tauri::webview::NewWindowResponse::Deny;
                     }
-                    let label = format!("{PAGE_WINDOW_LABEL_PREFIX}{}", next_window_number.fetch_add(1, Ordering::Relaxed));
+                    let label = format!("page-{}", next_window_number.fetch_add(1, Ordering::Relaxed));
                     let dev_url = dev_url.clone();
                     match WebviewWindowBuilder::new(&new_window_app, label, WebviewUrl::External(url))
                         .window_features(features)
@@ -521,7 +498,7 @@ mod tests {
     fn native_capabilities_use_the_runtime_port() {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        for identifier in ["inventory-metrics", "discord-sharing"] {
+        for identifier in ["main-page", "discord-sharing"] {
             let capability = config["app"]["security"]["capabilities"]
                 .as_array()
                 .unwrap()
@@ -577,29 +554,7 @@ mod tests {
     }
 
     #[test]
-    fn window_requests_name_a_page_and_match_its_window() {
-        let request = |url: &str| window_request(&url.parse().unwrap()).map(str::to_owned);
-        assert_eq!(
-            request("bitcraft://window/leaderboard").as_deref(),
-            Some("leaderboard")
-        );
-        assert_eq!(
-            request("bitcraft://window/recipebook").as_deref(),
-            Some("recipebook")
-        );
-        for url in [
-            "bitcraft://window/",
-            "bitcraft://window/Summary",
-            "bitcraft://window/raw?file=a.dobj",
-            "bitcraft://window/summary#top",
-            "bitcraft://window/summary/extra",
-            "bitcraft://agent/claude",
-            "bitcraft://user@window/summary",
-            "bitcraft://window:42/summary",
-            "https://window/summary",
-        ] {
-            assert_eq!(request(url), None, "{url}");
-        }
+    fn a_page_matches_only_the_daemon_window_showing_it() {
         let window = |url: &str| -> tauri::Url { url.parse().unwrap() };
         assert!(shows_page(
             &window("http://127.0.0.1:7727/bitcraft/?page=summary"),

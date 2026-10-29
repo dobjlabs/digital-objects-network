@@ -56,18 +56,6 @@ impl Leaderboard {
         true
     }
 
-    /// The highest `count` scores.
-    pub fn top(&self, count: usize) -> Leaderboard {
-        Leaderboard {
-            updated_at: self.updated_at,
-            entries: self.entries.iter().take(count).cloned().collect(),
-        }
-    }
-
-    pub fn has_entry(&self, user: Id<UserMarker>) -> bool {
-        self.entries.iter().any(|entry| entry.user_id == user)
-    }
-
     /// Updates `user`'s display name if they have an entry. Returns whether anything changed.
     pub fn rename(&mut self, user: Id<UserMarker>, name: &str) -> bool {
         match self.entries.iter_mut().find(|entry| entry.user_id == user) {
@@ -152,7 +140,6 @@ mod tests {
 
     #[test]
     fn reads_the_total_the_desktop_writes() {
-        // States the desktop host writes.
         assert_eq!(
             state_bits("31.12 BIT | -0.38 BIT/sec | No active jobs"),
             Some(31.12)
@@ -247,22 +234,5 @@ mod tests {
         assert_eq!(serde_json::from_value::<Leaderboard>(value).unwrap(), board);
         let minimal: Leaderboard = serde_json::from_value(json!({"entries": []})).unwrap();
         assert_eq!(minimal, Leaderboard::default());
-    }
-
-    #[test]
-    fn the_top_keeps_the_highest_scores() {
-        let mut board = Leaderboard {
-            updated_at: Some(at(10)),
-            ..Leaderboard::default()
-        };
-        let players = TOP_SIZE as u64 + 2;
-        for player in 1..=players {
-            board.record(user(player), player as f64, at(0));
-        }
-        let top = board.top(TOP_SIZE);
-        assert_eq!(top.updated_at, board.updated_at);
-        assert_eq!(top.entries, board.entries[..TOP_SIZE]);
-        assert_eq!(top.entries[0].user_id, user(players));
-        assert_eq!(board.top(TOP_SIZE * 2).entries.len(), players as usize);
     }
 }

@@ -103,14 +103,15 @@
   body.secondary-window #startup-screen,
   body.secondary-window #inventory-app,
   body.secondary-window #status-bar { display: none; }
-  /* The Inventory Summary window, laid out like Finder's Get Info. */
-  #summary-view {
+  /* The Inventory Summary window, laid out like Finder's Get Info, and the
+     Leaderboard window, which shares its header. */
+  #summary-view, #leaderboard-view {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
     padding: 14px 16px 20px;
   }
-  #summary-view[hidden] { display: none; }
+  #summary-view[hidden], #leaderboard-view[hidden] { display: none; }
   #settings-view {
     flex: 1;
     min-height: 0;
@@ -279,14 +280,6 @@
   }
   /* A row's second value, its total BIT value, sits further from the count. */
   .summary-table dd + dd { padding-left: 24px; }
-  /* The Leaderboard window: the Inventory Summary's header over the ranking. */
-  #leaderboard-view {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 14px 16px 20px;
-  }
-  #leaderboard-view[hidden] { display: none; }
   .summary-header-icon svg { color: var(--toolbar-icon); }
   .leaderboard-list {
     margin: 14px 0 0;
@@ -1961,7 +1954,10 @@
   // window, so the desktop host is also asked to raise it.
   function raiseWindow(opened, page) {
     opened.focus();
-    if (window.bitcraftDesktop) window.open(`bitcraft://window/${page}`, "_blank", "noopener");
+    if (window.bitcraftDesktop) {
+      window.__TAURI__.core.invoke("raise_window", { page })
+        .catch((error) => console.warn("Could not raise the window:", error));
+    }
   }
 
   // An open Recipe Info window is asked to select the entry, and is sent to
@@ -3195,32 +3191,19 @@
     const entries = (Array.isArray(board?.entries) ? board.entries : [])
       .filter((entry) => typeof entry?.name === "string" && Number.isFinite(entry?.bits));
 
-    const header = document.createElement("div");
-    header.className = "summary-header";
-    const iconTile = document.createElement("div");
-    iconTile.className = "summary-header-icon";
     const trophy = document.querySelector("#leaderboard-button svg").cloneNode(true);
     trophy.setAttribute("width", "30");
     trophy.setAttribute("height", "30");
-    iconTile.append(trophy);
-    const heading = document.createElement("div");
-    heading.className = "summary-heading";
-    const titleRow = document.createElement("div");
-    titleRow.className = "summary-title-row";
-    const title = document.createElement("span");
-    title.className = "summary-title";
-    title.textContent = "Leaderboard";
-    titleRow.append(title);
-    heading.append(titleRow);
+    const underTitle = [];
     const updatedAt = Date.parse(board?.updatedAt);
     if (Number.isFinite(updatedAt)) {
       const updated = document.createElement("div");
       updated.className = "summary-subtitle";
       updated.textContent = `Updated ${new Date(updatedAt)
         .toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}`;
-      heading.append(updated);
+      underTitle.push(updated);
     }
-    header.append(iconTile, heading);
+    const header = summaryHeader(trophy, "Leaderboard", [], underTitle);
 
     let ranking;
     if (entries.length === 0) {
@@ -3251,6 +3234,25 @@
     note.className = "leaderboard-note";
     note.textContent = LEADERBOARD_JOIN_NOTE;
     leaderboardView.replaceChildren(header, ranking, note);
+  }
+
+  function summaryHeader(icon, titleText, titleRowExtras = [], underTitle = []) {
+    const header = document.createElement("div");
+    header.className = "summary-header";
+    const iconTile = document.createElement("div");
+    iconTile.className = "summary-header-icon";
+    if (icon) iconTile.append(icon);
+    const heading = document.createElement("div");
+    heading.className = "summary-heading";
+    const titleRow = document.createElement("div");
+    titleRow.className = "summary-title-row";
+    const title = document.createElement("span");
+    title.className = "summary-title";
+    title.textContent = titleText;
+    titleRow.append(title, ...titleRowExtras);
+    heading.append(titleRow, ...underTitle);
+    header.append(iconTile, heading);
+    return header;
   }
 
   async function loadSummaryWindow() {
@@ -3285,30 +3287,17 @@
     const wasOpen = new Map([...summaryView.querySelectorAll("details[data-section]")]
       .map((section) => [section.dataset.section, section.open]));
 
-    const header = document.createElement("div");
-    header.className = "summary-header";
-    const iconTile = document.createElement("div");
-    iconTile.className = "summary-header-icon";
+    let icon = null;
     const iconPath = Presentation.classInfo({ pluginName: PLUGIN_NAME, name: SUMMARY_ICON_CLASS }).icon;
     if (iconPath) {
-      const icon = document.createElement("img");
+      icon = document.createElement("img");
       icon.src = iconPath;
       icon.alt = "";
-      iconTile.append(icon);
     }
-    const heading = document.createElement("div");
-    heading.className = "summary-heading";
-    const titleRow = document.createElement("div");
-    titleRow.className = "summary-title-row";
-    const title = document.createElement("span");
-    title.className = "summary-title";
-    title.textContent = "Inventory";
     const total = document.createElement("span");
     total.className = "summary-total";
     total.textContent = formatBitValue(totalValue);
-    titleRow.append(title, total);
-    heading.append(titleRow);
-    header.append(iconTile, heading);
+    const header = summaryHeader(icon, "Inventory", [total]);
 
     // Each row is a label followed by its values, one column each.
     const section = (key, titleText, rows, valueColumns = 1) => {

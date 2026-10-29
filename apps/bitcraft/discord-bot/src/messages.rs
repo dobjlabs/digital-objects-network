@@ -6,30 +6,21 @@ const JOIN_HINT: &str =
     "It counts players who turn on Share activity on Discord and leaderboard in the Bitcraft menu.";
 const MESSAGE_LIMIT: usize = 2000;
 
-/// Players appear as mentions, which Discord renders as their current server names.
-fn ranking(leaderboard: &Leaderboard) -> impl Iterator<Item = String> + '_ {
-    leaderboard
-        .entries
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| {
-            format!(
-                "{}. <@{}> - {:.2} BIT",
-                index + 1,
-                entry.user_id,
-                entry.bits
-            )
-        })
-}
-
 /// The leaderboard as Discord messages, split between lines to fit Discord's
-/// length limit. There are none while nobody has a score.
+/// length limit. There are none while nobody has a score. Players appear as
+/// mentions, which Discord renders as their current server names.
 pub fn standings(top: &Leaderboard) -> Vec<String> {
     if top.entries.is_empty() {
         return Vec::new();
     }
     let mut messages = vec!["**Bitcraft leaderboard**".to_owned()];
-    for line in ranking(top) {
+    for (index, entry) in top.entries.iter().enumerate() {
+        let line = format!(
+            "{}. <@{}> - {:.2} BIT",
+            index + 1,
+            entry.user_id,
+            entry.bits
+        );
         let message = messages.last_mut().unwrap();
         if message.len() + 1 + line.len() > MESSAGE_LIMIT {
             messages.push(line);
@@ -89,7 +80,7 @@ mod tests {
         let scores: Vec<_> = (0..TOP_SIZE as u64)
             .map(|index| (1_400_000_000_000_000_000 + index, 100_000.0 + index as f64))
             .collect();
-        let messages = standings(&with_players(&scores).top(TOP_SIZE));
+        let messages = standings(&with_players(&scores));
         assert_eq!(messages.len(), 2);
         assert!(
             messages

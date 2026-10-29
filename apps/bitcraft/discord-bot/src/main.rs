@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -44,6 +44,7 @@ const NAME_RETRY_DELAY: Duration = Duration::from_secs(10 * 60);
 /// How long shutdown waits for the gateway close to go out.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[derive(Default)]
 struct State {
     leaderboard: Leaderboard,
     unsaved: bool,
@@ -58,8 +59,6 @@ struct Bot {
     bitcraft_application_id: Id<ApplicationMarker>,
     http: Arc<Client>,
     state: Arc<Mutex<State>>,
-    /// The bot's own application, known once connected.
-    application_id: OnceLock<Id<ApplicationMarker>>,
 }
 
 #[tokio::main]
@@ -84,16 +83,14 @@ async fn main() -> Result<()> {
         .init();
     let public_store = Store::new(&s3, public_bucket, public_object)?;
     let state_store = Store::new(&s3, state_bucket, state_object)?;
-    let leaderboard = state_store
-        .load()
-        .await
-        .context("Could not read the saved leaderboard")?;
+    let (saved, published) = tokio::join!(state_store.load(), public_store.load());
+    let leaderboard = saved.context("Could not read the saved leaderboard")?;
     info!(
         entries = leaderboard.entries.len(),
         "Loaded the leaderboard"
     );
     // Until the next publication, `/rank` answers from what was published before.
-    let published = public_store.load().await.unwrap_or_else(|error| {
+    let published = published.unwrap_or_else(|error| {
         warn!(?error, "Could not read the published leaderboard");
         Leaderboard::default()
     });
@@ -105,11 +102,9 @@ async fn main() -> Result<()> {
         http: http.clone(),
         state: Arc::new(Mutex::new(State {
             leaderboard,
-            unsaved: false,
             published,
-            name_due: HashMap::new(),
+            ..State::default()
         })),
-        application_id: OnceLock::new(),
     };
     let (stop, stopped) = watch::channel(());
     let saver = tokio::spawn(save_loop(
@@ -186,8 +181,13 @@ impl Bot {
         match event {
             Event::Ready(ready) => {
                 info!(user = %ready.user.name, "Connected to Discord");
-                let _ = self.application_id.set(ready.application.id);
-                if !ready.guilds.iter().any(|guild| guild.id == self.guild_id) {
+                if ready.guilds.iter().any(|guild| guild.id == self.guild_id) {
+                    tokio::spawn(register_commands(
+                        self.http.clone(),
+                        ready.application.id,
+                        self.guild_id,
+                    ));
+                } else {
                     warn!(
                         guild_id = %self.guild_id,
                         "The bot is not in the DISCORD_GUILD_ID server; invite it with the bot and applications.commands scopes"
@@ -199,13 +199,6 @@ impl Bot {
                     && guild.id == self.guild_id
                 {
                     info!(name = %guild.name, "Following the server");
-                    if let Some(application_id) = self.application_id.get() {
-                        tokio::spawn(register_commands(
-                            self.http.clone(),
-                            *application_id,
-                            self.guild_id,
-                        ));
-                    }
                     self.observe(&guild.presences);
                 }
             }
@@ -233,7 +226,7 @@ impl Bot {
                 .name_due
                 .get(&player)
                 .is_none_or(|due| *due <= Instant::now());
-            if name_is_due && state.leaderboard.has_entry(player) {
+            if name_is_due {
                 state
                     .name_due
                     .insert(player, Instant::now() + NAME_REFRESH_INTERVAL);
@@ -272,7 +265,7 @@ async fn register_commands(
 ) {
     if let Err(error) = http
         .interaction(application_id)
-        .set_guild_commands(guild_id, &commands::definitions())
+        .set_guild_commands(guild_id, &[commands::rank()])
         .await
     {
         warn!(?error, "Could not register the commands");
@@ -355,7 +348,6 @@ async fn save_leaderboard(store: &Store, state: &Mutex<State>) {
             return;
         }
         state.unsaved = false;
-        state.leaderboard.updated_at = Some(now());
         state.leaderboard.clone()
     };
     match store.save(&leaderboard).await {
@@ -404,8 +396,19 @@ fn unix_now() -> u64 {
 /// Publishes the top scores, or nothing if the upload fails, so that the public file, the posts
 /// and `/rank` keep agreeing.
 async fn publish_top(store: &Store, state: &Mutex<State>) -> Option<Leaderboard> {
-    let mut top = state.lock().unwrap().leaderboard.top(TOP_SIZE);
-    top.updated_at = Some(now());
+    let entries = state
+        .lock()
+        .unwrap()
+        .leaderboard
+        .entries
+        .iter()
+        .take(TOP_SIZE)
+        .cloned()
+        .collect();
+    let top = Leaderboard {
+        updated_at: Some(now()),
+        entries,
+    };
     match store.save(&top).await {
         Ok(()) => {
             info!(entries = top.entries.len(), "Published the leaderboard");
@@ -483,8 +486,7 @@ mod tests {
         let state = Arc::new(Mutex::new(State {
             leaderboard: players(3),
             unsaved: true,
-            published: Leaderboard::default(),
-            name_due: HashMap::new(),
+            ..State::default()
         }));
         let (stop, stopped) = watch::channel(());
         let saver = tokio::spawn(save_loop(
@@ -523,9 +525,7 @@ mod tests {
         let (s3, service) = store::mock::start().await;
         let state = Mutex::new(State {
             leaderboard: players(TOP_SIZE as u64 + 5),
-            unsaved: false,
-            published: Leaderboard::default(),
-            name_due: HashMap::new(),
+            ..State::default()
         });
         let store = Store::new(&s3, "public".into(), "leaderboard.json".into()).unwrap();
         let top = publish_top(&store, &state).await.unwrap();
@@ -547,9 +547,8 @@ mod tests {
         let previous = players(1);
         let state = Mutex::new(State {
             leaderboard: players(3),
-            unsaved: false,
             published: previous.clone(),
-            name_due: HashMap::new(),
+            ..State::default()
         });
         let store = Store::new(&s3, "public".into(), "leaderboard.json".into()).unwrap();
         assert!(publish_top(&store, &state).await.is_none());
