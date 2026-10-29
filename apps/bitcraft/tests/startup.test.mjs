@@ -1344,46 +1344,47 @@ test("Settings hides Discord sharing without a host, and when the host cannot be
   assert.equal(failing.document.querySelector("#settings-sharing").hidden, true);
 });
 
-test("the Settings window saves a CPU usage change and describes the chosen level", async (context) => {
+test("the Settings window saves the CPU for jobs chosen with its radio buttons", async (context) => {
   const ui = await page(context, {
     url: "http://127.0.0.1:7727/bitcraft/?page=settings",
     settings: { synchronizerApiUrl: "http://127.0.0.1:3000", relayerApiUrl: "http://127.0.0.1:3200", mcpEnabled: false, cpuUsage: "light" },
   });
-  const select = ui.document.querySelector("#settings-cpu-usage");
-  const hint = () => ui.document.querySelector("#settings-cpu-usage-hint").textContent;
+  const radio = (level) => ui.document.querySelector(`#settings-view input[name="cpu-usage"][value="${level}"]`);
+  const checked = () => ui.document.querySelector('#settings-view input[name="cpu-usage"]:checked')?.value;
   const choose = async (level) => {
-    select.value = level;
-    select.dispatchEvent(new ui.dom.window.Event("change"));
+    radio(level).click();
     await flush();
   };
-  assert.equal(select.value, "light");
-  assert.equal(select.disabled, false);
-  assert.match(hint(), /spare capacity/);
+  assert.equal(checked(), "light");
+  assert.equal(radio("full").disabled, false);
+  assert.equal(ui.document.querySelector("#settings-cpu-usage-label").textContent, "CPU for jobs");
+  for (const [level, label] of [["light", "Light"], ["medium", "Medium"], ["full", "Full"]]) {
+    assert.equal(radio(level).closest("label").textContent.trim(), label);
+  }
 
   await choose("full");
   assert.deepEqual(ui.backend.settingsWrites, [{ cpuUsage: "full" }]);
-  assert.equal(select.value, "full");
-  assert.match(hint(), /as fast as possible/);
+  assert.equal(checked(), "full");
   assert.equal(ui.document.querySelector("#settings-error"), null);
 
   ui.backend.settingsWriteError = true;
   await choose("medium");
-  assert.equal(select.value, "full", "a failed save shows the saved level again");
-  assert.match(hint(), /as fast as possible/);
-  assert.match(ui.document.querySelector("#settings-error").textContent, /Could not save CPU usage/);
+  assert.equal(checked(), "full", "a failed save selects the saved level again");
+  assert.match(ui.document.querySelector("#settings-error").textContent, /Could not save the CPU setting/);
+  assert.equal(radio("medium").disabled, false);
 
   ui.backend.settingsWriteError = false;
   await choose("medium");
-  assert.equal(select.value, "medium");
+  assert.equal(checked(), "medium");
   assert.equal(ui.document.querySelector("#settings-error"), null);
 });
 
-test("the Settings window shows medium when dobjd reports no CPU usage", async (context) => {
+test("the Settings window selects medium when dobjd reports no CPU usage", async (context) => {
   const ui = await page(context, {
     url: "http://127.0.0.1:7727/bitcraft/?page=settings",
     settings: { synchronizerApiUrl: "http://127.0.0.1:3000", relayerApiUrl: "http://127.0.0.1:3200", mcpEnabled: false },
   });
-  assert.equal(ui.document.querySelector("#settings-cpu-usage").value, "medium");
+  assert.equal(ui.document.querySelector('#settings-view input[name="cpu-usage"]:checked').value, "medium");
 });
 
 test("the top bar and the window title show the Inventory Value of live objects", async (context) => {

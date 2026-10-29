@@ -140,12 +140,19 @@
     gap: 8px;
     color: inherit;
   }
-  .settings-hint {
-    grid-column: 1 / -1;
-    margin: 0;
-    color: var(--muted);
-    font-size: 12px;
+  #settings-cpu-usage-label { color: var(--muted); }
+  .cpu-usage-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
   }
+  .settings-fields .cpu-usage-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--text);
+  }
+  .cpu-usage-option input { margin: 0; }
   /* The game's identity and links, set apart from the settings above like
      a Mac About window. */
   .settings-about {
@@ -187,8 +194,7 @@
     cursor: pointer;
   }
   .settings-about-links a:active { background: var(--row-hover); }
-  .settings-fields input,
-  .settings-fields select {
+  .settings-fields input[type="text"] {
     min-width: 0;
     padding: 4px 7px;
     border: 1px solid var(--border);
@@ -1226,14 +1232,13 @@
       <input id="settings-relayer" type="text" readonly spellcheck="false">
     </div>
     <div class="settings-fields">
-      <h1 class="settings-title">Proving</h1>
-      <label for="settings-cpu-usage">CPU usage</label>
-      <select id="settings-cpu-usage" disabled>
-        <option value="light">Light</option>
-        <option value="medium">Medium</option>
-        <option value="full">Full</option>
-      </select>
-      <p id="settings-cpu-usage-hint" class="settings-hint"></p>
+      <h1 class="settings-title">Performance</h1>
+      <span id="settings-cpu-usage-label">CPU for jobs</span>
+      <div class="cpu-usage-options" role="radiogroup" aria-labelledby="settings-cpu-usage-label">
+        <label class="cpu-usage-option"><input type="radio" name="cpu-usage" value="light" disabled>Light</label>
+        <label class="cpu-usage-option"><input type="radio" name="cpu-usage" value="medium" disabled>Medium</label>
+        <label class="cpu-usage-option"><input type="radio" name="cpu-usage" value="full" disabled>Full</label>
+      </div>
     </div>
     <div id="settings-sharing" class="settings-fields" hidden>
       <h1 class="settings-title">Sharing</h1>
@@ -2912,16 +2917,10 @@
     openedWindows.set(name, window.open(url, name, features));
   }
 
-  const CPU_USAGE_HINTS = {
-    light: "Proves only on spare capacity: near-silent, but several times slower.",
-    medium: "Gives way to other apps and runs cooler, at a moderate cost in speed.",
-    full: "Proves as fast as possible; other apps may slow down and fans may spin up.",
-  };
-
   // The Settings window shows the connection addresses from dobjd's settings,
-  // which cannot be edited yet, so the fields are read-only, the CPU usage
-  // level proving runs at, saved as soon as it is changed, and the game's
-  // version, website and Discord server.
+  // which cannot be edited yet, so the fields are read-only, how much CPU
+  // jobs may use (dobjd's `cpuUsage`), saved as soon as it is changed, and
+  // the game's version, website and Discord server.
   async function loadSettingsWindow() {
     document.body.classList.add("secondary-window");
     document.title = "Bitcraft Settings";
@@ -2973,31 +2972,32 @@
   }
 
   function watchCpuUsage(initial) {
-    const select = document.getElementById("settings-cpu-usage");
-    const hint = document.getElementById("settings-cpu-usage-hint");
+    const options = [...document.querySelectorAll('#settings-view input[name="cpu-usage"]')];
     let saved = initial;
     const show = (level) => {
-      select.value = level;
-      hint.textContent = CPU_USAGE_HINTS[level] ?? "";
+      for (const option of options) option.checked = option.value === level;
+    };
+    const enable = (enabled) => {
+      for (const option of options) option.disabled = !enabled;
     };
     show(saved);
-    select.disabled = false;
-    select.addEventListener("change", async () => {
-      const level = select.value;
-      show(level);
-      select.disabled = true;
-      try {
-        const settings = await sendJson("PUT", "/settings", { cpuUsage: level });
-        saved = settings.cpuUsage ?? level;
-        show(saved);
-        document.getElementById("settings-error")?.remove();
-      } catch (error) {
-        show(saved);
-        showSettingsError(`Could not save CPU usage: ${error.message}`);
-      } finally {
-        select.disabled = false;
-      }
-    });
+    enable(true);
+    for (const option of options) {
+      option.addEventListener("change", async () => {
+        enable(false);
+        try {
+          const settings = await sendJson("PUT", "/settings", { cpuUsage: option.value });
+          saved = settings.cpuUsage ?? option.value;
+          show(saved);
+          document.getElementById("settings-error")?.remove();
+        } catch (error) {
+          show(saved);
+          showSettingsError(`Could not save the CPU setting: ${error.message}`);
+        } finally {
+          enable(true);
+        }
+      });
+    }
   }
 
   function showSettingsError(text) {
@@ -4756,7 +4756,7 @@
     document.getElementById("inventory-value").addEventListener("click",
       () => openPageWindow(SUMMARY_PAGE, SUMMARY_WINDOW_NAME, SUMMARY_WINDOW_FEATURES));
     document.getElementById("settings-button").addEventListener("click",
-      () => openPageWindow(SETTINGS_PAGE, SETTINGS_WINDOW_NAME, "popup,width=480,height=470"));
+      () => openPageWindow(SETTINGS_PAGE, SETTINGS_WINDOW_NAME, "popup,width=480,height=450"));
     document.getElementById("bitcraft-version").textContent = BITCRAFT_VERSION;
     refreshServiceStatus();
     setInterval(refreshServiceStatus, SERVICE_STATUS_INTERVAL_MS);

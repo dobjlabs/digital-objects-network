@@ -22,10 +22,11 @@ The outer page fills the window with scrolling and overscroll disabled, includin
 
 Settings (`?page=settings`) shows the synchronizer and relayer addresses
 from dobjd's `GET /settings` in read-only fields; they cannot be edited yet.
-Under a "Proving" heading, a CPU usage menu (Light, Medium, Full) shows
-dobjd's `cpuUsage` (Medium when dobjd reports none), with a line saying
-what the chosen level means. Choosing a level saves it at once with
-`PUT /settings`; if the save fails, the menu returns to the saved level
+Under a "Performance" heading, a row of radio buttons labelled "CPU for
+jobs" (Light, Medium, Full) shows dobjd's `cpuUsage` (Medium when dobjd
+reports none). The label names what the CPU is for; "CPU usage" alone would
+read as a live measurement. Choosing a level saves it at once
+with `PUT /settings`; if the save fails, the saved level is selected again
 and an error appears below.
 In the desktop app a Sharing section follows, with a "Share my Bitcraft
 scores on Discord" checkbox backed by the host's `discord_sharing` and
