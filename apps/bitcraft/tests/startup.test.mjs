@@ -1355,6 +1355,10 @@ test("the Settings window saves the CPU for jobs chosen with its radio buttons",
     radio(level).click();
     await flush();
   };
+  const performance = ui.document.querySelector("#settings-performance");
+  assert.equal(performance.open, false, "the options start collapsed");
+  assert.equal(performance.querySelector("summary").textContent, "Performance (Advanced)");
+  assert.equal(ui.document.querySelector("#settings-sharing").nextElementSibling, performance);
   assert.equal(checked(), "light");
   assert.equal(radio("full").disabled, false);
   assert.equal(ui.document.querySelector("#settings-cpu-usage-label").textContent, "CPU for jobs");
