@@ -18,7 +18,9 @@ use crate::clients::{
 };
 use crate::driver::{Driver, DriverDeps, PayloadBuilder};
 use crate::object_record::{FileStatus, ObjectRecord, ensure_extra_pod_deserializers_registered};
-use crate::object_store::{ensure_store_dirs, load_object_files, write_object_file};
+use crate::object_store::{
+    ensure_store_dirs, load_object_files, object_file_name, write_object_file,
+};
 use crate::pexe_catalog::{PexeCatalog, test_plugin_bytes};
 use crate::{ActionQuery, DriverPaths, ExecuteActionInput, NoopExecutionReporter, ObjectQuery};
 use wire_types::{ObjectStatus, QualifiedName};
@@ -1191,6 +1193,41 @@ fn test_import_grounded_object_is_live() {
     assert_eq!(summary.class, craft_basics("Log"));
     assert_eq!(summary.status, ObjectStatus::Live);
     assert!(summary.file_name.starts_with("craft-basics__log_"));
+}
+
+#[test]
+fn imported_objects_share_their_key_until_an_action_replaces_it() {
+    use pod2::middleware::{StrKey, Value};
+
+    let (json, source_tx, _nullifier) = make_importable_log();
+    let (driver, _) = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
+    assert!(driver.import_object(&json).unwrap().shared_key);
+
+    let imported: ObjectRecord = serde_json::from_str(&json).unwrap();
+    let file_version = |obj: pod2::middleware::containers::Dictionary| {
+        let record = ObjectRecord {
+            content_hash: obj.commitment(),
+            obj,
+            ..imported.clone()
+        };
+        let file_name = object_file_name(&record.class, &record.obj).unwrap();
+        write_object_file(driver.paths(), &record, &file_name).unwrap();
+        driver
+            .read_object(std::path::Path::new(&file_name))
+            .unwrap()
+    };
+
+    let mut changed_keeping_key = imported.obj.clone();
+    changed_keeping_key
+        .insert(&StrKey::from("durability"), &Value::from(1))
+        .unwrap();
+    assert!(file_version(changed_keeping_key).shared_key);
+
+    let mut rekeyed = imported.obj.clone();
+    rekeyed
+        .update(&StrKey::from("key"), &Value::from(42))
+        .unwrap();
+    assert!(!file_version(rekeyed).shared_key);
 }
 
 #[test]

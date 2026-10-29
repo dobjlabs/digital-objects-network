@@ -1,7 +1,13 @@
 use anyhow::{Result, anyhow};
 use hex::ToHex;
-use pod2::middleware::{Hash, StrKey, containers::Dictionary};
-use std::{collections::HashMap, fs, path::Path};
+use payload::{decode_hash_hex, encode_hash_hex};
+use pod2::middleware::{Hash, StrKey, containers::Dictionary, hash_values};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    io::{ErrorKind, Write},
+    path::Path,
+};
 use wire_types::{ObjectStatus, ObjectSummary, QualifiedName};
 
 use crate::object_record::ObjectRecord;
@@ -196,6 +202,48 @@ pub(crate) fn matches_query(summary: &ObjectSummary, query: &ObjectQuery) -> boo
         return false;
     }
     !(query.exclude_nullified && summary.status == ObjectStatus::Nullified)
+}
+
+/// A hash of the object's spending key. Actions that keep the key, as most
+/// mutations do unless their script replaces it, keep the fingerprint.
+pub(crate) fn key_fingerprint(obj: &Dictionary) -> Option<Hash> {
+    let key = obj.get(&StrKey::from("key")).ok()??;
+    Some(hash_values(&[key]))
+}
+
+/// One line appended per call, so concurrent imports cannot drop each
+/// other's entries.
+pub(crate) fn record_imported_key(paths: &DriverPaths, fingerprint: &Hash) -> Result<()> {
+    let line = format!("{}\n", encode_hash_hex(fingerprint));
+    fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&paths.imported_keys_path)
+        .and_then(|mut file| file.write_all(line.as_bytes()))
+        .map_err(|err| {
+            anyhow!(
+                "failed to record imported key in {}: {err}",
+                paths.imported_keys_path.display()
+            )
+        })
+}
+
+pub(crate) fn load_imported_keys(paths: &DriverPaths) -> Result<HashSet<Hash>> {
+    let contents = match fs::read_to_string(&paths.imported_keys_path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(err) => {
+            return Err(anyhow!(
+                "failed to read {}: {err}",
+                paths.imported_keys_path.display()
+            ));
+        }
+    };
+    contents
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| decode_hash_hex(line.trim()))
+        .collect()
 }
 
 #[cfg(test)]

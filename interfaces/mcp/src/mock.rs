@@ -363,6 +363,7 @@ impl DobjOps for MockDobjOps {
                 serde_json::Value::String("Log".to_string()),
             )]),
             held_by_run_id: None,
+            shared_key: true,
         })
     }
 
@@ -413,6 +414,7 @@ fn make_obj(
         description: Some(format!("Mock {class_name}")),
         fields,
         held_by_run_id: None,
+        shared_key: false,
     }
 }
 

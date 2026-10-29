@@ -59,6 +59,9 @@ export interface ObjectSummaryPayload {
   fields: Record<string, unknown>;
   /** The run holding this object as an input while that run is in flight. */
   heldByRunId?: string | null;
+  /** The object's key is still one it was imported with, so whoever gave it
+   * the file can still spend it, until an action replaces the key. */
+  sharedKey: boolean;
 }
 
 /** `POST /objects/import` request body — the raw JSON contents of an external

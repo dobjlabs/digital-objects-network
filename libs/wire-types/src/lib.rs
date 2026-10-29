@@ -195,6 +195,10 @@ pub struct ObjectSummary {
     /// never stored; `status` still gives the object's on-chain state.
     #[serde(default)]
     pub held_by_run_id: Option<String>,
+    /// The object's key is still one it was imported with, so whoever gave
+    /// it the file can still spend it. Cleared by any action that replaces
+    /// the key, such as the class's built-in Rekey action.
+    pub shared_key: bool,
 }
 
 /// `POST /objects/import` body — the raw JSON contents of an external `.dobj`

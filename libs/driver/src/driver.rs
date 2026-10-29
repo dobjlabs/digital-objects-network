@@ -19,8 +19,8 @@ use crate::execute::{build_relayer_payload, obj_type_hash};
 use crate::holds::HoldTable;
 use crate::object_record::{FileStatus, ObjectRecord, parse_object_record_file};
 use crate::object_store::{
-    ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, object_file_name,
-    write_object_file,
+    ObjectFileEntry, ensure_store_dirs, key_fingerprint, load_imported_keys, load_object_files,
+    matches_query, object_file_name, record_imported_key, write_object_file,
 };
 use crate::pexe_catalog::PexeCatalog;
 use crate::pipeline::RecordIndex;
@@ -553,6 +553,12 @@ impl Driver {
         };
         record.status = status;
 
+        // Recorded before the object is filed, so a filed import is never
+        // missing its fingerprint.
+        if let Some(fingerprint) = key_fingerprint(&record.obj) {
+            record_imported_key(&self.paths, &fingerprint)?;
+        }
+
         // 5. File it. `write_object_file` routes to the live or nullified dir
         //    based on status, so a freshly-imported Unknown/Live lands live.
         write_object_file(&self.paths, &record, &file_name)?;
@@ -579,9 +585,15 @@ impl Driver {
         let index = RecordIndex::new(records);
         let held = self.holds.labels();
         let catalog = self.catalog();
+        let imported_keys = load_imported_keys(&self.paths).unwrap_or_else(|err| {
+            log::warn!("treating no object keys as shared: {err:#}");
+            HashSet::new()
+        });
         entries
             .into_iter()
-            .map(|entry| self.object_summary(entry, &index, &held, catalog.as_ref()))
+            .map(|entry| {
+                self.object_summary(entry, &index, &held, &imported_keys, catalog.as_ref())
+            })
             .collect()
     }
 
@@ -592,6 +604,7 @@ impl Driver {
         entry: &ObjectFileEntry,
         index: &RecordIndex<'_>,
         held: &HashMap<String, String>,
+        imported_keys: &HashSet<Hash>,
         catalog: &dyn ActionCatalog,
     ) -> ObjectSummary {
         let class_info = catalog.get_class(&entry.record.class);
@@ -628,6 +641,8 @@ impl Driver {
             description: class_info.as_ref().map(|c| c.description.clone()),
             fields: entry.record.fields_map(),
             held_by_run_id,
+            shared_key: key_fingerprint(&entry.record.obj)
+                .is_some_and(|fingerprint| imported_keys.contains(&fingerprint)),
         }
     }
 

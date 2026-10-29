@@ -69,6 +69,10 @@ All routes return JSON unless noted; errors come back as
 | `DELETE` | `/transactions/{tx_final}`    | `delete_transaction`: abandon a recorded transaction never offered to the relayer |
 | `GET`  | `/events`                       | every state change (SSE), numbered by `seq`                  |
 
+### Imported objects share their key
+
+An imported object's file carries its spending key, so whoever exported it can still spend it. `POST /objects/import` records a hash of the object's key in `imported-keys` in the data directory, and every object summary reports `sharedKey: true` while the object's key is one of those. An action that keeps the key keeps the flag, as most mutations do unless the plugin's script sets a new key. An action that replaces the key, such as the class's built-in `Rekey<Class>` action, clears it.
+
 ### Discarding objects is unsafe
 
 `POST /objects/{file_name}/discard_unsafe` moves an unspent object's file straight into `~/.dobj/objects/.discarded/`, whatever its status (`live`, `pending`, or `unknown`) and even while a run holds it, and returns the object's summary from before the move. Spent (`nullified`) objects are left alone and come back as `404`. It is an escape hatch for clients that have decided an object is stale, such as an `unknown` output left by a crash before its transaction was recorded, not an object-state transition. An output of a recorded transaction needs no discarding: `DELETE /transactions/{tx_final}` removes it with the record, and settlement removes it when the transaction expires.

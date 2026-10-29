@@ -155,6 +155,27 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     Menu::with_items(app, &[&open, &agents, &close, &discord, &quit])
 }
 
+/// The editing commands, whose items carry the shortcuts that let pages cut,
+/// copy, paste and select text on macOS.
+#[cfg(target_os = "macos")]
+fn edit_menu(app: &tauri::AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
+    use tauri::menu::PredefinedMenuItem;
+    Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )
+}
+
 fn is_daemon_url(url: &tauri::Url) -> bool {
     url.scheme() == "http"
         && url.host_str() == Some("127.0.0.1")
@@ -376,7 +397,10 @@ fn main() -> Result<()> {
                 .build()?;
             let app_menu = menu(app.handle())?;
             let submenu = Submenu::with_items(app, "Bitcraft", true, &app_menu.items()?.iter().map(|item| item as &dyn tauri::menu::IsMenuItem<tauri::Wry>).collect::<Vec<_>>())?;
-            app.set_menu(Menu::with_items(app, &[&submenu])?)?;
+            let menu_bar = Menu::with_items(app, &[&submenu])?;
+            #[cfg(target_os = "macos")]
+            menu_bar.append(&edit_menu(app.handle())?)?;
+            app.set_menu(menu_bar)?;
             if !args.no_tray {
                 match TrayIconBuilder::with_id("bitcraft")
                     .menu(&menu(app.handle())?)
