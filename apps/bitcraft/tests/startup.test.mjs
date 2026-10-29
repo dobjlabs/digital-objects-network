@@ -1382,9 +1382,11 @@ test("pasted contents are imported, selected, and come with a rekey reminder", a
   assert.equal(sheet.hidden, true);
 });
 
-test("chosen files are imported in turn, and refusals show dobjd's reason", async (context) => {
+test("chosen files wait for Import, are imported in turn, and refusals show dobjd's reason", async (context) => {
   const ui = await page(context, { objects: [knife(), knife("live", { fileName: "wood_bb22.dobj", class: qname("Wood") })], importStatus: "unknown" });
   const { document, dom } = ui;
+  const submit = document.querySelector("#import-submit");
+  const chosen = document.querySelector("#import-chosen");
   document.querySelector("#import-button").click();
   const input = document.querySelector("#import-files");
   let pickerOpened = 0;
@@ -1404,6 +1406,16 @@ test("chosen files are imported in turn, and refusals show dobjd's reason", asyn
   Object.defineProperty(input, "files", { value: files, configurable: true });
   input.dispatchEvent(new dom.window.Event("change"));
   await flush();
+  assert.deepEqual(ui.backend.imports, [], "choosing files does not import them");
+  assert.equal(chosen.hidden, false);
+  assert.deepEqual([...chosen.querySelectorAll("li")].map((item) => item.textContent),
+    ["stone.dobj", "copy-of-wood.dobj", "log.dobj", "notes.txt"]);
+  assert.equal(submit.disabled, false);
+
+  submit.click();
+  await flush();
+  assert.equal(chosen.hidden, true, "imported files leave the chosen list");
+  assert.equal(submit.disabled, true);
   assert.deepEqual(ui.backend.imports, [
     dobjContents("Stone", "cc33"), dobjContents("Wood", "bb22"), dobjContents("Log", "dd44", "craft-basics"), "not json",
   ]);
