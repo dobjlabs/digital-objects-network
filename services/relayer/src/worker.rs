@@ -22,7 +22,7 @@ pub struct WorkerConfig {
     pub idle_sleep_ms: u64,
     /// Seconds after submission before first fee-bump attempt. `None` disables bumping.
     pub fee_bump_after_secs: Option<u64>,
-    /// Percentage to increase fees per bump (e.g. 20 = 1.2x). Min 13 for EIP-1559 rules.
+    /// Percentage to increase fees per bump (e.g. 100 = 2x).
     pub fee_bump_multiplier_pct: u64,
     /// Maximum number of fee bumps per job.
     pub fee_bump_max: u32,

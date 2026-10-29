@@ -66,7 +66,7 @@ Indexes:
 - `WORKER_IDLE_SLEEP_MS` (default: `1000`)
 - `MAX_FEE_PER_BLOB_GAS` (optional override)
 - `FEE_BUMP_AFTER_SECS` (seconds before first fee-bump attempt; unset = disabled)
-- `FEE_BUMP_MULTIPLIER_PCT` (default: `20`, i.e. 1.2x per bump; min `13` for EIP-1559)
+- `FEE_BUMP_MULTIPLIER_PCT` (default and minimum: `100`, i.e. 2x per bump; blob pools reject a replacement blob tx unless every fee cap at least doubles)
 - `FEE_BUMP_MAX` (default: `5`, max replacement attempts per job)
 
 ## Run
