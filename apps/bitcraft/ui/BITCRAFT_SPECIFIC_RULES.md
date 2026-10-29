@@ -250,6 +250,10 @@ nothing. Rekeying does not change the value: a `Rekey<Class>` action leaves
 every value field alone. Values are shown with two decimal places and the
 unit, as in "31.00 BIT".
 
+## Leaderboard
+
+The trophy in the main window's top bar opens the Leaderboard window, which reads `LEADERBOARD_URL`: the leaderboard the Bitcraft Discord bot publishes from the Discord presence the desktop shares (see `../discord-bot/README.md`). Under the ranking, `LEADERBOARD_JOIN_NOTE` names the setting that puts a player on it. Generic behavior: no Leaderboard button or window.
+
 ## Welcome guide
 
 - **Where:** `WELCOME_FILE`, loaded in `load()`; the text is

@@ -151,6 +151,27 @@ fn edit_menu(app: &tauri::AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
     )
 }
 
+fn shows_page(url: &tauri::Url, page: &str) -> bool {
+    is_daemon_url(url)
+        && url
+            .query_pairs()
+            .any(|(key, value)| key == "page" && value == page)
+}
+
+/// Brings the window showing `page` to the front, which the page's own
+/// `focus()` on that window does not.
+#[tauri::command]
+fn raise_window(app: tauri::AppHandle, page: String) {
+    let window = app
+        .webview_windows()
+        .into_values()
+        .find(|window| window.url().is_ok_and(|url| shows_page(&url, &page)));
+    if let Some(window) = window {
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 fn is_daemon_url(url: &tauri::Url) -> bool {
     url.scheme() == "http"
         && url.host_str() == Some("127.0.0.1")
@@ -313,7 +334,8 @@ fn main() -> Result<()> {
         .invoke_handler(tauri::generate_handler![
             inventory_metrics,
             discord_sharing,
-            set_discord_sharing
+            set_discord_sharing,
+            raise_window
         ])
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
             if !args.iter().any(|arg| arg == "--background") {
@@ -476,7 +498,7 @@ mod tests {
     fn native_capabilities_use_the_runtime_port() {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        for identifier in ["inventory-metrics", "discord-sharing"] {
+        for identifier in ["main-page", "discord-sharing"] {
             let capability = config["app"]["security"]["capabilities"]
                 .as_array()
                 .unwrap()
@@ -528,6 +550,31 @@ mod tests {
         ));
         assert!(!is_daemon_url(
             &"tauri://localhost/index.html".parse().unwrap()
+        ));
+    }
+
+    #[test]
+    fn a_page_matches_only_the_daemon_window_showing_it() {
+        let window = |url: &str| -> tauri::Url { url.parse().unwrap() };
+        assert!(shows_page(
+            &window("http://127.0.0.1:7727/bitcraft/?page=summary"),
+            "summary"
+        ));
+        assert!(shows_page(
+            &window("http://127.0.0.1:7727/bitcraft/?page=recipebook&class=bitcraft::Wood"),
+            "recipebook"
+        ));
+        assert!(!shows_page(
+            &window("http://127.0.0.1:7727/bitcraft/?page=settings"),
+            "summary"
+        ));
+        assert!(!shows_page(
+            &window("http://127.0.0.1:7727/bitcraft/"),
+            "summary"
+        ));
+        assert!(!shows_page(
+            &window("https://example.com/?page=summary"),
+            "summary"
         ));
     }
 
