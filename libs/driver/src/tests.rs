@@ -1271,19 +1271,33 @@ fn imported_objects_share_their_key_until_an_action_replaces_it() {
 }
 
 #[test]
-fn test_import_ungrounded_object_is_unknown() {
-    let (json, _source_tx, _nullifier) = make_importable_log();
+fn test_import_ungrounded_object_is_rejected() {
+    let (json, _commitment, _nullifier) = make_importable_log();
     let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
-    let summary = driver.import_object(&json, None).unwrap();
-    assert_eq!(summary.status, ObjectStatus::Unknown);
+    let err = driver.import_object(&json, None).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("not registered in the network broadcast history"),
+        "got: {err}"
+    );
+    assert!(driver.list_objects(None).unwrap().is_empty());
 }
 
 #[test]
 fn sync_objects_follows_the_chain_forward_only() {
     let (json, commitment, nullifier) = make_importable_log();
     let (driver, chain) = import_driver(HashSet::new(), HashSet::new(), false);
-    let summary = driver.import_object(&json, None).unwrap();
-    assert_eq!(summary.status, ObjectStatus::Unknown);
+    let mut record: ObjectRecord = serde_json::from_str(&json).unwrap();
+    record.metadata.status = FileStatus::Unknown;
+    let file_name = "awaiting.dobj".to_string();
+    write_object_file(driver.paths(), &record, &file_name).unwrap();
+    assert_eq!(
+        driver
+            .read_object(std::path::Path::new(&file_name))
+            .unwrap()
+            .status,
+        ObjectStatus::Unknown
+    );
 
     chain.lock().unwrap().created.insert(commitment);
     let synced = driver.sync_objects(None).unwrap().objects;
@@ -1297,7 +1311,7 @@ fn sync_objects_follows_the_chain_forward_only() {
         driver
             .paths()
             .nullified_objects_dir
-            .join(&summary.file_name)
+            .join(&file_name)
             .exists()
     );
 
@@ -1490,9 +1504,13 @@ fn test_import_duplicate_is_rejected() {
 
 #[test]
 fn imported_objects_keep_their_requested_file_name() {
-    let (first, source_tx, _nullifier) = make_importable_log();
-    let (second, _, _) = make_importable_log();
-    let (driver, _) = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
+    let (first, first_commitment, _nullifier) = make_importable_log();
+    let (second, second_commitment, _) = make_importable_log();
+    let (driver, _) = import_driver(
+        HashSet::from([first_commitment, second_commitment]),
+        HashSet::new(),
+        false,
+    );
 
     let summary = driver.import_object(&first, Some("my log")).unwrap();
     assert_eq!(summary.file_name, "my log.dobj");
@@ -1512,8 +1530,8 @@ fn imported_objects_keep_their_requested_file_name() {
 
 #[test]
 fn imported_file_names_skip_discarded_files_and_refuse_foreign_generated_names() {
-    let (json, _source_tx, _nullifier) = make_importable_log();
-    let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
+    let (json, commitment, _nullifier) = make_importable_log();
+    let (driver, _) = import_driver(HashSet::from([commitment]), HashSet::new(), false);
     std::fs::create_dir_all(&driver.paths().discarded_objects_dir).unwrap();
     std::fs::write(driver.paths().discarded_objects_dir.join("log.dobj"), "{}").unwrap();
 
@@ -1538,20 +1556,24 @@ fn imported_file_names_skip_discarded_files_and_refuse_foreign_generated_names()
 
 #[test]
 fn imported_objects_may_keep_their_own_generated_name() {
-    let (json, _source_tx, _nullifier) = make_importable_log();
+    let (json, commitment, _nullifier) = make_importable_log();
     let record: ObjectRecord = serde_json::from_str(&json).unwrap();
     let generated = object_file_name(&record.metadata.class, &record.obj).unwrap();
-    let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
+    let (driver, _) = import_driver(HashSet::from([commitment]), HashSet::new(), false);
     let summary = driver.import_object(&json, Some(&generated)).unwrap();
     assert_eq!(summary.file_name, generated);
 }
 
 #[test]
-fn test_import_sync_unreachable_falls_back_to_unknown() {
-    let (json, _source_tx, _nullifier) = make_importable_log();
-    let (driver, _) = import_driver(HashSet::new(), HashSet::new(), true);
-    let summary = driver.import_object(&json, None).unwrap();
-    assert_eq!(summary.status, ObjectStatus::Unknown);
+fn test_import_sync_unreachable_is_rejected() {
+    let (json, commitment, _nullifier) = make_importable_log();
+    let (driver, _) = import_driver(HashSet::from([commitment]), HashSet::new(), true);
+    let err = driver.import_object(&json, None).unwrap_err();
+    assert!(
+        err.to_string().contains("against the network"),
+        "got: {err}"
+    );
+    assert!(driver.list_objects(None).unwrap().is_empty());
 }
 
 #[test]
@@ -2262,15 +2284,6 @@ fn importing_a_live_object_adds_its_creation_proof() {
     )
     .unwrap();
     verified_creation_proof(&stored);
-
-    let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
-    let summary = driver.import_object(&json, None).unwrap();
-    assert_eq!(summary.status, ObjectStatus::Unknown);
-    let stored = crate::object_record::parse_object_record_file(
-        &driver.paths().objects_dir.join(&summary.file_name),
-    )
-    .unwrap();
-    assert_eq!(stored.metadata.creation_proof, None);
 }
 
 /// An importable Log file carrying a creation proof, and the commitment it

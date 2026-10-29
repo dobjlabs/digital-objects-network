@@ -472,14 +472,15 @@ impl Driver {
     /// - the object must not already be present (live or nullified);
     /// - a `creationProof`, when the file has one, must place the object in
     ///   the created set of the state root the synchronizer derived at the
-    ///   proof's block; an unreachable synchronizer fails the import;
+    ///   proof's block; a block the synchronizer has derived no state at
+    ///   fails the import;
+    /// - the object must be on chain: in the created set the synchronizer
+    ///   reports, or placed in one by its creation proof;
     /// - the object's nullifier must not already be spent on-chain.
     ///
-    /// Status is decided by grounding: `Live` if the source tx is committed,
-    /// otherwise `Unknown` (a later `sync_objects` promotes it). If the
-    /// synchronizer is unreachable the object is imported as `Unknown` rather
-    /// than failing, so the flow still works offline. A `Live` object without
-    /// a creation proof gets one from the synchronizer.
+    /// Every check against the chain needs the synchronizer, so an
+    /// unreachable one fails the import. An imported object is always `Live`;
+    /// one without a creation proof gets one from the synchronizer.
     pub fn import_object(
         &self,
         dobj_json: &str,
@@ -535,8 +536,7 @@ impl Driver {
         self.import_file_name(&record, &generated_file_name, requested_file_name)?;
 
         // 4. A creation proof the file carries must place the object in the
-        //    created set of a state root the synchronizer derived. Unlike the
-        //    status check below, this fails when the synchronizer cannot answer.
+        //    created set of a state root the synchronizer derived.
         let settings = self.load_settings()?;
         let proven_created = match &record.metadata.creation_proof {
             Some(encoded) => {
@@ -546,41 +546,44 @@ impl Driver {
             None => false,
         };
 
-        // 5. Grounding decides status. A nullifier already on-chain means the
-        //    object has been spent — reject it. Otherwise Live if the object's
-        //    commitment is in the created set, else Unknown. Tolerate
-        //    an unreachable synchronizer by importing as Unknown.
+        // 5. The object must be on chain: created according to the
+        //    synchronizer, or placed in a created set by the proof above. A
+        //    nullifier already on-chain means the object has been spent.
         let nullifier = object_nullifier_hash(&record.obj).map_err(|err| {
             DriverError::InvalidInput(format!(
                 "could not derive nullifier from imported object: {err}"
             ))
         })?;
-        let status = match self.deps.synchronizer.fetch_membership_with_nullifiers(
-            &settings.synchronizer_api_url,
-            &[commitment],
-            &[nullifier],
-        ) {
-            Ok(membership) => {
-                if membership.on_chain_nullifiers.contains(&nullifier) {
-                    return Err(DriverError::Conflict(
-                        "imported object has already been spent on-chain".to_string(),
-                    )
-                    .into());
-                } else if proven_created || membership.created_objects.contains(&commitment) {
-                    FileStatus::Live
-                } else {
-                    FileStatus::Unknown
-                }
-            }
-            Err(err) => {
-                log::warn!(
-                    "import: grounding check failed, importing {generated_file_name} as unknown: {err:#}"
-                );
-                FileStatus::Unknown
-            }
-        };
-        record.metadata.status = status;
-        if status == FileStatus::Live && record.metadata.creation_proof.is_none() {
+        let membership = self
+            .deps
+            .synchronizer
+            .fetch_membership_with_nullifiers(
+                &settings.synchronizer_api_url,
+                &[commitment],
+                &[nullifier],
+            )
+            .with_context(|| {
+                format!(
+                    "could not check imported object contentHash {} against the network",
+                    encode_hash_hex(&commitment)
+                )
+            })?;
+        if membership.on_chain_nullifiers.contains(&nullifier) {
+            return Err(DriverError::Conflict(format!(
+                "imported object contentHash {} has already been spent in the network",
+                encode_hash_hex(&commitment)
+            ))
+            .into());
+        }
+        if !proven_created && !membership.created_objects.contains(&commitment) {
+            return Err(DriverError::InvalidInput(format!(
+                "imported object contentHash {} is not registered in the network broadcast history",
+                encode_hash_hex(&commitment)
+            ))
+            .into());
+        }
+        record.metadata.status = FileStatus::Live;
+        if record.metadata.creation_proof.is_none() {
             match self.fetch_creation_proofs(&settings.synchronizer_api_url, &[commitment]) {
                 Ok(mut proofs) => record.metadata.creation_proof = proofs.remove(&commitment),
                 Err(err) => log::warn!(
@@ -600,9 +603,7 @@ impl Driver {
                 record_imported_key(&self.paths, &fingerprint)?;
             }
 
-            // 6. File it. `write_object_file` routes to the live or nullified
-            //    dir based on status, so a freshly-imported Unknown/Live lands
-            //    live.
+            // 6. File it.
             write_object_file(&self.paths, &record, &file_name)?;
             file_name
         };
@@ -612,7 +613,7 @@ impl Driver {
 
     /// Refuses a creation proof that does not place `commitment` in the
     /// created set of the state root the synchronizer derived at the proof's
-    /// block.
+    /// block, a block it has derived no state at included.
     fn check_creation_proof(
         &self,
         sync_api_url: &str,

@@ -63,9 +63,11 @@ Core read APIs:
 - `import_object(dobj_json, requested_file_name)` — adopt an external
   `.dobj`, filed under the requested name (adjusted to be safe and unique)
   or a derived one; rejects if class identity doesn't match, the object is
-  already held, its nullifier is already spent on-chain, or it carries a
-  creation proof that fails (below). Tolerates an unreachable synchronizer by importing
-  the object as `Unknown`, unless the file carries a creation proof
+  already held, its nullifier is already spent on-chain, the synchronizer does
+  not report it created (unless its creation proof places it in a created
+  set), or it carries a creation proof that fails (below). Every check asks
+  the synchronizer, so an unreachable one fails the import; an imported object
+  is always `Live`
 
 Transaction APIs:
 
@@ -128,7 +130,7 @@ The driver depends on traits, not the HTTP implementations directly:
 
 An object file is `{ "metadata": { class, contentHash, status, txFinal, txHash?, creationProof? }, "obj": ... }`. Files from before `metadata` existed kept its fields at the top level; they still parse and are rewritten in the nested form the next time the driver writes them.
 
-`creationProof` is base64 of a Merkle proof that the object's commitment is in the created array of a state root, together with that root's state header (format in [`src/creation_proof.rs`](src/creation_proof.rs)). Settlement fetches one from the synchronizer for each output it marks `live`, and a sync pass fetches one for any unspent file the synchronizer reports created without one, so a failed fetch is retried. Import checks a proof a file carries: it must verify, and its state root must be the one the synchronizer derived at the proof's block, or the import fails. A file without one that imports as `live` gets one.
+`creationProof` is base64 of a Merkle proof that the object's commitment is in the created array of a state root, together with that root's state header (format in [`src/creation_proof.rs`](src/creation_proof.rs)). Settlement fetches one from the synchronizer for each output it marks `live`, and a sync pass fetches one for any unspent file the synchronizer reports created without one, so a failed fetch is retried. Import checks a proof a file carries: it must verify, and its state root must be the one the synchronizer derived at the proof's block, or the import fails; a block the synchronizer has derived no state at fails too. Import also refuses an object the synchronizer does not report created, unless its proof places it in a created set, so a well-formed file for an object that was never created, or whose transaction has not landed yet, is not imported. A file without a proof gets one on import, so removing a proof the synchronizer does not back lets the object import and be re-proved once the synchronizer reports it created.
 
 An object file says only what the chain has said about the object: `unknown`, `live` or `nullified`. The parser and serializer live in [`src/object_record.rs`](src/object_record.rs), and filesystem placement logic lives in [`src/object_store.rs`](src/object_store.rs). Whether an output is awaiting a transaction (`pending` in listings) is derived from its open transaction record. An optional `txHash` is stored in the object file and survives transaction-record pruning. Listings prefer a transaction record's newer hash while it is retained, and fall back to the file's hash. Spending an input preserves its original creation hash.
 
