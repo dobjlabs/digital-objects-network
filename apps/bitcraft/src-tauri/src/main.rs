@@ -12,7 +12,7 @@ use anyhow::Result;
 use clap::Parser;
 use tauri::{
     Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent,
-    menu::{CheckMenuItem, Menu, MenuItem, Submenu},
+    menu::{Menu, MenuItem, Submenu},
     tray::TrayIconBuilder,
 };
 use tokio::sync::watch;
@@ -43,7 +43,6 @@ struct Desktop {
     discord: discord::Presence,
     inventory_metrics: watch::Sender<Option<metrics::InventoryMetrics>>,
     metrics_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
-    discord_menu_items: Mutex<Vec<CheckMenuItem<tauri::Wry>>>,
     runtime: Mutex<Option<Arc<runtime::Runtime>>>,
     message: Mutex<String>,
     tray_available: AtomicBool,
@@ -59,7 +58,6 @@ impl Desktop {
             home,
             inventory_metrics: watch::Sender::new(None),
             metrics_task: Mutex::new(None),
-            discord_menu_items: Mutex::new(Vec::new()),
             runtime: Mutex::new(None),
             message: Mutex::new(message),
             tray_available: AtomicBool::new(false),
@@ -116,15 +114,6 @@ fn run_menu_action(app: &tauri::AppHandle, id: &str) {
                 eprintln!("Could not open agent guide: {error:#}");
             }
         }
-        "discord-presence" => {
-            let desktop = app.state::<Desktop>();
-            if let Err(error) = desktop.discord.set_enabled(!desktop.discord.enabled()) {
-                eprintln!("Could not save Discord sharing preference: {error}");
-            }
-            for item in desktop.discord_menu_items.lock().unwrap().iter() {
-                let _ = item.set_checked(desktop.discord.enabled());
-            }
-        }
         "quit" => app.exit(0),
         _ => {}
     }
@@ -133,20 +122,6 @@ fn run_menu_action(app: &tauri::AppHandle, id: &str) {
 fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let open = MenuItem::with_id(app, "open", "Open Bitcraft", true, None::<&str>)?;
     let close = MenuItem::with_id(app, "close", "Close Window", true, Some("CmdOrCtrl+W"))?;
-    let desktop = app.state::<Desktop>();
-    let discord = CheckMenuItem::with_id(
-        app,
-        "discord-presence",
-        "Share activity on Discord",
-        true,
-        desktop.discord.enabled(),
-        None::<&str>,
-    )?;
-    desktop
-        .discord_menu_items
-        .lock()
-        .unwrap()
-        .push(discord.clone());
     let quit = MenuItem::with_id(app, "quit", "Quit Bitcraft", true, Some("CmdOrCtrl+Q"))?;
     let agents = MenuItem::with_id(
         app,
@@ -155,7 +130,7 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         true,
         None::<&str>,
     )?;
-    Menu::with_items(app, &[&open, &agents, &close, &discord, &quit])
+    Menu::with_items(app, &[&open, &agents, &close, &quit])
 }
 
 /// The editing commands, whose items carry the shortcuts that let pages cut,
@@ -177,6 +152,27 @@ fn edit_menu(app: &tauri::AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
             &PredefinedMenuItem::select_all(app, None)?,
         ],
     )
+}
+
+fn shows_page(url: &tauri::Url, page: &str) -> bool {
+    is_daemon_url(url)
+        && url
+            .query_pairs()
+            .any(|(key, value)| key == "page" && value == page)
+}
+
+/// Brings the window showing `page` to the front, which the page's own
+/// `focus()` on that window does not.
+#[tauri::command]
+fn raise_window(app: tauri::AppHandle, page: String) {
+    let window = app
+        .webview_windows()
+        .into_values()
+        .find(|window| window.url().is_ok_and(|url| shows_page(&url, &page)));
+    if let Some(window) = window {
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
 }
 
 fn is_daemon_url(url: &tauri::Url) -> bool {
@@ -209,6 +205,21 @@ fn show_page_title(window: tauri::WebviewWindow, title: String) {
 #[tauri::command]
 fn inventory_metrics(desktop: tauri::State<Desktop>) -> Option<metrics::InventoryMetrics> {
     desktop.inventory_metrics.borrow().clone()
+}
+
+#[tauri::command]
+fn discord_sharing(desktop: tauri::State<Desktop>) -> bool {
+    desktop.discord.enabled()
+}
+
+/// Returns the preference now in effect, which is the requested one even
+/// when saving it fails.
+#[tauri::command]
+fn set_discord_sharing(desktop: tauri::State<Desktop>, enabled: bool) -> bool {
+    if let Err(error) = desktop.discord.set_enabled(enabled) {
+        eprintln!("Could not save Discord sharing preference: {error}");
+    }
+    desktop.discord.enabled()
 }
 
 fn shell_dev_url(app: &tauri::AppHandle) -> Option<tauri::Url> {
@@ -325,6 +336,9 @@ fn main() -> Result<()> {
     let app = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             inventory_metrics,
+            discord_sharing,
+            set_discord_sharing,
+            raise_window,
             appearance::set_appearance
         ])
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
@@ -492,10 +506,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn page_capabilities_use_the_runtime_port_and_only_the_main_window() {
+    fn native_capabilities_use_the_runtime_port() {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        for identifier in ["inventory-metrics", "appearance"] {
+        for identifier in ["main-page", "discord-sharing"] {
             let capability = config["app"]["security"]["capabilities"]
                 .as_array()
                 .unwrap()
@@ -507,12 +521,22 @@ mod tests {
                 serde_json::json!([format!("http://127.0.0.1:{}/*", runtime::HTTP_PORT)]),
                 "{identifier}"
             );
-            assert_eq!(
-                capability["windows"],
-                serde_json::json!(["main"]),
-                "{identifier}"
-            );
         }
+    }
+
+    #[test]
+    fn settings_window_calls_are_allowed_under_the_main_window_label() {
+        // On macOS a window the page opens shares the main window's webview
+        // configuration, so its IPC calls arrive labelled as the main window's.
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let capability = config["app"]["security"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|capability| capability["identifier"] == "discord-sharing")
+            .unwrap();
+        assert_eq!(capability["windows"], serde_json::json!(["main", "page-*"]));
     }
 
     #[test]
@@ -537,6 +561,31 @@ mod tests {
         ));
         assert!(!is_daemon_url(
             &"tauri://localhost/index.html".parse().unwrap()
+        ));
+    }
+
+    #[test]
+    fn a_page_matches_only_the_daemon_window_showing_it() {
+        let window = |url: &str| -> tauri::Url { url.parse().unwrap() };
+        assert!(shows_page(
+            &window("http://127.0.0.1:7727/bitcraft/?page=summary"),
+            "summary"
+        ));
+        assert!(shows_page(
+            &window("http://127.0.0.1:7727/bitcraft/?page=recipebook&class=bitcraft::Wood"),
+            "recipebook"
+        ));
+        assert!(!shows_page(
+            &window("http://127.0.0.1:7727/bitcraft/?page=settings"),
+            "summary"
+        ));
+        assert!(!shows_page(
+            &window("http://127.0.0.1:7727/bitcraft/"),
+            "summary"
+        ));
+        assert!(!shows_page(
+            &window("https://example.com/?page=summary"),
+            "summary"
         ));
     }
 

@@ -172,14 +172,15 @@
   body.secondary-window #startup-screen,
   body.secondary-window #inventory-app,
   body.secondary-window #status-bar { display: none; }
-  /* The Inventory Summary window, laid out like Finder's Get Info. */
-  #summary-view {
+  /* The Inventory Summary window, laid out like Finder's Get Info, and the
+     Leaderboard window, which shares its header. */
+  #summary-view, #leaderboard-view {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
     padding: 14px 16px 20px;
   }
-  #summary-view[hidden] { display: none; }
+  #summary-view[hidden], #leaderboard-view[hidden] { display: none; }
   #settings-view {
     flex: 1;
     min-height: 0;
@@ -193,7 +194,6 @@
     font-size: 13px;
     font-weight: 600;
   }
-  .settings-title:not(:first-child) { margin-top: 10px; }
   .settings-fields {
     display: grid;
     grid-template-columns: max-content minmax(0, 1fr);
@@ -201,6 +201,15 @@
     gap: 8px 10px;
   }
   .settings-fields label { color: var(--muted); }
+  .settings-fields[hidden] { display: none; }
+  .settings-fields + .settings-fields { margin-top: 18px; }
+  .settings-fields label.settings-checkbox {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: inherit;
+  }
   /* The game's identity and links, set apart from the settings above like
      a Mac About window. */
   .settings-about {
@@ -346,6 +355,45 @@
   }
   /* A row's second value, its total BIT value, sits further from the count. */
   .summary-table dd + dd { padding-left: 24px; }
+  .summary-header-icon svg { color: var(--toolbar-icon); }
+  .leaderboard-list {
+    margin: 14px 0 0;
+    padding: 8px 0 0;
+    border-top: 1px solid var(--border);
+    list-style: none;
+  }
+  .leaderboard-list li {
+    display: grid;
+    grid-template-columns: 2.2em minmax(0, 1fr) max-content;
+    gap: 8px;
+    padding: 3px 0;
+  }
+  .leaderboard-rank {
+    color: var(--muted);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .leaderboard-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .leaderboard-bits {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .leaderboard-list li.podium .leaderboard-name,
+  .leaderboard-list li.podium .leaderboard-bits { font-weight: 600; }
+  .leaderboard-empty {
+    margin-top: 14px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+  .leaderboard-note {
+    margin-top: 14px;
+    color: var(--muted);
+    font-size: 12px;
+  }
   /* Laid out like the details pane: a document icon over a title and muted
      text. The desktop shell's preparation screen copies these values. */
   #startup-screen {
@@ -778,9 +826,13 @@
     height: 18px;
     border-radius: 4px;
   }
+  /* Every redraw replaces the rows, which leaves the browser's scroll
+     anchoring nothing to hold on to; the script keeps the view in place
+     instead. */
   #object-list {
     flex: 1;
     overflow-y: auto;
+    overflow-anchor: none;
     margin: 0;
     padding: 0 0 var(--list-trailing-space);
     list-style: none;
@@ -1198,6 +1250,16 @@
         <path d="M9 5.2C7.6 4.1 5.5 3.6 2.5 3.8v10c3-.2 5.1.3 6.5 1.4 1.4-1.1 3.5-1.6 6.5-1.4v-10c-3-.2-5.1.3-6.5 1.4zM9 5.2v10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
       </svg>
     </button>
+    <button type="button" id="leaderboard-button" class="toolbar-button" data-tooltip="Leaderboard" aria-label="Open Leaderboard">
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+        <g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round">
+          <path d="M5.5 2.75h7v4a3.5 3.5 0 0 1-7 0z"/>
+          <path d="M5.5 4.25H4.25a1.6 1.6 0 0 0 0 3.2h1.6M12.5 4.25h1.25a1.6 1.6 0 0 1 0 3.2h-1.6"/>
+          <path d="M9 10.25v2.75"/>
+          <rect x="6.25" y="13" width="5.5" height="2.25" rx="0.6"/>
+        </g>
+      </svg>
+    </button>
     <span class="toolbar-divider" role="separator"></span>
     <button type="button" id="claude-button" class="toolbar-button" data-tooltip="Automate with Claude" aria-label="Automate with Claude" hidden>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd" aria-hidden="true">
@@ -1276,6 +1338,7 @@
     </section>
   </div>
   <div id="summary-view" hidden></div>
+  <div id="leaderboard-view" hidden></div>
   <div id="raw-view" hidden><pre id="raw-text"></pre></div>
   <div id="settings-view" hidden>
     <div class="settings-fields">
@@ -1285,11 +1348,17 @@
         <option value="light">Light</option>
         <option value="dark">Dark</option>
       </select>
+    </div>
+    <div class="settings-fields">
       <h1 class="settings-title">Connections</h1>
       <label for="settings-synchronizer">Synchronizer address</label>
       <input id="settings-synchronizer" type="text" readonly spellcheck="false">
       <label for="settings-relayer">Relayer address</label>
       <input id="settings-relayer" type="text" readonly spellcheck="false">
+    </div>
+    <div id="settings-sharing" class="settings-fields" hidden>
+      <h1 class="settings-title">Sharing</h1>
+      <label class="settings-checkbox"><input id="settings-discord-sharing" type="checkbox"> Share my Bitcraft scores on Discord</label>
     </div>
     <div class="settings-about">
       <div class="settings-about-name">Bitcraft</div>
@@ -1657,6 +1726,13 @@
   const BITCRAFT_SITE_URL = "https://bitcraft.sh/";
   const BITCRAFT_DISCORD_URL = "https://discord.gg/cWtZZYrer";
 
+  // The leaderboard the Bitcraft Discord bot publishes: each player's highest
+  // Total Inventory Value seen in the Discord presence the desktop shares.
+  const LEADERBOARD_URL = "https://pub-9c17c0256cad4d13862cfec1f4cbde32.r2.dev/leaderboard.json";
+  // Under the Leaderboard: the setting that puts a player on it.
+  const LEADERBOARD_JOIN_NOTE = "To appear here, turn on Share my Bitcraft scores on Discord "
+    + "in Settings. Each player's highest Total Inventory Value counts.";
+
   // ---- End of bitcraft-specific rules.
 
   const objectsDirHeader = document.getElementById("objects-dir");
@@ -1684,6 +1760,12 @@
   const initialParams = new URLSearchParams(location.search);
   const isReferenceWindow = initialParams.get(PAGE_PARAM) === RECIPEBOOK_PAGE;
   const isSummaryWindow = initialParams.get(PAGE_PARAM) === SUMMARY_PAGE;
+  // `?page=leaderboard` loads this page as the Leaderboard window.
+  const LEADERBOARD_PAGE = "leaderboard";
+  const LEADERBOARD_WINDOW_NAME = "bitcraft-leaderboard";
+  const LEADERBOARD_WINDOW_FEATURES = "popup,width=420,height=560";
+  const LEADERBOARD_REFRESH_MS = 60000;
+  const isLeaderboardWindow = initialParams.get(PAGE_PARAM) === LEADERBOARD_PAGE;
   // `?page=settings` loads this page as the Settings window.
   const SETTINGS_PAGE = "settings";
   const SETTINGS_WINDOW_NAME = "bitcraft-settings";
@@ -1702,6 +1784,7 @@
   // Windows opened from the top bar, by name.
   const openedWindows = new Map();
   const summaryView = document.getElementById("summary-view");
+  const leaderboardView = document.getElementById("leaderboard-view");
   const rowTooltip = document.getElementById("row-tooltip");
   const ROW_TOOLTIP_DELAY_MS = 250;
   // Pending while the pointer rests on a row, and the pointer's last event.
@@ -1954,6 +2037,16 @@
     return true;
   }
 
+  // In the desktop app a window's own focus() leaves it behind the main
+  // window, so the desktop host is also asked to raise it.
+  function raiseWindow(opened, page) {
+    opened.focus();
+    if (window.bitcraftDesktop) {
+      window.__TAURI__.core.invoke("raise_window", { page })
+        .catch((error) => console.warn("Could not raise the window:", error));
+    }
+  }
+
   // An open Recipe Info window is asked to select the entry, and is sent to
   // its address when it cannot.
   function openReference(reference) {
@@ -1967,7 +2060,7 @@
       if (!shown) {
         opened.location.href = url.href;
       }
-      opened.focus();
+      raiseWindow(opened, RECIPEBOOK_PAGE);
       return;
     }
     openedWindows.set(REFERENCE_WINDOW_NAME, window.open(url, REFERENCE_WINDOW_NAME, REFERENCE_WINDOW_FEATURES));
@@ -2956,7 +3049,7 @@
   function openPageWindow(page, name, features) {
     const opened = openedWindows.get(name);
     if (opened && !opened.closed) {
-      opened.focus();
+      raiseWindow(opened, page);
       return;
     }
     const url = new URL(location.href);
@@ -2980,6 +3073,7 @@
     website.href = BITCRAFT_SITE_URL;
     website.textContent = BITCRAFT_SITE_URL.replace(/\/$/, "");
     document.getElementById("settings-discord").href = BITCRAFT_DISCORD_URL;
+    void loadDiscordSharing();
     try {
       const settings = await fetchJson("/settings");
       document.getElementById("settings-synchronizer").value = settings.synchronizerApiUrl ?? "";
@@ -3009,6 +3103,35 @@
     } catch (error) {
       console.warn("Could not apply the theme to the desktop app:", error);
     }
+  }
+
+  // The desktop host keeps the Discord sharing preference. Where it cannot be
+  // read, as in a standalone browser, the section stays hidden.
+  async function loadDiscordSharing() {
+    const invoke = window.__TAURI__?.core?.invoke;
+    if (!invoke) {
+      return;
+    }
+    const checkbox = document.getElementById("settings-discord-sharing");
+    try {
+      checkbox.checked = await invoke("discord_sharing");
+    } catch (error) {
+      console.warn("Could not read the Discord sharing preference:", error);
+      return;
+    }
+    checkbox.addEventListener("change", async () => {
+      const requested = checkbox.checked;
+      checkbox.disabled = true;
+      try {
+        checkbox.checked = await invoke("set_discord_sharing", { enabled: requested });
+      } catch (error) {
+        console.warn("Could not change the Discord sharing preference:", error);
+        checkbox.checked = !requested;
+      } finally {
+        checkbox.disabled = false;
+      }
+    });
+    document.getElementById("settings-sharing").hidden = false;
   }
 
   // The window is titled with the file's name, which the desktop app shows
@@ -3134,6 +3257,113 @@
     return { reload, records, accept, values };
   }
 
+  // A failed read keeps the leaderboard already shown.
+  async function loadLeaderboardWindow() {
+    document.body.classList.add("secondary-window");
+    document.title = "Bitcraft Leaderboard";
+    leaderboardView.hidden = false;
+    let shown = false;
+    let reading = null;
+    const read = () => {
+      reading ??= (async () => {
+        try {
+          const response = await fetch(LEADERBOARD_URL, { cache: "no-cache" });
+          if (response.status === 404) {
+            renderLeaderboard({ entries: [] });
+          } else if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          } else {
+            renderLeaderboard(await response.json());
+          }
+          shown = true;
+        } catch (error) {
+          if (!shown) {
+            const message = document.createElement("div");
+            message.className = "message error";
+            message.textContent = `Could not read the leaderboard: ${error.message}`;
+            leaderboardView.replaceChildren(message);
+          }
+        } finally {
+          reading = null;
+        }
+      })();
+      return reading;
+    };
+    window.addEventListener("focus", read);
+    setInterval(read, LEADERBOARD_REFRESH_MS);
+    await read();
+  }
+
+  // Lists players in the published order, highest first. Names come from
+  // Discord, so they are only ever set as text.
+  function renderLeaderboard(board) {
+    const entries = (Array.isArray(board?.entries) ? board.entries : [])
+      .filter((entry) => typeof entry?.name === "string" && Number.isFinite(entry?.bits));
+
+    const trophy = document.querySelector("#leaderboard-button svg").cloneNode(true);
+    trophy.setAttribute("width", "30");
+    trophy.setAttribute("height", "30");
+    const underTitle = [];
+    const updatedAt = Date.parse(board?.updatedAt);
+    if (Number.isFinite(updatedAt)) {
+      const updated = document.createElement("div");
+      updated.className = "summary-subtitle";
+      updated.textContent = `Updated ${new Date(updatedAt)
+        .toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}`;
+      underTitle.push(updated);
+    }
+    const header = summaryHeader(trophy, "Leaderboard", [], underTitle);
+
+    let ranking;
+    if (entries.length === 0) {
+      ranking = document.createElement("div");
+      ranking.className = "leaderboard-empty";
+      ranking.textContent = "No scores yet.";
+    } else {
+      ranking = document.createElement("ol");
+      ranking.className = "leaderboard-list";
+      entries.forEach((entry, index) => {
+        const row = document.createElement("li");
+        row.classList.toggle("podium", index < 3);
+        const rank = document.createElement("span");
+        rank.className = "leaderboard-rank";
+        rank.textContent = String(index + 1);
+        const name = document.createElement("span");
+        name.className = "leaderboard-name";
+        name.textContent = entry.name;
+        const bits = document.createElement("span");
+        bits.className = "leaderboard-bits";
+        bits.textContent = formatBitValue(entry.bits);
+        row.append(rank, name, bits);
+        ranking.append(row);
+      });
+    }
+
+    const note = document.createElement("p");
+    note.className = "leaderboard-note";
+    note.textContent = LEADERBOARD_JOIN_NOTE;
+    leaderboardView.replaceChildren(header, ranking, note);
+  }
+
+  function summaryHeader(icon, titleText, titleRowExtras = [], underTitle = []) {
+    const header = document.createElement("div");
+    header.className = "summary-header";
+    const iconTile = document.createElement("div");
+    iconTile.className = "summary-header-icon";
+    if (icon) iconTile.append(icon);
+    const heading = document.createElement("div");
+    heading.className = "summary-heading";
+    const titleRow = document.createElement("div");
+    titleRow.className = "summary-title-row";
+    const title = document.createElement("span");
+    title.className = "summary-title";
+    title.textContent = titleText;
+    titleRow.append(title, ...titleRowExtras);
+    heading.append(titleRow, ...underTitle);
+    header.append(iconTile, heading);
+    return header;
+  }
+
   async function loadSummaryWindow() {
     document.body.classList.add("secondary-window");
     document.title = "Bitcraft Inventory Summary";
@@ -3166,30 +3396,17 @@
     const wasOpen = new Map([...summaryView.querySelectorAll("details[data-section]")]
       .map((section) => [section.dataset.section, section.open]));
 
-    const header = document.createElement("div");
-    header.className = "summary-header";
-    const iconTile = document.createElement("div");
-    iconTile.className = "summary-header-icon";
+    let icon = null;
     const iconPath = Presentation.classInfo({ pluginName: PLUGIN_NAME, name: SUMMARY_ICON_CLASS }).icon;
     if (iconPath) {
-      const icon = document.createElement("img");
+      icon = document.createElement("img");
       icon.src = iconPath;
       icon.alt = "";
-      iconTile.append(icon);
     }
-    const heading = document.createElement("div");
-    heading.className = "summary-heading";
-    const titleRow = document.createElement("div");
-    titleRow.className = "summary-title-row";
-    const title = document.createElement("span");
-    title.className = "summary-title";
-    title.textContent = "Inventory";
     const total = document.createElement("span");
     total.className = "summary-total";
     total.textContent = formatBitValue(totalValue);
-    titleRow.append(title, total);
-    heading.append(titleRow);
-    header.append(iconTile, heading);
+    const header = summaryHeader(icon, "Inventory", [total]);
 
     // Each row is a label followed by its values, one column each.
     const section = (key, titleText, rows, valueColumns = 1) => {
@@ -3795,6 +4012,7 @@
   const nameMeasureContext = document.createElement("canvas").getContext("2d");
 
   function renderObjects(objects) {
+    const shownRows = rowsInView();
     objectList.replaceChildren();
     rowsByFileName.clear();
     if (welcomeText !== null) {
@@ -3815,6 +4033,43 @@
       }
     }
     fitObjectNames();
+    keepRowsInView(shownRows);
+  }
+
+  // The row the last redraw kept in view, the distance from the top of the
+  // viewport it was meant to have, and the scroll position that left it at.
+  let keptRow = null;
+
+  // The rows in view, top first, each with its distance from the top of the
+  // list's viewport. Empty when the list is scrolled to the top, which a
+  // redraw keeps.
+  function rowsInView() {
+    if (objectList.scrollTop <= 0) return [];
+    const viewport = objectList.getBoundingClientRect();
+    // Scroll positions snap to device pixels, so a kept row lands a fraction
+    // away from where it was meant to be; measuring from there each time
+    // would let the error add up.
+    const intended = keptRow?.scrollTop === objectList.scrollTop ? keptRow : null;
+    const shown = [];
+    for (const [fileName, row] of rowsByFileName) {
+      const box = row.getBoundingClientRect();
+      if (box.bottom > viewport.top && box.top < viewport.bottom) {
+        const offset = intended?.fileName === fileName ? intended.offset : box.top - viewport.top;
+        shown.push({ fileName, offset });
+      }
+    }
+    return shown;
+  }
+
+  // Scrolls the redrawn list so the topmost of `shown` still listed sits
+  // where it was, whatever was added or removed above it.
+  function keepRowsInView(shown) {
+    const kept = shown.find(({ fileName }) => rowsByFileName.has(fileName));
+    if (kept === undefined) return;
+    const viewportTop = objectList.getBoundingClientRect().top;
+    const offset = rowsByFileName.get(kept.fileName).getBoundingClientRect().top - viewportTop;
+    objectList.scrollTop += offset - kept.offset;
+    keptRow = { ...kept, scrollTop: objectList.scrollTop };
   }
 
   // The object's Total Bit Value, for its row's tooltip. Empty for a row
@@ -4730,6 +4985,8 @@
     loadReferenceWindow();
   } else if (isSummaryWindow) {
     loadSummaryWindow();
+  } else if (isLeaderboardWindow) {
+    loadLeaderboardWindow();
   } else if (isSettingsWindow) {
     loadSettingsWindow();
   } else if (isRawWindow) {
@@ -4759,10 +5016,12 @@
       () => openPageWindow(RECIPEBOOK_PAGE, REFERENCE_WINDOW_NAME, REFERENCE_WINDOW_FEATURES));
     document.getElementById("summary-button").addEventListener("click",
       () => openPageWindow(SUMMARY_PAGE, SUMMARY_WINDOW_NAME, SUMMARY_WINDOW_FEATURES));
+    document.getElementById("leaderboard-button").addEventListener("click",
+      () => openPageWindow(LEADERBOARD_PAGE, LEADERBOARD_WINDOW_NAME, LEADERBOARD_WINDOW_FEATURES));
     document.getElementById("inventory-value").addEventListener("click",
       () => openPageWindow(SUMMARY_PAGE, SUMMARY_WINDOW_NAME, SUMMARY_WINDOW_FEATURES));
     document.getElementById("settings-button").addEventListener("click",
-      () => openPageWindow(SETTINGS_PAGE, SETTINGS_WINDOW_NAME, "popup,width=480,height=354"));
+      () => openPageWindow(SETTINGS_PAGE, SETTINGS_WINDOW_NAME, "popup,width=480,height=422"));
     document.getElementById("bitcraft-version").textContent = BITCRAFT_VERSION;
     refreshServiceStatus();
     setInterval(refreshServiceStatus, SERVICE_STATUS_INTERVAL_MS);

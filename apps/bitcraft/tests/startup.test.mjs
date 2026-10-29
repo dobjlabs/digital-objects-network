@@ -8,6 +8,7 @@ import { JSDOM, VirtualConsole } from "jsdom";
 const presentationScript = await readFile(new URL("../ui/presentation.js", import.meta.url), "utf8");
 const html = (await readFile(new URL("../ui/index.html", import.meta.url), "utf8"))
   .replace('<script src="presentation.js"></script>', () => `<script>${presentationScript}</script>`);
+const leaderboardUrl = html.match(/const LEADERBOARD_URL = "([^"]+)";/)[1];
 const inventoryValues = JSON.parse(await readFile(new URL("../ui/inventory-values.json", import.meta.url), "utf8"));
 const qname = (name, pluginName = "bitcraft") => ({ pluginName, name });
 const recipe = (name = "CraftPocketknife") => ({
@@ -29,7 +30,7 @@ async function page(context, options = {}) {
   const backend = {
     objects: [], transactions: [], proofJobs: new Map(), submissions: [], actions: [recipe()], states: new Map(), posts: [], discards: [], imports: [], importFileNames: [],
     inventoryError: false, listError: false, runError: false, postError: false, syncError: false,
-    inventoryReads: 0, runReads: 0, runGate: null, ...options,
+    inventoryReads: 0, runReads: 0, leaderboardReads: 0, runGate: null, ...options,
   };
   const timers = new Map();
   const holds = new Map();
@@ -86,6 +87,12 @@ async function page(context, options = {}) {
       window.fetch = async (url, init = {}) => {
         const respond = (value, status = 200) => ({ ok: status < 400, status, json: async () => copy(value) });
         if (url === "BITCRAFT_WELCOME.md") return { ok: true, text: async () => "# Welcome" };
+        if (url === leaderboardUrl) {
+          backend.leaderboardReads++;
+          if (backend.leaderboardDown) throw new TypeError("Failed to fetch");
+          if (backend.leaderboardStatus) return respond({}, backend.leaderboardStatus);
+          return backend.leaderboard ? respond(backend.leaderboard) : respond({}, 404);
+        }
         const parsed = new URL(url);
         assert.equal(parsed.origin, "http://127.0.0.1:7727");
         // Presentation packs are files served beside the page; by default
@@ -1154,9 +1161,9 @@ test("desktop values inventory locally and takes only the rate from the host", a
 test("browser and secondary pages do not request native metrics", async (context) => {
   const browser = await page(context, { objects: [knife()], invoke: () => {} });
   assert.deepEqual(browser.desktopCalls, []);
-  for (const mode of ["summary", "settings", "recipebook", "raw&file=pocketknife.dobj"]) {
+  for (const mode of ["summary", "leaderboard", "settings", "recipebook", "raw&file=pocketknife.dobj"]) {
     const secondary = await page(context, { desktop: true, objects: [knife()], url: `http://127.0.0.1:7727/bitcraft/?page=${mode}` });
-    assert.deepEqual(secondary.desktopCalls, [], mode);
+    assert.ok(!secondary.desktopCalls.includes("inventory_metrics"), mode);
   }
 });
 
@@ -1190,6 +1197,116 @@ test("the summary icon opens the Inventory Summary in one window", async (contex
   assert.deepEqual(opened, [
     { url: "http://127.0.0.1:7727/bitcraft/?page=summary", name: "bitcraft-inventory-summary" },
   ]);
+});
+
+test("in the desktop app a window already open is raised through the host", async (context) => {
+  const raised = [];
+  const ui = await page(context, {
+    desktop: true, objects: [knife()],
+    invoke: (command, args) => { if (command === "raise_window") raised.push(args.page); },
+  });
+  const opened = [];
+  ui.dom.window.open = (url) => {
+    opened.push(String(url));
+    return { closed: false, focus() {}, showReferenceEntry: () => true, location: {} };
+  };
+  for (const [button, page] of [
+    ["summary", "summary"], ["reference", "recipebook"], ["leaderboard", "leaderboard"], ["settings", "settings"],
+  ]) {
+    const control = ui.document.querySelector(`#${button}-button`);
+    control.click();
+    control.click();
+    assert.deepEqual(opened.splice(0), [`http://127.0.0.1:7727/bitcraft/?page=${page}`], button);
+    assert.deepEqual(raised.splice(0), [page], button);
+  }
+  ui.document.querySelector('.object-row[data-file-name="pocketknife.dobj"]')
+    .dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  ui.document.querySelector("#details-body .class-link").click();
+  assert.deepEqual(opened, []);
+  assert.deepEqual(raised, ["recipebook"], "a Recipe Info link raises the open window");
+});
+
+test("the trophy opens the Leaderboard in one window", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  const opened = [];
+  ui.dom.window.open = (url, name) => {
+    opened.push({ url: String(url), name });
+    return { closed: false, focus() {} };
+  };
+  const button = ui.document.querySelector("#leaderboard-button");
+  assert.equal(button.dataset.tooltip, "Leaderboard");
+  button.click();
+  button.click();
+  assert.deepEqual(opened, [
+    { url: "http://127.0.0.1:7727/bitcraft/?page=leaderboard", name: "bitcraft-leaderboard" },
+  ]);
+  assert.equal(ui.backend.leaderboardReads, 0, "the main window does not read the leaderboard");
+});
+
+const player = (name, bits) => ({ userId: "1400000000000000123", name, bits, achievedAt: "2026-10-29T10:00:00Z" });
+
+test("the Leaderboard lists players by score with their names as text, and runs no startup", async (context) => {
+  const ui = await page(context, {
+    url: "http://127.0.0.1:7727/bitcraft/?page=leaderboard",
+    leaderboard: {
+      updatedAt: "2026-10-29T10:48:00Z",
+      entries: [
+        player("Ada", 31.12), player("<b>Bo</b>", 5), player("Cy", 1.5), player("Dee", 0.25),
+        { name: 7, bits: 1 }, { name: "No score" },
+      ],
+    },
+  });
+  const { document } = ui;
+  const rows = () => [...document.querySelectorAll(".leaderboard-list li")]
+    .map((row) => [...row.children].map((cell) => cell.textContent));
+  assert.equal(document.title, "Bitcraft Leaderboard");
+  assert.equal(document.body.classList.contains("secondary-window"), true);
+  assert.equal(document.querySelector("#leaderboard-view").hidden, false);
+  assert.equal(ui.backend.inventoryReads, 0);
+  assert.deepEqual(ui.backend.posts, []);
+  assert.equal(document.querySelector(".summary-title").textContent, "Leaderboard");
+  assert.match(document.querySelector(".summary-subtitle").textContent, /^Updated \S/);
+  assert.deepEqual(rows(), [
+    ["1", "Ada", "31.12 BIT"],
+    ["2", "<b>Bo</b>", "5.00 BIT"],
+    ["3", "Cy", "1.50 BIT"],
+    ["4", "Dee", "0.25 BIT"],
+  ]);
+  assert.equal(document.querySelector(".leaderboard-list b"), null, "names are not markup");
+  assert.deepEqual([...document.querySelectorAll(".leaderboard-list li")].map((row) => row.classList.contains("podium")),
+    [true, true, true, false]);
+  assert.match(document.querySelector(".leaderboard-note").textContent, /Share my Bitcraft scores on Discord/);
+
+  ui.backend.leaderboard = { updatedAt: "2026-10-29T10:49:00Z", entries: [player("Cy", 40), player("Ada", 31.12)] };
+  ui.dom.window.dispatchEvent(new ui.dom.window.Event("focus"));
+  await flush();
+  assert.deepEqual(rows(), [["1", "Cy", "40.00 BIT"], ["2", "Ada", "31.12 BIT"]]);
+  const refresh = [...ui.timers.values()].find((timer) => timer.delay === 60000);
+  ui.backend.leaderboard = { entries: [player("Dee", 50)] };
+  refresh.callback();
+  await flush();
+  assert.deepEqual(rows(), [["1", "Dee", "50.00 BIT"]]);
+  assert.equal(document.querySelector(".summary-subtitle"), null, "no update time when none is published");
+});
+
+test("the Leaderboard says when there are no scores and keeps the last one through failed reads", async (context) => {
+  const empty = await page(context, { url: "http://127.0.0.1:7727/bitcraft/?page=leaderboard" });
+  assert.equal(empty.document.querySelector(".leaderboard-empty").textContent, "No scores yet.");
+  assert.equal(empty.document.querySelector(".leaderboard-list"), null);
+
+  const down = await page(context, { url: "http://127.0.0.1:7727/bitcraft/?page=leaderboard", leaderboardStatus: 503 });
+  assert.equal(down.document.querySelector("#leaderboard-view .message.error").textContent,
+    "Could not read the leaderboard: HTTP 503");
+  down.backend.leaderboardStatus = 0;
+  down.backend.leaderboard = { entries: [player("Ada", 2)] };
+  down.dom.window.dispatchEvent(new down.dom.window.Event("focus"));
+  await flush();
+  assert.equal(down.document.querySelector("#leaderboard-view .message"), null);
+  down.backend.leaderboardDown = true;
+  down.dom.window.dispatchEvent(new down.dom.window.Event("focus"));
+  await flush();
+  assert.equal(down.document.querySelector(".leaderboard-name").textContent, "Ada");
+  assert.equal(down.document.querySelector("#leaderboard-view .message"), null);
 });
 
 test("the Inventory Summary applies object events and reconciles untracked outputs", async (context) => {
@@ -1352,6 +1469,49 @@ test("the desktop app's theme stands in until the page has its own, and follows 
   assert.deepEqual(sent, ["light"]);
 });
 
+test("desktop Settings reads and changes the Discord sharing preference through the host", async (context) => {
+  let sharing = false;
+  const requests = [];
+  const ui = await page(context, {
+    desktop: true, url: "http://127.0.0.1:7727/bitcraft/?page=settings",
+    invoke: (command, args) => {
+      requests.push([command, args && { ...args }]);
+      if (command === "set_discord_sharing") sharing = args.enabled;
+      return sharing;
+    },
+  });
+  await flush();
+  const section = ui.document.querySelector("#settings-sharing");
+  const checkbox = ui.document.querySelector("#settings-discord-sharing");
+  assert.equal(section.hidden, false);
+  assert.equal(checkbox.checked, false);
+  checkbox.click();
+  await flush();
+  assert.equal(sharing, true);
+  assert.equal(checkbox.checked, true);
+  assert.equal(checkbox.disabled, false);
+  checkbox.click();
+  await flush();
+  assert.equal(sharing, false);
+  assert.deepEqual(requests, [
+    ["discord_sharing", undefined],
+    ["set_discord_sharing", { enabled: true }],
+    ["set_discord_sharing", { enabled: false }],
+  ]);
+});
+
+test("Settings hides Discord sharing without a host, and when the host cannot be reached", async (context) => {
+  const browser = await page(context, { url: "http://127.0.0.1:7727/bitcraft/?page=settings" });
+  await flush();
+  assert.equal(browser.document.querySelector("#settings-sharing").hidden, true);
+  const failing = await page(context, {
+    desktop: true, url: "http://127.0.0.1:7727/bitcraft/?page=settings",
+    invoke: () => { throw new Error("Not allowed"); },
+  });
+  await flush();
+  assert.equal(failing.document.querySelector("#settings-sharing").hidden, true);
+});
+
 test("the top bar and the window title show the Inventory Value of live objects", async (context) => {
   const wood = (fileName, status = "live") => ({ fileName, class: qname("Wood"), status, fields: { kvs: [] } });
   const ui = await page(context, { objects: [knife(), wood("wood-1.dobj"), wood("wood-2.dobj"), wood("wood-3.dobj", "pending")] });
@@ -1391,7 +1551,7 @@ test("a worn tool is worth the fraction of its durability it has left", async (c
 test("the top bar's icons have tooltips", async (context) => {
   const ui = await page(context, { objects: [knife()] });
   assert.deepEqual([...ui.document.querySelectorAll("#top-bar .toolbar-button:not([hidden])")].map((button) => button.dataset.tooltip),
-    ["Objects", "Stats", "Reference", "Settings"]);
+    ["Objects", "Stats", "Reference", "Leaderboard", "Settings"]);
 });
 
 const dobjContents = (name, contentHash, pluginName = "bitcraft") => JSON.stringify({
@@ -2142,4 +2302,50 @@ test("pruning a completed transaction preserves its successful job", async (cont
   assert.equal(ui.backend.transactions.length, 0);
   assert.match(ui.jobs()[0].textContent, /succeeded/);
   assert.equal(ui.jobs()[0].classList.contains("failed"), false);
+});
+
+test("redraws keep the rows in view where they were", async (context) => {
+  const woods = Array.from({ length: 30 }, (_, index) =>
+    knife("live", { fileName: `wood-${String(index).padStart(2, "0")}.dobj`, class: qname("Wood") }));
+  const ui = await page(context, { objects: [knife(), ...woods] });
+  const list = ui.document.querySelector("#object-list");
+  // jsdom lays nothing out: rows are stacked 24px apart in a 240px viewport.
+  const rowHeight = 24;
+  const viewportTop = 100;
+  let scrollTop = 0;
+  Object.defineProperty(list, "scrollTop", {
+    configurable: true,
+    get: () => scrollTop,
+    set: (value) => { scrollTop = Math.max(0, value); },
+  });
+  ui.dom.window.HTMLElement.prototype.getBoundingClientRect = function () {
+    if (this === list) return { top: viewportTop, bottom: viewportTop + 240 };
+    const top = viewportTop + [...list.children].indexOf(this) * rowHeight - scrollTop;
+    return { top, bottom: top + rowHeight };
+  };
+  const topRow = () => [...list.children]
+    .find((row) => row.getBoundingClientRect().bottom > viewportTop).dataset.fileName;
+
+  scrollTop = 10 * rowHeight + 5;
+  const shown = topRow();
+  await ui.event({ type: "object", ...woods[12] });
+  assert.equal(scrollTop, 10 * rowHeight + 5, "a redraw with nothing new leaves the view alone");
+
+  await ui.event({ type: "object", ...knife("live", { fileName: "aaa.dobj", class: qname("Wood") }) });
+  assert.equal(topRow(), shown, "an object listed above the view does not push it down");
+  assert.equal(scrollTop, 11 * rowHeight + 5);
+
+  await ui.event({ type: "object-removed", fileName: "wood-00.dobj" });
+  assert.equal(topRow(), shown, "nor does one removed above it");
+  assert.equal(scrollTop, 10 * rowHeight + 5);
+
+  const next = [...list.children][[...list.children].findIndex((row) => row.dataset.fileName === shown) + 1];
+  const nextTop = next.getBoundingClientRect().top;
+  await ui.event({ type: "object-removed", fileName: shown });
+  assert.equal(list.querySelector(`[data-file-name="${next.dataset.fileName}"]`).getBoundingClientRect().top, nextTop,
+    "when the top row goes, the next one stays where it was");
+
+  scrollTop = 0;
+  await ui.event({ type: "object", ...knife("live", { fileName: "aab.dobj", class: qname("Wood") }) });
+  assert.equal(scrollTop, 0, "a list scrolled to the top stays there");
 });
