@@ -711,9 +711,13 @@
     height: 18px;
     border-radius: 4px;
   }
+  /* Every redraw replaces the rows, which leaves the browser's scroll
+     anchoring nothing to hold on to; the script keeps the view in place
+     instead. */
   #object-list {
     flex: 1;
     overflow-y: auto;
+    overflow-anchor: none;
     margin: 0;
     padding: 0 0 var(--list-trailing-space);
     list-style: none;
@@ -3734,6 +3738,7 @@
   const nameMeasureContext = document.createElement("canvas").getContext("2d");
 
   function renderObjects(objects) {
+    const shownRows = rowsInView();
     objectList.replaceChildren();
     rowsByFileName.clear();
     if (welcomeText !== null) {
@@ -3754,6 +3759,43 @@
       }
     }
     fitObjectNames();
+    keepRowsInView(shownRows);
+  }
+
+  // The row the last redraw kept in view, the distance from the top of the
+  // viewport it was meant to have, and the scroll position that left it at.
+  let keptRow = null;
+
+  // The rows in view, top first, each with its distance from the top of the
+  // list's viewport. Empty when the list is scrolled to the top, which a
+  // redraw keeps.
+  function rowsInView() {
+    if (objectList.scrollTop <= 0) return [];
+    const viewport = objectList.getBoundingClientRect();
+    // Scroll positions snap to device pixels, so a kept row lands a fraction
+    // away from where it was meant to be; measuring from there each time
+    // would let the error add up.
+    const intended = keptRow?.scrollTop === objectList.scrollTop ? keptRow : null;
+    const shown = [];
+    for (const [fileName, row] of rowsByFileName) {
+      const box = row.getBoundingClientRect();
+      if (box.bottom > viewport.top && box.top < viewport.bottom) {
+        const offset = intended?.fileName === fileName ? intended.offset : box.top - viewport.top;
+        shown.push({ fileName, offset });
+      }
+    }
+    return shown;
+  }
+
+  // Scrolls the redrawn list so the topmost of `shown` still listed sits
+  // where it was, whatever was added or removed above it.
+  function keepRowsInView(shown) {
+    const kept = shown.find(({ fileName }) => rowsByFileName.has(fileName));
+    if (kept === undefined) return;
+    const viewportTop = objectList.getBoundingClientRect().top;
+    const offset = rowsByFileName.get(kept.fileName).getBoundingClientRect().top - viewportTop;
+    objectList.scrollTop += offset - kept.offset;
+    keptRow = { ...kept, scrollTop: objectList.scrollTop };
   }
 
   // The object's Total Bit Value, for its row's tooltip. Empty for a row
