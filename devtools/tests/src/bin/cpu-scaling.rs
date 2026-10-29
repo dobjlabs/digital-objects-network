@@ -24,7 +24,8 @@ use std::{
 };
 
 use driver::build_proving_pool;
-use pod2::middleware::EMPTY_HASH;
+use payload::shrink::ShrunkMainPodSetup;
+use pod2::middleware::{EMPTY_HASH, Params};
 use tests::{Prover, find_log_action};
 use txlib::{GroundingWitness, StateHeader};
 use wire_types::CpuUsage;
@@ -314,6 +315,8 @@ fn prove_find_log(prover: &Prover) {
         HashMap::new(),
     );
     prover.prove(&find_log_action(), witness, Vec::new());
+    // dobjd builds the shrink circuit afresh for every proof; so does a sample.
+    ShrunkMainPodSetup::new(&Params::default()).build().unwrap();
 }
 
 fn median(mut values: Vec<f64>) -> f64 {
