@@ -131,6 +131,15 @@
     gap: 8px 10px;
   }
   .settings-fields label { color: var(--muted); }
+  .settings-fields[hidden] { display: none; }
+  .settings-fields + .settings-fields { margin-top: 18px; }
+  .settings-fields label.settings-checkbox {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: inherit;
+  }
   /* The game's identity and links, set apart from the settings above like
      a Mac About window. */
   .settings-about {
@@ -1208,6 +1217,10 @@
       <input id="settings-synchronizer" type="text" readonly spellcheck="false">
       <label for="settings-relayer">Relayer address</label>
       <input id="settings-relayer" type="text" readonly spellcheck="false">
+    </div>
+    <div id="settings-sharing" class="settings-fields" hidden>
+      <h1 class="settings-title">Sharing</h1>
+      <label class="settings-checkbox"><input id="settings-discord-sharing" type="checkbox"> Share my Bitcraft scores on Discord</label>
     </div>
     <div class="settings-about">
       <div class="settings-about-name">Bitcraft</div>
@@ -2895,6 +2908,7 @@
     website.href = BITCRAFT_SITE_URL;
     website.textContent = BITCRAFT_SITE_URL.replace(/\/$/, "");
     document.getElementById("settings-discord").href = BITCRAFT_DISCORD_URL;
+    void loadDiscordSharing();
     try {
       const settings = await fetchJson("/settings");
       document.getElementById("settings-synchronizer").value = settings.synchronizerApiUrl ?? "";
@@ -2905,6 +2919,35 @@
       message.textContent = `Could not read settings: ${error.message}`;
       view.append(message);
     }
+  }
+
+  // The desktop host keeps the Discord sharing preference. Where it cannot be
+  // read, as in a standalone browser, the section stays hidden.
+  async function loadDiscordSharing() {
+    const invoke = window.__TAURI__?.core?.invoke;
+    if (!invoke) {
+      return;
+    }
+    const checkbox = document.getElementById("settings-discord-sharing");
+    try {
+      checkbox.checked = await invoke("discord_sharing");
+    } catch (error) {
+      console.warn("Could not read the Discord sharing preference:", error);
+      return;
+    }
+    checkbox.addEventListener("change", async () => {
+      const requested = checkbox.checked;
+      checkbox.disabled = true;
+      try {
+        checkbox.checked = await invoke("set_discord_sharing", { enabled: requested });
+      } catch (error) {
+        console.warn("Could not change the Discord sharing preference:", error);
+        checkbox.checked = !requested;
+      } finally {
+        checkbox.disabled = false;
+      }
+    });
+    document.getElementById("settings-sharing").hidden = false;
   }
 
   // The window is titled with the file's name, which the desktop app shows
@@ -4648,7 +4691,7 @@
     document.getElementById("inventory-value").addEventListener("click",
       () => openPageWindow(SUMMARY_PAGE, SUMMARY_WINDOW_NAME, SUMMARY_WINDOW_FEATURES));
     document.getElementById("settings-button").addEventListener("click",
-      () => openPageWindow(SETTINGS_PAGE, SETTINGS_WINDOW_NAME, "popup,width=480,height=300"));
+      () => openPageWindow(SETTINGS_PAGE, SETTINGS_WINDOW_NAME, "popup,width=480,height=370"));
     document.getElementById("bitcraft-version").textContent = BITCRAFT_VERSION;
     refreshServiceStatus();
     setInterval(refreshServiceStatus, SERVICE_STATUS_INTERVAL_MS);

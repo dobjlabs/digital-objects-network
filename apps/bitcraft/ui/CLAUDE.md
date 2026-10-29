@@ -22,6 +22,10 @@ The outer page fills the window with scrolling and overscroll disabled, includin
 
 Settings (`?page=settings`) shows the synchronizer and relayer addresses
 from dobjd's `GET /settings` in read-only fields; they cannot be edited yet.
+In the desktop app a Sharing section follows, with a "Share my Bitcraft
+scores on Discord" checkbox backed by the host's `discord_sharing` and
+`set_discord_sharing` commands (see [the desktop README](../README.md#discord-rich-presence));
+it stays hidden in a standalone browser.
 Below them, set apart like a Mac About window, it shows the Bitcraft name
 and version, the website's address as a link, and a Discord button; both
 open in the player's browser. The window's opening height counts the title

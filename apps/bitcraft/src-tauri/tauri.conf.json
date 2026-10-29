@@ -20,6 +20,13 @@
         "local": false,
         "remote": { "urls": ["http://127.0.0.1:7727/*"] },
         "permissions": ["allow-inventory-metrics"]
+      }, {
+        "identifier": "discord-sharing",
+        "description": "Read and change the Discord sharing preference from Settings",
+        "windows": ["main", "page-*"],
+        "local": false,
+        "remote": { "urls": ["http://127.0.0.1:7727/*"] },
+        "permissions": ["allow-discord-sharing"]
       }],
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; frame-src 'none'"
     }

@@ -139,7 +139,7 @@ MCP clients can launch the proxy with no port arguments once MCP is enabled in t
 
 ## Discord Rich Presence
 
-The native host can share Bitcraft activity with the Discord desktop client over local IPC. Sharing is off by default. Turn it on with **Share activity on Discord** in the Bitcraft app menu or tray menu. The preference is stored in `<home>/desktop.json`, separate from daemon settings, and follows `--home` and `BITCRAFT_HOME`. Turning it off clears presence immediately; quitting clears presence before stopping the daemon. Closing to the tray keeps presence active. Shell-only launches never connect to Discord.
+The native host can share Bitcraft activity with the Discord desktop client over local IPC. Sharing is off by default. Turn it on with **Share my Bitcraft scores on Discord** in the Settings window (the gear in the game's top bar). The preference is stored in `<home>/desktop.json`, separate from daemon settings, and follows `--home` and `BITCRAFT_HOME`. Turning it off clears presence immediately; quitting clears presence before stopping the daemon. Closing to the tray keeps presence active. Shell-only launches never connect to Discord.
 
 Presence shows the current Bitcraft action (or a summary for concurrent jobs), Total Inventory Value in BIT, the five-minute production rate in BIT/sec, active job count, and elapsed session time, with links to the website and community Discord. The total includes the value of resources and tools, rather than just counting Bit objects. Both numeric values use the same calculation as the main window's toolbar, and appear once the native host has loaded its inventory. Presence includes zero and negative production rates. Individual objects, file paths, and errors are not published. Discord's own activity-sharing settings control who can see it.
 
@@ -158,7 +158,7 @@ To activate this integration for development or a release:
 
    The ID is public and is embedded at compile time. The same environment variable can override it at runtime. Blank runtime values fall back to the compiled ID; blank compiled values leave the integration unconfigured. The sharing preference can always be changed. Without a valid ID, no Discord connection is attempted; the saved preference takes effect when an ID is configured.
 
-5. Run the Discord desktop app and enable sharing in Bitcraft's menu. Check the activity card on your Discord profile and verify disabling sharing removes it. A browser-only Discord session cannot receive local IPC.
+5. Run the Discord desktop app and enable sharing in Bitcraft's Settings. Check the activity card on your Discord profile and verify disabling sharing removes it. A browser-only Discord session cannot receive local IPC.
 
 The native host keeps inventory metrics whether or not a window is open or sharing is on. It follows the daemon's inventory, values it with `ui/inventory-values.json` (the table the game pages use), and keeps five minutes of history, so BIT/sec stays current while the window is hidden. The main game window takes BIT/sec from the host through the `inventory_metrics` command and computes everything else itself. When the host loses track of the inventory, it starts a fresh rate history rather than counting changes it did not observe as production.
 
