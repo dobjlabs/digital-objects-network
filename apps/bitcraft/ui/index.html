@@ -38,6 +38,7 @@
     --progress-fill: #0a64d8;
     --button-border: #c4c4c4;
     --faint-text: #a0a0a0;
+    --icon-badge: #0a84ff;
     /* Blank strip kept below the last row of a full list, so a click on
        empty space to clear the selection always has a target. */
     --list-trailing-space: 48px;
@@ -657,12 +658,45 @@
     height: 16px;
     image-rendering: pixelated;
   }
+  .icon-badged {
+    position: relative;
+    display: flex;
+    flex: none;
+  }
+  .icon-badge {
+    position: absolute;
+    right: -3px;
+    bottom: -3px;
+    min-width: 10px;
+    padding: 0 2px;
+    border-radius: 5px;
+    background: var(--icon-badge);
+    box-shadow: 0 0 0 1px var(--bg);
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 10px;
+    text-align: center;
+  }
+  /* Over the bottom right corner of the 96px art, which ends 16px from the
+     page's right edge and 24px from its bottom. */
+  .large-page-icon > .icon-badge {
+    right: 8px;
+    bottom: 16px;
+    min-width: 30px;
+    padding: 0 7px;
+    border-radius: 15px;
+    box-shadow: 0 0 0 2px var(--bg);
+    font-size: 22px;
+    line-height: 30px;
+  }
   .object-name {
     flex: 1;
     min-width: 0;
     overflow: hidden;
   }
   .object-row.welcome .object-name { font-weight: 600; }
+  .object-row.capital-good .object-name { font-weight: 700; }
   .message {
     padding: 8px 10px;
     color: var(--muted);
@@ -1306,6 +1340,20 @@
     "BucketOfWood", "BucketOfStone", "BucketOfIron",
   ];
 
+  // Capital goods, the classes a level-up upgrades. The object list shows
+  // them first, in bold.
+  const CAPITAL_GOOD_CLASSES = ["Quarry", "MiningDrill"];
+
+  function isCapitalGood(className) {
+    return className.pluginName === PLUGIN_NAME && CAPITAL_GOOD_CLASSES.includes(className.name);
+  }
+
+  // The text over the bottom right corner of an object's icon: a capital
+  // good's level. Null for any other object.
+  function iconBadgeText(object) {
+    return isCapitalGood(object.class) ? fieldValue(object, "level") : null;
+  }
+
   // The game's website and Discord server, linked from the Settings window
   // and opened in the player's browser.
   const BITCRAFT_SITE_URL = "https://bitcraft.sh/";
@@ -1495,6 +1543,27 @@
     classIcon.alt = "";
     tile.append(classIcon);
     return tile;
+  }
+
+  function iconBadge(badgeText) {
+    const badge = document.createElement("span");
+    badge.className = "icon-badge";
+    badge.textContent = badgeText;
+    return badge;
+  }
+
+  // An object list row's icon: its class's, with the object's badge text,
+  // if it has any, over the icon's bottom right corner.
+  function smallObjectIcon(object) {
+    const icon = smallClassIcon(object.class);
+    const badgeText = iconBadgeText(object);
+    if (badgeText === null) {
+      return icon;
+    }
+    const badged = document.createElement("span");
+    badged.className = "icon-badged";
+    badged.append(icon, iconBadge(badgeText));
+    return badged;
   }
 
   // The action's icon from its presentation pack, a finished image drawn
@@ -2512,8 +2581,9 @@
   }
 
   // The Details pane's icon for a class: the blank page with the class's art
-  // on it, or the blank page alone when it has none.
-  function largeClassIcon(qualifiedName) {
+  // on it, or the blank page alone when it has none, and `badgeText`, when
+  // given, over the art's bottom right corner.
+  function largeClassIcon(qualifiedName, badgeText = null) {
     const icon = document.createElement("div");
     icon.className = "details-icon";
     const page = document.createElement("div");
@@ -2526,6 +2596,9 @@
       classIcon.src = classIconPath;
       classIcon.alt = "";
       page.append(classIcon);
+    }
+    if (badgeText !== null) {
+      page.append(iconBadge(badgeText));
     }
     icon.append(page);
     return icon;
@@ -3275,7 +3348,7 @@
     const [fileName] = selectedFileNames;
     const object = objectsByFileName.get(fileName);
 
-    const icon = largeClassIcon(object.class);
+    const icon = largeClassIcon(object.class, iconBadgeText(object));
 
     const title = document.createElement("div");
     title.className = "details-title";
@@ -3375,11 +3448,12 @@
       appendFileRow(WELCOME_FILE, docIconTemplate.content.cloneNode(true)).classList.add("welcome");
     }
     for (const object of objects) {
-      const row = appendFileRow(object.fileName, smallClassIcon(object.class));
+      const row = appendFileRow(object.fileName, smallObjectIcon(object));
       const state = shownState(object);
       row.classList.toggle("unknown", state === "unknown");
       row.classList.toggle("pending", state === "pending");
       row.classList.toggle("held", state === "held");
+      row.classList.toggle("capital-good", isCapitalGood(object.class));
       const flashElapsed = Date.now() - (flashStartedAt.get(object.fileName) ?? -Infinity);
       if (flashElapsed < ROW_FLASH_MS) {
         // A redraw mid-flash resumes the animation rather than restarting it.
@@ -4035,7 +4109,8 @@
     }
     const heldObjects = objects
       .filter((object) => object.class.pluginName === PLUGIN_NAME)
-      .sort((left, right) => left.fileName.localeCompare(right.fileName));
+      .sort((left, right) => Number(isCapitalGood(right.class)) - Number(isCapitalGood(left.class))
+        || left.fileName.localeCompare(right.fileName));
     const now = Date.now();
     const listVisible = document.getElementById("startup-screen").hidden;
     for (const object of heldObjects) {
