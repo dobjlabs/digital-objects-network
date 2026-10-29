@@ -14,6 +14,7 @@ use crate::catalog::{ActionCatalog, CatalogClass};
 use crate::clients::{
     HttpRelayerClient, HttpSynchronizerClient, RelayerClient, SynchronizerClient,
 };
+use crate::cpu_usage::ProvingPool;
 use crate::error::DriverError;
 use crate::execute::{build_relayer_payload, obj_type_hash};
 use crate::holds::HoldTable;
@@ -96,6 +97,7 @@ pub struct Driver {
     pub(crate) holds: HoldTable,
     pub(crate) reconciled_transactions: Arc<Mutex<HashMap<String, TransactionRecord>>>,
     pub(crate) submission_locks: Arc<Mutex<HashMap<Hash, Weak<Mutex<()>>>>>,
+    pub(crate) proving_pool: Arc<ProvingPool>,
 }
 
 impl Driver {
@@ -114,6 +116,7 @@ impl Driver {
             holds: HoldTable::default(),
             reconciled_transactions: Arc::default(),
             submission_locks: Arc::default(),
+            proving_pool: Arc::default(),
         })
     }
 

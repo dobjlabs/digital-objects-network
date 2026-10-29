@@ -27,7 +27,7 @@ const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(setImm
 
 async function page(context, options = {}) {
   const backend = {
-    objects: [], transactions: [], proofJobs: new Map(), submissions: [], actions: [recipe()], states: new Map(), posts: [], discards: [], imports: [], importFileNames: [],
+    objects: [], transactions: [], proofJobs: new Map(), submissions: [], actions: [recipe()], states: new Map(), posts: [], discards: [], imports: [], importFileNames: [], settingsWrites: [],
     inventoryError: false, listError: false, runError: false, postError: false, syncError: false,
     inventoryReads: 0, runReads: 0, runGate: null, ...options,
   };
@@ -163,7 +163,15 @@ async function page(context, options = {}) {
           backend.objects.push(copy(summary));
           return respond(summary);
         }
-        if (parsed.pathname === "/settings") return respond(backend.settings ?? {});
+        if (parsed.pathname === "/settings") {
+          if (init.method === "PUT") {
+            const patch = JSON.parse(init.body);
+            backend.settingsWrites.push(patch);
+            if (backend.settingsWriteError) return respond({}, 503);
+            backend.settings = { ...backend.settings, ...patch };
+          }
+          return respond(backend.settings ?? {});
+        }
         const raw = parsed.pathname.match(/^\/objects\/([^/]+)\/raw$/);
         if (raw) {
           const object = backend.objects.find((candidate) => candidate.fileName === decodeURIComponent(raw[1]));
@@ -1334,6 +1342,48 @@ test("Settings hides Discord sharing without a host, and when the host cannot be
   });
   await flush();
   assert.equal(failing.document.querySelector("#settings-sharing").hidden, true);
+});
+
+test("the Settings window saves a CPU usage change and describes the chosen level", async (context) => {
+  const ui = await page(context, {
+    url: "http://127.0.0.1:7727/bitcraft/?page=settings",
+    settings: { synchronizerApiUrl: "http://127.0.0.1:3000", relayerApiUrl: "http://127.0.0.1:3200", mcpEnabled: false, cpuUsage: "light" },
+  });
+  const select = ui.document.querySelector("#settings-cpu-usage");
+  const hint = () => ui.document.querySelector("#settings-cpu-usage-hint").textContent;
+  const choose = async (level) => {
+    select.value = level;
+    select.dispatchEvent(new ui.dom.window.Event("change"));
+    await flush();
+  };
+  assert.equal(select.value, "light");
+  assert.equal(select.disabled, false);
+  assert.match(hint(), /spare capacity/);
+
+  await choose("full");
+  assert.deepEqual(ui.backend.settingsWrites, [{ cpuUsage: "full" }]);
+  assert.equal(select.value, "full");
+  assert.match(hint(), /as fast as possible/);
+  assert.equal(ui.document.querySelector("#settings-error"), null);
+
+  ui.backend.settingsWriteError = true;
+  await choose("medium");
+  assert.equal(select.value, "full", "a failed save shows the saved level again");
+  assert.match(hint(), /as fast as possible/);
+  assert.match(ui.document.querySelector("#settings-error").textContent, /Could not save CPU usage/);
+
+  ui.backend.settingsWriteError = false;
+  await choose("medium");
+  assert.equal(select.value, "medium");
+  assert.equal(ui.document.querySelector("#settings-error"), null);
+});
+
+test("the Settings window shows medium when dobjd reports no CPU usage", async (context) => {
+  const ui = await page(context, {
+    url: "http://127.0.0.1:7727/bitcraft/?page=settings",
+    settings: { synchronizerApiUrl: "http://127.0.0.1:3000", relayerApiUrl: "http://127.0.0.1:3200", mcpEnabled: false },
+  });
+  assert.equal(ui.document.querySelector("#settings-cpu-usage").value, "medium");
 });
 
 test("the top bar and the window title show the Inventory Value of live objects", async (context) => {

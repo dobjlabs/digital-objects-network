@@ -184,34 +184,38 @@ impl Driver {
                 },
             );
         });
-        let spendable_outputs = catalog.execute_action_with_progress(
-            input.action.clone(),
-            grounding_witness,
-            execution_inputs,
-            &args,
-            progress,
-        )?;
-        if spendable_outputs.objs.len() != action.total_outputs.len() {
-            return Err(anyhow!(
-                "action {} output mismatch: descriptor expects {}, engine returned {}",
-                action.action,
-                action.total_outputs.len(),
-                spendable_outputs.objs.len()
-            ));
-        }
-        reporter.on_done(ExecutionPhase::GenerateProof);
+        let proving_pool = self.proving_pool.get(settings.cpu_usage);
+        let (spendable_outputs, payload_bytes) = proving_pool.install(|| {
+            let spendable_outputs = catalog.execute_action_with_progress(
+                input.action.clone(),
+                grounding_witness,
+                execution_inputs,
+                &args,
+                progress,
+            )?;
+            if spendable_outputs.objs.len() != action.total_outputs.len() {
+                return Err(anyhow!(
+                    "action {} output mismatch: descriptor expects {}, engine returned {}",
+                    action.action,
+                    action.total_outputs.len(),
+                    spendable_outputs.objs.len()
+                ));
+            }
+            reporter.on_done(ExecutionPhase::GenerateProof);
 
-        let shrink_ctx = ExecutionStepContext {
-            stage: Some(ExecutionStage::Shrinking),
-            old_root: Some(grounding_root),
-            output_files: Vec::new(),
-            output_status: None,
-        };
-        reporter.on_step(ExecutionPhase::Commit, "Shrinking proof", &shrink_ctx);
-        let payload_bytes = self
-            .deps
-            .payload_builder
-            .build_payload(&grounding_root, &spendable_outputs)?;
+            let shrink_ctx = ExecutionStepContext {
+                stage: Some(ExecutionStage::Shrinking),
+                old_root: Some(grounding_root),
+                output_files: Vec::new(),
+                output_status: None,
+            };
+            reporter.on_step(ExecutionPhase::Commit, "Shrinking proof", &shrink_ctx);
+            let payload_bytes = self
+                .deps
+                .payload_builder
+                .build_payload(&grounding_root, &spendable_outputs)?;
+            Ok((spendable_outputs, payload_bytes))
+        })?;
 
         let outputs = action
             .total_outputs
