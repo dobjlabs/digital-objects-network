@@ -7,7 +7,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use rayon::{ThreadPool, ThreadPoolBuilder};
+use rayon::{ThreadPool, ThreadPoolBuildError, ThreadPoolBuilder};
 use wire_types::CpuUsage;
 
 /// Logical CPUs per pool thread at the levels below Full.
@@ -49,22 +49,22 @@ pub(crate) struct ProvingPool {
 }
 
 impl ProvingPool {
-    pub(crate) fn get(&self, level: CpuUsage) -> Arc<ThreadPool> {
+    pub(crate) fn get(&self, level: CpuUsage) -> Result<Arc<ThreadPool>, ThreadPoolBuildError> {
         let mut current = self.current.lock().expect("proving pool lock poisoned");
         if let Some((current_level, pool)) = current.as_ref()
             && *current_level == level
         {
-            return pool.clone();
+            return Ok(pool.clone());
         }
-        let pool = Arc::new(build_proving_pool(level));
+        let pool = Arc::new(build_proving_pool(level)?);
         *current = Some((level, pool.clone()));
-        pool
+        Ok(pool)
     }
 }
 
 /// A fresh pool for `level`. Everything run inside it with `install`,
 /// including the single-threaded parts of a proof, stays within the level.
-pub fn build_proving_pool(level: CpuUsage) -> ThreadPool {
+pub fn build_proving_pool(level: CpuUsage) -> Result<ThreadPool, ThreadPoolBuildError> {
     let logical_cpus = std::thread::available_parallelism().map_or(1, |count| count.get());
     ThreadPoolBuilder::new()
         .num_threads(thread_count(level, logical_cpus))
@@ -72,7 +72,6 @@ pub fn build_proving_pool(level: CpuUsage) -> ThreadPool {
         .stack_size(STACK_SIZE)
         .start_handler(move |_| configure_current_thread(level))
         .build()
-        .expect("failed to build the proving thread pool")
 }
 
 fn thread_count(level: CpuUsage, logical_cpus: usize) -> usize {
@@ -177,11 +176,11 @@ mod tests {
     #[test]
     fn pool_is_reused_until_the_level_changes() {
         let pools = ProvingPool::default();
-        let medium = pools.get(CpuUsage::Medium);
-        assert!(Arc::ptr_eq(&medium, &pools.get(CpuUsage::Medium)));
-        let light = pools.get(CpuUsage::Light);
+        let medium = pools.get(CpuUsage::Medium).unwrap();
+        assert!(Arc::ptr_eq(&medium, &pools.get(CpuUsage::Medium).unwrap()));
+        let light = pools.get(CpuUsage::Light).unwrap();
         assert!(!Arc::ptr_eq(&medium, &light));
-        assert!(Arc::ptr_eq(&light, &pools.get(CpuUsage::Light)));
+        assert!(Arc::ptr_eq(&light, &pools.get(CpuUsage::Light).unwrap()));
     }
 
     #[test]
@@ -199,8 +198,9 @@ mod tests {
     #[test]
     fn pool_threads_carry_the_level() {
         let nice = || unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
-        assert_eq!(build_proving_pool(CpuUsage::Full).install(nice), nice());
-        assert_eq!(build_proving_pool(CpuUsage::Medium).install(nice), 10);
-        assert_eq!(build_proving_pool(CpuUsage::Light).install(nice), 19);
+        let at = |level| build_proving_pool(level).unwrap().install(nice);
+        assert_eq!(at(CpuUsage::Full), nice());
+        assert_eq!(at(CpuUsage::Medium), 10);
+        assert_eq!(at(CpuUsage::Light), 19);
     }
 }

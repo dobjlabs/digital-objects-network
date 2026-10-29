@@ -206,10 +206,7 @@ notes. Write `~/.dobj/settings.json` only to point somewhere else:
 
 ### Limit how hard proving works the machine
 
-Proving defaults to `medium`, which gives way to other applications and runs
-cooler at a moderate cost in speed. `full` proves as fast as it can; `light`
-proves only on spare capacity, near silently and several times slower. The
-change applies from the next proof:
+Proving defaults to `medium`, which gives way to other applications and runs cooler at a moderate cost in speed. `full` proves as fast as it can; `light` proves only on spare capacity, near silently and several times slower. The change applies from the next proof:
 
 ```bash
 dobj settings set --cpu-usage light

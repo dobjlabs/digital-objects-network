@@ -644,7 +644,7 @@ impl std::str::FromStr for CpuUsage {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
+        match value.to_ascii_lowercase().as_str() {
             "light" => Ok(CpuUsage::Light),
             "medium" => Ok(CpuUsage::Medium),
             "full" => Ok(CpuUsage::Full),
@@ -810,6 +810,13 @@ mod tests {
             "\"live\""
         );
         assert_eq!(ObjectStatus::Pending.to_string(), "pending");
+    }
+
+    #[test]
+    fn cpu_usage_parses_any_case() {
+        assert_eq!("LIGHT".parse::<CpuUsage>(), Ok(CpuUsage::Light));
+        assert_eq!("Full".parse::<CpuUsage>(), Ok(CpuUsage::Full));
+        assert!("fast".parse::<CpuUsage>().is_err());
     }
 
     #[test]

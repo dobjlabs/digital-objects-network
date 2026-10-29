@@ -141,7 +141,7 @@ impl PlanEntry {
 
     fn build_pool(self) -> rayon::ThreadPool {
         match self {
-            PlanEntry::Level(level) => build_proving_pool(level),
+            PlanEntry::Level(level) => build_proving_pool(level).unwrap(),
             PlanEntry::Pool { qos, threads } => rayon::ThreadPoolBuilder::new()
                 .num_threads(threads)
                 .start_handler(move |_| qos.apply_to_current_thread())
