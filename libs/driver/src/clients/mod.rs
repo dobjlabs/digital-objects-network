@@ -7,11 +7,12 @@ mod relayer_client;
 mod synchronizer_client;
 
 pub(crate) use relayer_client::{HttpRelayerClient, RelayerClient};
-pub(crate) use synchronizer_client::{
-    HttpSynchronizerClient, SynchronizerClient, SynchronizerMembership,
-};
 #[cfg(test)]
-pub(crate) use synchronizer_client::{SynchronizerHead, SynchronizerTxStatus};
+pub(crate) use synchronizer_client::SynchronizerHead;
+pub(crate) use synchronizer_client::{
+    HASH_BATCH_LIMIT, HttpSynchronizerClient, SynchronizerClient, SynchronizerMembership,
+    SynchronizerTxStatus,
+};
 
 /// Total timeout for each relayer or synchronizer request.
 const HTTP_REQUEST_TIMEOUT_SECS: u64 = 30;

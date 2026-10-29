@@ -473,7 +473,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Import an external .dobj object — one not produced by this driver — into the local object store. Pass `path`, a local filesystem path (on the machine running dobjd) to the .dobj file; dobjd reads it. If you only have the object's JSON inline, write it to a temp file first and pass that path. Validates the object's class identity and on-chain grounding, files it under a canonical name, and returns its summary (status is `live` if grounded, otherwise `unknown`). Errors if the object is already present or already spent on-chain."
+        description = "Import an external .dobj object — one not produced by this driver — into the local object store. Pass `path`, a local filesystem path (on the machine running dobjd) to the .dobj file; dobjd reads it. If you only have the object's JSON inline, write it to a temp file first and pass that path. Validates the object's class identity and on-chain grounding, files it under a canonical name, and returns its summary (always `live`). Errors if the object is already present, already spent on-chain, not reported created by the synchronizer (unless its creation proof places it in a created set), or the synchronizer cannot be reached."
     )]
     fn import_object_file(
         &self,

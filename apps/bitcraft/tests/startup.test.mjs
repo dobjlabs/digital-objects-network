@@ -154,10 +154,11 @@ async function page(context, options = {}) {
           } catch (error) {
             return respond({ error: `invalid input: could not parse .dobj contents: ${error.message}` }, 400);
           }
-          if (record.class.pluginName !== "bitcraft") {
-            return respond({ error: `unknown class: ${record.class.pluginName}::${record.class.name}` }, 404);
+          const { class: objectClass, contentHash } = record.metadata;
+          if (objectClass.pluginName !== "bitcraft") {
+            return respond({ error: `unknown class: ${objectClass.pluginName}::${objectClass.name}` }, 404);
           }
-          const generatedName = `${record.class.name.toLowerCase()}_${record.contentHash}.dobj`;
+          const generatedName = `${objectClass.name.toLowerCase()}_${contentHash}.dobj`;
           if (backend.objects.some((object) => object.fileName === generatedName)) {
             return respond({ error: `conflict: object already present: ${generatedName}` }, 409);
           }
@@ -165,7 +166,7 @@ async function page(context, options = {}) {
             ? generatedName
             : requestedName.endsWith(".dobj") ? requestedName : `${requestedName}.dobj`;
           const summary = {
-            fileName, class: record.class, status: backend.importStatus ?? "live", fields: { kvs: [] }, sharedKey: true,
+            fileName, class: objectClass, status: backend.importStatus ?? "live", fields: { kvs: [] }, sharedKey: true,
           };
           backend.objects.push(copy(summary));
           return respond(summary);
@@ -1496,7 +1497,7 @@ test("the top bar's icons have tooltips", async (context) => {
 });
 
 const dobjContents = (name, contentHash, pluginName = "bitcraft") => JSON.stringify({
-  class: qname(name, pluginName), contentHash, obj: { kind: "d--", kvs: [] }, status: "live",
+  metadata: { class: qname(name, pluginName), contentHash, status: "live" }, obj: { kind: "d--", kvs: [] },
 });
 const importResultTexts = (document) => [...document.querySelectorAll("#import-results li")]
   .map((item) => item.textContent.trim());

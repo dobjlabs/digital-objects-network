@@ -14,12 +14,13 @@ use wire_types::relayer::{JobStatus, JobStatusResponse};
 use wire_types::transactions::{TransactionRecord, TransactionState};
 use wire_types::{ExecutionPhase, ExecutionStage, ObjectSummary, QualifiedName};
 
-use crate::clients::SynchronizerMembership;
+use crate::clients::{HASH_BATCH_LIMIT, SynchronizerMembership, SynchronizerTxStatus};
+use crate::creation_proof::CreationProof;
 use crate::driver::Driver;
 use crate::error::DriverError;
 use crate::execute::{decode_action_args, resolve_inputs, validate_execute_request};
 use crate::holds::Holds;
-use crate::object_record::{FileStatus, ObjectRecord};
+use crate::object_record::{FileStatus, ObjectMetadata, ObjectRecord};
 use crate::object_store::{load_object_files, matches_query, object_file_name, write_object_file};
 use crate::transactions::{
     load_records, locked_inputs, read_record, record_tx_final, remove_transaction, write_payload,
@@ -252,11 +253,11 @@ impl Driver {
                 .into());
             }
             match entries.iter().find(|entry| &entry.file_name == input) {
-                Some(entry) if entry.record.status == FileStatus::Live => {}
+                Some(entry) if entry.record.metadata.status == FileStatus::Live => {}
                 Some(entry) => {
                     return Err(DriverError::Conflict(format!(
                         "input {input} is no longer live (status: {:?})",
-                        entry.record.status
+                        entry.record.metadata.status
                     ))
                     .into());
                 }
@@ -297,12 +298,15 @@ impl Driver {
             for (output, file_name) in proved.outputs.iter().zip(&output_files) {
                 attempted_outputs.push(file_name);
                 let output_record = ObjectRecord {
-                    content_hash: output.obj.commitment(),
-                    class: output.class.clone(),
-                    status: FileStatus::Unknown,
-                    tx_hash: None,
+                    metadata: ObjectMetadata {
+                        class: output.class.clone(),
+                        content_hash: output.obj.commitment(),
+                        status: FileStatus::Unknown,
+                        tx_final: proved.tx_final,
+                        tx_hash: None,
+                        creation_proof: None,
+                    },
                     obj: output.obj.clone(),
-                    tx_final: proved.tx_final,
                 };
                 write_object_file(&self.paths, &output_record, file_name)?;
             }
@@ -537,6 +541,12 @@ impl Driver {
                 .fetch_tx_status(&settings.synchronizer_api_url, &record_tx_final(record)?)?;
             statuses.insert(record.tx_final.clone(), status);
         }
+        let creation_proofs = self.fetch_missing_creation_proofs(
+            &settings.synchronizer_api_url,
+            &records,
+            &statuses,
+            membership.as_ref(),
+        );
 
         let _store = self.store_lock.lock().expect("store lock poisoned");
         let mut outcome = SettleOutcome::default();
@@ -631,18 +641,28 @@ impl Driver {
         for entry in entries.iter_mut() {
             let status = match &membership {
                 Some(membership) => chain_file_status(&entry.record, membership),
-                None => entry.record.status,
+                None => entry.record.metadata.status,
             };
             let tx_hash = record_index
                 .by_tx_final
-                .get(&entry.record.tx_final)
+                .get(&entry.record.metadata.tx_final)
                 .and_then(|record| record.tx_hash.clone())
-                .or_else(|| entry.record.tx_hash.clone());
-            if entry.record.status == status && entry.record.tx_hash == tx_hash {
+                .or_else(|| entry.record.metadata.tx_hash.clone());
+            let creation_proof = entry.record.metadata.creation_proof.clone().or_else(|| {
+                creation_proofs
+                    .get(&entry.record.obj.commitment())
+                    .filter(|_| status == FileStatus::Live)
+                    .cloned()
+            });
+            if entry.record.metadata.status == status
+                && entry.record.metadata.tx_hash == tx_hash
+                && entry.record.metadata.creation_proof == creation_proof
+            {
                 continue;
             }
-            entry.record.status = status;
-            entry.record.tx_hash = tx_hash;
+            entry.record.metadata.status = status;
+            entry.record.metadata.tx_hash = tx_hash;
+            entry.record.metadata.creation_proof = creation_proof;
             write_object_file(&self.paths, &entry.record, &entry.file_name)?;
             changed_files.insert(entry.file_name.clone());
         }
@@ -743,6 +763,90 @@ impl Driver {
         Ok(outcome)
     }
 
+    /// Creation proofs, keyed by commitment, for every object `commitments`
+    /// names. Each must already be in the synchronizer's created set.
+    pub(crate) fn fetch_creation_proofs(
+        &self,
+        sync_api_url: &str,
+        commitments: &[Hash],
+    ) -> Result<HashMap<Hash, String>> {
+        let mut proofs = HashMap::new();
+        for batch in commitments.chunks(HASH_BATCH_LIMIT) {
+            let witness = self
+                .deps
+                .synchronizer
+                .fetch_grounding_witness(sync_api_url, batch)?;
+            for (commitment, (index, proof)) in witness.created_proofs {
+                let creation_proof = CreationProof {
+                    state_header: witness.state_header.clone(),
+                    index,
+                    proof,
+                };
+                proofs.insert(commitment, creation_proof.encode()?);
+            }
+        }
+        Ok(proofs)
+    }
+
+    /// Creation proofs for the object files about to be live without one:
+    /// outputs of transactions `statuses` reports applied and, given
+    /// `membership`, unspent files it reports created. A failed fetch leaves
+    /// them to a later pass.
+    fn fetch_missing_creation_proofs(
+        &self,
+        sync_api_url: &str,
+        records: &[TransactionRecord],
+        statuses: &HashMap<String, Option<SynchronizerTxStatus>>,
+        membership: Option<&SynchronizerMembership>,
+    ) -> HashMap<Hash, String> {
+        let landed_outputs = records
+            .iter()
+            .filter(|record| {
+                statuses
+                    .get(&record.tx_final)
+                    .and_then(Option::as_ref)
+                    .is_some_and(|status| status.error.is_none())
+            })
+            .filter_map(|record| Some((record, record_tx_final(record).ok()?)))
+            .flat_map(|(record, tx_final)| {
+                record
+                    .output_files
+                    .iter()
+                    .map(move |file_name| (file_name.as_str(), tx_final))
+            })
+            .collect::<HashMap<_, _>>();
+        if landed_outputs.is_empty() && membership.is_none() {
+            return HashMap::new();
+        }
+        let result = load_object_files(&self.paths).and_then(|entries| {
+            let commitments = entries
+                .iter()
+                .filter(|entry| {
+                    let metadata = &entry.record.metadata;
+                    metadata.creation_proof.is_none() && metadata.status != FileStatus::Nullified
+                })
+                .filter(|entry| {
+                    landed_outputs.get(entry.file_name.as_str())
+                        == Some(&entry.record.metadata.tx_final)
+                        || membership.is_some_and(|membership| {
+                            membership
+                                .created_objects
+                                .contains(&entry.record.obj.commitment())
+                        })
+                })
+                .map(|entry| entry.record.obj.commitment())
+                .collect::<Vec<_>>();
+            if commitments.is_empty() {
+                return Ok(HashMap::new());
+            }
+            self.fetch_creation_proofs(sync_api_url, &commitments)
+        });
+        result.unwrap_or_else(|err| {
+            log::warn!("could not fetch creation proofs: {err:#}");
+            HashMap::new()
+        })
+    }
+
     fn persist_settled_objects(
         &self,
         record: &TransactionRecord,
@@ -773,23 +877,23 @@ impl Driver {
                     continue;
                 }
                 let mut stored = crate::object_record::parse_object_record_file(&path)?;
-                if output && stored.tx_final != producing_tx_final {
+                if output && stored.metadata.tx_final != producing_tx_final {
                     continue;
                 }
                 let mut changed = false;
                 if output {
-                    if stored.status == FileStatus::Unknown {
-                        stored.status = FileStatus::Live;
+                    if stored.metadata.status == FileStatus::Unknown {
+                        stored.metadata.status = FileStatus::Live;
                         changed = true;
                     }
                     if let Some(tx_hash) = &record.tx_hash
-                        && stored.tx_hash.as_ref() != Some(tx_hash)
+                        && stored.metadata.tx_hash.as_ref() != Some(tx_hash)
                     {
-                        stored.tx_hash = Some(tx_hash.clone());
+                        stored.metadata.tx_hash = Some(tx_hash.clone());
                         changed = true;
                     }
-                } else if stored.status != FileStatus::Nullified {
-                    stored.status = FileStatus::Nullified;
+                } else if stored.metadata.status != FileStatus::Nullified {
+                    stored.metadata.status = FileStatus::Nullified;
                     changed = true;
                 }
                 if changed {
@@ -843,7 +947,8 @@ impl Driver {
             let Ok(stored) = crate::object_record::parse_object_record_file(&path) else {
                 continue;
             };
-            if stored.status == FileStatus::Unknown && stored.tx_final == tx_final {
+            if stored.metadata.status == FileStatus::Unknown && stored.metadata.tx_final == tx_final
+            {
                 fs::remove_file(&path)
                     .with_context(|| format!("failed to remove output {file_name}"))?;
                 removed.push(file_name.clone());
@@ -858,7 +963,7 @@ impl Driver {
 fn chain_file_status(record: &ObjectRecord, membership: &SynchronizerMembership) -> FileStatus {
     let spent = object_nullifier_hash(&record.obj)
         .is_ok_and(|nullifier| membership.on_chain_nullifiers.contains(&nullifier));
-    match record.status {
+    match record.metadata.status {
         FileStatus::Nullified => FileStatus::Nullified,
         _ if spent => FileStatus::Nullified,
         FileStatus::Unknown

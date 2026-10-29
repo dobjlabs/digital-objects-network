@@ -12,7 +12,7 @@ use wire_types::synchronizer::{
 
 /// Combined commitment and nullifier limit for each membership request.
 /// Must not exceed the synchronizer's request limit.
-const HASH_BATCH_LIMIT: usize = 256;
+pub(crate) const HASH_BATCH_LIMIT: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SynchronizerHead {
@@ -61,6 +61,9 @@ pub trait SynchronizerClient: Send + Sync {
         object_commitments: &[Hash],
         nullifiers: &[Hash],
     ) -> Result<SynchronizerMembership>;
+    /// State root the synchronizer derived at execution block `block_number`;
+    /// `None` when it derived none there.
+    fn fetch_state_root_at(&self, sync_api_url: &str, block_number: i64) -> Result<Option<Hash>>;
 }
 
 #[derive(Debug, Clone)]
@@ -231,6 +234,19 @@ impl SynchronizerClient for HttpSynchronizerClient {
             on_chain_nullifiers,
             block_number: block_number.expect("at least one membership request was made"),
         })
+    }
+
+    fn fetch_state_root_at(&self, sync_api_url: &str, block_number: i64) -> Result<Option<Hash>> {
+        let endpoint = format!(
+            "{}/v1/state/by_el/{block_number}",
+            sync_api_url.trim_end_matches('/')
+        );
+        let payload = send_optional_json_request::<StateHeadResponse>(
+            self.client.get(&endpoint),
+            &endpoint,
+            "synchronizer state response",
+        )?;
+        Ok(payload.map(|payload| payload.state_root))
     }
 }
 
