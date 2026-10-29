@@ -2,28 +2,13 @@
 //! work: a QoS class on macOS, a thread priority plus EcoQoS on Windows, and
 //! a nice value on Linux. Thread counts stay as they are.
 
-use std::sync::atomic::{AtomicU8, Ordering};
-
 use anyhow::{Result, anyhow};
 use wire_types::CpuUsage;
 
-static GLOBAL_POOL_LEVEL: AtomicU8 = AtomicU8::new(0);
-
 /// Re-classes the threads of Rayon's global pool, where proofs do their
-/// parallel work. Each thread applies the latest level when it gets to the
-/// broadcast, so an earlier change cannot land after a later one.
+/// parallel work.
 pub fn apply_cpu_usage(level: CpuUsage) {
-    GLOBAL_POOL_LEVEL.store(level as u8, Ordering::Relaxed);
-    rayon::spawn_broadcast(|_| {
-        set_current_thread_cpu_usage(level_from_u8(GLOBAL_POOL_LEVEL.load(Ordering::Relaxed)));
-    });
-}
-
-fn level_from_u8(value: u8) -> CpuUsage {
-    [CpuUsage::Light, CpuUsage::Medium, CpuUsage::Full]
-        .into_iter()
-        .find(|level| *level as u8 == value)
-        .expect("stored from a CpuUsage")
+    rayon::spawn_broadcast(move |_| set_current_thread_cpu_usage(level));
 }
 
 /// Runs `work` on a fresh thread classed for `level`, or on this thread at
@@ -52,23 +37,15 @@ pub(crate) fn run_at_cpu_usage<T: Send>(
 
 #[cfg(target_os = "macos")]
 pub fn set_current_thread_cpu_usage(level: CpuUsage) {
-    use std::ffi::c_int;
-
-    // From <sys/qos.h>; libc does not export the QoS API.
-    const QOS_CLASS_DEFAULT: u32 = 0x15;
-    const QOS_CLASS_UTILITY: u32 = 0x11;
-    const QOS_CLASS_BACKGROUND: u32 = 0x09;
-    unsafe extern "C" {
-        fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: c_int) -> c_int;
-    }
+    use libc::qos_class_t::{QOS_CLASS_BACKGROUND, QOS_CLASS_DEFAULT, QOS_CLASS_UTILITY};
 
     let class = match level {
         CpuUsage::Full => QOS_CLASS_DEFAULT,
         CpuUsage::Medium => QOS_CLASS_UTILITY,
         CpuUsage::Light => QOS_CLASS_BACKGROUND,
     };
-    // SAFETY: takes plain integers and only affects the calling thread.
-    let result = unsafe { pthread_set_qos_class_self_np(class, 0) };
+    // SAFETY: takes plain values and only affects the calling thread.
+    let result = unsafe { libc::pthread_set_qos_class_self_np(class, 0) };
     if result != 0 {
         log::warn!("could not set the QoS class of a proving thread: error {result}");
     }
@@ -77,7 +54,7 @@ pub fn set_current_thread_cpu_usage(level: CpuUsage) {
 #[cfg(target_os = "linux")]
 pub fn set_current_thread_cpu_usage(level: CpuUsage) {
     use std::sync::OnceLock;
-    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     // The nice value dobjd started with, read from a thread no level has
     // touched yet. Levels never ask for a higher priority than this.
@@ -172,15 +149,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn levels_round_trip_through_the_stored_byte() {
-        for level in [CpuUsage::Light, CpuUsage::Medium, CpuUsage::Full] {
-            assert_eq!(level_from_u8(level as u8), level);
-        }
-    }
-
-    #[test]
     fn work_runs_and_its_error_comes_back() {
-        for level in [CpuUsage::Light, CpuUsage::Medium, CpuUsage::Full] {
+        for level in CpuUsage::ALL {
             assert_eq!(run_at_cpu_usage(level, || Ok(7)).unwrap(), 7);
             let error = run_at_cpu_usage::<()>(level, || Err(anyhow!("failed"))).unwrap_err();
             assert_eq!(error.to_string(), "failed");

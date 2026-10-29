@@ -238,7 +238,7 @@ enum SettingsCmd {
         /// Takes effect immediately.
         #[arg(long, value_name = "ON|OFF", value_parser = clap::builder::BoolishValueParser::new())]
         mcp: Option<bool>,
-        /// How much CPU proving may use. Takes effect from the next proof.
+        /// How much CPU proving may use.
         #[arg(long, value_name = "LIGHT|MEDIUM|FULL")]
         cpu_usage: Option<CpuUsage>,
     },
