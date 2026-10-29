@@ -1,0 +1,8 @@
+# dev-mock runs dobjd alone, with mock proofs and an in-memory DON, so no
+# chain-side services start. Launch dobjd -> web in order so the UI doesn't
+# flash connection errors while dobjd starts.
+procs:
+  dobjd:
+    shell: just dobjd
+  web:
+    shell: just wait-health http://127.0.0.1:7717/healthz && just web

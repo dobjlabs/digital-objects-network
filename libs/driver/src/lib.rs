@@ -4,6 +4,7 @@ mod driver;
 mod error;
 mod execute;
 mod holds;
+mod mock_don;
 mod object_record;
 mod object_store;
 pub mod paths;
@@ -20,6 +21,7 @@ mod tests;
 pub use crate::catalog::ActionCatalog as DriverActionCatalog;
 pub use crate::driver::{Driver, DriverDeps, PayloadBuilder};
 pub use crate::error::DriverError;
+pub use crate::mock_don::DOBJ_MOCK_ENV;
 pub use crate::object_record::{FileStatus, ObjectRecord, parse_object_record_file};
 pub use crate::pexe_catalog::PexeCatalog;
 pub use crate::pipeline::{
