@@ -47,6 +47,20 @@ that block should be plugin-agnostic.
 - **Why:** the starter tool, the resources and what they make, then the
   tools, machines and buckets, roughly in the order a player meets them.
 
+### Capital goods head the object list, in bold, with their level
+
+- **Where:** `CAPITAL_GOOD_CLASSES`, applied through `isCapitalGood()` in `showObjects()` (order) and `renderObjects()` (weight), and through `iconBadgeFor()` to the object list's icons and a single object's Details pane icon (level).
+- **What:** objects of the classes a `LevelUp*` action upgrades, Quarry and MiningDrill, are listed right after the welcome guide, with their names in bold, then every other object. Each group is sorted by file name. Their icons carry their `level` field as a number on a badge over the icon's bottom right corner, colored by level like item rarity (`--icon-badge-level-1` to `-6`): 1 green, 2 blue, 3 purple, 4 orange, 5 red, and 6 gold with dark text; levels above `TOP_BADGE_LEVEL` (6) share level 6's gold. Levels 1 to 5 have white text. The badge shows on the object list's icon, and on the class art of the large icon in the object's Details pane.
+- **Generic behavior:** every object sorted by file name, in the regular weight, with plain class icons.
+- **Why:** they are the machines a player builds up and keeps, in an inventory mostly of resources that get spent.
+
+### Buckets show their quantity on their icon
+
+- **Where:** `BUCKET_CLASSES`, applied through `iconBadgeFor()` to the object list's icons and a single object's Details pane icon.
+- **What:** a BucketOfWood, BucketOfStone or BucketOfIron icon carries its `n` field on a dark gray badge (`--icon-badge-quantity`), in the same corner as a capital good's level badge, a neutral color no level uses, abbreviated by `abbreviatedQuantity()`: in full below 1000, two significant figures from 1000 up to 10K and from 1M up to 10M ("5.3K", "5.3M"), and no decimals from 10K up to 1M and from 10M ("53K", "53M"). A quantity that rounds up to the next unit takes it (999,600 is "1.0M"). The large icon in the object's Details pane carries it too, as a capital good's carries its level.
+- **Generic behavior:** plain class icons.
+- **Why:** a bucket's contents are what it is for, and otherwise show only in its Details pane.
+
 ### Only bitcraft activity appears in Jobs
 
 - **Where:** `activityInScope()`, applied to retained `/runs`, `/proof-jobs`, open transaction records and activity arriving on `/events`.
@@ -186,12 +200,7 @@ their entries know about bitcraft:
   first gains do not spike. A rate that rounds to 0.00 is not shown. Since crafting converts value
   rather than creating it, this is in effect the player's production rate.
   Generic behavior: no rate.
-- **Total Inventory Value** (top bar, window title and Inventory Summary):
-  the summed
-  Total Bit Value of the live bitcraft objects (pending ones are left out);
-  see below. The Inventory Summary also shows each class's summed value
-  beside its count, and hovering an object row in the main window shows
-  that object's value in a tooltip.
+- **Total Inventory Value** (top bar, window title and Inventory Summary): the summed Total Bit Value of the live bitcraft objects (pending ones are left out); see below. The Inventory Summary also shows each class's summed value beside its count, and hovering an object row in the main window shows that object's value in a tooltip. The valuation tables live in `inventory-values.json`, which the desktop's native host also reads. In the desktop, BIT/sec comes from that host, which keeps sampling while the window is hidden; see the [desktop README](../README.md#discord-rich-presence).
 - **Inventory Summary icon:** `SUMMARY_ICON_CLASS` (`Bit`), the class whose
   art heads the window, since it totals the inventory in bits.
 - **Website and Discord links:** `BITCRAFT_SITE_URL` and
@@ -213,7 +222,7 @@ An object's Total Bit Value is the raw resources spent to make it, each
 counted at the rate its `BitsFrom*` recipe pays: Wood 1, Stone 2, Iron 5.
 A Bit is worth 1. The values are worked out by hand from `../../../examples/bitcraft/plugin.rhai`
 and hardcoded (`TOTAL_BIT_VALUES`, `BUCKET_CONTENT_BIT_VALUES`,
-`LEVELED_TOTAL_BIT_VALUES` in `index.html`). Recompute them whenever a
+`LEVELED_TOTAL_BIT_VALUES` in `inventory-values.json`). Recompute them whenever a
 recipe's inputs or outputs change.
 
 | Class | Total Bit Value | Made from |

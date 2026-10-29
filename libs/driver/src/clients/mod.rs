@@ -7,9 +7,11 @@ mod relayer_client;
 mod synchronizer_client;
 
 pub(crate) use relayer_client::{HttpRelayerClient, RelayerClient};
-pub(crate) use synchronizer_client::{HttpSynchronizerClient, SynchronizerClient};
+pub(crate) use synchronizer_client::{
+    HttpSynchronizerClient, SynchronizerClient, SynchronizerMembership,
+};
 #[cfg(test)]
-pub(crate) use synchronizer_client::{SynchronizerHead, SynchronizerMembership};
+pub(crate) use synchronizer_client::{SynchronizerHead, SynchronizerTxStatus};
 
 /// Total timeout for each relayer or synchronizer request.
 const HTTP_REQUEST_TIMEOUT_SECS: u64 = 30;
@@ -41,6 +43,29 @@ fn send_json_request<T: DeserializeOwned>(
     let response = request
         .send()
         .with_context(|| format!("failed to request {decode_context} at {endpoint}"))?;
+    decode_json_response(response, endpoint, decode_context)
+}
+
+/// `send_json_request` with a 404 response decoded as `None`.
+fn send_optional_json_request<T: DeserializeOwned>(
+    request: reqwest::blocking::RequestBuilder,
+    endpoint: &str,
+    decode_context: &str,
+) -> Result<Option<T>> {
+    let response = request
+        .send()
+        .with_context(|| format!("failed to request {decode_context} at {endpoint}"))?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    decode_json_response(response, endpoint, decode_context).map(Some)
+}
+
+fn decode_json_response<T: DeserializeOwned>(
+    response: reqwest::blocking::Response,
+    endpoint: &str,
+    decode_context: &str,
+) -> Result<T> {
     if !response.status().is_success() {
         let status = response.status();
         let detail = response

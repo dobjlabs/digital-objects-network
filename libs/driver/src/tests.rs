@@ -2,22 +2,25 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{Result, anyhow};
-use payload::decode_hash_hex;
 use payload::test_state::TestState;
+use payload::{decode_hash_hex, encode_hash_hex};
 use pod2::middleware::Hash;
 use sdk::SpendableObjects;
 use tempfile::tempdir;
 use txlib::{GroundingWitness, MAX_STATE_ROOT_AGE_BLOCKS, StateHeader};
-use wire_types::relayer::{
-    JobStatus, JobStatusResponse, SubmitProofResponse, TxHashEntry, TxHashesByTxFinalResponse,
-};
+use wire_types::relayer::{JobStatus, JobStatusResponse, SubmitProofResponse};
 use wire_types::transactions::{TransactionRecord, TransactionState};
 
 use crate::catalog::ActionCatalog;
-use crate::clients::{RelayerClient, SynchronizerClient, SynchronizerHead, SynchronizerMembership};
+use crate::clients::{
+    RelayerClient, SynchronizerClient, SynchronizerHead, SynchronizerMembership,
+    SynchronizerTxStatus,
+};
 use crate::driver::{Driver, DriverDeps, PayloadBuilder};
 use crate::object_record::{FileStatus, ObjectRecord, ensure_extra_pod_deserializers_registered};
-use crate::object_store::{ensure_store_dirs, load_object_files, write_object_file};
+use crate::object_store::{
+    ensure_store_dirs, load_object_files, object_file_name, write_object_file,
+};
 use crate::pexe_catalog::{PexeCatalog, test_plugin_bytes};
 use crate::{ActionQuery, DriverPaths, ExecuteActionInput, NoopExecutionReporter, ObjectQuery};
 use wire_types::{ObjectStatus, QualifiedName};
@@ -149,6 +152,11 @@ impl Fixture {
     }
 
     fn land(&self, record: &TransactionRecord) {
+        self.land_with_tx_hash(record, "0xlanded");
+    }
+
+    /// Apply the transaction's effects to the chain and record it as applied by `tx_hash`.
+    fn land_with_tx_hash(&self, record: &TransactionRecord, tx_hash: &str) {
         let mut chain = self.chain.lock().unwrap();
         for hex in &record.created {
             chain.created.insert(decode_hash_hex(hex).unwrap());
@@ -156,6 +164,23 @@ impl Fixture {
         for hex in &record.nullifiers {
             chain.nullifiers.insert(decode_hash_hex(hex).unwrap());
         }
+        let status = SynchronizerTxStatus {
+            tx_hash: tx_hash.to_string(),
+            block_number: chain.head_block,
+            error: None,
+        };
+        chain.statuses.insert(tx_final_of(record), status);
+    }
+
+    /// Record the transaction's proof as rejected by the synchronizer, with no chain effects.
+    fn reject(&self, record: &TransactionRecord, error: &str) {
+        let mut chain = self.chain.lock().unwrap();
+        let status = SynchronizerTxStatus {
+            tx_hash: "0xrejected".to_string(),
+            block_number: chain.head_block,
+            error: Some(error.to_string()),
+        };
+        chain.statuses.insert(tx_final_of(record), status);
     }
 
     fn advance_head_to(&self, block: i64) {
@@ -346,18 +371,20 @@ impl PayloadBuilder for MockPayloadBuilder {
 struct MockChain {
     created: HashSet<Hash>,
     nullifiers: HashSet<Hash>,
+    /// Transactions carried by a committed blob, applied or rejected.
+    statuses: HashMap<Hash, SynchronizerTxStatus>,
     head_block: i64,
     fail_membership: bool,
     fail_head: bool,
+    fail_status: bool,
     head_requests: usize,
-    membership_requests: usize,
-    queried_commitments: HashSet<Hash>,
+    queried_statuses: Vec<Hash>,
     on_head: Option<Box<dyn FnOnce() + Send>>,
-    on_membership: Option<Box<dyn FnOnce() + Send>>,
+    on_status: Option<Box<dyn FnOnce() + Send>>,
 }
 
 struct MockSynchronizer {
-    /// Source of grounding witnesses; membership reads use `chain` instead.
+    /// Source of grounding witnesses; status and membership reads use `chain` instead.
     state: TestState,
     chain: Arc<Mutex<MockChain>>,
 }
@@ -379,6 +406,25 @@ impl SynchronizerClient for MockSynchronizer {
             on_head();
         }
         Ok(head)
+    }
+
+    fn fetch_tx_status(
+        &self,
+        _sync_api_url: &str,
+        tx_final: &Hash,
+    ) -> Result<Option<SynchronizerTxStatus>> {
+        let mut chain = self.chain.lock().unwrap();
+        chain.queried_statuses.push(*tx_final);
+        if chain.fail_status {
+            return Err(anyhow!("synchronizer unreachable"));
+        }
+        let status = chain.statuses.get(tx_final).cloned();
+        let on_status = chain.on_status.take();
+        drop(chain);
+        if let Some(on_status) = on_status {
+            on_status();
+        }
+        Ok(status)
     }
 
     fn fetch_grounding_witness(
@@ -403,9 +449,7 @@ impl SynchronizerClient for MockSynchronizer {
         object_commitments: &[Hash],
         nullifiers: &[Hash],
     ) -> Result<SynchronizerMembership> {
-        let mut chain = self.chain.lock().unwrap();
-        chain.membership_requests += 1;
-        chain.queried_commitments = object_commitments.iter().copied().collect();
+        let chain = self.chain.lock().unwrap();
         if chain.fail_membership {
             return Err(anyhow!("synchronizer unreachable"));
         }
@@ -422,11 +466,6 @@ impl SynchronizerClient for MockSynchronizer {
                 .collect(),
             block_number: chain.head_block,
         };
-        let on_membership = chain.on_membership.take();
-        drop(chain);
-        if let Some(on_membership) = on_membership {
-            on_membership();
-        }
         Ok(membership)
     }
 }
@@ -434,9 +473,6 @@ impl SynchronizerClient for MockSynchronizer {
 #[derive(Default)]
 struct MockRelayerState {
     fail_submit: bool,
-    fail_hash_lookup: bool,
-    hash_queries: Vec<Vec<Hash>>,
-    on_hash_lookup: Option<Box<dyn FnOnce() + Send>>,
     submit_calls: usize,
     on_submit: Option<Box<dyn FnOnce() -> Result<()> + Send>>,
     submitted: Vec<Vec<u8>>,
@@ -476,36 +512,6 @@ impl RelayerClient for MockRelayer {
             state_root: Default::default(),
             attempt_count: 0,
             created_at: 0,
-        })
-    }
-
-    fn fetch_tx_hashes(
-        &self,
-        _relayer_api_url: &str,
-        tx_finals: &[Hash],
-    ) -> Result<TxHashesByTxFinalResponse> {
-        let on_lookup = {
-            let mut inner = self.inner.lock().unwrap();
-            inner.hash_queries.push(tx_finals.to_vec());
-            inner.on_hash_lookup.take()
-        };
-        if let Some(on_lookup) = on_lookup {
-            on_lookup();
-        }
-        let inner = self.inner.lock().unwrap();
-        if inner.fail_hash_lookup {
-            anyhow::bail!("relayer hash lookup failed");
-        }
-        Ok(TxHashesByTxFinalResponse {
-            results: tx_finals
-                .iter()
-                .filter_map(|tx_final| {
-                    inner.tx_hash.as_ref().map(|tx_hash| TxHashEntry {
-                        tx_final: *tx_final,
-                        tx_hash: tx_hash.clone(),
-                    })
-                })
-                .collect(),
         })
     }
 
@@ -643,8 +649,7 @@ fn execute_records_and_submits_and_settle_lands() {
             .unwrap_err();
         assert!(err.to_string().contains("awaiting the chain"), "{err}");
 
-        fx.land(&record);
-        fx.relayer.lock().unwrap().tx_hash = Some("0xtx".to_string());
+        fx.land_with_tx_hash(&record, "0xtx");
         let outcome = fx.driver.settle().unwrap();
         assert_eq!(outcome.records.len(), 1);
         assert_eq!(outcome.records[0].state, TransactionState::Landed);
@@ -1041,6 +1046,7 @@ fn settle_annotates_a_relayer_failure_and_still_lands() {
     {
         let mut relayer = fx.relayer.lock().unwrap();
         relayer.status = Some(JobStatus::Failed);
+        relayer.tx_hash = Some("0xbroadcast".to_string());
         relayer.last_error = Some("nonce too low".to_string());
     }
     let outcome = fx.driver.settle().unwrap();
@@ -1048,17 +1054,21 @@ fn settle_annotates_a_relayer_failure_and_still_lands() {
     let annotated = &outcome.records[0];
     assert_eq!(annotated.state, TransactionState::Submitted);
     assert_eq!(annotated.relayer_failure.as_deref(), Some("nonce too low"));
+    assert_eq!(annotated.tx_hash.as_deref(), Some("0xbroadcast"));
     for file_name in &result.output_files {
-        assert_eq!(fx.summary(file_name).status, ObjectStatus::Pending);
+        let summary = fx.summary(file_name);
+        assert_eq!(summary.status, ObjectStatus::Pending);
+        assert_eq!(summary.tx_hash.as_deref(), Some("0xbroadcast"));
     }
 
-    fx.land(annotated);
+    fx.land_with_tx_hash(annotated, "0xincluded");
     let outcome = fx.driver.settle().unwrap();
     assert_eq!(outcome.records[0].state, TransactionState::Landed);
     assert_eq!(
         outcome.records[0].relayer_failure.as_deref(),
         Some("nonce too low")
     );
+    assert_eq!(outcome.records[0].tx_hash.as_deref(), Some("0xincluded"));
     for file_name in &result.output_files {
         assert_eq!(fx.summary(file_name).status, ObjectStatus::Live);
     }
@@ -1068,7 +1078,7 @@ fn settle_annotates_a_relayer_failure_and_still_lands() {
 fn settle_with_an_unreachable_synchronizer_changes_nothing() {
     let fx = fixture("log_1.dobj");
     let result = fx.driver.execute(fx.input("CraftWood")).unwrap();
-    fx.chain.lock().unwrap().fail_membership = true;
+    fx.chain.lock().unwrap().fail_status = true;
     let err = fx.driver.settle().unwrap_err();
     assert!(err.to_string().contains("unreachable"), "{err}");
     assert_eq!(
@@ -1179,17 +1189,52 @@ fn import_driver(
 fn test_import_grounded_object_is_live() {
     let (json, source_tx, _nullifier) = make_importable_log();
     let (driver, _) = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
-    let summary = driver.import_object(&json).unwrap();
+    let summary = driver.import_object(&json, None).unwrap();
     assert_eq!(summary.class, craft_basics("Log"));
     assert_eq!(summary.status, ObjectStatus::Live);
     assert!(summary.file_name.starts_with("craft-basics__log_"));
 }
 
 #[test]
+fn imported_objects_share_their_key_until_an_action_replaces_it() {
+    use pod2::middleware::{StrKey, Value};
+
+    let (json, source_tx, _nullifier) = make_importable_log();
+    let (driver, _) = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
+    assert!(driver.import_object(&json, None).unwrap().shared_key);
+
+    let imported: ObjectRecord = serde_json::from_str(&json).unwrap();
+    let file_version = |obj: pod2::middleware::containers::Dictionary| {
+        let record = ObjectRecord {
+            content_hash: obj.commitment(),
+            obj,
+            ..imported.clone()
+        };
+        let file_name = object_file_name(&record.class, &record.obj).unwrap();
+        write_object_file(driver.paths(), &record, &file_name).unwrap();
+        driver
+            .read_object(std::path::Path::new(&file_name))
+            .unwrap()
+    };
+
+    let mut changed_keeping_key = imported.obj.clone();
+    changed_keeping_key
+        .insert(&StrKey::from("durability"), &Value::from(1))
+        .unwrap();
+    assert!(file_version(changed_keeping_key).shared_key);
+
+    let mut rekeyed = imported.obj.clone();
+    rekeyed
+        .update(&StrKey::from("key"), &Value::from(42))
+        .unwrap();
+    assert!(!file_version(rekeyed).shared_key);
+}
+
+#[test]
 fn test_import_ungrounded_object_is_unknown() {
     let (json, _source_tx, _nullifier) = make_importable_log();
     let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
-    let summary = driver.import_object(&json).unwrap();
+    let summary = driver.import_object(&json, None).unwrap();
     assert_eq!(summary.status, ObjectStatus::Unknown);
 }
 
@@ -1197,7 +1242,7 @@ fn test_import_ungrounded_object_is_unknown() {
 fn sync_objects_follows_the_chain_forward_only() {
     let (json, commitment, nullifier) = make_importable_log();
     let (driver, chain) = import_driver(HashSet::new(), HashSet::new(), false);
-    let summary = driver.import_object(&json).unwrap();
+    let summary = driver.import_object(&json, None).unwrap();
     assert_eq!(summary.status, ObjectStatus::Unknown);
 
     chain.lock().unwrap().created.insert(commitment);
@@ -1237,7 +1282,7 @@ fn sync_objects_follows_the_chain_forward_only() {
 fn test_read_object_raw_returns_stored_file() {
     let (json, source_tx, _nullifier) = make_importable_log();
     let (driver, _) = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
-    let summary = driver.import_object(&json).unwrap();
+    let summary = driver.import_object(&json, None).unwrap();
     let raw = driver
         .read_object_raw(std::path::Path::new(&summary.file_name))
         .unwrap();
@@ -1381,7 +1426,7 @@ fn test_import_spent_object_is_rejected() {
         HashSet::from([nullifier]),
         false,
     );
-    let err = driver.import_object(&json).unwrap_err();
+    let err = driver.import_object(&json, None).unwrap_err();
     assert!(
         err.to_string().contains("spent"),
         "expected already-spent error, got: {err}"
@@ -1392,8 +1437,8 @@ fn test_import_spent_object_is_rejected() {
 fn test_import_duplicate_is_rejected() {
     let (json, source_tx, _nullifier) = make_importable_log();
     let (driver, _) = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
-    driver.import_object(&json).unwrap();
-    let err = driver.import_object(&json).unwrap_err();
+    driver.import_object(&json, None).unwrap();
+    let err = driver.import_object(&json, None).unwrap_err();
     assert!(
         err.to_string().contains("already present"),
         "expected duplicate error, got: {err}"
@@ -1401,10 +1446,68 @@ fn test_import_duplicate_is_rejected() {
 }
 
 #[test]
+fn imported_objects_keep_their_requested_file_name() {
+    let (first, source_tx, _nullifier) = make_importable_log();
+    let (second, _, _) = make_importable_log();
+    let (driver, _) = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
+
+    let summary = driver.import_object(&first, Some("my log")).unwrap();
+    assert_eq!(summary.file_name, "my log.dobj");
+    assert_eq!(summary.status, ObjectStatus::Live);
+    assert!(driver.paths().objects_dir.join("my log.dobj").exists());
+    let summary = driver.import_object(&second, Some("my log.dobj")).unwrap();
+    assert_eq!(summary.file_name, "my log 2.dobj");
+
+    let err = driver
+        .import_object(&first, Some("another name.dobj"))
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("already present: my log.dobj"),
+        "expected duplicate error naming the held file, got: {err}"
+    );
+}
+
+#[test]
+fn imported_file_names_skip_discarded_files_and_refuse_foreign_generated_names() {
+    let (json, _source_tx, _nullifier) = make_importable_log();
+    let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
+    std::fs::create_dir_all(&driver.paths().discarded_objects_dir).unwrap();
+    std::fs::write(driver.paths().discarded_objects_dir.join("log.dobj"), "{}").unwrap();
+
+    let err = driver
+        .import_object(
+            &json,
+            Some("craft-basics__log_0123456789abcdef_0123456789abcdef.dobj"),
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("generated object name"),
+        "expected generated-name error, got: {err}"
+    );
+    let err = driver
+        .import_object(&json, Some("../log.dobj"))
+        .unwrap_err();
+    assert!(err.to_string().contains("invalid input"), "got: {err}");
+
+    let summary = driver.import_object(&json, Some("log.dobj")).unwrap();
+    assert_eq!(summary.file_name, "log 2.dobj");
+}
+
+#[test]
+fn imported_objects_may_keep_their_own_generated_name() {
+    let (json, _source_tx, _nullifier) = make_importable_log();
+    let record: ObjectRecord = serde_json::from_str(&json).unwrap();
+    let generated = object_file_name(&record.class, &record.obj).unwrap();
+    let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
+    let summary = driver.import_object(&json, Some(&generated)).unwrap();
+    assert_eq!(summary.file_name, generated);
+}
+
+#[test]
 fn test_import_sync_unreachable_falls_back_to_unknown() {
     let (json, _source_tx, _nullifier) = make_importable_log();
     let (driver, _) = import_driver(HashSet::new(), HashSet::new(), true);
-    let summary = driver.import_object(&json).unwrap();
+    let summary = driver.import_object(&json, None).unwrap();
     assert_eq!(summary.status, ObjectStatus::Unknown);
 }
 
@@ -1415,11 +1518,29 @@ fn test_import_unknown_class_is_rejected() {
     value["class"]["name"] = serde_json::Value::String("Diamond".to_string());
     let tampered = serde_json::to_string(&value).unwrap();
     let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
-    let err = driver.import_object(&tampered).unwrap_err();
+    let err = driver.import_object(&tampered, None).unwrap_err();
     assert!(
         err.to_string().contains("unknown class"),
         "expected unknown-class error, got: {err}"
     );
+}
+
+#[test]
+fn test_import_content_hash_mismatch_is_rejected() {
+    let (json, commitment, _nullifier) = make_importable_log();
+    let (driver, _) = import_driver(HashSet::from([commitment]), HashSet::new(), false);
+    let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    value["contentHash"] = serde_json::Value::String("00".repeat(32));
+    let tampered = serde_json::to_string(&value).unwrap();
+    let err = driver.import_object(&tampered, None).unwrap_err();
+    assert!(
+        err.to_string().contains("content hash mismatch"),
+        "expected content-hash error, got: {err}"
+    );
+    assert!(load_object_files(driver.paths()).unwrap().is_empty());
+
+    let summary = driver.import_object(&json, None).unwrap();
+    assert_eq!(summary.content_hash, encode_hash_hex(&commitment));
 }
 
 #[test]
@@ -1432,7 +1553,7 @@ fn test_import_class_hash_mismatch_is_rejected() {
     value["class"]["name"] = serde_json::Value::String("Wood".to_string());
     let tampered = serde_json::to_string(&value).unwrap();
     let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
-    let err = driver.import_object(&tampered).unwrap_err();
+    let err = driver.import_object(&tampered, None).unwrap_err();
     assert!(
         err.to_string().contains("class hash mismatch"),
         "expected hash-mismatch error, got: {err}"
@@ -1440,7 +1561,7 @@ fn test_import_class_hash_mismatch_is_rejected() {
 }
 
 #[test]
-fn settle_skips_records_committed_during_membership_query() {
+fn settle_skips_records_committed_during_status_query() {
     let fx = fixture("log_1.dobj");
     let anchor = fx.driver.execute(fx.input("CraftWood")).unwrap();
     let late = fx
@@ -1458,7 +1579,7 @@ fn settle_skips_records_committed_during_membership_query() {
     let late_tx_final = late.tx_final;
     let late_outputs = late.output_files().unwrap();
     let driver = fx.driver.clone();
-    fx.chain.lock().unwrap().on_membership = Some(Box::new(move || {
+    fx.chain.lock().unwrap().on_status = Some(Box::new(move || {
         driver.record(late).unwrap();
     }));
     fx.advance_head_to(anchor.grounding_block + MAX_STATE_ROOT_AGE_BLOCKS + 1);
@@ -1520,8 +1641,7 @@ fn landed_objects_keep_creation_hashes_after_transaction_pruning_and_restart() {
     input.tx_hash = Some("original-creation".to_string());
     write_object_file(&fx.paths, &input, &fx.input_file).unwrap();
     let record = fx.driver.execute(fx.input("CraftWood")).unwrap();
-    fx.land(&record);
-    fx.relayer.lock().unwrap().tx_hash = Some("landed-creation".to_string());
+    fx.land_with_tx_hash(&record, "landed-creation");
     let landed = fx.driver.settle().unwrap().records.remove(0);
     let cleanup_at = landed.settled_at_ms.unwrap() + crate::TRANSACTION_RETENTION_MS;
     let retained = fx.driver.prune_transactions(cleanup_at - 1).unwrap();
@@ -1546,145 +1666,6 @@ fn landed_objects_keep_creation_hashes_after_transaction_pruning_and_restart() {
         let summary = restarted.read_object(std::path::Path::new(file)).unwrap();
         assert_eq!(summary.tx_hash, stored.tx_hash);
     }
-}
-
-#[test]
-fn late_hash_recovery_survives_restart_lost_acknowledgement_and_pruning() {
-    for lost_acknowledgement in [false, true] {
-        let fx = fixture("log_1.dobj");
-        let mut input = fx.stored(&fx.input_file);
-        input.tx_hash = Some("original-creation".to_string());
-        write_object_file(&fx.paths, &input, &fx.input_file).unwrap();
-        let proved = fx
-            .driver
-            .prove(fx.input("CraftWood"), "run", &NoopExecutionReporter)
-            .unwrap();
-        let record = fx.driver.record(proved).unwrap();
-        fx.relayer.lock().unwrap().fail_submit = lost_acknowledgement;
-        let submission = fx.driver.submit(&tx_final_of(&record));
-        assert_eq!(submission.is_err(), lost_acknowledgement);
-        fx.land(&record);
-        let landed = fx.driver.settle().unwrap().records.remove(0);
-        assert_eq!(landed.state, TransactionState::Landed);
-        assert_eq!(landed.tx_hash, None);
-        assert_eq!(landed.relayer_job_id.is_none(), lost_acknowledgement);
-        let restarted = Driver::open(fx.paths.clone(), fx.driver.deps.clone()).unwrap();
-        fx.chain.lock().unwrap().fail_membership = true;
-        fx.relayer.lock().unwrap().fail_hash_lookup = true;
-        assert!(restarted.backfill_transaction_hashes().unwrap().is_empty());
-        fx.relayer.lock().unwrap().fail_hash_lookup = false;
-        assert!(restarted.backfill_transaction_hashes().unwrap().is_empty());
-        fx.relayer.lock().unwrap().tx_hash = Some("late-creation".to_string());
-        let recovered = restarted.backfill_transaction_hashes().unwrap();
-        assert_eq!(recovered.len(), 1);
-        assert_eq!(recovered[0].tx_hash.as_deref(), Some("late-creation"));
-        assert_eq!(recovered[0].state, TransactionState::Landed);
-        assert_eq!(recovered[0].settled_at_ms, landed.settled_at_ms);
-        assert_eq!(
-            fx.relayer.lock().unwrap().hash_queries,
-            vec![vec![tx_final_of(&record)]; 3]
-        );
-        for file in &record.output_files {
-            assert_eq!(fx.stored(file).tx_hash.as_deref(), Some("late-creation"));
-        }
-        assert_eq!(
-            fx.stored(&fx.input_file).tx_hash.as_deref(),
-            Some("original-creation")
-        );
-        restarted
-            .prune_transactions(landed.settled_at_ms.unwrap() + crate::TRANSACTION_RETENTION_MS)
-            .unwrap();
-        assert!(restarted.backfill_transaction_hashes().unwrap().is_empty());
-        assert_eq!(fx.relayer.lock().unwrap().hash_queries.len(), 3);
-        let reopened = Driver::open(fx.paths.clone(), fx.driver.deps.clone()).unwrap();
-        for file in &record.output_files {
-            assert_eq!(
-                reopened
-                    .read_object(std::path::Path::new(file))
-                    .unwrap()
-                    .tx_hash
-                    .as_deref(),
-                Some("late-creation")
-            );
-        }
-    }
-}
-
-#[test]
-fn hash_recovery_does_not_recreate_a_pruned_record() {
-    let fx = fixture("log_1.dobj");
-    let record = fx.driver.execute(fx.input("CraftWood")).unwrap();
-    fx.land(&record);
-    let landed = fx.driver.settle().unwrap().records.remove(0);
-    let driver = fx.driver.clone();
-    let cleanup_at = landed.settled_at_ms.unwrap() + crate::TRANSACTION_RETENTION_MS;
-    {
-        let mut relayer = fx.relayer.lock().unwrap();
-        relayer.tx_hash = Some("too-late".to_string());
-        relayer.on_hash_lookup = Some(Box::new(move || {
-            assert_eq!(
-                driver
-                    .prune_transactions(cleanup_at)
-                    .unwrap()
-                    .tx_finals
-                    .len(),
-                1
-            );
-        }));
-    }
-    assert!(fx.driver.backfill_transaction_hashes().unwrap().is_empty());
-    assert!(fx.driver.list_transactions().unwrap().is_empty());
-    assert!(!fx.paths.transactions_dir.join(&record.tx_final).exists());
-}
-
-#[test]
-fn hash_recovery_batches_only_landed_transactions_without_hashes() {
-    let fx = fixture("log_1.dobj");
-    let template = fx.driver.execute(fx.input("CraftWood")).unwrap();
-    for index in 1..=260 {
-        let mut record = template.clone();
-        record.tx_final = payload::encode_hash_hex(
-            &decode_hash_hex(&format!("{index:016x}{}", "0".repeat(48))).unwrap(),
-        );
-        record.state = match index {
-            258 => TransactionState::Expired,
-            259 => TransactionState::Recorded,
-            _ => TransactionState::Landed,
-        };
-        record.input_files.clear();
-        record.output_files.clear();
-        record.created.clear();
-        record.nullifiers.clear();
-        if index == 257 {
-            record.tx_hash = Some("already-known".to_string());
-        }
-        crate::transactions::write_record(&fx.paths, &record).unwrap();
-    }
-    fx.relayer.lock().unwrap().tx_hash = Some("recovered".to_string());
-    let recovered = fx.driver.backfill_transaction_hashes().unwrap();
-    assert_eq!(recovered.len(), 257);
-    let relayer = fx.relayer.lock().unwrap();
-    assert_eq!(
-        relayer
-            .hash_queries
-            .iter()
-            .map(Vec::len)
-            .collect::<Vec<_>>(),
-        vec![256, 1]
-    );
-    assert!(
-        recovered
-            .iter()
-            .all(|record| record.state == TransactionState::Landed
-                && record.tx_hash.as_deref() == Some("recovered"))
-    );
-    assert_eq!(
-        fx.driver
-            .get_transaction(&tx_final_of(&template))
-            .unwrap()
-            .state,
-        TransactionState::Submitted
-    );
 }
 
 #[test]
@@ -1847,7 +1828,7 @@ fn object_hash_metadata_is_optional_and_survives_import() {
     assert_eq!(legacy.tx_hash, None);
     value["txHash"] = serde_json::json!("creation");
     let (driver, _) = import_driver(HashSet::from([commitment]), HashSet::new(), false);
-    let summary = driver.import_object(&value.to_string()).unwrap();
+    let summary = driver.import_object(&value.to_string(), None).unwrap();
     assert_eq!(summary.tx_hash.as_deref(), Some("creation"));
     assert_eq!(
         driver
@@ -1866,14 +1847,14 @@ fn unattempted_records_use_only_head_checks_and_expire_safely() {
         .prove(fx.input("CraftWood"), "staged", &NoopExecutionReporter)
         .unwrap();
     let record = fx.driver.record(proved).unwrap();
-    fx.chain.lock().unwrap().fail_membership = true;
+    fx.chain.lock().unwrap().fail_status = true;
     fx.advance_head_to(record.grounding_block + MAX_STATE_ROOT_AGE_BLOCKS);
     let outcome = fx.driver.settle().unwrap();
     assert!(outcome.records.is_empty());
     assert_eq!(outcome.open_records, 1);
     assert_eq!(outcome.unattempted_records, 1);
     assert_eq!(fx.chain.lock().unwrap().head_requests, 1);
-    assert_eq!(fx.chain.lock().unwrap().membership_requests, 0);
+    assert!(fx.chain.lock().unwrap().queried_statuses.is_empty());
     assert_eq!(
         fx.summary(&fx.input_file).held_by_run_id.as_deref(),
         Some("staged")
@@ -1892,7 +1873,7 @@ fn unattempted_records_use_only_head_checks_and_expire_safely() {
     let outcome = fx.driver.settle().unwrap();
     assert_eq!(outcome.records[0].state, TransactionState::Expired);
     assert_eq!(outcome.unattempted_records, 0);
-    assert_eq!(fx.chain.lock().unwrap().membership_requests, 0);
+    assert!(fx.chain.lock().unwrap().queried_statuses.is_empty());
     assert_eq!(fx.summary(&fx.input_file).held_by_run_id, None);
     for file in &record.output_files {
         assert!(!fx.paths.objects_dir.join(file).exists());
@@ -1900,21 +1881,63 @@ fn unattempted_records_use_only_head_checks_and_expire_safely() {
 }
 
 #[test]
-fn attempted_records_without_acknowledgement_still_query_membership() {
+fn attempted_records_without_acknowledgement_still_query_status() {
     let fx = fixture("log_1.dobj");
     fx.relayer.lock().unwrap().fail_submit = true;
     assert!(fx.driver.execute(fx.input("CraftWood")).is_err());
     let record = fx.driver.list_transactions().unwrap().remove(0);
-    fx.land(&record);
+    assert_eq!(record.relayer_job_id, None);
+    fx.land_with_tx_hash(&record, "0xunacknowledged");
     fx.advance_head_to(record.grounding_block + MAX_STATE_ROOT_AGE_BLOCKS + 1);
     let outcome = fx.driver.settle().unwrap();
     assert_eq!(outcome.records[0].state, TransactionState::Landed);
-    assert_eq!(fx.chain.lock().unwrap().membership_requests, 1);
+    assert_eq!(
+        outcome.records[0].tx_hash.as_deref(),
+        Some("0xunacknowledged")
+    );
+    assert_eq!(fx.chain.lock().unwrap().queried_statuses.len(), 1);
     assert_eq!(outcome.unattempted_records, 0);
+    for file in &record.output_files {
+        assert_eq!(fx.stored(file).tx_hash.as_deref(), Some("0xunacknowledged"));
+    }
 }
 
 #[test]
-fn mixed_settlement_queries_only_attempted_transaction_effects() {
+fn settle_expires_a_rejected_transaction_before_its_grounding_ages_out() {
+    let fx = fixture("log_1.dobj");
+    let record = fx.driver.execute(fx.input("CraftWood")).unwrap();
+    fx.reject(&record, "created object already exists");
+    let outcome = fx.driver.settle().unwrap();
+    assert_eq!(outcome.open_records, 0);
+    let expired = &outcome.records[0];
+    assert_eq!(expired.state, TransactionState::Expired);
+    assert_eq!(expired.tx_hash.as_deref(), Some("0xrejected"));
+    let reason = expired.reason.as_deref().unwrap();
+    assert!(
+        reason.contains("rejected by the synchronizer")
+            && reason.contains("created object already exists"),
+        "{reason}"
+    );
+    assert_eq!(
+        outcome.removed_files.len(),
+        record.output_files.len(),
+        "{outcome:?}"
+    );
+    for file in &record.output_files {
+        assert!(!fx.paths.objects_dir.join(file).exists());
+    }
+    assert_eq!(fx.stored(&fx.input_file).status, FileStatus::Live);
+    assert_eq!(fx.summary(&fx.input_file).held_by_run_id, None);
+    assert!(
+        fx.driver
+            .check_action(&craft_basics("CraftWood"))
+            .unwrap()
+            .feasible
+    );
+}
+
+#[test]
+fn mixed_settlement_queries_only_attempted_transaction_statuses() {
     let fx = fixture("log_1.dobj");
     let submitted = fx.driver.execute(fx.input("CraftWood")).unwrap();
     let proved = fx
@@ -1930,30 +1953,18 @@ fn mixed_settlement_queries_only_attempted_transaction_effects() {
         )
         .unwrap();
     let staged = fx.driver.record(proved).unwrap();
+    assert_ne!(staged.tx_final, submitted.tx_final);
     fx.chain.lock().unwrap().head_requests = 0;
     let outcome = fx.driver.settle().unwrap();
     assert_eq!(outcome.open_records, 2);
     assert_eq!(outcome.unattempted_records, 1);
     let chain = fx.chain.lock().unwrap();
-    assert_eq!(chain.membership_requests, 1);
-    assert_eq!(chain.head_requests, 0);
-    assert_eq!(
-        chain.queried_commitments,
-        crate::transactions::decode_hashes(&submitted.created)
-            .unwrap()
-            .into_iter()
-            .collect()
-    );
-    assert!(
-        crate::transactions::decode_hashes(&staged.created)
-            .unwrap()
-            .iter()
-            .all(|hash| !chain.queried_commitments.contains(hash))
-    );
+    assert_eq!(chain.head_requests, 1);
+    assert_eq!(chain.queried_statuses, vec![tx_final_of(&submitted)]);
 }
 
 #[test]
-fn submission_started_during_head_query_waits_for_membership_before_expiry() {
+fn submission_started_during_head_query_waits_for_a_status_before_expiry() {
     let fx = fixture("log_1.dobj");
     let proved = fx
         .driver
@@ -1974,7 +1985,7 @@ fn submission_started_during_head_query_waits_for_membership_before_expiry() {
     assert!(outcome.records.is_empty());
     assert_eq!(outcome.open_records, 1);
     assert_eq!(outcome.unattempted_records, 0);
-    assert_eq!(fx.chain.lock().unwrap().membership_requests, 0);
+    assert!(fx.chain.lock().unwrap().queried_statuses.is_empty());
     for file in &record.output_files {
         assert!(fx.paths.objects_dir.join(file).exists());
     }

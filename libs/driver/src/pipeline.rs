@@ -14,6 +14,7 @@ use wire_types::relayer::{JobStatus, JobStatusResponse};
 use wire_types::transactions::{TransactionRecord, TransactionState};
 use wire_types::{ExecutionPhase, ExecutionStage, ObjectSummary, QualifiedName};
 
+use crate::clients::SynchronizerMembership;
 use crate::driver::Driver;
 use crate::error::DriverError;
 use crate::execute::{decode_action_args, resolve_inputs, validate_execute_request};
@@ -21,8 +22,8 @@ use crate::holds::Holds;
 use crate::object_record::{FileStatus, ObjectRecord};
 use crate::object_store::{load_object_files, matches_query, object_file_name, write_object_file};
 use crate::transactions::{
-    decode_hashes, load_records, locked_inputs, read_record, record_tx_final, remove_transaction,
-    write_payload, write_record,
+    load_records, locked_inputs, read_record, record_tx_final, remove_transaction, write_payload,
+    write_record,
 };
 use crate::types::{ExecuteActionInput, ExecutionReporter, ExecutionStepContext, ObjectQuery};
 
@@ -419,8 +420,8 @@ impl Driver {
         Ok(record)
     }
 
-    /// Reconcile open records against membership and relayer status, then
-    /// persist changes under the store lock.
+    /// Reconcile open records against the synchronizer's transaction statuses and
+    /// head, annotate them with relayer status, then persist changes under the store lock.
     pub fn settle(&self) -> Result<SettleOutcome> {
         let relayer_jobs = self.fetch_relayer_jobs()?;
         self.settle_with_relayer_jobs(&relayer_jobs)
@@ -477,8 +478,8 @@ impl Driver {
         })
     }
 
-    /// With `all_objects`, query and summarize every object; otherwise,
-    /// summarize only files changed by settlement.
+    /// With `all_objects`, query membership for every object file and summarize
+    /// them all; otherwise, summarize only files changed by settlement.
     fn settle_with(
         &self,
         all_objects: bool,
@@ -491,63 +492,51 @@ impl Driver {
             .filter(|record| record.is_open())
             .map(|record| record.tx_final.clone())
             .collect::<HashSet<_>>();
-        let queried_membership = records
-            .iter()
-            .filter(|record| record.needs_membership())
-            .map(|record| record.tx_final.clone())
-            .collect::<HashSet<_>>();
-        let mut commitments = HashSet::new();
-        let mut nullifiers = HashSet::new();
-        for record in records.iter().filter(|record| record.needs_membership()) {
-            commitments.extend(decode_hashes(&record.created)?);
-            nullifiers.extend(decode_hashes(&record.nullifiers)?);
+        if queried_transactions.is_empty() && !all_objects {
+            return Ok((SettleOutcome::default(), Vec::new()));
         }
-        if all_objects {
+        let membership = if all_objects {
+            let mut commitments = HashSet::new();
+            let mut nullifiers = HashSet::new();
             for entry in load_object_files(&self.paths)? {
                 commitments.insert(entry.record.obj.commitment());
                 if let Ok(nullifier) = object_nullifier_hash(&entry.record.obj) {
                     nullifiers.insert(nullifier);
                 }
             }
-        }
-        let membership = if !commitments.is_empty()
-            || !nullifiers.is_empty()
-            || !queried_membership.is_empty()
-        {
-            Some(self.deps.synchronizer.fetch_membership_with_nullifiers(
-                &settings.synchronizer_api_url,
-                &commitments.into_iter().collect::<Vec<_>>(),
-                &nullifiers.into_iter().collect::<Vec<_>>(),
-            )?)
+            if commitments.is_empty() && nullifiers.is_empty() {
+                None
+            } else {
+                Some(self.deps.synchronizer.fetch_membership_with_nullifiers(
+                    &settings.synchronizer_api_url,
+                    &commitments.into_iter().collect::<Vec<_>>(),
+                    &nullifiers.into_iter().collect::<Vec<_>>(),
+                )?)
+            }
         } else {
             None
         };
-        let expiry_block = match membership.as_ref() {
+        // The head is read before the statuses, so a transaction without a status was absent
+        // from every slot committed up to that head and can only be included in a later
+        // block, further past its grounding.
+        let head_block = match &membership {
             Some(membership) => Some(membership.block_number),
-            None if !queried_transactions.is_empty() => Some(
+            None if queried_transactions.is_empty() => None,
+            None => Some(
                 self.deps
                     .synchronizer
                     .fetch_head(&settings.synchronizer_api_url)?
                     .block_number,
             ),
-            None => None,
         };
-        let Some(expiry_block) = expiry_block else {
-            let outcome = SettleOutcome {
-                open_records: records.iter().filter(|record| record.is_open()).count(),
-                unattempted_records: records
-                    .iter()
-                    .filter(|record| record.is_open() && !record.needs_membership())
-                    .count(),
-                ..SettleOutcome::default()
-            };
-            let listing = if all_objects {
-                self.summaries(&load_object_files(&self.paths)?, &records)
-            } else {
-                Vec::new()
-            };
-            return Ok((outcome, listing));
-        };
+        let mut statuses = HashMap::new();
+        for record in records.iter().filter(|record| record.needs_tx_status()) {
+            let status = self
+                .deps
+                .synchronizer
+                .fetch_tx_status(&settings.synchronizer_api_url, &record_tx_final(record)?)?;
+            statuses.insert(record.tx_final.clone(), status);
+        }
 
         let _store = self.store_lock.lock().expect("store lock poisoned");
         let mut outcome = SettleOutcome::default();
@@ -557,10 +546,8 @@ impl Driver {
             .iter_mut()
             .filter(|record| record.is_open() && queried_transactions.contains(&record.tx_final))
         {
-            let record_membership = membership
-                .as_ref()
-                .filter(|_| queried_membership.contains(&record.tx_final));
-            if record.needs_membership() && record_membership.is_none() {
+            // A submission attempted after the statuses were read waits for the next pass.
+            if record.needs_tx_status() && !statuses.contains_key(&record.tx_final) {
                 continue;
             }
             let before = record.clone();
@@ -576,32 +563,38 @@ impl Driver {
                     );
                 }
             }
-            let landed = if let Some(membership) = record_membership {
-                let created = decode_hashes(&record.created)?;
-                let spent = decode_hashes(&record.nullifiers)?;
-                created
-                    .iter()
-                    .all(|commitment| membership.created_objects.contains(commitment))
-                    && spent
-                        .iter()
-                        .all(|nullifier| membership.on_chain_nullifiers.contains(nullifier))
-            } else {
-                false
+            // A rejection is final: every check the synchronizer applies only gets
+            // stricter as the chain grows, so the proof cannot land in a later block.
+            let status = statuses.get(&record.tx_final).and_then(Option::as_ref);
+            let expiry_reason = match status {
+                Some(applied) if applied.error.is_none() => {
+                    record.state = TransactionState::Landed;
+                    record.tx_hash = Some(applied.tx_hash.clone());
+                    record.settled_at_ms = Some(settled_at_ms);
+                    None
+                }
+                Some(rejected) => {
+                    record.tx_hash = Some(rejected.tx_hash.clone());
+                    Some(format!(
+                        "rejected by the synchronizer at block {}: {}",
+                        rejected.block_number,
+                        rejected.error.as_deref().unwrap_or_default()
+                    ))
+                }
+                None => head_block
+                    .filter(|head| grounding_aged_out(*head, record.grounding_block))
+                    .map(|head| {
+                        format!(
+                            "grounding block {} is more than {} blocks behind the synchronizer head {head}",
+                            record.grounding_block,
+                            txlib::MAX_STATE_ROOT_AGE_BLOCKS,
+                        )
+                    }),
             };
-            if landed {
-                record.state = TransactionState::Landed;
-                record.settled_at_ms = Some(settled_at_ms);
-            } else if grounding_aged_out(expiry_block, record.grounding_block) {
+            if let Some(reason) = expiry_reason {
                 record.state = TransactionState::Expired;
-                record.reason = Some(format!(
-                    "grounding block {} is more than {} blocks behind the synchronizer head {}",
-                    record.grounding_block,
-                    txlib::MAX_STATE_ROOT_AGE_BLOCKS,
-                    expiry_block
-                ));
+                record.reason = Some(reason);
                 record.settled_at_ms = Some(settled_at_ms);
-                let removed = self.remove_unknown_outputs(record)?;
-                outcome.removed_files.extend(removed);
             }
             if *record != before {
                 write_record(&self.paths, record)?;
@@ -611,31 +604,34 @@ impl Driver {
         outcome.open_records = records.iter().filter(|record| record.is_open()).count();
         outcome.unattempted_records = records
             .iter()
-            .filter(|record| record.is_open() && !record.needs_membership())
+            .filter(|record| record.is_open() && !record.needs_tx_status())
             .count();
 
+        let mut changed_files = HashSet::new();
+        for record in &outcome.records {
+            if record.state.is_terminal()
+                && let Err(err) = self.persist_settled_objects(
+                    record,
+                    &mut changed_files,
+                    &mut outcome.removed_files,
+                )
+            {
+                log::warn!(
+                    "could not update the objects of settled transaction {}: {err:#}",
+                    record.tx_final
+                );
+            }
+            if record.state.is_terminal() {
+                changed_files.extend(record.output_files.iter().cloned());
+                changed_files.extend(record.input_files.iter().cloned());
+            }
+        }
         let mut entries = load_object_files(&self.paths)?;
         let record_index = RecordIndex::new(&records);
-        let mut changed_files = HashSet::new();
         for entry in entries.iter_mut() {
-            let commitment = entry.record.obj.commitment();
-            let nullifier = object_nullifier_hash(&entry.record.obj).ok();
-            let status = match entry.record.status {
-                FileStatus::Nullified => FileStatus::Nullified,
-                _ if membership.as_ref().is_some_and(|membership| {
-                    nullifier.is_some_and(|n| membership.on_chain_nullifiers.contains(&n))
-                }) =>
-                {
-                    FileStatus::Nullified
-                }
-                FileStatus::Unknown
-                    if membership.as_ref().is_some_and(|membership| {
-                        membership.created_objects.contains(&commitment)
-                    }) =>
-                {
-                    FileStatus::Live
-                }
-                status => status,
+            let status = match &membership {
+                Some(membership) => chain_file_status(&entry.record, membership),
+                None => entry.record.status,
             };
             let tx_hash = record_index
                 .by_tx_final
@@ -649,12 +645,6 @@ impl Driver {
             entry.record.tx_hash = tx_hash;
             write_object_file(&self.paths, &entry.record, &entry.file_name)?;
             changed_files.insert(entry.file_name.clone());
-        }
-        for record in &outcome.records {
-            if record.state.is_terminal() {
-                changed_files.extend(record.output_files.iter().cloned());
-                changed_files.extend(record.input_files.iter().cloned());
-            }
         }
         let summaries = self.summaries(
             entries
@@ -674,62 +664,6 @@ impl Driver {
             Vec::new()
         };
         Ok((outcome, listing))
-    }
-
-    pub fn backfill_transaction_hashes(&self) -> Result<Vec<TransactionRecord>> {
-        let pending = load_records(&self.paths)?
-            .iter()
-            .filter(|record| record.state == TransactionState::Landed && record.tx_hash.is_none())
-            .map(record_tx_final)
-            .collect::<Result<Vec<_>>>()?;
-        if pending.is_empty() {
-            return Ok(Vec::new());
-        }
-        let settings = self.load_settings()?;
-        let mut updated = Vec::new();
-        for batch in pending.chunks(256) {
-            let response = match self
-                .deps
-                .relayer
-                .fetch_tx_hashes(&settings.relayer_api_url, batch)
-            {
-                Ok(response) => response,
-                Err(err) => {
-                    log::warn!("relayer transaction hashes unavailable: {err:#}");
-                    continue;
-                }
-            };
-            let hashes = response
-                .results
-                .into_iter()
-                .filter(|entry| batch.contains(&entry.tx_final))
-                .map(|entry| (encode_hash_hex(&entry.tx_final), entry.tx_hash))
-                .collect::<HashMap<_, _>>();
-            if hashes.is_empty() {
-                continue;
-            }
-            let _store = self.store_lock.lock().expect("store lock poisoned");
-            for mut record in load_records(&self.paths)? {
-                if record.state != TransactionState::Landed || record.tx_hash.is_some() {
-                    continue;
-                }
-                let Some(tx_hash) = hashes.get(&record.tx_final) else {
-                    continue;
-                };
-                record.tx_hash = Some(tx_hash.clone());
-                write_record(&self.paths, &record)?;
-                if let Err(err) =
-                    self.persist_settled_objects(&record, &mut HashSet::new(), &mut Vec::new())
-                {
-                    log::warn!(
-                        "could not persist recovered hash for {}: {err:#}",
-                        record.tx_final
-                    );
-                }
-                updated.push(record);
-            }
-        }
-        Ok(updated)
     }
 
     pub fn prune_transactions(&self, current_time_ms: u64) -> Result<PrunedTransactions> {
@@ -916,6 +850,25 @@ impl Driver {
             }
         }
         Ok(removed)
+    }
+}
+
+/// Status of an object file against the chain's created and nullifier sets; a file
+/// only moves forward, to live and then to nullified.
+fn chain_file_status(record: &ObjectRecord, membership: &SynchronizerMembership) -> FileStatus {
+    let spent = object_nullifier_hash(&record.obj)
+        .is_ok_and(|nullifier| membership.on_chain_nullifiers.contains(&nullifier));
+    match record.status {
+        FileStatus::Nullified => FileStatus::Nullified,
+        _ if spent => FileStatus::Nullified,
+        FileStatus::Unknown
+            if membership
+                .created_objects
+                .contains(&record.obj.commitment()) =>
+        {
+            FileStatus::Live
+        }
+        status => status,
     }
 }
 

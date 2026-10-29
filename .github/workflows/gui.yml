@@ -1,4 +1,4 @@
-name: Browser UI
+name: UI
 
 on:
   pull_request:
@@ -8,6 +8,7 @@ on:
 
 jobs:
   build:
+    name: Browser UI
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -25,3 +26,21 @@ jobs:
         working-directory: interfaces/gui
       - run: pnpm test
         working-directory: interfaces/gui
+
+  bitcraft:
+    name: Bitcraft UI and preparation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/bitcraft/tests/pnpm-lock.yaml
+      - run: |
+          pnpm --dir apps/bitcraft/tests install --frozen-lockfile
+          pnpm --dir apps/bitcraft/tests test
+          python3 -m unittest discover -s apps/bitcraft/tests -p '*_test.py'

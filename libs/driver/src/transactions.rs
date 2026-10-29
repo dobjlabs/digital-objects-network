@@ -27,14 +27,6 @@ pub(crate) fn record_tx_final(record: &TransactionRecord) -> Result<Hash> {
     })
 }
 
-pub(crate) fn decode_hashes(hex: &[String]) -> Result<Vec<Hash>> {
-    hex.iter()
-        .map(|value| {
-            decode_hash_hex(value).map_err(|err| anyhow!("unreadable hash {value}: {err}"))
-        })
-        .collect()
-}
-
 pub(crate) fn load_records(paths: &DriverPaths) -> Result<Vec<TransactionRecord>> {
     let mut records = Vec::new();
     if !paths.transactions_dir.exists() {

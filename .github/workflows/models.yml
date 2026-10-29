@@ -4,6 +4,11 @@ on:
   pull_request:
     branches: [main]
     types: [ready_for_review, opened, synchronize, reopened, converted_to_draft]
+    # UI-only PRs are tested by gui.yml; pushes to main still run this.
+    paths-ignore:
+      - "interfaces/gui/**"
+      - "apps/bitcraft/ui/**"
+      - "apps/bitcraft/tests/**"
   push:
     branches: [main]
   workflow_dispatch:

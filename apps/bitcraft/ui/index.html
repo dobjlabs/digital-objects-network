@@ -44,6 +44,19 @@
     /* Class art is drawn for a white tile, so the tile stays white in the
        dark theme too. */
     --icon-tile-bg: #ffffff;
+    --icon-badge: #0a84ff;
+    --icon-badge-quantity: #3a3a3c;
+    --icon-badge-level-1: #28a745;
+    --icon-badge-level-2: #0a84ff;
+    --icon-badge-level-3: #8e44ec;
+    --icon-badge-level-4: #f08c00;
+    --icon-badge-level-5: #e0383b;
+    --icon-badge-level-6: #ffc800;
+    --icon-badge-level-6-text: #3d2c00;
+    --shared-key: #facc15;
+    --shared-key-outline: #a16207;
+    --shared-key-notice-bg: #fefce8;
+    --shared-key-notice-border: #facc15;
     /* Blank strip kept below the last row of a full list, so a click on
        empty space to clear the selection always has a target. */
     --list-trailing-space: 48px;
@@ -349,7 +362,8 @@
   }
   #startup-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 12px; }
   #startup-actions[hidden] { display: none; }
-  #startup-actions button {
+  #startup-actions button,
+  #import-dialog button {
     min-width: 88px;
     padding: 3px 12px;
     border: 1px solid var(--button-border);
@@ -360,13 +374,80 @@
     font: inherit;
     cursor: default;
   }
-  #startup-actions button:active { background: var(--row-hover); }
-  #startup-actions #startup-retry {
+  #startup-actions button:active,
+  #import-dialog button:active { background: var(--row-hover); }
+  #startup-actions #startup-retry,
+  #import-dialog #import-submit {
     border-color: var(--progress-fill);
     background: var(--progress-fill);
     color: white;
   }
-  #startup-actions #startup-retry:active { filter: brightness(0.9); }
+  #startup-actions #startup-retry:active,
+  #import-dialog #import-submit:active { filter: brightness(0.9); }
+  #import-dialog button:disabled { opacity: 0.5; }
+  /* Covers the main window, so the inventory behind it takes no clicks
+     while it is open. */
+  #import-sheet {
+    position: fixed;
+    inset: 0;
+    z-index: 15;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 48px 16px 16px;
+    background: rgba(0, 0, 0, 0.18);
+  }
+  #import-sheet[hidden] { display: none; }
+  #import-dialog {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: min(100%, 460px);
+    max-height: 100%;
+    overflow-y: auto;
+    padding: 16px 18px;
+    border-radius: 10px;
+    background: var(--bg);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25), 0 1px 3px rgba(0, 0, 0, 0.15);
+  }
+  #import-title { margin: 0; font-size: 13px; font-weight: 600; }
+  #import-description { margin: 0 0 4px; color: var(--muted); }
+  #import-dialog #import-choose { align-self: flex-start; }
+  #import-chosen {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  #import-chosen[hidden] { display: none; }
+  #import-chosen li { padding: 2px 0; overflow-wrap: anywhere; }
+  #import-text-label { margin-top: 4px; color: var(--muted); }
+  #import-text {
+    height: 110px;
+    padding: 6px 7px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    resize: vertical;
+  }
+  #import-results {
+    margin: 4px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  #import-results[hidden], #import-rekey-note[hidden] { display: none; }
+  #import-results li { padding: 2px 0; overflow-wrap: anywhere; }
+  #import-results li.error { color: var(--error); }
+  .import-result-status { color: var(--muted); }
+  #import-rekey-note { margin: 0; color: var(--muted); font-size: 12px; }
+  .import-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 6px;
+  }
   #startup-copy-status { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
   #status-bar {
     flex: none;
@@ -639,6 +720,29 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* The objects directory's path, cut to fit, with the import button at the
+     right end. Not clipped like other pane headers, so the button's tooltip
+     can show below it. */
+  .objects-header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    overflow: visible;
+  }
+  #objects-dir {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* No taller than the header's line, so the header lines up with the
+     Details pane's. */
+  .toolbar-button.pane-header-button {
+    flex: none;
+    margin-left: auto;
+    width: 22px;
+    height: 18px;
+    border-radius: 4px;
+  }
   #object-list {
     flex: 1;
     overflow-y: auto;
@@ -698,12 +802,94 @@
     height: 16px;
     image-rendering: pixelated;
   }
+  .icon-badged {
+    position: relative;
+    display: flex;
+    flex: none;
+  }
+  .icon-badge {
+    position: absolute;
+    right: -3px;
+    bottom: -3px;
+    min-width: 10px;
+    padding: 0 2px;
+    border-radius: 5px;
+    background: var(--icon-badge);
+    box-shadow: 0 0 0 1px var(--bg);
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 10px;
+    text-align: center;
+  }
+  .icon-badge.quantity {
+    background: var(--icon-badge-quantity);
+    font-weight: 600;
+  }
+  .icon-badge.level-1 { background: var(--icon-badge-level-1); }
+  .icon-badge.level-2 { background: var(--icon-badge-level-2); }
+  .icon-badge.level-3 { background: var(--icon-badge-level-3); }
+  .icon-badge.level-4 { background: var(--icon-badge-level-4); }
+  .icon-badge.level-5 { background: var(--icon-badge-level-5); }
+  .icon-badge.level-6 {
+    background: var(--icon-badge-level-6);
+    color: var(--icon-badge-level-6-text);
+  }
+  /* Over the bottom right corner of the 96px art, which ends 16px from the
+     page's right edge and 24px from its bottom. */
+  .large-page-icon > .icon-badge {
+    right: 8px;
+    bottom: 16px;
+    min-width: 30px;
+    padding: 0 7px;
+    border-radius: 15px;
+    box-shadow: 0 0 0 2px var(--bg);
+    font-size: 22px;
+    line-height: 30px;
+  }
   .object-name {
     flex: 1;
     min-width: 0;
     overflow: hidden;
   }
+  /* Marks an object whose key it still shares with whoever gave it the
+     file. */
+  .shared-key-badge {
+    display: block;
+    flex: none;
+    width: 16px;
+    height: 15px;
+  }
+  .shared-key-halo { fill: none; stroke: var(--bg); stroke-width: 3; }
+  .shared-key-triangle { fill: var(--shared-key); stroke: var(--shared-key-outline); }
+  .shared-key-icon {
+    position: relative;
+    display: flex;
+    flex: none;
+  }
+  .shared-key-icon > .shared-key-badge {
+    position: absolute;
+    top: -5px;
+    right: -6px;
+    width: 13px;
+    height: 12px;
+  }
+  .shared-key-notice {
+    margin-bottom: 4px;
+    padding: 8px 10px;
+    border: 1px solid var(--shared-key-notice-border);
+    border-radius: 6px;
+    background: var(--shared-key-notice-bg);
+  }
+  .shared-key-notice-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+  }
+  .shared-key-notice p { margin: 4px 0 0; }
   .object-row.welcome .object-name { font-weight: 600; }
+  .object-row.capital-good .object-name { font-weight: 700; }
   .message {
     padding: 8px 10px;
     color: var(--muted);
@@ -1006,7 +1192,14 @@
   <div id="objects-view" class="view">
     <div id="left-column">
       <section id="objects-pane" class="pane">
-        <div id="objects-dir" class="pane-header">&nbsp;</div>
+        <div class="pane-header objects-header">
+          <span id="objects-dir">&nbsp;</span>
+          <button type="button" id="import-button" class="toolbar-button pane-header-button" data-tooltip="Import" aria-label="Import objects">
+            <svg width="14" height="14" viewBox="0 0 18 18" aria-hidden="true">
+              <path d="M9 2v14M2 9h14" fill="none" stroke="currentColor" stroke-width="3"/>
+            </svg>
+          </button>
+        </div>
         <ul id="object-list"></ul>
       </section>
       <section id="execute-pane" class="pane">
@@ -1018,6 +1211,23 @@
       <div class="pane-header">Details</div>
       <div id="details-body"></div>
     </section>
+  </div>
+  <div id="import-sheet" hidden>
+    <div id="import-dialog" role="dialog" aria-modal="true" aria-labelledby="import-title" aria-describedby="import-description">
+      <h1 id="import-title">Import objects</h1>
+      <p id="import-description">Add .dobj files that someone sent you or that you saved on another computer.</p>
+      <button type="button" id="import-choose">Choose Files...</button>
+      <input type="file" id="import-files" multiple hidden>
+      <ul id="import-chosen" hidden></ul>
+      <label id="import-text-label" for="import-text">Or paste a file's contents:</label>
+      <textarea id="import-text" spellcheck="false" autocomplete="off"></textarea>
+      <ul id="import-results" aria-live="polite" hidden></ul>
+      <p id="import-rekey-note" hidden></p>
+      <div class="import-actions">
+        <button type="button" id="import-close">Cancel</button>
+        <button type="button" id="import-submit" disabled>Import</button>
+      </div>
+    </div>
   </div>
   </div>
   <div id="recipebook-view" class="view" hidden>
@@ -1093,6 +1303,15 @@
     </defs>
     <path d="M6 4h80l36 36v114H6z" fill="#fff" stroke="#d0d0d0" filter="url(#large-file-icon-shadow)"/>
     <path d="M86 4v28a8 8 0 0 0 8 8h28" fill="#f2f2f2" stroke="#d0d0d0"/>
+  </svg>
+</template>
+
+<template id="shared-key-badge">
+  <svg class="shared-key-badge" viewBox="0 0 16 15" role="img" aria-label="Shared key">
+    <path class="shared-key-halo" d="M8 1.2 15.2 13.8H0.8z" stroke-linejoin="round"/>
+    <path class="shared-key-triangle" d="M8 1.2 15.2 13.8H0.8z" stroke-linejoin="round"/>
+    <rect x="7.1" y="5" width="1.8" height="4.8" rx="0.9" fill="#000"/>
+    <circle cx="8" cy="11.7" r="1" fill="#000"/>
   </svg>
 </template>
 
@@ -1324,31 +1543,15 @@
   // Total Bit Value: what an object is worth in bits, counting each raw
   // resource spent to make it at the rate its BitsFrom* recipe pays (Wood 1,
   // Stone 2, Iron 5). Worked out by hand from the recipes, per class.
-  const TOTAL_BIT_VALUES = {
-    Bit: 1,
-    Wood: 1,
-    Stone: 2,
-    Iron: 5,
-    Pocketknife: 0,
-    Stick: 0.5,
-    WoodAxe: 2,
-    StoneAxe: 4,
-    IronAxe: 9,
-    BucketOfWood: 5,
-    BucketOfStone: 5,
-    BucketOfIron: 5,
-  };
+  let TOTAL_BIT_VALUES = {};
   // A bucket is also worth the `n` resources it holds, at these rates.
-  const BUCKET_CONTENT_BIT_VALUES = { BucketOfWood: 1, BucketOfStone: 2, BucketOfIron: 5 };
+  let BUCKET_CONTENT_BIT_VALUES = {};
   // Quarries and drills by level (index 0 is level 1): building one, plus the
   // full buckets every level-up spends.
-  const LEVELED_TOTAL_BIT_VALUES = {
-    Quarry: [40, 130, 300, 630, 1280, 2570],
-    MiningDrill: [135, 420, 975, 2070, 4245, 8580],
-  };
+  let LEVELED_TOTAL_BIT_VALUES = {};
   // Tools that wear out: the `durability` a new one starts with. Such a
   // tool is worth its Total Bit Value times the fraction of that it has left.
-  const FULL_DURABILITY = { WoodAxe: 100, StoneAxe: 100, IronAxe: 100 };
+  let FULL_DURABILITY = {};
 
   // The class whose art heads the Inventory Summary window, which totals the
   // inventory in bits.
@@ -1362,6 +1565,51 @@
     "WoodAxe", "StoneAxe", "IronAxe", "Quarry", "MiningDrill",
     "BucketOfWood", "BucketOfStone", "BucketOfIron",
   ];
+
+  // Capital goods, the classes a level-up upgrades. The object list shows
+  // them first, in bold.
+  const CAPITAL_GOOD_CLASSES = ["Quarry", "MiningDrill"];
+
+  function isCapitalGood(className) {
+    return className.pluginName === PLUGIN_NAME && CAPITAL_GOOD_CLASSES.includes(className.name);
+  }
+
+  // Buckets, whose `n` field is the quantity of a resource they hold.
+  const BUCKET_CLASSES = ["BucketOfWood", "BucketOfStone", "BucketOfIron"];
+
+  // Capital goods above this level share its badge color.
+  const TOP_BADGE_LEVEL = 6;
+
+  // The badge over the bottom right corner of an object's icon: a capital
+  // good's level, colored by level, or a bucket's quantity, abbreviated to
+  // fit. `kind` names the badge's style. Null for any other object.
+  function iconBadgeFor(object) {
+    if (isCapitalGood(object.class)) {
+      const level = fieldValue(object, "level");
+      const colorLevel = Math.min(Math.max(Math.floor(Number(level)), 1), TOP_BADGE_LEVEL);
+      return { text: level, kind: Number.isFinite(colorLevel) ? `level-${colorLevel}` : "level" };
+    }
+    if (object.class.pluginName !== PLUGIN_NAME || !BUCKET_CLASSES.includes(object.class.name)) {
+      return null;
+    }
+    const quantity = Number(fieldValue(object, "n"));
+    return Number.isFinite(quantity) ? { text: abbreviatedQuantity(quantity), kind: "quantity" } : null;
+  }
+
+  // Below 1000 in full; up to 10K or 10M with two significant figures
+  // ("5.3K"), and with none past the decimal point above that ("53K").
+  function abbreviatedQuantity(quantity) {
+    if (quantity < 1000) {
+      return String(quantity);
+    }
+    for (const [suffix, unit, nextUnit] of [["K", 1e3, 1e6], ["M", 1e6, Infinity]]) {
+      const scaled = quantity / unit;
+      const digits = scaled < 10 ? scaled.toPrecision(2) : String(Math.round(scaled));
+      if (Number(digits) * unit < nextUnit) {
+        return `${digits}${suffix}`;
+      }
+    }
+  }
 
   // The game's website and Discord server, linked from the Settings window
   // and opened in the player's browser.
@@ -1552,6 +1800,27 @@
     classIcon.alt = "";
     tile.append(classIcon);
     return tile;
+  }
+
+  function iconBadge({ text, kind }) {
+    const badge = document.createElement("span");
+    badge.className = `icon-badge ${kind}`;
+    badge.textContent = text;
+    return badge;
+  }
+
+  // An object list row's icon: its class's, with the object's badge, if it
+  // has one, over the icon's bottom right corner.
+  function smallObjectIcon(object) {
+    const icon = smallClassIcon(object.class);
+    const badge = iconBadgeFor(object);
+    if (badge === null) {
+      return icon;
+    }
+    const badged = document.createElement("span");
+    badged.className = "icon-badged";
+    badged.append(icon, iconBadge(badge));
+    return badged;
   }
 
   // The action's icon from its presentation pack, a finished image drawn
@@ -1774,7 +2043,9 @@
   function showObjectMenu(x, y) {
     const fileNames = [...selectedFileNames];
     const entries = [];
-    if (fileNames.length > 0) {
+    if (fileNames.length === 0) {
+      entries.push({ label: "Import...", onSelect: openImportSheet }, MENU_DIVIDER);
+    } else {
       entries.push({
         label: fileNames.length === 1 ? "Open" : "Open all",
         onSelect: () => {
@@ -2569,8 +2840,9 @@
   }
 
   // The Details pane's icon for a class: the blank page with the class's art
-  // on it, or the blank page alone when it has none.
-  function largeClassIcon(qualifiedName) {
+  // on it, or the blank page alone when it has none, and `badge`, when
+  // given, over the art's bottom right corner.
+  function largeClassIcon(qualifiedName, badge = null) {
     const icon = document.createElement("div");
     icon.className = "details-icon";
     const page = document.createElement("div");
@@ -2583,6 +2855,9 @@
       classIcon.src = classIconPath;
       classIcon.alt = "";
       page.append(classIcon);
+    }
+    if (badge !== null) {
+      page.append(iconBadge(badge));
     }
     icon.append(page);
     return icon;
@@ -2800,7 +3075,7 @@
     document.body.classList.add("secondary-window");
     document.title = "Bitcraft Inventory Summary";
     summaryView.hidden = false;
-    await Presentation.load();
+    await Promise.all([Presentation.load(), loadInventoryValues()]);
     inventory = watchInventory(renderSummary);
     try {
       await inventory.reload();
@@ -3332,13 +3607,14 @@
     const [fileName] = selectedFileNames;
     const object = objectsByFileName.get(fileName);
 
-    const icon = largeClassIcon(object.class);
+    const icon = largeClassIcon(object.class, iconBadgeFor(object));
 
     const title = document.createElement("div");
     title.className = "details-title";
     title.textContent = object.fileName;
 
     const meta = summaryLine(object, []);
+    const notices = object.sharedKey ? [sharedKeyNotice()] : [];
 
     const identityTable = document.createElement("table");
     identityTable.className = "field-table";
@@ -3373,8 +3649,38 @@
     }
 
     const classDescription = descriptionSection(Presentation.classInfo(object.class), null);
-    detailsBody.append(icon, title, meta, identityTable, ...classDescription, propertiesTitle,
-      properties);
+    detailsBody.append(...notices, icon, title, meta, identityTable, ...classDescription,
+      propertiesTitle, properties);
+  }
+
+  function sharedKeyBadge() {
+    return document.getElementById("shared-key-badge").content.firstElementChild.cloneNode(true);
+  }
+
+  // The icon, with a badge over its top right corner when the object's key
+  // is shared.
+  function markSharedKey(icon, object) {
+    if (!object.sharedKey) return icon;
+    const marked = document.createElement("span");
+    marked.className = "shared-key-icon";
+    marked.append(icon, sharedKeyBadge());
+    return marked;
+  }
+
+  function sharedKeyNotice() {
+    const notice = document.createElement("div");
+    notice.className = "shared-key-notice";
+    notice.setAttribute("role", "note");
+    const title = document.createElement("div");
+    title.className = "shared-key-notice-title";
+    title.append(sharedKeyBadge(), "This file was recently imported.");
+    const risk = document.createElement("p");
+    risk.textContent = "Someone else on the network might have an identical copy of this file.";
+    const claim = document.createElement("p");
+    claim.textContent = "You can fully claim this item by rekeying it (right-click > Rekey). "
+      + "This invalidates all other copies of this file on the network.";
+    notice.append(title, risk, claim);
+    return notice;
   }
 
   // An error with `noResponse` set got no HTTP response from dobjd at all.
@@ -3432,11 +3738,12 @@
       appendFileRow(WELCOME_FILE, docIconTemplate.content.cloneNode(true)).classList.add("welcome");
     }
     for (const object of objects) {
-      const row = appendFileRow(object.fileName, smallClassIcon(object.class));
+      const row = appendFileRow(object.fileName, markSharedKey(smallObjectIcon(object), object));
       const state = shownState(object);
       row.classList.toggle("unknown", state === "unknown");
       row.classList.toggle("pending", state === "pending");
       row.classList.toggle("held", state === "held");
+      row.classList.toggle("capital-good", isCapitalGood(object.class));
       const flashElapsed = Date.now() - (flashStartedAt.get(object.fileName) ?? -Infinity);
       if (flashElapsed < ROW_FLASH_MS) {
         // A redraw mid-flash resumes the animation rather than restarting it.
@@ -3451,7 +3758,9 @@
   // that is not an object.
   function rowTooltipText(fileName) {
     const object = objectsByFileName.get(fileName);
-    return object?.class ? formatBitValue(totalBitValue(object)) : "";
+    if (!object?.class) return "";
+    const value = formatBitValue(totalBitValue(object));
+    return object.sharedKey ? `${value}\nShared key, not yet rekeyed` : value;
   }
 
   // Shown once the pointer has rested on the row for `ROW_TOOLTIP_DELAY_MS`,
@@ -3747,6 +4056,7 @@
     showStartup("Loading inventory...");
     showMessage("Loading...", false);
     try {
+      await loadInventoryValues();
       inventory ??= watchInventory(showObjects, {
         onError: startupInventoryError,
         onReconnect: restoreRuns,
@@ -3972,11 +4282,33 @@
   // inventory change. The whole window is always averaged over, the value
   // before the first sample counting as that sample's, so a new session's
   // first gains do not read as a spike. The samples are kept for the
-  // session, so a reload does not restart the measurement.
+  // session, so a reload does not restart the measurement. The desktop
+  // host keeps its own samples, which a hidden window cannot, and supplies
+  // the rate instead.
   const VALUE_RATE_WINDOW_MS = 5 * 60 * 1000;
   const VALUE_SAMPLES_STORAGE_KEY = "bitcraft.inventory-value-samples";
   let valueSamples = readValueSamples();
   let latestInventoryValue = null;
+  let desktopRateError = null;
+
+  async function loadInventoryValues() {
+    const response = await fetch(new URL("inventory-values.json", document.baseURI).href);
+    if (!response.ok) throw new Error("Could not load inventory values");
+    ({ TOTAL_BIT_VALUES, BUCKET_CONTENT_BIT_VALUES, LEVELED_TOTAL_BIT_VALUES, FULL_DURABILITY } = await response.json());
+  }
+
+  async function readDesktopRate() {
+    let rate = 0;
+    try {
+      rate = (await window.__TAURI__.core.invoke("inventory_metrics"))?.bitsPerSecond ?? 0;
+      desktopRateError = null;
+    } catch (error) {
+      const message = String(error);
+      if (message !== desktopRateError) console.warn("Could not read the native production rate:", error);
+      desktopRateError = message;
+    }
+    renderValueRate(rate);
+  }
 
   function readValueSamples() {
     try {
@@ -4021,7 +4353,14 @@
     if (latestInventoryValue === null) {
       return;
     }
-    const rate = valueRate(Date.now());
+    if (window.bitcraftDesktop) {
+      void readDesktopRate();
+    } else {
+      renderValueRate(valueRate(Date.now()));
+    }
+  }
+
+  function renderValueRate(rate) {
     const shown = Math.abs(rate) >= 0.005;
     const rateText = `${rate.toFixed(2)} BIT/sec`;
     document.getElementById("inventory-rate").textContent = shown ? rateText : "";
@@ -4062,7 +4401,8 @@
     }
     const heldObjects = objects
       .filter((object) => object.class.pluginName === PLUGIN_NAME)
-      .sort((left, right) => left.fileName.localeCompare(right.fileName));
+      .sort((left, right) => Number(isCapitalGood(right.class)) - Number(isCapitalGood(left.class))
+        || left.fileName.localeCompare(right.fileName));
     const now = Date.now();
     const listVisible = document.getElementById("startup-screen").hidden;
     for (const object of heldObjects) {
@@ -4106,6 +4446,165 @@
     showSelection();
     updateStartupPocketknife();
   }
+
+  const importSheet = document.getElementById("import-sheet");
+  const importChoose = document.getElementById("import-choose");
+  const importFiles = document.getElementById("import-files");
+  const importChosen = document.getElementById("import-chosen");
+  const importText = document.getElementById("import-text");
+  const importResults = document.getElementById("import-results");
+  const importRekeyNote = document.getElementById("import-rekey-note");
+  const importClose = document.getElementById("import-close");
+  const importSubmit = document.getElementById("import-submit");
+  // What the sheet covers, made inert while it is open.
+  const importSheetBackground = [document.getElementById("top-bar"), document.getElementById("objects-view")];
+  let importing = false;
+  let focusBeforeImport = null;
+  // Files picked with Choose Files..., waiting for Import.
+  let chosenFiles = [];
+
+  function openImportSheet() {
+    if (importSheet.hidden) {
+      focusBeforeImport = document.activeElement;
+      if (!importing) {
+        showChosenFiles([]);
+        showImportResults([]);
+      }
+      importSheet.hidden = false;
+      for (const element of importSheetBackground) element.inert = true;
+    }
+    importChoose.focus();
+  }
+
+  function closeImportSheet() {
+    importSheet.hidden = true;
+    for (const element of importSheetBackground) element.inert = false;
+    focusBeforeImport?.focus();
+    focusBeforeImport = null;
+  }
+
+  function updateImportControls() {
+    importChoose.disabled = importing;
+    importSubmit.disabled = importing || (chosenFiles.length === 0 && importText.value.trim() === "");
+    importSubmit.textContent = importing ? "Importing..." : "Import";
+    importClose.textContent = importResults.hidden ? "Cancel" : "Done";
+  }
+
+  // Unlike `fetchJson`, an error carries dobjd's message, which says why the
+  // object was refused.
+  async function importObject(dobj, fileName) {
+    let response;
+    try {
+      response = await fetch(`${DOBJD_URL}/objects/import`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dobj, fileName }),
+      });
+    } catch (error) {
+      error.noResponse = true;
+      throw error;
+    }
+    const body = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(body?.error ?? `/objects/import: HTTP ${response.status}`);
+    return body;
+  }
+
+  // Each source is `{ label, read, fileName }`, where `read` resolves to a
+  // `.dobj` file's contents and `fileName`, if any, is the name to keep for
+  // it. Resolves to one result per source: `{ label, summary }`
+  // or `{ label, error }`.
+  async function importSources(sources) {
+    importing = true;
+    updateImportControls();
+    const results = [];
+    for (const { label, read, fileName } of sources) {
+      try {
+        const summary = await importObject(await read(), fileName);
+        // Listed now rather than when its event arrives, so it can be selected.
+        inventory.accept({ type: "object", ...summary });
+        results.push({ label, summary });
+      } catch (error) {
+        results.push({ label, error: startupErrorText(error) });
+      }
+    }
+    importing = false;
+    showImportResults(results);
+    selectImported(results.filter((result) => result.summary).map((result) => result.summary.fileName));
+    return results;
+  }
+
+  function showImportResults(results) {
+    importResults.replaceChildren();
+    for (const { label, summary, error } of results) {
+      const item = document.createElement("li");
+      if (error) {
+        item.className = "error";
+        item.textContent = `${label}: ${error}`;
+      } else {
+        const status = document.createElement("span");
+        status.className = "import-result-status";
+        status.textContent = summary.status === "live"
+          ? " imported, ready to use"
+          : " imported, usable once the network confirms it";
+        item.append(classLabel(summary.class), status);
+      }
+      importResults.append(item);
+    }
+    importResults.hidden = results.length === 0;
+    const sharedKeys = results.filter((result) => result.summary?.sharedKey).length;
+    importRekeyNote.hidden = sharedKeys === 0;
+    importRekeyNote.textContent = sharedKeys === 1
+      ? "Whoever gave you this object can still use their copy until you rekey it. "
+        + "Until then it is marked with a yellow warning sign."
+      : "Whoever gave you these objects can still use their copies until you rekey them. "
+        + "Until then they are marked with a yellow warning sign.";
+    updateImportControls();
+  }
+
+  function showChosenFiles(files) {
+    chosenFiles = files;
+    importChosen.replaceChildren(...files.map((file) => {
+      const item = document.createElement("li");
+      item.textContent = file.name;
+      return item;
+    }));
+    importChosen.hidden = files.length === 0;
+    updateImportControls();
+  }
+
+  function selectImported(fileNames) {
+    const listed = fileNames.filter(isListedFile);
+    if (listed.length === 0) return;
+    selectedRunId = null;
+    selectedFileNames.clear();
+    for (const fileName of listed) selectedFileNames.add(fileName);
+    anchorFileName = listed.at(-1);
+    selectionAtAnchor = new Set(selectedFileNames);
+    showSelection();
+    rowsByFileName.get(listed[0])?.scrollIntoView({ block: "nearest" });
+  }
+
+  importChoose.addEventListener("click", () => importFiles.click());
+  importFiles.addEventListener("change", () => {
+    const files = [...importFiles.files];
+    // Lets the same file be chosen again.
+    importFiles.value = "";
+    if (files.length > 0) showChosenFiles(files);
+  });
+  importText.addEventListener("input", updateImportControls);
+  importSubmit.addEventListener("click", async () => {
+    const sources = chosenFiles.map((file) => ({ label: file.name, read: () => file.text(), fileName: file.name }));
+    const pasted = importText.value.trim() !== "";
+    if (pasted) sources.push({ label: "Pasted contents", read: async () => importText.value });
+    showChosenFiles([]);
+    const results = await importSources(sources);
+    if (pasted && results.at(-1).summary) importText.value = "";
+    updateImportControls();
+  });
+  importClose.addEventListener("click", closeImportSheet);
+  importSheet.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeImportSheet();
+  });
 
   function isPlainPress(event) {
     return event.button === 0
@@ -4182,6 +4681,7 @@
       }
       document.getElementById("agent-divider").hidden = false;
     }
+    document.getElementById("import-button").addEventListener("click", openImportSheet);
     document.getElementById("reference-button").addEventListener("click",
       () => openPageWindow(RECIPEBOOK_PAGE, REFERENCE_WINDOW_NAME, REFERENCE_WINDOW_FEATURES));
     document.getElementById("summary-button").addEventListener("click",

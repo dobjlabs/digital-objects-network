@@ -1,12 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
-use super::send_json_request;
+use super::{send_json_request, send_optional_json_request};
 use anyhow::{Result, anyhow};
+use payload::encode_hash_hex;
 use pod2::middleware::Hash;
 use txlib::{GroundingWitness, StateHeader};
 use wire_types::synchronizer::{
     GroundingWitnessRequest, GroundingWitnessResponse, MembershipRequest, MembershipResponse,
-    StateHeadResponse,
+    StateHeadResponse, TxStatusResponse,
 };
 
 /// Combined commitment and nullifier limit for each membership request.
@@ -29,8 +30,26 @@ pub struct SynchronizerMembership {
     pub block_number: i64,
 }
 
+/// Outcome of a transaction's proof in a committed slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SynchronizerTxStatus {
+    /// Ethereum transaction whose blob carried the proof, in hex.
+    pub tx_hash: String,
+    /// Execution block that included the Ethereum transaction.
+    pub block_number: i64,
+    /// Why the synchronizer rejected the proof; `None` when it applied it.
+    pub error: Option<String>,
+}
+
 pub trait SynchronizerClient: Send + Sync {
     fn fetch_head(&self, sync_api_url: &str) -> Result<SynchronizerHead>;
+    /// Status of the blob that applied `tx_final`, or else of the latest rejected blob
+    /// carrying it; `None` when no committed blob carries it.
+    fn fetch_tx_status(
+        &self,
+        sync_api_url: &str,
+        tx_final: &Hash,
+    ) -> Result<Option<SynchronizerTxStatus>>;
     fn fetch_grounding_witness(
         &self,
         sync_api_url: &str,
@@ -75,6 +94,35 @@ impl SynchronizerClient for HttpSynchronizerClient {
             state_root: payload.state_root,
             block_number: payload.block_number,
         })
+    }
+
+    fn fetch_tx_status(
+        &self,
+        sync_api_url: &str,
+        tx_final: &Hash,
+    ) -> Result<Option<SynchronizerTxStatus>> {
+        let endpoint = format!(
+            "{}/v1/tx/by_final/{}",
+            sync_api_url.trim_end_matches('/'),
+            encode_hash_hex(tx_final)
+        );
+        let Some(response) = send_optional_json_request::<TxStatusResponse>(
+            self.client.get(&endpoint),
+            &endpoint,
+            "synchronizer transaction status response",
+        )?
+        else {
+            return Ok(None);
+        };
+        let blob =
+            response.blobs.into_iter().next().ok_or_else(|| {
+                anyhow!("synchronizer transaction status at {endpoint} has no blob")
+            })?;
+        Ok(Some(SynchronizerTxStatus {
+            tx_hash: format!("{:#x}", blob.tx_hash),
+            block_number: blob.block_number,
+            error: blob.error,
+        }))
     }
 
     fn fetch_grounding_witness(

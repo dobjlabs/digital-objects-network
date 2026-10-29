@@ -48,7 +48,7 @@ module transactions_tests {
     .then(chainLand(1)).then(settle)
     .expect(all { node.records.get(1).state == Landed, node.objects.get(3).status == Live, safety })
 
-  // Land exactly at the age limit, advance beyond it, then settle. Membership
+  // Land exactly at the age limit, advance beyond it, then settle. Inclusion
   // must win over age so the driver never expires a transaction already included.
   run landedAtTheAgeLimitStaysLandedTest = init
     .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1)).then(submit(1))
@@ -59,6 +59,26 @@ module transactions_tests {
     .expect(chain.head - node.records.get(1).grounding > maxAge)
     .then(settle)
     .expect(all { node.records.get(1).state == Landed, node.objects.get(3).status == Live, safety })
+
+  // A proof the chain refused expires as soon as settlement sees the rejection,
+  // and the chain can never land it afterwards.
+  run rejectedProofExpiresAndCannotLandTest = init
+    .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1)).then(submit(1))
+    .then(chainAdvance).then(chainAdvance).then(chainAdvance)
+    .then(chainReject(1))
+    .then(settle)
+    .expect(all {
+      node.records.get(1).state == Expired,
+      not(node.objects.keys().contains(3)),
+      freeLiveObjects == Set(1, 2),
+      safety,
+    })
+    .then(chainLand(1)).fail()
+
+  // The chain cannot reject a payload it would still accept.
+  run acceptableProofIsNotRejectedTest = init
+    .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1)).then(submit(1))
+    .then(chainReject(1)).fail()
 
   // Expiry and ownership
   //
@@ -163,8 +183,8 @@ module transactions_tests {
     .then(chainLand(1)).then(settle)
     .expect(all { node.records.get(1).state == Landed, safety })
 
-  // The accepted payload can land before any retry. Settlement must inspect
-  // membership for a Recorded transaction even without a stored relayer job ID.
+  // The accepted payload can land before any retry. Settlement must query the
+  // status of a Recorded transaction even without a stored relayer job ID.
   run crashAfterRelayerAcceptStillSettlesTest = init
     .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1)).then(crash(1, RelayerAccepted))
     .then(chainLand(1)).then(settle)
@@ -369,7 +389,7 @@ module transactions_tests {
     .then(settle)
     .expect(all { node.records.get(2).state == Expired, not(node.objects.keys().contains(4)), safety })
 
-  run settlementKeepsMembershipAndExpiryAtSameHeadTest = init
+  run settlementKeepsStatusAndExpiryAtSameHeadTest = init
     .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1)).then(submit(1))
     .then(chainAdvance).then(chainAdvance).then(querySettlement)
     .then(chainLand(1)).then(chainAdvance).then(applySettlement)
@@ -447,20 +467,20 @@ module transactions_tests {
     .then(prune(1)).fail()
 
 
-  run mixedQueriesRequestMembershipOnlyForAttemptedRecordsTest = init
+  run mixedQueriesRequestStatusOnlyForAttemptedRecordsTest = init
     .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1)).then(submit(1))
     .then(startProofWith(2, Set(2), Set(4))).then(finishProof(2)).then(querySettlement)
     .expect(all {
       node.settlement.transactions == Set(1, 2),
-      node.settlement.membershipTransactions == Set(1),
+      node.settlement.statusTransactions == Set(1),
       safety,
     })
     .then(applySettlement)
     .expect(all { node.records.get(1).state == Submitted, node.records.get(2).state == Recorded, safety })
 
-  run headOnlySnapshotWaitsForMembershipAfterConcurrentSubmissionTest = init
+  run headOnlySnapshotWaitsForStatusAfterConcurrentSubmissionTest = init
     .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1)).then(querySettlement)
-    .expect(node.settlement.membershipTransactions == Set())
+    .expect(node.settlement.statusTransactions == Set())
     .then(submitWith(1, false, ResponseLost)).then(chainLand(1))
     .then(chainAdvance).then(chainAdvance).then(chainAdvance).then(applySettlement)
     .expect(all {
@@ -475,7 +495,7 @@ module transactions_tests {
   run headOnlyQueryExpiresAnUntouchedRecordTest = init
     .then(startProofWith(1, Set(1), Set(3))).then(finishProof(1))
     .then(chainAdvance).then(chainAdvance).then(chainAdvance).then(querySettlement)
-    .expect(node.settlement.membershipTransactions == Set())
+    .expect(node.settlement.statusTransactions == Set())
     .then(applySettlement)
     .expect(all { node.records.get(1).state == Expired, node.objects.keys() == Set(1, 2), safety })
 

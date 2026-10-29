@@ -19,8 +19,8 @@ use crate::execute::{build_relayer_payload, obj_type_hash};
 use crate::holds::HoldTable;
 use crate::object_record::{FileStatus, ObjectRecord, parse_object_record_file};
 use crate::object_store::{
-    ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, object_file_name,
-    write_object_file,
+    ObjectFileEntry, ensure_store_dirs, imported_file_name, key_fingerprint, load_imported_keys,
+    load_object_files, matches_query, object_file_name, record_imported_key, write_object_file,
 };
 use crate::pexe_catalog::PexeCatalog;
 use crate::pipeline::RecordIndex;
@@ -453,13 +453,18 @@ impl Driver {
     /// (e.g. a file from outside `~/.dobj/`) — into the local object store.
     ///
     /// `dobj_json` is the raw JSON contents of a `.dobj` file. The object is
-    /// filed under a name derived from its commitment — the file's
-    /// own `id` and filename are not trusted.
+    /// filed under `requested_file_name` when given (typically the name of
+    /// the file it came in), otherwise under a name derived from its
+    /// commitment. A requested name gets `.dobj` added when it lacks it and a
+    /// numbered suffix when another file holds it, and is refused when unsafe
+    /// as a file name or when it has the form of a derived name without being
+    /// this object's.
     ///
     /// Validation:
     /// - the `class` must be one this driver's catalog knows, and the object's
     ///   committed `obj["type"]` predicate hash must equal that class's hash
     ///   (the same belt-and-suspenders check `execute` runs on its inputs);
+    /// - the file's `contentHash` must be the commitment of its `obj`;
     /// - the object must not already be present (live or nullified);
     /// - the object's nullifier must not already be spent on-chain.
     ///
@@ -467,7 +472,11 @@ impl Driver {
     /// otherwise `Unknown` (a later `sync_objects` promotes it). If the
     /// synchronizer is unreachable the object is imported as `Unknown` rather
     /// than failing, so the flow still works offline.
-    pub fn import_object(&self, dobj_json: &str) -> Result<ObjectSummary> {
+    pub fn import_object(
+        &self,
+        dobj_json: &str,
+        requested_file_name: Option<&str>,
+    ) -> Result<ObjectSummary> {
         let mut record: ObjectRecord = serde_json::from_str(dobj_json).map_err(|err| {
             DriverError::InvalidInput(format!("could not parse .dobj contents: {err}"))
         })?;
@@ -497,24 +506,25 @@ impl Driver {
             .into());
         }
 
-        // 2. Recompute content hash + file name from the commitment; never
-        //    trust the sender's. The content hash is self-certifying -- it IS
-        //    the commitment.
+        // 2. The file's content hash must be the object's commitment, which
+        //    is what the store and the chain know the object by. The file
+        //    name is generated from the commitment, never the sender's.
         let commitment = record.obj.commitment();
-        let file_name = object_file_name(&record.class, &record.obj)
-            .map_err(|err| DriverError::InvalidInput(format!("imported {err:#}")))?;
-        record.content_hash = commitment;
-
-        // 3. Reject if we already hold this object (live or nullified).
-        let entries = load_object_files(&self.paths)?;
-        if entries
-            .iter()
-            .any(|entry| entry.record.content_hash == commitment || entry.file_name == file_name)
-        {
-            return Err(
-                DriverError::Conflict(format!("object already present: {file_name}")).into(),
-            );
+        if record.content_hash != commitment {
+            return Err(DriverError::InvalidInput(format!(
+                "content hash mismatch: the file says {}, the object's is {}",
+                encode_hash_hex(&record.content_hash),
+                encode_hash_hex(&commitment)
+            ))
+            .into());
         }
+        let generated_file_name = object_file_name(&record.class, &record.obj)
+            .map_err(|err| DriverError::InvalidInput(format!("imported {err:#}")))?;
+
+        // 3. Reject if we already hold this object or refuse its name, before
+        //    asking the synchronizer. Checked again under the store lock
+        //    before filing, since the store can change meanwhile.
+        self.import_file_name(&record, &generated_file_name, requested_file_name)?;
 
         // 4. Grounding decides status. A nullifier already on-chain means the
         //    object has been spent — reject it. Otherwise Live if the object's
@@ -546,18 +556,75 @@ impl Driver {
             }
             Err(err) => {
                 log::warn!(
-                    "import: grounding check failed, importing {file_name} as unknown: {err:#}"
+                    "import: grounding check failed, importing {generated_file_name} as unknown: {err:#}"
                 );
                 FileStatus::Unknown
             }
         };
         record.status = status;
 
-        // 5. File it. `write_object_file` routes to the live or nullified dir
-        //    based on status, so a freshly-imported Unknown/Live lands live.
-        write_object_file(&self.paths, &record, &file_name)?;
+        let file_name = {
+            let _store = self.store_lock.lock().expect("store lock poisoned");
+            let file_name =
+                self.import_file_name(&record, &generated_file_name, requested_file_name)?;
+
+            // Recorded before the object is filed, so a filed import is never
+            // missing its fingerprint.
+            if let Some(fingerprint) = key_fingerprint(&record.obj) {
+                record_imported_key(&self.paths, &fingerprint)?;
+            }
+
+            // 5. File it. `write_object_file` routes to the live or nullified
+            //    dir based on status, so a freshly-imported Unknown/Live lands
+            //    live.
+            write_object_file(&self.paths, &record, &file_name)?;
+            file_name
+        };
 
         self.summary_of(ObjectFileEntry { file_name, record })
+    }
+
+    /// The name an imported `record` is filed under: `requested`, adjusted
+    /// as [`imported_file_name`] does, or `generated`. Refuses an object the
+    /// store already holds, live or nullified, and a requested name it
+    /// refuses. A requested name skips past names in the discarded
+    /// directory too, so discarding it later cannot replace another file.
+    fn import_file_name(
+        &self,
+        record: &ObjectRecord,
+        generated: &str,
+        requested: Option<&str>,
+    ) -> Result<String> {
+        let entries = load_object_files(&self.paths)?;
+        if let Some(held) = entries
+            .iter()
+            .find(|entry| entry.record.content_hash == record.content_hash)
+        {
+            return Err(DriverError::Conflict(format!(
+                "object already present: {}",
+                held.file_name
+            ))
+            .into());
+        }
+        let file_name = match requested {
+            None => generated.to_string(),
+            Some(requested) => imported_file_name(requested, generated, |name| {
+                [
+                    &self.paths.objects_dir,
+                    &self.paths.nullified_objects_dir,
+                    &self.paths.discarded_objects_dir,
+                ]
+                .iter()
+                .any(|dir| dir.join(name).exists())
+            })
+            .map_err(|err| DriverError::InvalidInput(format!("{err:#}")))?,
+        };
+        if entries.iter().any(|entry| entry.file_name == file_name) {
+            return Err(
+                DriverError::Conflict(format!("object already present: {file_name}")).into(),
+            );
+        }
+        Ok(file_name)
     }
 
     pub fn generated_podlang(&self) -> Option<String> {
@@ -579,9 +646,15 @@ impl Driver {
         let index = RecordIndex::new(records);
         let held = self.holds.labels();
         let catalog = self.catalog();
+        let imported_keys = load_imported_keys(&self.paths).unwrap_or_else(|err| {
+            log::warn!("treating no object keys as shared: {err:#}");
+            HashSet::new()
+        });
         entries
             .into_iter()
-            .map(|entry| self.object_summary(entry, &index, &held, catalog.as_ref()))
+            .map(|entry| {
+                self.object_summary(entry, &index, &held, &imported_keys, catalog.as_ref())
+            })
             .collect()
     }
 
@@ -592,6 +665,7 @@ impl Driver {
         entry: &ObjectFileEntry,
         index: &RecordIndex<'_>,
         held: &HashMap<String, String>,
+        imported_keys: &HashSet<Hash>,
         catalog: &dyn ActionCatalog,
     ) -> ObjectSummary {
         let class_info = catalog.get_class(&entry.record.class);
@@ -628,6 +702,8 @@ impl Driver {
             description: class_info.as_ref().map(|c| c.description.clone()),
             fields: entry.record.fields_map(),
             held_by_run_id,
+            shared_key: key_fingerprint(&entry.record.obj)
+                .is_some_and(|fingerprint| imported_keys.contains(&fingerprint)),
         }
     }
 

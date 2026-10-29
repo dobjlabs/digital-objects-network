@@ -44,7 +44,7 @@ Two flavors of commands.
 | `runs wait <run-id>`                           | Follows an existing run through SSE and a final state read; never submits an action |
 | `events`                                        | `GET /events` SSE — prints every event as JSON lines                                                                |
 
-Each command renders human-friendly output by default. Pass `--json` for machine-readable output (suitable for `jq`). Inventory includes object fields and `heldByRunId`; actions include outputs, mutation slots, and argument names.
+Each command renders human-friendly output by default. Pass `--json` for machine-readable output (suitable for `jq`). Inventory includes object fields, `heldByRunId` and `sharedKey`; actions include outputs, mutation slots, and argument names.
 
 `run --json` and `runs wait --json` print the final `RunState` to stdout, with progress on stderr. Failed runs print their state and exit nonzero. `runs show` can inspect a failed run without treating that status as a CLI failure. Run IDs are printed to stderr when submitting; `--quiet` suppresses progress and the ID announcement.
 

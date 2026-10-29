@@ -12,11 +12,14 @@ use anyhow::Result;
 use clap::Parser;
 use tauri::{
     Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent,
-    menu::{Menu, MenuItem, Submenu},
+    menu::{CheckMenuItem, Menu, MenuItem, Submenu},
     tray::TrayIconBuilder,
 };
+use tokio::sync::watch;
 
 mod agents;
+mod discord;
+mod metrics;
 mod onboarding;
 mod runtime;
 
@@ -35,11 +38,32 @@ struct Args {
 
 struct Desktop {
     home: PathBuf,
+    discord: discord::Presence,
+    inventory_metrics: watch::Sender<Option<metrics::InventoryMetrics>>,
+    metrics_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+    discord_menu_items: Mutex<Vec<CheckMenuItem<tauri::Wry>>>,
     runtime: Mutex<Option<Arc<runtime::Runtime>>>,
     message: Mutex<String>,
     tray_available: AtomicBool,
     #[cfg(target_os = "linux")]
     background_pending: AtomicBool,
+}
+
+impl Desktop {
+    fn new(home: PathBuf, message: String) -> Self {
+        Self {
+            discord: discord::Presence::new(&home),
+            home,
+            inventory_metrics: watch::Sender::new(None),
+            metrics_task: Mutex::new(None),
+            discord_menu_items: Mutex::new(Vec::new()),
+            runtime: Mutex::new(None),
+            message: Mutex::new(message),
+            tray_available: AtomicBool::new(false),
+            #[cfg(target_os = "linux")]
+            background_pending: AtomicBool::new(false),
+        }
+    }
 }
 
 fn show_window(app: &tauri::AppHandle) {
@@ -89,6 +113,15 @@ fn run_menu_action(app: &tauri::AppHandle, id: &str) {
                 eprintln!("Could not open agent guide: {error:#}");
             }
         }
+        "discord-presence" => {
+            let desktop = app.state::<Desktop>();
+            if let Err(error) = desktop.discord.set_enabled(!desktop.discord.enabled()) {
+                eprintln!("Could not save Discord sharing preference: {error}");
+            }
+            for item in desktop.discord_menu_items.lock().unwrap().iter() {
+                let _ = item.set_checked(desktop.discord.enabled());
+            }
+        }
         "quit" => app.exit(0),
         _ => {}
     }
@@ -97,6 +130,20 @@ fn run_menu_action(app: &tauri::AppHandle, id: &str) {
 fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let open = MenuItem::with_id(app, "open", "Open Bitcraft", true, None::<&str>)?;
     let close = MenuItem::with_id(app, "close", "Close Window", true, Some("CmdOrCtrl+W"))?;
+    let desktop = app.state::<Desktop>();
+    let discord = CheckMenuItem::with_id(
+        app,
+        "discord-presence",
+        "Share activity on Discord",
+        true,
+        desktop.discord.enabled(),
+        None::<&str>,
+    )?;
+    desktop
+        .discord_menu_items
+        .lock()
+        .unwrap()
+        .push(discord.clone());
     let quit = MenuItem::with_id(app, "quit", "Quit Bitcraft", true, Some("CmdOrCtrl+Q"))?;
     let agents = MenuItem::with_id(
         app,
@@ -105,7 +152,28 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         true,
         None::<&str>,
     )?;
-    Menu::with_items(app, &[&open, &agents, &close, &quit])
+    Menu::with_items(app, &[&open, &agents, &close, &discord, &quit])
+}
+
+/// The editing commands, whose items carry the shortcuts that let pages cut,
+/// copy, paste and select text on macOS.
+#[cfg(target_os = "macos")]
+fn edit_menu(app: &tauri::AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
+    use tauri::menu::PredefinedMenuItem;
+    Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )
 }
 
 fn is_daemon_url(url: &tauri::Url) -> bool {
@@ -133,6 +201,11 @@ fn is_external_link(url: &tauri::Url) -> bool {
 
 fn show_page_title(window: tauri::WebviewWindow, title: String) {
     let _ = window.set_title(&title);
+}
+
+#[tauri::command]
+fn inventory_metrics(desktop: tauri::State<Desktop>) -> Option<metrics::InventoryMetrics> {
+    desktop.inventory_metrics.borrow().clone()
 }
 
 fn shell_dev_url(app: &tauri::AppHandle) -> Option<tauri::Url> {
@@ -234,19 +307,20 @@ fn watch_tray(app: tauri::AppHandle) {
 fn main() -> Result<()> {
     let args = Args::parse();
     let home = bitcraft_launchers::resolve_home(args.home)?;
-    let desktop = Desktop {
-        home: home.clone(),
-        runtime: Mutex::new(None),
-        message: Mutex::new(if args.no_runtime {
+    let desktop = Desktop::new(
+        home.clone(),
+        if args.no_runtime {
             "Desktop shell only. Start without --no-runtime to launch the game.".into()
         } else {
             "Preparing artifacts...".into()
-        }),
-        tray_available: AtomicBool::new(false),
-        #[cfg(target_os = "linux")]
-        background_pending: AtomicBool::new(args.background),
-    };
+        },
+    );
+    #[cfg(target_os = "linux")]
+    desktop
+        .background_pending
+        .store(args.background, Ordering::Relaxed);
     let app = tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![inventory_metrics])
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
             if !args.iter().any(|arg| arg == "--background") {
                 show_window(app);
@@ -323,7 +397,10 @@ fn main() -> Result<()> {
                 .build()?;
             let app_menu = menu(app.handle())?;
             let submenu = Submenu::with_items(app, "Bitcraft", true, &app_menu.items()?.iter().map(|item| item as &dyn tauri::menu::IsMenuItem<tauri::Wry>).collect::<Vec<_>>())?;
-            app.set_menu(Menu::with_items(app, &[&submenu])?)?;
+            let menu_bar = Menu::with_items(app, &[&submenu])?;
+            #[cfg(target_os = "macos")]
+            menu_bar.append(&edit_menu(app.handle())?)?;
+            app.set_menu(menu_bar)?;
             if !args.no_tray {
                 match TrayIconBuilder::with_id("bitcraft")
                     .menu(&menu(app.handle())?)
@@ -355,6 +432,9 @@ fn main() -> Result<()> {
                             *handle.state::<Desktop>().runtime.lock().unwrap() = Some(runtime.clone());
                             match runtime.wait_until_ready().await {
                                 Ok(()) => {
+                                    let desktop = handle.state::<Desktop>();
+                                    *desktop.metrics_task.lock().unwrap() = Some(tauri::async_runtime::spawn(metrics::run(runtime.connection(), desktop.inventory_metrics.clone())));
+                                    desktop.discord.start(runtime.connection(), desktop.inventory_metrics.subscribe());
                                     if let Some(window) = handle.get_webview_window("main") {
                                         let _ = window.navigate(format!("http://127.0.0.1:{}/bitcraft/", runtime::HTTP_PORT).parse().unwrap());
                                     }
@@ -378,6 +458,10 @@ fn main() -> Result<()> {
         .build(tauri::generate_context!())?;
     app.run(|app, event| match event {
         RunEvent::Exit => {
+            if let Some(task) = app.state::<Desktop>().metrics_task.lock().unwrap().take() {
+                task.abort();
+            }
+            app.state::<Desktop>().discord.stop();
             if let Some(runtime) = app.state::<Desktop>().runtime.lock().unwrap().take() {
                 let _ = runtime.stop();
             }
@@ -393,6 +477,22 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inventory_metrics_capability_uses_the_runtime_port() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let capability = config["app"]["security"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|capability| capability["identifier"] == "inventory-metrics")
+            .expect("inventory metrics capability must exist");
+        assert_eq!(
+            capability["remote"]["urls"],
+            serde_json::json!([format!("http://127.0.0.1:{}/*", runtime::HTTP_PORT)])
+        );
+    }
 
     #[test]
     fn navigation_stays_on_the_app_or_its_daemon() {
