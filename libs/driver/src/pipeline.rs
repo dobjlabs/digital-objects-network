@@ -11,8 +11,10 @@ use payload::encode_hash_hex;
 use pod2::middleware::{Hash, containers::Dictionary};
 use txlib::{grounding_aged_out, object_nullifier_hash};
 use wire_types::relayer::{JobStatus, JobStatusResponse};
-use wire_types::transactions::{TransactionRecord, TransactionState};
-use wire_types::{ExecutionPhase, ExecutionStage, ObjectSummary, QualifiedName};
+use wire_types::transactions::{PendingName, TransactionRecord, TransactionState};
+use wire_types::{
+    ExecutionPhase, ExecutionStage, MutatedObjectSlots, ObjectSummary, QualifiedName,
+};
 
 use crate::clients::SynchronizerMembership;
 use crate::driver::Driver;
@@ -20,7 +22,11 @@ use crate::error::DriverError;
 use crate::execute::{decode_action_args, resolve_inputs, validate_execute_request};
 use crate::holds::Holds;
 use crate::object_record::{FileStatus, ObjectRecord};
-use crate::object_store::{load_object_files, matches_query, object_file_name, write_object_file};
+use crate::object_store::{
+    has_custom_file_name, load_object_files, matches_query, nullify_object_file, object_file_name,
+    pending_file_name, rename_live_object_file, store_has_file, unique_file_name,
+    write_object_file,
+};
 use crate::transactions::{
     load_records, locked_inputs, read_record, record_tx_final, remove_transaction, write_payload,
     write_record,
@@ -55,6 +61,8 @@ pub struct ProvedTransaction {
     pub nullifiers: Vec<Hash>,
     pub created: Vec<Hash>,
     pub payload_bytes: Vec<u8>,
+    /// Which input each mutated output replaces.
+    pub mutated_objects: Vec<MutatedObjectSlots>,
     holds: Holds,
 }
 
@@ -232,6 +240,7 @@ impl Driver {
             nullifiers: spendable_outputs.tx.nullifier_hashes()?,
             created: spendable_outputs.tx.created_commitments()?,
             payload_bytes,
+            mutated_objects: action.mutated_objects.clone(),
             holds,
         })
     }
@@ -241,7 +250,7 @@ impl Driver {
     /// Release input holds on success or failure.
     pub fn record(&self, proved: ProvedTransaction) -> Result<TransactionRecord> {
         let _store = self.store_lock.lock().expect("store lock poisoned");
-        let output_files = proved.output_files()?;
+        let mut output_files = proved.output_files()?;
         let entries = load_object_files(&self.paths)?;
         let locked = locked_inputs(&load_records(&self.paths)?);
         for input in proved.input_files() {
@@ -279,8 +288,31 @@ impl Driver {
                 );
             }
         }
+        // A mutated input with a custom name passes it on: its new version is
+        // written under a pending name and takes the name once it lands.
+        let mut pending_names = Vec::new();
+        for slots in &proved.mutated_objects {
+            let Some(input) = proved.input_files().get(slots.input_index) else {
+                continue;
+            };
+            let custom = entries.iter().any(|entry| {
+                &entry.file_name == input && has_custom_file_name(input, &entry.record)
+            });
+            if !custom || slots.output_index >= output_files.len() {
+                continue;
+            }
+            let pending = pending_file_name(input, |name| {
+                store_has_file(&self.paths, name)
+                    || output_files.iter().any(|output| output == name)
+            });
+            output_files[slots.output_index] = pending.clone();
+            pending_names.push(PendingName {
+                file_name: pending,
+                final_name: input.clone(),
+            });
+        }
 
-        let record = TransactionRecord::recorded(
+        let mut record = TransactionRecord::recorded(
             encode_hash_hex(&proved.tx_final),
             proved.action.clone(),
             proved.owner.clone(),
@@ -292,6 +324,7 @@ impl Driver {
             proved.created.iter().map(encode_hash_hex).collect(),
             now_ms(),
         );
+        record.pending_names = pending_names;
         let mut attempted_outputs = Vec::new();
         let result = (|| -> Result<()> {
             for (output, file_name) in proved.outputs.iter().zip(&output_files) {
@@ -608,18 +641,20 @@ impl Driver {
             .count();
 
         let mut changed_files = HashSet::new();
-        for record in &outcome.records {
-            if record.state.is_terminal()
-                && let Err(err) = self.persist_settled_objects(
+        for record in outcome.records.iter_mut() {
+            if record.state.is_terminal() {
+                match self.persist_settled_objects(
                     record,
                     &mut changed_files,
                     &mut outcome.removed_files,
-                )
-            {
-                log::warn!(
-                    "could not update the objects of settled transaction {}: {err:#}",
-                    record.tx_final
-                );
+                ) {
+                    Ok(true) => write_record(&self.paths, record)?,
+                    Ok(false) => {}
+                    Err(err) => log::warn!(
+                        "could not update the objects of settled transaction {}: {err:#}",
+                        record.tx_final
+                    ),
+                }
             }
             if record.state.is_terminal() {
                 changed_files.extend(record.output_files.iter().cloned());
@@ -641,9 +676,19 @@ impl Driver {
             if entry.record.status == status && entry.record.tx_hash == tx_hash {
                 continue;
             }
+            let newly_spent =
+                status == FileStatus::Nullified && entry.record.status != FileStatus::Nullified;
             entry.record.status = status;
             entry.record.tx_hash = tx_hash;
-            write_object_file(&self.paths, &entry.record, &entry.file_name)?;
+            if newly_spent {
+                let spent_name = nullify_object_file(&self.paths, &entry.record, &entry.file_name)?;
+                if spent_name != entry.file_name {
+                    outcome.removed_files.push(entry.file_name.clone());
+                    entry.file_name = spent_name;
+                }
+            } else {
+                write_object_file(&self.paths, &entry.record, &entry.file_name)?;
+            }
             changed_files.insert(entry.file_name.clone());
         }
         let summaries = self.summaries(
@@ -682,16 +727,25 @@ impl Driver {
             .expect("reconciliation cache lock poisoned");
         reconciled.retain(|tx_final, _| terminal_ids.contains(tx_final.as_str()));
         for record in records.iter().filter(|record| record.state.is_terminal()) {
+            let mut record = record.clone();
             let cleanup_at = record
                 .settled_at_ms
                 .unwrap_or(record.recorded_at_ms)
                 .saturating_add(TRANSACTION_RETENTION_MS);
-            if current_time_ms >= cleanup_at || reconciled.get(&record.tx_final) != Some(record) {
-                if let Err(err) = self.persist_settled_objects(
-                    record,
-                    &mut changed_files,
-                    &mut outcome.removed_files,
-                ) {
+            if current_time_ms >= cleanup_at || reconciled.get(&record.tx_final) != Some(&record) {
+                let persisted = self
+                    .persist_settled_objects(
+                        &mut record,
+                        &mut changed_files,
+                        &mut outcome.removed_files,
+                    )
+                    .and_then(|record_changed| {
+                        if record_changed {
+                            write_record(&self.paths, &record)?;
+                        }
+                        Ok(())
+                    });
+                if let Err(err) = persisted {
                     reconciled.remove(&record.tx_final);
                     log::warn!("retaining transaction {}: {err:#}", record.tx_final);
                     let retry_at = current_time_ms.saturating_add(60_000);
@@ -705,7 +759,7 @@ impl Driver {
                 reconciled.insert(record.tx_final.clone(), record.clone());
             }
             if current_time_ms >= cleanup_at {
-                match remove_transaction(&self.paths, &record_tx_final(record)?) {
+                match remove_transaction(&self.paths, &record_tx_final(&record)?) {
                     Ok(()) => {
                         reconciled.remove(&record.tx_final);
                         outcome.tx_finals.push(record.tx_final.clone());
@@ -743,12 +797,14 @@ impl Driver {
         Ok(outcome)
     }
 
+    /// Bring a terminal record's object files in line with it. Returns
+    /// whether `record` itself changed, which the caller persists.
     fn persist_settled_objects(
         &self,
-        record: &TransactionRecord,
+        record: &mut TransactionRecord,
         changed_files: &mut HashSet<String>,
         removed_files: &mut Vec<String>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         if record.state == TransactionState::Expired {
             for file_name in &record.output_files {
                 let path = self.paths.objects_dir.join(file_name);
@@ -757,7 +813,7 @@ impl Driver {
                 }
             }
             removed_files.extend(self.remove_unknown_outputs(record)?);
-            return Ok(());
+            return Ok(false);
         }
         let producing_tx_final = record_tx_final(record)?;
         for (files, output) in [(&record.input_files, false), (&record.output_files, true)] {
@@ -773,23 +829,37 @@ impl Driver {
                     continue;
                 }
                 let mut stored = crate::object_record::parse_object_record_file(&path)?;
-                if output && stored.tx_final != producing_tx_final {
+                if !output {
+                    // An input's name may since have passed to a later
+                    // version of the object, or to another object.
+                    let spent_here = object_nullifier_hash(&stored.obj).is_ok_and(|nullifier| {
+                        record.nullifiers.contains(&encode_hash_hex(&nullifier))
+                    });
+                    if !spent_here {
+                        continue;
+                    }
+                    if stored.status != FileStatus::Nullified {
+                        stored.status = FileStatus::Nullified;
+                        let spent_name = nullify_object_file(&self.paths, &stored, file_name)?;
+                        if &spent_name != file_name {
+                            removed_files.push(file_name.clone());
+                        }
+                        changed_files.insert(spent_name);
+                    }
+                    continue;
+                }
+                if stored.tx_final != producing_tx_final {
                     continue;
                 }
                 let mut changed = false;
-                if output {
-                    if stored.status == FileStatus::Unknown {
-                        stored.status = FileStatus::Live;
-                        changed = true;
-                    }
-                    if let Some(tx_hash) = &record.tx_hash
-                        && stored.tx_hash.as_ref() != Some(tx_hash)
-                    {
-                        stored.tx_hash = Some(tx_hash.clone());
-                        changed = true;
-                    }
-                } else if stored.status != FileStatus::Nullified {
-                    stored.status = FileStatus::Nullified;
+                if stored.status == FileStatus::Unknown {
+                    stored.status = FileStatus::Live;
+                    changed = true;
+                }
+                if let Some(tx_hash) = &record.tx_hash
+                    && stored.tx_hash.as_ref() != Some(tx_hash)
+                {
+                    stored.tx_hash = Some(tx_hash.clone());
                     changed = true;
                 }
                 if changed {
@@ -798,7 +868,62 @@ impl Driver {
                 }
             }
         }
-        Ok(())
+        self.finish_pending_names(record, changed_files, removed_files)
+    }
+
+    /// Give each landed output written under a pending name the name of the
+    /// input it replaced, now spent. An output an action has since taken as
+    /// an input keeps its pending name until that action ends. Returns
+    /// whether `record` changed.
+    fn finish_pending_names(
+        &self,
+        record: &mut TransactionRecord,
+        changed_files: &mut HashSet<String>,
+        removed_files: &mut Vec<String>,
+    ) -> Result<bool> {
+        if record.state != TransactionState::Landed || record.pending_names.is_empty() {
+            return Ok(false);
+        }
+        let producing_tx_final = record_tx_final(record)?;
+        let held = self.holds.labels();
+        let locked = locked_inputs(&load_records(&self.paths)?);
+        let mut finished = Vec::new();
+        for pending in &record.pending_names {
+            let path = self.paths.objects_dir.join(&pending.file_name);
+            let ours = path.try_exists()?
+                && crate::object_record::parse_object_record_file(&path)?.tx_final
+                    == producing_tx_final;
+            if !ours {
+                finished.push((pending.file_name.clone(), None));
+                continue;
+            }
+            if held.contains_key(&pending.file_name) || locked.contains(&pending.file_name) {
+                continue;
+            }
+            let final_name = unique_file_name(&pending.final_name, |name| {
+                store_has_file(&self.paths, name)
+            });
+            rename_live_object_file(&self.paths, &pending.file_name, &final_name)?;
+            removed_files.push(pending.file_name.clone());
+            changed_files.insert(final_name.clone());
+            finished.push((pending.file_name.clone(), Some(final_name)));
+        }
+        if finished.is_empty() {
+            return Ok(false);
+        }
+        for (pending_name, final_name) in finished {
+            record
+                .pending_names
+                .retain(|pending| pending.file_name != pending_name);
+            if let Some(final_name) = final_name {
+                for output in record.output_files.iter_mut() {
+                    if *output == pending_name {
+                        *output = final_name.clone();
+                    }
+                }
+            }
+        }
+        Ok(true)
     }
 
     pub fn list_transactions(&self) -> Result<Vec<TransactionRecord>> {

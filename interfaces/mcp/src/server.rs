@@ -152,6 +152,14 @@ pub struct CheckFeasibilityParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct RenameObjectParams {
+    /// The object's current file name, as `list_objects` reports it.
+    pub file_name: String,
+    /// The new file name; `.dobj` is added when missing.
+    pub new_name: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ImportObjectFileParams {
     /// Local filesystem path (on the machine running dobjd) to an external
     /// `.dobj` file — one not produced by this driver (e.g. a download, or a
@@ -486,6 +494,19 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
+        description = "Rename a live object's file. `.dobj` is added to `new_name` when missing. Refuses names that are unsafe as file names, that another object file already has, or that look like a generated object name but are not this object's; refuses objects that are not live (including ones awaiting confirmation) and objects a run holds or an open transaction spends. When an action mutates an object with a custom name, the new version keeps the name once the transaction lands. Returns the object's summary under its new name."
+    )]
+    fn rename_object(
+        &self,
+        Parameters(params): Parameters<RenameObjectParams>,
+    ) -> Result<Json<ObjectSummary>, String> {
+        self.ops
+            .rename_object(&params.file_name, &params.new_name)
+            .map(Json)
+            .map_err(|e| e.to_string())
+    }
+
+    #[tool(
         description = "Read the daemon's current configuration: synchronizer + relayer URLs and the MCP server toggle."
     )]
     fn read_settings(&self) -> Result<Json<DriverSettings>, String> {
@@ -754,6 +775,7 @@ mod tests {
         assert!(tools.contains(&"write_settings".to_string()));
         assert!(tools.contains(&"get_objects_dir".to_string()));
         assert!(tools.contains(&"import_object_file".to_string()));
+        assert!(tools.contains(&"rename_object".to_string()));
         assert!(tools.contains(&"define_command".to_string()));
         assert!(tools.contains(&"list_commands".to_string()));
         assert!(tools.contains(&"delete_command".to_string()));
@@ -770,7 +792,7 @@ mod tests {
         ] {
             assert!(tools.contains(&tool.to_string()), "{tool}");
         }
-        assert_eq!(tools.len(), 28);
+        assert_eq!(tools.len(), 29);
     }
 
     #[test]

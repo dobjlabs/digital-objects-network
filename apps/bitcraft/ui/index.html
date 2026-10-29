@@ -857,6 +857,18 @@
   }
   .shared-key-notice p { margin: 4px 0 0; }
   .object-row.welcome .object-name { font-weight: 600; }
+  .rename-field {
+    box-sizing: border-box;
+    width: 100%;
+    margin: 0;
+    padding: 0 3px;
+    border: 1px solid var(--progress-fill);
+    border-radius: 3px;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    font-weight: normal;
+  }
   .object-row.capital-good .object-name { font-weight: 700; }
   .message {
     padding: 8px 10px;
@@ -2026,6 +2038,13 @@
           }
         },
       });
+      if (fileNames.length === 1 && fileNames[0] !== WELCOME_FILE) {
+        entries.push({
+          label: "Rename",
+          isDisabled: () => !canRename(fileNames[0]),
+          onSelect: () => startRename(fileNames[0]),
+        });
+      }
     }
     // A file that is not an object is no action's input.
     if (fileNames.includes(WELCOME_FILE)) {
@@ -3753,6 +3772,7 @@
         row.style.animation = `row-flash ${ROW_FLASH_MS}ms ease-out -${flashElapsed}ms`;
       }
     }
+    placeRenameField();
     fitObjectNames();
   }
 
@@ -3965,6 +3985,7 @@
   // Writes each row's file name, cut in the middle to fit its row.
   function fitObjectNames() {
     for (const [fileName, row] of rowsByFileName) {
+      if (renaming?.fileName === fileName) continue;
       const name = row.querySelector(".object-name");
       nameMeasureContext.font = getComputedStyle(name).font;
       name.textContent = fitFileName(fileName, name.clientWidth);
@@ -4493,22 +4514,137 @@
   }
 
   // Unlike `fetchJson`, an error carries dobjd's message, which says why the
-  // object was refused.
-  async function importObject(dobj, fileName) {
+  // request was refused.
+  async function postForReason(path, body) {
     let response;
     try {
-      response = await fetch(`${DOBJD_URL}/objects/import`, {
+      response = await fetch(DOBJD_URL + path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dobj, fileName }),
+        body: JSON.stringify(body),
       });
     } catch (error) {
       error.noResponse = true;
       throw error;
     }
-    const body = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(body?.error ?? `/objects/import: HTTP ${response.status}`);
-    return body;
+    const result = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(result?.error ?? `${path}: HTTP ${response.status}`);
+    return result;
+  }
+
+  function importObject(dobj, fileName) {
+    return postForReason("/objects/import", { dobj, fileName });
+  }
+
+  // The row whose name is being edited: its file name and the text field.
+  let renaming = null;
+
+  // dobjd renames only objects no action holds or is creating.
+  function canRename(fileName) {
+    return objectsByFileName.get(fileName)?.class !== undefined && inputsAvailable([fileName]);
+  }
+
+  // As in Finder, the name is edited in place, with all of it but the
+  // extension selected.
+  function startRename(fileName) {
+    if (renaming !== null || !canRename(fileName)) return;
+    const field = document.createElement("input");
+    field.type = "text";
+    field.className = "rename-field";
+    field.value = fileName;
+    field.spellcheck = false;
+    field.setAttribute("aria-label", "New file name");
+    renaming = { fileName, field, saving: false, moving: false };
+    field.addEventListener("keydown", (event) => {
+      event.stopPropagation();
+      if (event.key === "Enter") {
+        event.preventDefault();
+        commitRename();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        endRename();
+      }
+    });
+    field.addEventListener("blur", () => {
+      if (!renaming?.moving) commitRename();
+    });
+    // The row's own handlers would change the selection.
+    for (const type of ["mousedown", "dblclick", "contextmenu"]) {
+      field.addEventListener(type, (event) => event.stopPropagation());
+    }
+    field.addEventListener("input", hideRowTooltip);
+    placeRenameField();
+    field.focus();
+    const stem = fileName.endsWith(".dobj") ? fileName.length - ".dobj".length : fileName.length;
+    field.setSelectionRange(0, stem);
+  }
+
+  // Puts the field in its row, which every redraw of the list replaces.
+  function placeRenameField() {
+    if (renaming === null) return;
+    const row = rowsByFileName.get(renaming.fileName);
+    if (!row) {
+      endRename();
+      return;
+    }
+    const { field } = renaming;
+    const hadFocus = document.activeElement === field;
+    const { selectionStart, selectionEnd } = field;
+    renaming.moving = true;
+    row.querySelector(".object-name").replaceChildren(field);
+    row.classList.add("renaming");
+    if (hadFocus) {
+      field.focus();
+      field.setSelectionRange(selectionStart, selectionEnd);
+    }
+    renaming.moving = false;
+  }
+
+  function endRename() {
+    if (renaming === null) return;
+    const { fileName, field } = renaming;
+    renaming = null;
+    hideRowTooltip();
+    field.remove();
+    rowsByFileName.get(fileName)?.classList.remove("renaming");
+    fitObjectNames();
+  }
+
+  async function commitRename() {
+    if (renaming === null || renaming.saving) return;
+    const { fileName, field } = renaming;
+    const newName = field.value.trim();
+    if (newName === "" || newName === fileName) {
+      endRename();
+      return;
+    }
+    renaming.saving = true;
+    let summary;
+    try {
+      summary = await postForReason(
+        `/objects/${encodeURIComponent(fileName)}/rename`, { fileName: newName });
+    } catch (error) {
+      if (renaming?.field !== field) return;
+      renaming.saving = false;
+      field.focus();
+      showRenameError(startupErrorText(error));
+      return;
+    }
+    if (renaming?.field === field) endRename();
+    // Listed now rather than when its events arrive, so it stays selected.
+    inventory.accept({ type: "object-removed", fileName });
+    inventory.accept({ type: "object", ...summary });
+    selectImported([summary.fileName]);
+  }
+
+  // dobjd's reason, under the field, until the name is edited.
+  function showRenameError(text) {
+    clearTimeout(rowTooltipTimer);
+    rowTooltip.textContent = text;
+    rowTooltip.hidden = false;
+    const box = renaming.field.getBoundingClientRect();
+    rowTooltip.style.left = `${box.left}px`;
+    rowTooltip.style.top = `${box.bottom + 4}px`;
   }
 
   // Each source is `{ label, read, fileName }`, where `read` resolves to a
@@ -4652,6 +4788,17 @@
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       closeContextMenu();
+    }
+    // As in Finder, Return renames the selected file.
+    const typing = event.target instanceof HTMLElement
+      && (event.target.closest("input, textarea, button, select") || event.target.isContentEditable);
+    if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey
+        && !typing && openMenu === null && importSheet.hidden && selectedFileNames.size === 1) {
+      const [fileName] = selectedFileNames;
+      if (canRename(fileName)) {
+        event.preventDefault();
+        startRename(fileName);
+      }
     }
   });
   window.addEventListener("blur", closeContextMenu);

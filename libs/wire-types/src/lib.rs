@@ -222,6 +222,15 @@ pub struct ImportObjectRequest {
     pub file_name: Option<String>,
 }
 
+/// `POST /objects/{file_name}/rename` body: the object's new file name.
+/// dobjd adds `.dobj` when it is missing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RenameObjectRequest {
+    pub file_name: String,
+}
+
 // ===========================================================================
 // Catalog
 // ===========================================================================

@@ -40,9 +40,9 @@ pub(crate) fn object_file_name(class: &QualifiedName, obj: &Dictionary) -> Resul
     ))
 }
 
-/// Upper bound on an imported file's name, in bytes, leaving room under
-/// common 255-byte filesystem limits for a clash suffix.
-const MAX_IMPORTED_FILE_NAME_BYTES: usize = 200;
+/// Upper bound on a custom file name, in bytes, leaving room under common
+/// 255-byte filesystem limits for the suffixes the store adds.
+const MAX_CUSTOM_FILE_NAME_BYTES: usize = 200;
 
 /// Characters some supported platform refuses in a file name.
 const FILE_NAME_FORBIDDEN_CHARS: &[char] = &['/', '\\', '<', '>', ':', '"', '|', '?', '*'];
@@ -52,6 +52,10 @@ const WINDOWS_DEVICE_NAMES: &[&str] = &[
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
     "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
+
+/// Added to a custom name to name the new version of an object while the
+/// transaction that mutates it awaits the chain.
+const PENDING_SUFFIX: &str = "-pending";
 
 /// Whether `file_name` has the `<prefix>_<16 hex>_<16 hex>.dobj` shape of a
 /// name from [`object_file_name`].
@@ -73,16 +77,11 @@ fn has_generated_shape(file_name: &str) -> bool {
     }
 }
 
-/// The name an imported object is filed under when its importer asks for
-/// `requested`, `generated` being the name the store would give it. The
-/// extension is added when missing. A name another file holds (`is_taken`)
-/// gets a numbered suffix, except `generated` itself, which is returned as
-/// is. Errors describe why `requested` was refused.
-pub(crate) fn imported_file_name(
-    requested: &str,
-    generated: &str,
-    is_taken: impl Fn(&str) -> bool,
-) -> Result<String> {
+/// `requested` as a file name for an object whose generated name is
+/// `generated`, with the extension added when missing. Errors describe why
+/// it was refused: unsafe on some supported platform, or shaped like a
+/// generated name without being `generated`.
+pub(crate) fn custom_file_name(requested: &str, generated: &str) -> Result<String> {
     if requested.trim().is_empty() {
         return Err(anyhow!("file name is empty"));
     }
@@ -110,28 +109,73 @@ pub(crate) fn imported_file_name(
     } else {
         format!("{requested}{extension}")
     };
-    if file_name.len() > MAX_IMPORTED_FILE_NAME_BYTES {
+    if file_name.len() > MAX_CUSTOM_FILE_NAME_BYTES {
         return Err(anyhow!(
-            "file name is longer than {MAX_IMPORTED_FILE_NAME_BYTES} bytes"
+            "file name is longer than {MAX_CUSTOM_FILE_NAME_BYTES} bytes"
         ));
     }
-    if file_name == generated {
-        return Ok(file_name);
-    }
-    if has_generated_shape(&file_name) {
+    if file_name != generated && has_generated_shape(&file_name) {
         return Err(anyhow!(
             "file name {file_name:?} has the form of a generated object name but is not \
              this object's ({generated})"
         ));
     }
-    if !is_taken(&file_name) {
-        return Ok(file_name);
+    Ok(file_name)
+}
+
+/// `file_name`, or the first of `<stem> 2.dobj`, `<stem> 3.dobj`, ... that
+/// `is_taken` does not report.
+pub(crate) fn unique_file_name(file_name: &str, is_taken: impl Fn(&str) -> bool) -> String {
+    if !is_taken(file_name) {
+        return file_name.to_string();
     }
-    let stem = &file_name[..file_name.len() - extension.len()];
+    let extension = format!(".{DOBJ_EXTENSION}");
+    let stem = file_name.strip_suffix(&extension).unwrap_or(file_name);
     (2..)
         .map(|number| format!("{stem} {number}{extension}"))
         .find(|candidate| !is_taken(candidate))
-        .ok_or_else(|| anyhow!("no free name for {file_name:?}"))
+        .expect("an unbounded range always yields a free name")
+}
+
+/// The name an imported object is filed under when its importer asks for
+/// `requested`, `generated` being the name the store would give it: the
+/// [`custom_file_name`], made unique unless it is `generated` itself.
+pub(crate) fn imported_file_name(
+    requested: &str,
+    generated: &str,
+    is_taken: impl Fn(&str) -> bool,
+) -> Result<String> {
+    let file_name = custom_file_name(requested, generated)?;
+    if file_name == generated {
+        return Ok(file_name);
+    }
+    Ok(unique_file_name(&file_name, is_taken))
+}
+
+/// The name for the new version of the object called `final_name` while the
+/// transaction creating it awaits the chain: `<stem>-pending.dobj`, made
+/// unique.
+pub(crate) fn pending_file_name(final_name: &str, is_taken: impl Fn(&str) -> bool) -> String {
+    let extension = format!(".{DOBJ_EXTENSION}");
+    let stem = final_name.strip_suffix(&extension).unwrap_or(final_name);
+    unique_file_name(&format!("{stem}{PENDING_SUFFIX}{extension}"), is_taken)
+}
+
+/// Whether `file_name` is one a player chose rather than the object's
+/// generated name.
+pub(crate) fn has_custom_file_name(file_name: &str, record: &ObjectRecord) -> bool {
+    object_file_name(&record.class, &record.obj).is_ok_and(|generated| generated != file_name)
+}
+
+/// Whether any store directory holds a file called `file_name`.
+pub(crate) fn store_has_file(paths: &DriverPaths, file_name: &str) -> bool {
+    [
+        &paths.objects_dir,
+        &paths.nullified_objects_dir,
+        &paths.discarded_objects_dir,
+    ]
+    .iter()
+    .any(|dir| dir.join(file_name).exists())
 }
 
 pub(crate) fn ensure_store_dirs(paths: &DriverPaths) -> Result<()> {
@@ -204,6 +248,43 @@ pub(crate) fn write_object_file(
     }
 
     Ok(())
+}
+
+/// Writes `record`, now spent, to the nullified directory under its
+/// generated name and removes its live file `file_name`. Spent versions of
+/// one custom-named object would otherwise collide there. Returns the name
+/// it was written under.
+pub(crate) fn nullify_object_file(
+    paths: &DriverPaths,
+    record: &ObjectRecord,
+    file_name: &str,
+) -> Result<String> {
+    let spent_name =
+        object_file_name(&record.class, &record.obj).unwrap_or_else(|_| file_name.to_string());
+    write_object_file(paths, record, &spent_name)?;
+    if spent_name != file_name {
+        match fs::remove_file(paths.objects_dir.join(file_name)) {
+            Ok(()) => {}
+            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(anyhow!(
+                    "failed to remove spent object file {file_name}: {err}"
+                ));
+            }
+        }
+    }
+    Ok(spent_name)
+}
+
+/// Renames the live object file `from` to `to` without replacing a file
+/// already called `to`, other than `from` itself under a change of case.
+pub(crate) fn rename_live_object_file(paths: &DriverPaths, from: &str, to: &str) -> Result<()> {
+    let target = paths.objects_dir.join(to);
+    if !to.eq_ignore_ascii_case(from) && target.try_exists()? {
+        return Err(anyhow!("object file {to} already exists"));
+    }
+    fs::rename(paths.objects_dir.join(from), target)
+        .map_err(|err| anyhow!("failed to rename object file {from} to {to}: {err}"))
 }
 
 fn load_object_files_from_dir(

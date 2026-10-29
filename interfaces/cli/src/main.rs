@@ -93,6 +93,13 @@ enum Cmd {
         /// to dobjd, which files the object under a canonical name.
         path: PathBuf,
     },
+    /// Rename one of your objects' files. `.dobj` is added when missing.
+    Rename {
+        /// The object's current file name, as `dobj objects` lists it.
+        file_name: String,
+        /// The new file name.
+        new_name: String,
+    },
     /// Install a plugin (`.pexe`) from a local path or URL, then hot-reload
     /// the daemon's action catalog so it's usable right away.
     Install {
@@ -275,6 +282,10 @@ async fn main() -> Result<()> {
         Cmd::StateRoot => commands::state_root(&client).await,
         Cmd::ObjectsDir => commands::objects_dir(&client).await,
         Cmd::Import { path } => commands::import(&client, path, cli.json).await,
+        Cmd::Rename {
+            file_name,
+            new_name,
+        } => commands::rename(&client, file_name, new_name, cli.json).await,
         Cmd::Install { source } => commands::install(&client, source, cli.json).await,
         Cmd::Settings(SettingsCmd::Get) => commands::settings_get(&client, cli.json).await,
         Cmd::Settings(SettingsCmd::Set {

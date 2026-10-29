@@ -11,7 +11,7 @@ use wire_types::transactions::TransactionRecord;
 use wire_types::{
     ActionArgValues, ActionInput, ActionSummary, CheckActionReport, ClassRef, ClassSummary,
     DriverSettings, ImportObjectRequest, ObjectSummary, ObjectsDirInfo, ProofJobState,
-    QualifiedName, RunAccepted, StartRunRequest, SubmitTransactionsRequest,
+    QualifiedName, RenameObjectRequest, RunAccepted, StartRunRequest, SubmitTransactionsRequest,
 };
 
 fn parse_qualified(id: &str) -> Result<QualifiedName> {
@@ -120,6 +120,29 @@ pub async fn state_root(client: &DobjdClient) -> Result<()> {
 pub async fn objects_dir(client: &DobjdClient) -> Result<()> {
     let dir: ObjectsDirInfo = client.get_json("/objects/dir").await?;
     println!("{}", dir.path);
+    Ok(())
+}
+
+pub async fn rename(
+    client: &DobjdClient,
+    file_name: String,
+    new_name: String,
+    json: bool,
+) -> Result<()> {
+    let path = format!("/objects/{}/rename", urlencoding::encode(&file_name));
+    let obj: ObjectSummary = client
+        .post_json(
+            &path,
+            &RenameObjectRequest {
+                file_name: new_name,
+            },
+        )
+        .await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+        return Ok(());
+    }
+    println!("renamed {file_name} to {}", obj.file_name);
     Ok(())
 }
 
