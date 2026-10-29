@@ -279,6 +279,10 @@ impl DobjOps for DobjdOps {
         Ok(summary)
     }
 
+    fn rename_object(&self, file_name: &str, new_name: &str) -> anyhow::Result<mcp::ObjectSummary> {
+        self.services.rename_object(file_name, new_name)
+    }
+
     fn read_settings(&self) -> anyhow::Result<mcp::DriverSettings> {
         self.driver().load_settings()
     }

@@ -30,6 +30,7 @@ Two flavors of commands.
 | `state-root`                                    | `GET /state-root`                                                                                                   |
 | `objects-dir`                                   | `GET /objects/dir`                                                                                                  |
 | `import <path>`                                 | `POST /objects/import` (reads the `.dobj` file locally, sends contents)                                             |
+| `rename <file-name> <new-name>`                 | `POST /objects/{file_name}/rename` (`.dobj` added to the new name when missing)                                     |
 | `settings get`                                  | `GET /settings`                                                                                                     |
 | `settings set [--synchronizer URL] [--relayer URL] [--mcp on\|off]` | `PUT /settings` (omitted flags left unchanged; the MCP toggle starts/stops the server immediately) |
 | `run <action> [paths...]`                       | `POST /runs`, then follows `/runs/{id}/events` and polls `/runs/{id}` to the terminal result |

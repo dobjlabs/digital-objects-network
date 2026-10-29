@@ -50,6 +50,7 @@ All routes return JSON unless noted; errors come back as
 | `GET`  | `/objects/{file_name}`          | `read_object(&Path)` (basename in `~/.dobj/objects/`)        |
 | `GET`  | `/objects/{file_name}/raw`      | `read_object_raw(&Path)` (file contents verbatim)            |
 | `POST` | `/objects/{file_name}/discard_unsafe` | `discard_object_unsafe(&Path)` (see below; no state guarantees) |
+| `POST` | `/objects/{file_name}/rename` | `rename_object(&Path, &str)` (body: `{ "fileName": "<name>" }`; see below) |
 | `GET`  | `/classes`                      | `list_classes`                                               |
 | `GET`  | `/classes/{name}`               | `get_class`                                                  |
 | `GET`  | `/settings`                     | `load_settings`                                              |
@@ -73,9 +74,17 @@ All routes return JSON unless noted; errors come back as
 
 `POST /objects/import` refuses (`400`) a file whose `contentHash` is not the commitment of its `obj`, the hash the store and the chain know the object by. Files dobjd writes always match, so this only refuses edited or hand-made files.
 
+### Custom file names
+
+Objects are filed under a name generated from their class, stable identifier and commitment, unless a player chose one. `POST /objects/{file_name}/rename` gives an unspent object's file a new name, with `.dobj` added when missing, and returns its summary under that name, announcing `object-removed` for the old name and `object` for the new one. It refuses (`400`) the same unsafe names import refuses (below), and refuses (`409`) a name another live, spent or discarded file has, and an object a proof holds, an open transaction spends, or an open transaction has yet to create.
+
+A custom name carries over to an object's new version. When an action mutates an object with a custom name, say `knife.dobj`, the transaction writes the new version as `knife-pending.dobj` (`knife-pending 2.dobj` and so on when that is taken), lists it in the record's `pendingNames`, and leaves `knife.dobj` as it is. When the transaction lands, the old version is spent and the new one is renamed `knife.dobj`. If it expires or is deleted, `knife-pending.dobj` is removed with the other outputs and `knife.dobj` is untouched. An object with its generated name, and every output that is not a mutated input, gets a generated name.
+
+A spent object moves to the nullified directory under its generated name, whatever it was called while live, so spent versions of one custom-named object never collide and a spent file never holds a name a live one needs.
+
 ### Imported objects keep the name they are given
 
-`POST /objects/import` files the object under `fileName` when the request has one, typically the name of the file the object came in, and otherwise under a name derived from its commitment, as action outputs are named. A given name gets `.dobj` added when it lacks it, and `name 2.dobj`, `name 3.dobj` and so on when another file, live, spent or discarded, already has it. It is refused (`400`) when it is empty, starts with `.`, contains a path separator, control character or a character Windows forbids, is a Windows device name, is longer than 200 bytes, or has the form of a derived name without being this object's. The name lasts until an action spends the object: its outputs get derived names.
+`POST /objects/import` files the object under `fileName` when the request has one, typically the name of the file the object came in, and otherwise under a name derived from its commitment, as action outputs are named. A given name gets `.dobj` added when it lacks it, and `name 2.dobj`, `name 3.dobj` and so on when another file, live, spent or discarded, already has it. It is refused (`400`) when it is empty, starts with `.`, contains a path separator, control character or a character Windows forbids, is a Windows device name, is longer than 200 bytes, or has the form of a derived name without being this object's. Like any custom name, it carries over to the object's new version when an action mutates it (see above).
 
 ### Imported objects share their key
 

@@ -7,7 +7,7 @@ use axum::{
     response::IntoResponse,
 };
 use driver::ObjectQuery;
-use wire_types::{ImportObjectRequest, ObjectSummary, ObjectsDirInfo};
+use wire_types::{ImportObjectRequest, ObjectSummary, ObjectsDirInfo, RenameObjectRequest};
 
 use crate::error::ApiResult;
 use crate::events::Event;
@@ -77,6 +77,25 @@ pub async fn discard_object_unsafe(
     })
     .await
     .map_err(|err| anyhow::anyhow!("discard_object_unsafe task panicked: {err}"))??;
+    Ok(Json(summary))
+}
+
+/// `POST /objects/{file_name}/rename` -- give an unspent object's file a new
+/// name. Returns its summary under the new name. 400 for an unsafe name, 409
+/// when the name is taken or the object is held, spent or still being
+/// created by an open transaction.
+pub async fn rename_object(
+    State(state): State<AppState>,
+    Path(file_name): Path<String>,
+    Json(req): Json<RenameObjectRequest>,
+) -> ApiResult<Json<ObjectSummary>> {
+    let services = state.services.clone();
+    let summary = tokio::task::spawn_blocking(move || {
+        let summary = services.rename_object(&file_name, &req.file_name)?;
+        anyhow::Ok(summary)
+    })
+    .await
+    .map_err(|err| anyhow::anyhow!("rename_object task panicked: {err}"))??;
     Ok(Json(summary))
 }
 

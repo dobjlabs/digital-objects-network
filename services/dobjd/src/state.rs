@@ -47,6 +47,18 @@ impl Services {
         self.driver.read_object(Path::new(file_name))
     }
 
+    /// Rename an object's file and announce it under its new name.
+    pub fn rename_object(&self, file_name: &str, new_name: &str) -> Result<ObjectSummary> {
+        let summary = self.driver.rename_object(Path::new(file_name), new_name)?;
+        if summary.file_name != file_name {
+            self.events.publish(Event::ObjectRemoved {
+                file_name: file_name.to_string(),
+            });
+        }
+        self.events.publish(Event::Object(summary.clone()));
+        Ok(summary)
+    }
+
     pub fn publish_objects(&self, file_names: &[String]) {
         if file_names.is_empty() {
             return;

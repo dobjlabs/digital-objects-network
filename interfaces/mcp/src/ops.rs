@@ -44,6 +44,10 @@ pub trait DobjOps: Send + Sync + 'static {
     /// Returns the filed object's summary.
     fn import_object_file(&self, path: &str) -> anyhow::Result<ObjectSummary>;
 
+    /// Give an unspent object's file a new name (`.dobj` added when
+    /// missing). Returns its summary under the new name.
+    fn rename_object(&self, file_name: &str, new_name: &str) -> anyhow::Result<ObjectSummary>;
+
     /// Read the daemon's current configuration.
     fn read_settings(&self) -> anyhow::Result<DriverSettings>;
     /// Apply a partial configuration update, merging the patch's present

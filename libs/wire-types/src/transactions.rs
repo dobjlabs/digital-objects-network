@@ -91,6 +91,20 @@ pub struct TransactionRecord {
     pub submitted_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settled_at_ms: Option<u64>,
+    /// Outputs written under a temporary name because they take over a
+    /// mutated input's custom name once the transaction lands.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_names: Vec<PendingName>,
+}
+
+/// An output file written as `file_name` that takes the name `final_name`,
+/// held until then by the input it replaces, when its transaction lands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct PendingName {
+    pub file_name: String,
+    pub final_name: String,
 }
 
 impl TransactionRecord {
@@ -127,6 +141,7 @@ impl TransactionRecord {
             submit_attempted_at_ms: None,
             submitted_at_ms: None,
             settled_at_ms: None,
+            pending_names: Vec::new(),
         }
     }
 

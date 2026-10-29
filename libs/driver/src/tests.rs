@@ -103,17 +103,94 @@ fn fixture(file_name: &str) -> Fixture {
         )
         .unwrap();
     let source_tx = outputs.tx.clone();
-    let spendable = outputs.obj(0);
+    let mut state = TestState::default();
+    apply_tx(&mut state, &source_tx);
+    fixture_holding(
+        catalog,
+        state,
+        file_name,
+        craft_basics("Log"),
+        outputs.obj(0),
+        tx_hash(&source_tx),
+    )
+}
+
+/// A Log filed under its generated name, which settlement keeps when the
+/// Log is spent.
+fn generated_fixture() -> Fixture {
+    let mut fx = fixture("log_1.dobj");
+    let log = fx.stored(&fx.input_file);
+    let generated = object_file_name(&log.class, &log.obj).unwrap();
+    fx.driver
+        .rename_object(std::path::Path::new(&fx.input_file), &generated)
+        .unwrap();
+    fx.input_file = generated;
+    fx
+}
+
+/// Run `action` outside the driver against `state`, then apply its
+/// transaction there.
+fn run_offline(
+    catalog: &PexeCatalog,
+    state: &mut TestState,
+    action: &str,
+    inputs: Vec<sdk::SpendableObject>,
+) -> sdk::SpendableObjects {
+    let created_proofs = inputs
+        .iter()
+        .map(|input| {
+            let commitment = input.obj.commitment();
+            (commitment, state.created_membership_proof(commitment))
+        })
+        .collect::<HashMap<_, _>>();
+    let witness = GroundingWitness::new(state_header(state), created_proofs);
+    let outputs = catalog
+        .execute_action(craft_basics(action), witness, inputs, &Default::default())
+        .unwrap();
+    apply_tx(state, &outputs.tx);
+    outputs
+}
+
+/// A local WoodPick, which `UseWoodPick` mutates, filed as `file_name`.
+fn pick_fixture(file_name: &str) -> Fixture {
+    ensure_extra_pod_deserializers_registered();
+    let catalog = make_catalog();
+    let mut state = TestState::default();
+    let log_a = run_offline(&catalog, &mut state, "FindLog", vec![]).obj(0);
+    let log_b = run_offline(&catalog, &mut state, "FindLog", vec![]).obj(0);
+    let wood_a = run_offline(&catalog, &mut state, "CraftWood", vec![log_a]).obj(0);
+    let wood_b = run_offline(&catalog, &mut state, "CraftWood", vec![log_b]).obj(0);
+    let stick = run_offline(&catalog, &mut state, "CraftSticks", vec![wood_a]).obj(0);
+    let crafted = run_offline(&catalog, &mut state, "CraftWoodPick", vec![wood_b, stick]);
+    let tx_final = tx_hash(&crafted.tx);
+    fixture_holding(
+        catalog,
+        state,
+        file_name,
+        craft_basics("WoodPick"),
+        crafted.obj(0),
+        tx_final,
+    )
+}
+
+/// A driver whose store holds one live object, `spendable`, as `file_name`,
+/// on a mock chain at `state`.
+fn fixture_holding(
+    catalog: PexeCatalog,
+    state: TestState,
+    file_name: &str,
+    class: QualifiedName,
+    spendable: sdk::SpendableObject,
+    tx_final: Hash,
+) -> Fixture {
     let record = ObjectRecord {
         content_hash: spendable.obj.commitment(),
-        class: craft_basics("Log"),
+        class,
         status: FileStatus::Live,
         tx_hash: None,
         obj: spendable.obj,
-        tx_final: tx_hash(&source_tx),
+        tx_final,
     };
-    let mut state = TestState::default();
-    apply_tx(&mut state, &source_tx);
     let chain = Arc::new(Mutex::new(MockChain {
         head_block: state.block_number,
         ..MockChain::default()
@@ -608,7 +685,7 @@ fn batch_summaries_skip_unreadable_files_and_include_transaction_ownership() {
 #[test]
 fn execute_records_and_submits_and_settle_lands() {
     for action_name in ["CraftWood", "RekeyLog"] {
-        let fx = fixture("log_1.dobj");
+        let fx = generated_fixture();
         let action = craft_basics(action_name);
         assert!(fx.driver.check_action(&action).unwrap().feasible);
 
@@ -1636,7 +1713,7 @@ fn record_rolls_back_outputs_and_payload_when_persistence_fails() {
 
 #[test]
 fn landed_objects_keep_creation_hashes_after_transaction_pruning_and_restart() {
-    let fx = fixture("log_1.dobj");
+    let fx = generated_fixture();
     let mut input = fx.stored(&fx.input_file);
     input.tx_hash = Some("original-creation".to_string());
     write_object_file(&fx.paths, &input, &fx.input_file).unwrap();
@@ -1726,7 +1803,7 @@ fn expired_transactions_are_pruned_after_outputs_are_removed() {
 
 #[test]
 fn pruning_repairs_committed_settlement_after_restart_and_retains_unreadable_outputs() {
-    let fx = fixture("log_1.dobj");
+    let fx = generated_fixture();
     let mut record = fx.driver.execute(fx.input("CraftWood")).unwrap();
     record.state = TransactionState::Landed;
     record.settled_at_ms = Some(1);
@@ -2132,4 +2209,233 @@ fn a_failed_submission_releases_the_lock_for_a_waiting_retry() {
     assert!(retried.submit_attempted_at_ms.is_some());
     assert_eq!(fx.relayer.lock().unwrap().submit_calls, 2);
     assert_eq!(fx.relayer.lock().unwrap().submitted.len(), 1);
+}
+
+fn pending_name(file_name: &str, final_name: &str) -> wire_types::transactions::PendingName {
+    wire_types::transactions::PendingName {
+        file_name: file_name.to_string(),
+        final_name: final_name.to_string(),
+    }
+}
+
+#[test]
+fn a_mutated_custom_named_object_takes_its_name_back_once_it_lands() {
+    let fx = pick_fixture("my pick.dobj");
+    let old_pick = fx.stored("my pick.dobj");
+    let record = fx
+        .driver
+        .execute(fx.input("MineStoneWithWoodPick"))
+        .unwrap();
+    assert_eq!(record.input_files, vec!["my pick.dobj"]);
+    assert_eq!(record.output_files[0], "my pick-pending.dobj");
+    assert_eq!(
+        record.pending_names,
+        vec![pending_name("my pick-pending.dobj", "my pick.dobj")]
+    );
+    assert_eq!(
+        fx.stored("my pick.dobj").content_hash,
+        old_pick.content_hash
+    );
+    let new_pick = fx.stored("my pick-pending.dobj");
+    assert_eq!(new_pick.status, FileStatus::Unknown);
+
+    fx.land(&record);
+    let outcome = fx.driver.settle().unwrap();
+    assert!(!fx.paths.objects_dir.join("my pick-pending.dobj").exists());
+    let renamed = fx.stored("my pick.dobj");
+    assert_eq!(renamed.content_hash, new_pick.content_hash);
+    assert_eq!(renamed.status, FileStatus::Live);
+    let spent_name = object_file_name(&old_pick.class, &old_pick.obj).unwrap();
+    let spent = crate::object_record::parse_object_record_file(
+        &fx.paths.nullified_objects_dir.join(&spent_name),
+    )
+    .unwrap();
+    assert_eq!(spent.content_hash, old_pick.content_hash);
+    assert_eq!(spent.status, FileStatus::Nullified);
+    assert!(
+        outcome
+            .removed_files
+            .contains(&"my pick-pending.dobj".to_string())
+    );
+    assert!(outcome.removed_files.contains(&"my pick.dobj".to_string()));
+    let objects = outcome
+        .objects
+        .iter()
+        .map(|object| (object.file_name.as_str(), object.status))
+        .collect::<HashMap<_, _>>();
+    assert_eq!(objects.get("my pick.dobj"), Some(&ObjectStatus::Live));
+    assert_eq!(
+        objects.get(spent_name.as_str()),
+        Some(&ObjectStatus::Nullified)
+    );
+
+    let landed = fx.driver.get_transaction(&tx_final_of(&record)).unwrap();
+    assert_eq!(landed.output_files[0], "my pick.dobj");
+    assert_eq!(landed.output_files[1], record.output_files[1]);
+    assert!(landed.pending_names.is_empty());
+
+    // Reconciling the landed record again must not spend the new version,
+    // which now has the input's name.
+    fx.driver
+        .prune_transactions(landed.settled_at_ms.unwrap())
+        .unwrap();
+    assert_eq!(fx.stored("my pick.dobj").status, FileStatus::Live);
+    assert!(fx.paths.objects_dir.join("my pick.dobj").exists());
+}
+
+#[test]
+fn an_expired_or_deleted_mutation_leaves_the_custom_named_object_as_it_was() {
+    let fx = pick_fixture("my pick.dobj");
+    let old_pick = fx.stored("my pick.dobj");
+    let record = fx
+        .driver
+        .execute(fx.input("MineStoneWithWoodPick"))
+        .unwrap();
+    fx.advance_head_to(record.grounding_block + MAX_STATE_ROOT_AGE_BLOCKS + 1);
+    let outcome = fx.driver.settle().unwrap();
+    assert_eq!(outcome.records[0].state, TransactionState::Expired);
+    assert_eq!(outcome.removed_files, record.output_files);
+    assert_eq!(outcome.removed_files[0], "my pick-pending.dobj");
+    assert!(!fx.paths.objects_dir.join("my pick-pending.dobj").exists());
+    let kept = fx.stored("my pick.dobj");
+    assert_eq!(kept.content_hash, old_pick.content_hash);
+    assert_eq!(kept.status, FileStatus::Live);
+
+    let fx = pick_fixture("my pick.dobj");
+    let proved = fx
+        .driver
+        .prove(
+            fx.input("MineStoneWithWoodPick"),
+            "unsent",
+            &NoopExecutionReporter,
+        )
+        .unwrap();
+    let record = fx.driver.record(proved).unwrap();
+    let deleted = fx.driver.delete_transaction(&tx_final_of(&record)).unwrap();
+    assert_eq!(deleted.removed_files, record.output_files);
+    assert_eq!(fx.stored("my pick.dobj").status, FileStatus::Live);
+}
+
+#[test]
+fn a_mutated_object_with_its_generated_name_gets_a_generated_name() {
+    let fx = pick_fixture("my pick.dobj");
+    let pick = fx.stored("my pick.dobj");
+    let generated = object_file_name(&pick.class, &pick.obj).unwrap();
+    fx.driver
+        .rename_object(std::path::Path::new("my pick.dobj"), &generated)
+        .unwrap();
+    let input = ExecuteActionInput {
+        action: craft_basics("MineStoneWithWoodPick"),
+        input_objects: vec![generated.clone()],
+        args: Default::default(),
+    };
+    let record = fx.driver.execute(input).unwrap();
+    assert!(record.pending_names.is_empty());
+    assert!(record.output_files[0].starts_with("craft-basics__woodpick_"));
+    assert_ne!(record.output_files[0], generated);
+}
+
+#[test]
+fn only_the_mutated_output_takes_a_pending_name() {
+    let fx = pick_fixture("my pick.dobj");
+    let record = fx
+        .driver
+        .execute(fx.input("MineStoneWithWoodPick"))
+        .unwrap();
+    assert_eq!(record.output_files[0], "my pick-pending.dobj");
+    assert!(record.output_files[1].starts_with("craft-basics__stone_"));
+    assert_eq!(record.pending_names.len(), 1);
+}
+
+#[test]
+fn a_pending_name_skips_past_files_that_have_it() {
+    let fx = pick_fixture("my pick.dobj");
+    std::fs::create_dir_all(&fx.paths.discarded_objects_dir).unwrap();
+    std::fs::write(
+        fx.paths.discarded_objects_dir.join("my pick-pending.dobj"),
+        "{}",
+    )
+    .unwrap();
+    let record = fx
+        .driver
+        .execute(fx.input("MineStoneWithWoodPick"))
+        .unwrap();
+    assert_eq!(record.output_files[0], "my pick-pending 2.dobj");
+}
+
+#[test]
+fn renaming_an_object_checks_the_name_and_what_holds_the_object() {
+    let fx = pick_fixture("pick.dobj");
+    let rename = |from: &str, to: &str| {
+        fx.driver
+            .rename_object(std::path::Path::new(from), to)
+            .map(|summary| summary.file_name)
+            .map_err(|err| err.to_string())
+    };
+    assert_eq!(rename("pick.dobj", "best pick").unwrap(), "best pick.dobj");
+    assert!(!fx.paths.objects_dir.join("pick.dobj").exists());
+    assert_eq!(
+        rename("best pick.dobj", "Best Pick.dobj").unwrap(),
+        "Best Pick.dobj"
+    );
+    assert!(fx.paths.objects_dir.join("Best Pick.dobj").exists());
+    assert_eq!(
+        rename("Best Pick.dobj", "Best Pick.dobj").unwrap(),
+        "Best Pick.dobj"
+    );
+
+    for refused in ["../pick.dobj", ".pick", "", "pick?.dobj", "NUL"] {
+        let err = rename("Best Pick.dobj", refused).unwrap_err();
+        assert!(err.contains("invalid input"), "{refused:?}: {err}");
+    }
+    let err = rename(
+        "Best Pick.dobj",
+        "craft-basics__woodpick_0123456789abcdef_0123456789abcdef.dobj",
+    )
+    .unwrap_err();
+    assert!(err.contains("generated object name"), "{err}");
+    std::fs::create_dir_all(&fx.paths.discarded_objects_dir).unwrap();
+    std::fs::write(fx.paths.discarded_objects_dir.join("taken.dobj"), "{}").unwrap();
+    let err = rename("Best Pick.dobj", "taken").unwrap_err();
+    assert!(err.contains("already exists"), "{err}");
+    let err = rename("missing.dobj", "anything").unwrap_err();
+    assert!(err.contains("missing.dobj"), "{err}");
+
+    let input = ExecuteActionInput {
+        action: craft_basics("MineStoneWithWoodPick"),
+        input_objects: vec!["Best Pick.dobj".to_string()],
+        args: Default::default(),
+    };
+    let proved = fx
+        .driver
+        .prove(input, "holder", &NoopExecutionReporter)
+        .unwrap();
+    let err = rename("Best Pick.dobj", "other").unwrap_err();
+    assert!(err.contains("held by holder"), "{err}");
+    let record = fx.driver.record(proved).unwrap();
+    let err = rename("Best Pick.dobj", "other").unwrap_err();
+    assert!(err.contains("spent by a transaction"), "{err}");
+    let err = rename(&record.output_files[0], "other").unwrap_err();
+    assert!(err.contains("created by a transaction"), "{err}");
+}
+
+#[test]
+fn an_object_seen_spent_on_chain_moves_to_its_generated_name() {
+    let fx = pick_fixture("my pick.dobj");
+    let pick = fx.stored("my pick.dobj");
+    fx.chain
+        .lock()
+        .unwrap()
+        .nullifiers
+        .insert(txlib::object_nullifier_hash(&pick.obj).unwrap());
+    let synced = fx.driver.sync_objects(None).unwrap();
+    let spent_name = object_file_name(&pick.class, &pick.obj).unwrap();
+    assert_eq!(synced.outcome.removed_files, vec!["my pick.dobj"]);
+    assert!(!fx.paths.objects_dir.join("my pick.dobj").exists());
+    assert_eq!(fx.stored(&spent_name).status, FileStatus::Nullified);
+    assert!(
+        synced.objects.iter().any(
+            |object| object.file_name == spent_name && object.status == ObjectStatus::Nullified
+        )
+    );
 }
