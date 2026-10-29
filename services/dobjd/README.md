@@ -46,7 +46,7 @@ All routes return JSON unless noted; errors come back as
 | `GET`  | `/actions`                      | `list_actions`                                               |
 | `GET`  | `/state-root`                   | `get_state_root`                                             |
 | `GET`  | `/objects/dir`                  | `paths().objects_dir`                                        |
-| `POST` | `/objects/import`               | `import_object` (body: `{ "dobj": "<json>" }`)               |
+| `POST` | `/objects/import`               | `import_object` (body: `{ "dobj": "<json>", "fileName"?: "<name>" }`; see below) |
 | `GET`  | `/objects/{file_name}`          | `read_object(&Path)` (basename in `~/.dobj/objects/`)        |
 | `GET`  | `/objects/{file_name}/raw`      | `read_object_raw(&Path)` (file contents verbatim)            |
 | `POST` | `/objects/{file_name}/discard_unsafe` | `discard_object_unsafe(&Path)` (see below; no state guarantees) |
@@ -68,6 +68,10 @@ All routes return JSON unless noted; errors come back as
 | `GET`  | `/transactions/{tx_final}`      | `get_transaction`; `?wait=true&timeoutMs=` holds until landed or expired |
 | `DELETE` | `/transactions/{tx_final}`    | `delete_transaction`: abandon a recorded transaction never offered to the relayer |
 | `GET`  | `/events`                       | every state change (SSE), numbered by `seq`                  |
+
+### Imported objects keep the name they are given
+
+`POST /objects/import` files the object under `fileName` when the request has one, typically the name of the file the object came in, and otherwise under a name derived from its commitment, as action outputs are named. A given name gets `.dobj` added when it lacks it, and `name 2.dobj`, `name 3.dobj` and so on when another file, live, spent or discarded, already has it. It is refused (`400`) when it is empty, starts with `.`, contains a path separator, control character or a character Windows forbids, is a Windows device name, is longer than 200 bytes, or has the form of a derived name without being this object's. The name lasts until an action spends the object: its outputs get derived names.
 
 ### Imported objects share their key
 

@@ -1189,7 +1189,7 @@ fn import_driver(
 fn test_import_grounded_object_is_live() {
     let (json, source_tx, _nullifier) = make_importable_log();
     let (driver, _) = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
-    let summary = driver.import_object(&json).unwrap();
+    let summary = driver.import_object(&json, None).unwrap();
     assert_eq!(summary.class, craft_basics("Log"));
     assert_eq!(summary.status, ObjectStatus::Live);
     assert!(summary.file_name.starts_with("craft-basics__log_"));
@@ -1201,7 +1201,7 @@ fn imported_objects_share_their_key_until_an_action_replaces_it() {
 
     let (json, source_tx, _nullifier) = make_importable_log();
     let (driver, _) = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
-    assert!(driver.import_object(&json).unwrap().shared_key);
+    assert!(driver.import_object(&json, None).unwrap().shared_key);
 
     let imported: ObjectRecord = serde_json::from_str(&json).unwrap();
     let file_version = |obj: pod2::middleware::containers::Dictionary| {
@@ -1234,7 +1234,7 @@ fn imported_objects_share_their_key_until_an_action_replaces_it() {
 fn test_import_ungrounded_object_is_unknown() {
     let (json, _source_tx, _nullifier) = make_importable_log();
     let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
-    let summary = driver.import_object(&json).unwrap();
+    let summary = driver.import_object(&json, None).unwrap();
     assert_eq!(summary.status, ObjectStatus::Unknown);
 }
 
@@ -1242,7 +1242,7 @@ fn test_import_ungrounded_object_is_unknown() {
 fn sync_objects_follows_the_chain_forward_only() {
     let (json, commitment, nullifier) = make_importable_log();
     let (driver, chain) = import_driver(HashSet::new(), HashSet::new(), false);
-    let summary = driver.import_object(&json).unwrap();
+    let summary = driver.import_object(&json, None).unwrap();
     assert_eq!(summary.status, ObjectStatus::Unknown);
 
     chain.lock().unwrap().created.insert(commitment);
@@ -1282,7 +1282,7 @@ fn sync_objects_follows_the_chain_forward_only() {
 fn test_read_object_raw_returns_stored_file() {
     let (json, source_tx, _nullifier) = make_importable_log();
     let (driver, _) = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
-    let summary = driver.import_object(&json).unwrap();
+    let summary = driver.import_object(&json, None).unwrap();
     let raw = driver
         .read_object_raw(std::path::Path::new(&summary.file_name))
         .unwrap();
@@ -1426,7 +1426,7 @@ fn test_import_spent_object_is_rejected() {
         HashSet::from([nullifier]),
         false,
     );
-    let err = driver.import_object(&json).unwrap_err();
+    let err = driver.import_object(&json, None).unwrap_err();
     assert!(
         err.to_string().contains("spent"),
         "expected already-spent error, got: {err}"
@@ -1437,8 +1437,8 @@ fn test_import_spent_object_is_rejected() {
 fn test_import_duplicate_is_rejected() {
     let (json, source_tx, _nullifier) = make_importable_log();
     let (driver, _) = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
-    driver.import_object(&json).unwrap();
-    let err = driver.import_object(&json).unwrap_err();
+    driver.import_object(&json, None).unwrap();
+    let err = driver.import_object(&json, None).unwrap_err();
     assert!(
         err.to_string().contains("already present"),
         "expected duplicate error, got: {err}"
@@ -1446,10 +1446,68 @@ fn test_import_duplicate_is_rejected() {
 }
 
 #[test]
+fn imported_objects_keep_their_requested_file_name() {
+    let (first, source_tx, _nullifier) = make_importable_log();
+    let (second, _, _) = make_importable_log();
+    let (driver, _) = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
+
+    let summary = driver.import_object(&first, Some("my log")).unwrap();
+    assert_eq!(summary.file_name, "my log.dobj");
+    assert_eq!(summary.status, ObjectStatus::Live);
+    assert!(driver.paths().objects_dir.join("my log.dobj").exists());
+    let summary = driver.import_object(&second, Some("my log.dobj")).unwrap();
+    assert_eq!(summary.file_name, "my log 2.dobj");
+
+    let err = driver
+        .import_object(&first, Some("another name.dobj"))
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("already present: my log.dobj"),
+        "expected duplicate error naming the held file, got: {err}"
+    );
+}
+
+#[test]
+fn imported_file_names_skip_discarded_files_and_refuse_foreign_generated_names() {
+    let (json, _source_tx, _nullifier) = make_importable_log();
+    let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
+    std::fs::create_dir_all(&driver.paths().discarded_objects_dir).unwrap();
+    std::fs::write(driver.paths().discarded_objects_dir.join("log.dobj"), "{}").unwrap();
+
+    let err = driver
+        .import_object(
+            &json,
+            Some("craft-basics__log_0123456789abcdef_0123456789abcdef.dobj"),
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("generated object name"),
+        "expected generated-name error, got: {err}"
+    );
+    let err = driver
+        .import_object(&json, Some("../log.dobj"))
+        .unwrap_err();
+    assert!(err.to_string().contains("invalid input"), "got: {err}");
+
+    let summary = driver.import_object(&json, Some("log.dobj")).unwrap();
+    assert_eq!(summary.file_name, "log 2.dobj");
+}
+
+#[test]
+fn imported_objects_may_keep_their_own_generated_name() {
+    let (json, _source_tx, _nullifier) = make_importable_log();
+    let record: ObjectRecord = serde_json::from_str(&json).unwrap();
+    let generated = object_file_name(&record.class, &record.obj).unwrap();
+    let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
+    let summary = driver.import_object(&json, Some(&generated)).unwrap();
+    assert_eq!(summary.file_name, generated);
+}
+
+#[test]
 fn test_import_sync_unreachable_falls_back_to_unknown() {
     let (json, _source_tx, _nullifier) = make_importable_log();
     let (driver, _) = import_driver(HashSet::new(), HashSet::new(), true);
-    let summary = driver.import_object(&json).unwrap();
+    let summary = driver.import_object(&json, None).unwrap();
     assert_eq!(summary.status, ObjectStatus::Unknown);
 }
 
@@ -1460,7 +1518,7 @@ fn test_import_unknown_class_is_rejected() {
     value["class"]["name"] = serde_json::Value::String("Diamond".to_string());
     let tampered = serde_json::to_string(&value).unwrap();
     let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
-    let err = driver.import_object(&tampered).unwrap_err();
+    let err = driver.import_object(&tampered, None).unwrap_err();
     assert!(
         err.to_string().contains("unknown class"),
         "expected unknown-class error, got: {err}"
@@ -1477,7 +1535,7 @@ fn test_import_class_hash_mismatch_is_rejected() {
     value["class"]["name"] = serde_json::Value::String("Wood".to_string());
     let tampered = serde_json::to_string(&value).unwrap();
     let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
-    let err = driver.import_object(&tampered).unwrap_err();
+    let err = driver.import_object(&tampered, None).unwrap_err();
     assert!(
         err.to_string().contains("class hash mismatch"),
         "expected hash-mismatch error, got: {err}"
@@ -1752,7 +1810,7 @@ fn object_hash_metadata_is_optional_and_survives_import() {
     assert_eq!(legacy.tx_hash, None);
     value["txHash"] = serde_json::json!("creation");
     let (driver, _) = import_driver(HashSet::from([commitment]), HashSet::new(), false);
-    let summary = driver.import_object(&value.to_string()).unwrap();
+    let summary = driver.import_object(&value.to_string(), None).unwrap();
     assert_eq!(summary.tx_hash.as_deref(), Some("creation"));
     assert_eq!(
         driver

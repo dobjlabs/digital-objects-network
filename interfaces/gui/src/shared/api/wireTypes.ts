@@ -68,6 +68,11 @@ export interface ObjectSummaryPayload {
  * `.dobj` file, one not produced by this driver (e.g. from outside `~/.dobj/`). */
 export interface ImportObjectRequest {
   dobj: string;
+  /** The name to file the object under, typically that of the file it came
+   * in. dobjd adds `.dobj` when it is missing and a numbered suffix when the
+   * name is taken, and refuses an unsafe name. Without one, the object gets a
+   * name derived from its commitment. */
+  fileName?: string;
 }
 
 export interface ClassRefPayload {

@@ -40,6 +40,100 @@ pub(crate) fn object_file_name(class: &QualifiedName, obj: &Dictionary) -> Resul
     ))
 }
 
+/// Upper bound on an imported file's name, in bytes, leaving room under
+/// common 255-byte filesystem limits for a clash suffix.
+const MAX_IMPORTED_FILE_NAME_BYTES: usize = 200;
+
+/// Characters some supported platform refuses in a file name.
+const FILE_NAME_FORBIDDEN_CHARS: &[char] = &['/', '\\', '<', '>', ':', '"', '|', '?', '*'];
+
+/// Names Windows reserves for devices, whatever their extension.
+const WINDOWS_DEVICE_NAMES: &[&str] = &[
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+/// Whether `file_name` has the `<prefix>_<16 hex>_<16 hex>.dobj` shape of a
+/// name from [`object_file_name`].
+fn has_generated_shape(file_name: &str) -> bool {
+    let Some(stem) = file_name.strip_suffix(&format!(".{DOBJ_EXTENSION}")) else {
+        return false;
+    };
+    let is_hash_prefix = |part: &str| {
+        part.len() == 16
+            && part
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    };
+    match stem.rsplitn(3, '_').collect::<Vec<_>>()[..] {
+        [commitment, stable_identifier, prefix] => {
+            !prefix.is_empty() && is_hash_prefix(commitment) && is_hash_prefix(stable_identifier)
+        }
+        _ => false,
+    }
+}
+
+/// The name an imported object is filed under when its importer asks for
+/// `requested`, `generated` being the name the store would give it. The
+/// extension is added when missing. A name another file holds (`is_taken`)
+/// gets a numbered suffix, except `generated` itself, which is returned as
+/// is. Errors describe why `requested` was refused.
+pub(crate) fn imported_file_name(
+    requested: &str,
+    generated: &str,
+    is_taken: impl Fn(&str) -> bool,
+) -> Result<String> {
+    if requested.trim().is_empty() {
+        return Err(anyhow!("file name is empty"));
+    }
+    if let Some(forbidden) = requested
+        .chars()
+        .find(|ch| ch.is_control() || FILE_NAME_FORBIDDEN_CHARS.contains(ch))
+    {
+        return Err(anyhow!(
+            "file name {requested:?} contains the character {forbidden:?}"
+        ));
+    }
+    if requested.starts_with('.') {
+        return Err(anyhow!("file name {requested:?} starts with '.'"));
+    }
+    let device_name = requested.split('.').next().unwrap_or_default().trim_end();
+    if WINDOWS_DEVICE_NAMES
+        .iter()
+        .any(|reserved| reserved.eq_ignore_ascii_case(device_name))
+    {
+        return Err(anyhow!("file name {requested:?} is reserved on Windows"));
+    }
+    let extension = format!(".{DOBJ_EXTENSION}");
+    let file_name = if requested.ends_with(&extension) {
+        requested.to_string()
+    } else {
+        format!("{requested}{extension}")
+    };
+    if file_name.len() > MAX_IMPORTED_FILE_NAME_BYTES {
+        return Err(anyhow!(
+            "file name is longer than {MAX_IMPORTED_FILE_NAME_BYTES} bytes"
+        ));
+    }
+    if file_name == generated {
+        return Ok(file_name);
+    }
+    if has_generated_shape(&file_name) {
+        return Err(anyhow!(
+            "file name {file_name:?} has the form of a generated object name but is not \
+             this object's ({generated})"
+        ));
+    }
+    if !is_taken(&file_name) {
+        return Ok(file_name);
+    }
+    let stem = &file_name[..file_name.len() - extension.len()];
+    (2..)
+        .map(|number| format!("{stem} {number}{extension}"))
+        .find(|candidate| !is_taken(candidate))
+        .ok_or_else(|| anyhow!("no free name for {file_name:?}"))
+}
+
 pub(crate) fn ensure_store_dirs(paths: &DriverPaths) -> Result<()> {
     fs::create_dir_all(&paths.objects_dir).map_err(|err| {
         anyhow!(
@@ -378,5 +472,79 @@ mod tests {
     #[test]
     fn test_default_paths_available() {
         assert!(default_paths().is_ok());
+    }
+
+    const GENERATED: &str = "bitcraft__pocketknife_48a7b2a2369a49f9_674cf8944de101ba.dobj";
+
+    fn imported_name(requested: &str, taken: &[&str]) -> Result<String, String> {
+        super::imported_file_name(requested, GENERATED, |name| taken.contains(&name))
+            .map_err(|err| err.to_string())
+    }
+
+    #[test]
+    fn imported_file_name_keeps_the_requested_name_and_adds_the_extension() {
+        assert_eq!(
+            imported_name("my knife.dobj", &[]).unwrap(),
+            "my knife.dobj"
+        );
+        assert_eq!(imported_name("my knife", &[]).unwrap(), "my knife.dobj");
+        assert_eq!(imported_name("knife.txt", &[]).unwrap(), "knife.txt.dobj");
+    }
+
+    #[test]
+    fn imported_file_name_suffixes_a_taken_name() {
+        assert_eq!(
+            imported_name("knife.dobj", &["knife.dobj"]).unwrap(),
+            "knife 2.dobj"
+        );
+        assert_eq!(
+            imported_name("knife", &["knife.dobj", "knife 2.dobj"]).unwrap(),
+            "knife 3.dobj"
+        );
+    }
+
+    #[test]
+    fn imported_file_name_refuses_unsafe_names() {
+        let too_long = "k".repeat(200);
+        for unsafe_name in [
+            "",
+            "   ",
+            "../knife.dobj",
+            "dir/knife.dobj",
+            "dir\\knife.dobj",
+            ".knife.dobj",
+            ".dobj",
+            "knife\n.dobj",
+            "knife:1.dobj",
+            "knife?.dobj",
+            "CON",
+            "nul.dobj",
+            "Com1.txt",
+            too_long.as_str(),
+        ] {
+            assert!(
+                imported_name(unsafe_name, &[]).is_err(),
+                "{unsafe_name:?} should be refused"
+            );
+        }
+        assert_eq!(imported_name("console.dobj", &[]).unwrap(), "console.dobj");
+    }
+
+    #[test]
+    fn imported_file_name_accepts_only_this_objects_generated_name() {
+        assert_eq!(imported_name(GENERATED, &[]).unwrap(), GENERATED);
+        assert_eq!(
+            imported_name(GENERATED, &[GENERATED]).unwrap(),
+            GENERATED,
+            "the caller decides what a taken generated name means"
+        );
+        let other_object = "bitcraft__pocketknife_48a7b2a2369a49f9_0000000000000000.dobj";
+        let err = imported_name(other_object, &[]).unwrap_err();
+        assert!(err.contains("generated object name"), "{err}");
+        assert!(imported_name("craft-basics__log_0123456789abcdef_0123456789abcdef", &[]).is_err());
+        assert_eq!(
+            imported_name("knife_0123456789abcdef.dobj", &[]).unwrap(),
+            "knife_0123456789abcdef.dobj"
+        );
     }
 }

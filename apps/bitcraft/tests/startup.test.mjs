@@ -27,7 +27,7 @@ const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(setImm
 
 async function page(context, options = {}) {
   const backend = {
-    objects: [], transactions: [], proofJobs: new Map(), submissions: [], actions: [recipe()], states: new Map(), posts: [], discards: [], imports: [],
+    objects: [], transactions: [], proofJobs: new Map(), submissions: [], actions: [recipe()], states: new Map(), posts: [], discards: [], imports: [], importFileNames: [],
     inventoryError: false, listError: false, runError: false, postError: false, syncError: false,
     inventoryReads: 0, runReads: 0, runGate: null, ...options,
   };
@@ -134,11 +134,13 @@ async function page(context, options = {}) {
           backend.objects = backend.objects.filter((candidate) => candidate !== object);
           return respond(object);
         }
-        // Mirrors dobjd: the daemon names the file, and refuses unparseable
-        // contents, unknown classes and objects it already holds.
+        // Mirrors dobjd: the daemon keeps a requested name, adding `.dobj`,
+        // or names the file itself, and refuses unparseable contents,
+        // unknown classes and objects it already holds.
         if (parsed.pathname === "/objects/import" && init.method === "POST") {
-          const { dobj } = JSON.parse(init.body);
+          const { dobj, fileName: requestedName } = JSON.parse(init.body);
           backend.imports.push(dobj);
+          backend.importFileNames.push(requestedName);
           let record;
           try {
             record = JSON.parse(dobj);
@@ -148,10 +150,13 @@ async function page(context, options = {}) {
           if (record.class.pluginName !== "bitcraft") {
             return respond({ error: `unknown class: ${record.class.pluginName}::${record.class.name}` }, 404);
           }
-          const fileName = `${record.class.name.toLowerCase()}_${record.contentHash}.dobj`;
-          if (backend.objects.some((object) => object.fileName === fileName)) {
-            return respond({ error: `conflict: object already present: ${fileName}` }, 409);
+          const generatedName = `${record.class.name.toLowerCase()}_${record.contentHash}.dobj`;
+          if (backend.objects.some((object) => object.fileName === generatedName)) {
+            return respond({ error: `conflict: object already present: ${generatedName}` }, 409);
           }
+          const fileName = requestedName === undefined
+            ? generatedName
+            : requestedName.endsWith(".dobj") ? requestedName : `${requestedName}.dobj`;
           const summary = {
             fileName, class: record.class, status: backend.importStatus ?? "live", fields: { kvs: [] }, sharedKey: true,
           };
@@ -1361,6 +1366,7 @@ test("pasted contents are imported, selected, and come with a rekey reminder", a
   submit.click();
   await flush();
   assert.deepEqual(ui.backend.imports, [dobjContents("Wood", "aa11")]);
+  assert.deepEqual(ui.backend.importFileNames, [undefined], "pasted contents get dobjd's own name");
   const row = document.querySelector('.object-row[data-file-name="wood_aa11.dobj"]');
   assert.ok(row, "the imported object is listed before its event arrives");
   assert.deepEqual([...document.querySelectorAll(".object-row.selected")], [row]);
@@ -1419,6 +1425,7 @@ test("chosen files wait for Import, are imported in turn, and refusals show dobj
   assert.deepEqual(ui.backend.imports, [
     dobjContents("Stone", "cc33"), dobjContents("Wood", "bb22"), dobjContents("Log", "dd44", "craft-basics"), "not json",
   ]);
+  assert.deepEqual(ui.backend.importFileNames, ["stone.dobj", "copy-of-wood.dobj", "log.dobj", "notes.txt"]);
   const results = importResultTexts(document);
   assert.equal(results[0], "bitcraft::Stone imported, usable once the network confirms it");
   assert.equal(results[1], "copy-of-wood.dobj: conflict: object already present: wood_bb22.dobj");
@@ -1426,8 +1433,8 @@ test("chosen files wait for Import, are imported in turn, and refusals show dobj
   assert.match(results[3], /^notes\.txt: invalid input: could not parse \.dobj contents/);
   assert.deepEqual([...document.querySelectorAll("#import-results li.error")].length, 3);
   assert.deepEqual([...document.querySelectorAll(".object-row.selected")].map((row) => row.dataset.fileName),
-    ["stone_cc33.dobj"]);
-  assert.ok(document.querySelector('.object-row[data-file-name="stone_cc33.dobj"]').classList.contains("unknown"));
+    ["stone.dobj"], "the chosen file's name is kept");
+  assert.ok(document.querySelector('.object-row[data-file-name="stone.dobj"]').classList.contains("unknown"));
   assert.equal(document.querySelector("#import-sheet").hidden, false, "the sheet stays open to show the results");
 });
 

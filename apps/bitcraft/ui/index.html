@@ -4451,13 +4451,13 @@
 
   // Unlike `fetchJson`, an error carries dobjd's message, which says why the
   // object was refused.
-  async function importObject(dobj) {
+  async function importObject(dobj, fileName) {
     let response;
     try {
       response = await fetch(`${DOBJD_URL}/objects/import`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dobj }),
+        body: JSON.stringify({ dobj, fileName }),
       });
     } catch (error) {
       error.noResponse = true;
@@ -4468,16 +4468,17 @@
     return body;
   }
 
-  // Each source is `{ label, read }`, where `read` resolves to a `.dobj`
-  // file's contents. Resolves to one result per source: `{ label, summary }`
+  // Each source is `{ label, read, fileName }`, where `read` resolves to a
+  // `.dobj` file's contents and `fileName`, if any, is the name to keep for
+  // it. Resolves to one result per source: `{ label, summary }`
   // or `{ label, error }`.
   async function importSources(sources) {
     importing = true;
     updateImportControls();
     const results = [];
-    for (const { label, read } of sources) {
+    for (const { label, read, fileName } of sources) {
       try {
-        const summary = await importObject(await read());
+        const summary = await importObject(await read(), fileName);
         // Listed now rather than when its event arrives, so it can be selected.
         inventory.accept({ type: "object", ...summary });
         results.push({ label, summary });
@@ -4551,7 +4552,7 @@
   });
   importText.addEventListener("input", updateImportControls);
   importSubmit.addEventListener("click", async () => {
-    const sources = chosenFiles.map((file) => ({ label: file.name, read: () => file.text() }));
+    const sources = chosenFiles.map((file) => ({ label: file.name, read: () => file.text(), fileName: file.name }));
     const pasted = importText.value.trim() !== "";
     if (pasted) sources.push({ label: "Pasted contents", read: async () => importText.value });
     showChosenFiles([]);
