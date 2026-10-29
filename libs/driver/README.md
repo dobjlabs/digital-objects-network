@@ -60,9 +60,10 @@ Core read APIs:
 - `get_class(name)`
 - `check_action(action_id)`
 - `get_state_root()`
-- `import_object(dobj_json)` — adopt an external `.dobj`; rejects if class
-  identity doesn't match, the object is already held, or its nullifier is
-  already spent on-chain. Tolerates an unreachable synchronizer by importing
+- `import_object(dobj_json, requested_file_name)` — adopt an external
+  `.dobj`, filed under the requested name (adjusted to be safe and unique)
+  or a derived one; rejects if class identity doesn't match, the object is
+  already held, or its nullifier is already spent on-chain. Tolerates an unreachable synchronizer by importing
   the object as `Unknown`
 
 Transaction APIs:

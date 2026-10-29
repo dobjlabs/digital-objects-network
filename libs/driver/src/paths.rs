@@ -30,6 +30,10 @@ pub const NULLIFIED_DIR: &str = ".nullified";
 /// `Driver::discard_object_unsafe`. The driver never reads it back.
 pub const DISCARDED_DIR: &str = ".discarded";
 
+/// File (inside [`DOBJ_HOME_DIR`]) listing the fingerprints of the keys
+/// imported objects arrived with, one hex hash per line.
+pub const IMPORTED_KEYS_FILE: &str = "imported-keys";
+
 /// Subdirectory (inside [`DOBJ_HOME_DIR`]) holding installed `.pexe` plugins.
 pub const ACTIONS_DIR: &str = "actions";
 
@@ -56,6 +60,7 @@ impl DriverPaths {
         let discarded_objects_dir = objects_dir.join(DISCARDED_DIR);
         Self {
             settings_path: root.join(SETTINGS_FILE),
+            imported_keys_path: root.join(IMPORTED_KEYS_FILE),
             objects_dir,
             nullified_objects_dir,
             discarded_objects_dir,

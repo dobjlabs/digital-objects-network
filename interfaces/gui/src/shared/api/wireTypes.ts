@@ -59,12 +59,20 @@ export interface ObjectSummaryPayload {
   fields: Record<string, unknown>;
   /** The run holding this object as an input while that run is in flight. */
   heldByRunId?: string | null;
+  /** The object's key is still one it was imported with, so whoever gave it
+   * the file can still spend it, until an action replaces the key. */
+  sharedKey: boolean;
 }
 
 /** `POST /objects/import` request body — the raw JSON contents of an external
  * `.dobj` file, one not produced by this driver (e.g. from outside `~/.dobj/`). */
 export interface ImportObjectRequest {
   dobj: string;
+  /** The name to file the object under, typically that of the file it came
+   * in. dobjd adds `.dobj` when it is missing and a numbered suffix when the
+   * name is taken, and refuses an unsafe name. Without one, the object gets a
+   * name derived from its commitment. */
+  fileName?: string;
 }
 
 export interface ClassRefPayload {

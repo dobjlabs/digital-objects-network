@@ -27,7 +27,7 @@ const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(setImm
 
 async function page(context, options = {}) {
   const backend = {
-    objects: [], transactions: [], proofJobs: new Map(), submissions: [], actions: [recipe()], states: new Map(), posts: [], discards: [],
+    objects: [], transactions: [], proofJobs: new Map(), submissions: [], actions: [recipe()], states: new Map(), posts: [], discards: [], imports: [], importFileNames: [],
     inventoryError: false, listError: false, runError: false, postError: false, syncError: false,
     inventoryReads: 0, runReads: 0, runGate: null, ...options,
   };
@@ -133,6 +133,35 @@ async function page(context, options = {}) {
           backend.discards.push(fileName);
           backend.objects = backend.objects.filter((candidate) => candidate !== object);
           return respond(object);
+        }
+        // Mirrors dobjd: the daemon keeps a requested name, adding `.dobj`,
+        // or names the file itself, and refuses unparseable contents,
+        // unknown classes and objects it already holds.
+        if (parsed.pathname === "/objects/import" && init.method === "POST") {
+          const { dobj, fileName: requestedName } = JSON.parse(init.body);
+          backend.imports.push(dobj);
+          backend.importFileNames.push(requestedName);
+          let record;
+          try {
+            record = JSON.parse(dobj);
+          } catch (error) {
+            return respond({ error: `invalid input: could not parse .dobj contents: ${error.message}` }, 400);
+          }
+          if (record.class.pluginName !== "bitcraft") {
+            return respond({ error: `unknown class: ${record.class.pluginName}::${record.class.name}` }, 404);
+          }
+          const generatedName = `${record.class.name.toLowerCase()}_${record.contentHash}.dobj`;
+          if (backend.objects.some((object) => object.fileName === generatedName)) {
+            return respond({ error: `conflict: object already present: ${generatedName}` }, 409);
+          }
+          const fileName = requestedName === undefined
+            ? generatedName
+            : requestedName.endsWith(".dobj") ? requestedName : `${requestedName}.dobj`;
+          const summary = {
+            fileName, class: record.class, status: backend.importStatus ?? "live", fields: { kvs: [] }, sharedKey: true,
+          };
+          backend.objects.push(copy(summary));
+          return respond(summary);
         }
         if (parsed.pathname === "/settings") return respond(backend.settings ?? {});
         const raw = parsed.pathname.match(/^\/objects\/([^/]+)\/raw$/);
@@ -429,7 +458,8 @@ test("manual pocketknife jobs remain visible", async (context) => {
   const ui = await page(context, { objects: [knife()] });
   const list = ui.document.querySelector("#object-list");
   list.dispatchEvent(new ui.dom.window.MouseEvent("contextmenu", { bubbles: true, button: 2 }));
-  ui.document.querySelector('.context-menu [role="menuitem"]').click();
+  [...ui.document.querySelectorAll('.context-menu [role="menuitem"]')]
+    .find((item) => item.textContent.includes("CraftPocketknife")).click();
   await flush();
   assert.equal(ui.jobs().length, 1);
   assert.match(ui.jobs()[0].textContent, /CraftPocketknife/);
@@ -1303,6 +1333,154 @@ test("the top bar's icons have tooltips", async (context) => {
   const ui = await page(context, { objects: [knife()] });
   assert.deepEqual([...ui.document.querySelectorAll("#top-bar .toolbar-button:not([hidden])")].map((button) => button.dataset.tooltip),
     ["Objects", "Stats", "Reference", "Settings"]);
+});
+
+const dobjContents = (name, contentHash, pluginName = "bitcraft") => JSON.stringify({
+  class: qname(name, pluginName), contentHash, obj: { kind: "d--", kvs: [] }, status: "live",
+});
+const importResultTexts = (document) => [...document.querySelectorAll("#import-results li")]
+  .map((item) => item.textContent.trim());
+
+test("pasted contents are imported, selected, and come with a rekey reminder", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  const { document, dom } = ui;
+  const sheet = document.querySelector("#import-sheet");
+  const text = document.querySelector("#import-text");
+  const submit = document.querySelector("#import-submit");
+  const close = document.querySelector("#import-close");
+  assert.equal(sheet.hidden, true);
+  const importButton = document.querySelector("#import-button");
+  assert.equal(importButton.closest(".pane-header").querySelector("#objects-dir").textContent,
+    "/Users/player/.bitcraft/objects", "the button is in the header that shows the objects directory");
+  importButton.click();
+  assert.equal(sheet.hidden, false);
+  assert.equal(document.querySelector("#top-bar").inert, true, "the sheet keeps the inventory out of reach");
+  assert.equal(document.querySelector("#objects-view").inert, true);
+  assert.equal(document.activeElement, document.querySelector("#import-choose"));
+  assert.equal(submit.disabled, true, "nothing to import yet");
+  assert.equal(close.textContent, "Cancel");
+
+  text.value = dobjContents("Wood", "aa11");
+  text.dispatchEvent(new dom.window.Event("input"));
+  assert.equal(submit.disabled, false);
+  submit.click();
+  await flush();
+  assert.deepEqual(ui.backend.imports, [dobjContents("Wood", "aa11")]);
+  assert.deepEqual(ui.backend.importFileNames, [undefined], "pasted contents get dobjd's own name");
+  const row = document.querySelector('.object-row[data-file-name="wood_aa11.dobj"]');
+  assert.ok(row, "the imported object is listed before its event arrives");
+  assert.deepEqual([...document.querySelectorAll(".object-row.selected")], [row]);
+  assert.deepEqual(importResultTexts(document), ["bitcraft::Wood imported, ready to use"]);
+  assert.match(document.querySelector("#import-rekey-note").textContent,
+    /can still use their copy until you rekey it/);
+  assert.equal(text.value, "", "imported contents are cleared");
+  assert.equal(submit.disabled, true);
+  assert.equal(close.textContent, "Done");
+
+  close.click();
+  assert.equal(sheet.hidden, true);
+  assert.equal(document.querySelector("#top-bar").inert, false);
+  assert.equal(document.querySelector("#objects-view").inert, false);
+  document.querySelector("#import-button").click();
+  assert.equal(document.querySelector("#import-results").hidden, true, "reopening starts afresh");
+  assert.equal(document.querySelector("#import-rekey-note").hidden, true);
+  sheet.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert.equal(sheet.hidden, true);
+});
+
+test("chosen files wait for Import, are imported in turn, and refusals show dobjd's reason", async (context) => {
+  const ui = await page(context, { objects: [knife(), knife("live", { fileName: "wood_bb22.dobj", class: qname("Wood") })], importStatus: "unknown" });
+  const { document, dom } = ui;
+  const submit = document.querySelector("#import-submit");
+  const chosen = document.querySelector("#import-chosen");
+  document.querySelector("#import-button").click();
+  const input = document.querySelector("#import-files");
+  let pickerOpened = 0;
+  input.click = () => { pickerOpened++; };
+  document.querySelector("#import-choose").click();
+  assert.equal(pickerOpened, 1);
+
+  // jsdom's File has no `text()`, the only part of a File the page reads
+  // besides its name.
+  const file = (name, contents) => ({ name, text: async () => contents });
+  const files = [
+    file("stone.dobj", dobjContents("Stone", "cc33")),
+    file("copy-of-wood.dobj", dobjContents("Wood", "bb22")),
+    file("log.dobj", dobjContents("Log", "dd44", "craft-basics")),
+    file("notes.txt", "not json"),
+  ];
+  Object.defineProperty(input, "files", { value: files, configurable: true });
+  input.dispatchEvent(new dom.window.Event("change"));
+  await flush();
+  assert.deepEqual(ui.backend.imports, [], "choosing files does not import them");
+  assert.equal(chosen.hidden, false);
+  assert.deepEqual([...chosen.querySelectorAll("li")].map((item) => item.textContent),
+    ["stone.dobj", "copy-of-wood.dobj", "log.dobj", "notes.txt"]);
+  assert.equal(submit.disabled, false);
+
+  submit.click();
+  await flush();
+  assert.equal(chosen.hidden, true, "imported files leave the chosen list");
+  assert.equal(submit.disabled, true);
+  assert.deepEqual(ui.backend.imports, [
+    dobjContents("Stone", "cc33"), dobjContents("Wood", "bb22"), dobjContents("Log", "dd44", "craft-basics"), "not json",
+  ]);
+  assert.deepEqual(ui.backend.importFileNames, ["stone.dobj", "copy-of-wood.dobj", "log.dobj", "notes.txt"]);
+  const results = importResultTexts(document);
+  assert.equal(results[0], "bitcraft::Stone imported, usable once the network confirms it");
+  assert.equal(results[1], "copy-of-wood.dobj: conflict: object already present: wood_bb22.dobj");
+  assert.equal(results[2], "log.dobj: unknown class: craft-basics::Log");
+  assert.match(results[3], /^notes\.txt: invalid input: could not parse \.dobj contents/);
+  assert.deepEqual([...document.querySelectorAll("#import-results li.error")].length, 3);
+  assert.deepEqual([...document.querySelectorAll(".object-row.selected")].map((row) => row.dataset.fileName),
+    ["stone.dobj"], "the chosen file's name is kept");
+  assert.ok(document.querySelector('.object-row[data-file-name="stone.dobj"]').classList.contains("unknown"));
+  assert.equal(document.querySelector("#import-sheet").hidden, false, "the sheet stays open to show the results");
+});
+
+test("a shared-key object is marked in the list and explained in its details until the key is replaced", async (context) => {
+  const sharedWood = knife("live", { fileName: "wood.dobj", class: qname("Wood"), sharedKey: true });
+  const ui = await page(context, { objects: [knife(), sharedWood] });
+  const { document, dom } = ui;
+  const row = (fileName) => document.querySelector(`.object-row[data-file-name="${fileName}"]`);
+  const notice = () => document.querySelector("#details-body .shared-key-notice");
+  const select = (fileName) => row(fileName).dispatchEvent(new dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  assert.ok(row("wood.dobj").querySelector(".shared-key-badge"));
+  assert.equal(row("pocketknife.dobj").querySelector(".shared-key-badge"), null);
+  assert.match(dom.window.rowTooltipText("wood.dobj"), /\nShared key, not yet rekeyed$/);
+  assert.doesNotMatch(dom.window.rowTooltipText("pocketknife.dobj"), /Shared key/);
+
+  select("pocketknife.dobj");
+  assert.equal(notice(), null);
+  select("wood.dobj");
+  assert.equal(notice().querySelector(".shared-key-notice-title").textContent.trim(), "This file was recently imported.");
+  assert.match(notice().textContent, /right-click > Rekey/);
+  assert.equal(notice().querySelector("button"), null);
+  assert.equal(document.querySelector("#details-body").firstElementChild, notice(), "the notice comes before the icon");
+
+  await ui.event({ type: "object-removed", fileName: "wood.dobj" });
+  await ui.event({ type: "object", ...knife("live", { fileName: "wood-rekeyed.dobj", class: qname("Wood"), sharedKey: false }) });
+  assert.equal(row("wood-rekeyed.dobj").querySelector(".shared-key-badge"), null);
+  select("wood-rekeyed.dobj");
+  assert.equal(notice(), null);
+});
+
+test("a right-click on empty space offers Import..., and one on an object does not", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  const { document, dom } = ui;
+  const menuLabels = () => [...document.querySelectorAll(".context-menu .menu-item-label")]
+    .map((label) => label.textContent);
+  document.querySelector("#object-list").dispatchEvent(
+    new dom.window.MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  assert.equal(menuLabels()[0], "Import...");
+  const knifeRow = document.querySelector('.object-row[data-file-name="pocketknife.dobj"]');
+  knifeRow.dispatchEvent(new dom.window.MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  assert.equal(menuLabels().includes("Import..."), false);
+  document.querySelector("#object-list").dispatchEvent(
+    new dom.window.MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  document.querySelector(".context-menu .menu-item").click();
+  assert.equal(document.querySelector(".context-menu"), null);
+  assert.equal(document.querySelector("#import-sheet").hidden, false);
 });
 
 const bitcraftPack = {
