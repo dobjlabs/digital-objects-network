@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{Result, anyhow};
-use payload::decode_hash_hex;
 use payload::test_state::TestState;
+use payload::{decode_hash_hex, encode_hash_hex};
 use pod2::middleware::Hash;
 use sdk::SpendableObjects;
 use tempfile::tempdir;
@@ -1523,6 +1523,24 @@ fn test_import_unknown_class_is_rejected() {
         err.to_string().contains("unknown class"),
         "expected unknown-class error, got: {err}"
     );
+}
+
+#[test]
+fn test_import_content_hash_mismatch_is_rejected() {
+    let (json, commitment, _nullifier) = make_importable_log();
+    let (driver, _) = import_driver(HashSet::from([commitment]), HashSet::new(), false);
+    let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    value["contentHash"] = serde_json::Value::String("00".repeat(32));
+    let tampered = serde_json::to_string(&value).unwrap();
+    let err = driver.import_object(&tampered, None).unwrap_err();
+    assert!(
+        err.to_string().contains("content hash mismatch"),
+        "expected content-hash error, got: {err}"
+    );
+    assert!(load_object_files(driver.paths()).unwrap().is_empty());
+
+    let summary = driver.import_object(&json, None).unwrap();
+    assert_eq!(summary.content_hash, encode_hash_hex(&commitment));
 }
 
 #[test]

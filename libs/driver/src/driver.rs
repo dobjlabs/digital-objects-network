@@ -464,6 +464,7 @@ impl Driver {
     /// - the `class` must be one this driver's catalog knows, and the object's
     ///   committed `obj["type"]` predicate hash must equal that class's hash
     ///   (the same belt-and-suspenders check `execute` runs on its inputs);
+    /// - the file's `contentHash` must be the commitment of its `obj`;
     /// - the object must not already be present (live or nullified);
     /// - the object's nullifier must not already be spent on-chain.
     ///
@@ -505,13 +506,20 @@ impl Driver {
             .into());
         }
 
-        // 2. Recompute content hash + generated file name from the
-        //    commitment; never trust the sender's. The content hash is
-        //    self-certifying -- it IS the commitment.
+        // 2. The file's content hash must be the object's commitment, which
+        //    is what the store and the chain know the object by. The file
+        //    name is generated from the commitment, never the sender's.
         let commitment = record.obj.commitment();
+        if record.content_hash != commitment {
+            return Err(DriverError::InvalidInput(format!(
+                "content hash mismatch: the file says {}, the object's is {}",
+                encode_hash_hex(&record.content_hash),
+                encode_hash_hex(&commitment)
+            ))
+            .into());
+        }
         let generated_file_name = object_file_name(&record.class, &record.obj)
             .map_err(|err| DriverError::InvalidInput(format!("imported {err:#}")))?;
-        record.content_hash = commitment;
 
         // 3. Reject if we already hold this object or refuse its name, before
         //    asking the synchronizer. Checked again under the store lock
