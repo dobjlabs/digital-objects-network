@@ -2447,6 +2447,21 @@ fn renaming_an_object_checks_the_name_and_what_holds_the_object() {
 }
 
 #[test]
+fn an_object_awaiting_confirmation_cannot_be_renamed() {
+    let fx = pick_fixture("pick.dobj");
+    let mut pick = fx.stored("pick.dobj");
+    pick.status = FileStatus::Unknown;
+    write_object_file(&fx.paths, &pick, "pick.dobj").unwrap();
+    let err = fx
+        .driver
+        .rename_object(std::path::Path::new("pick.dobj"), "other")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("not live"), "{err}");
+    assert!(fx.paths.objects_dir.join("pick.dobj").exists());
+}
+
+#[test]
 fn an_object_seen_spent_on_chain_moves_to_its_generated_name() {
     let fx = pick_fixture("my pick.dobj");
     let pick = fx.stored("my pick.dobj");

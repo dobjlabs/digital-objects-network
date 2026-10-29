@@ -80,10 +80,10 @@ pub async fn discard_object_unsafe(
     Ok(Json(summary))
 }
 
-/// `POST /objects/{file_name}/rename` -- give an unspent object's file a new
+/// `POST /objects/{file_name}/rename` -- give a live object's file a new
 /// name. Returns its summary under the new name. 400 for an unsafe name, 409
-/// when the name is taken or the object is held, spent or still being
-/// created by an open transaction.
+/// when the name is taken, the object is not live, or it is held or spent by
+/// an open transaction.
 pub async fn rename_object(
     State(state): State<AppState>,
     Path(file_name): Path<String>,

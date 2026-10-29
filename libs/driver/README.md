@@ -60,9 +60,9 @@ Core read APIs:
 - `get_class(name)`
 - `check_action(action_id)`
 - `get_state_root()`
-- `rename_object(path, new_name)` — give an unspent object's file a new,
-  safe and unused name; refused while a proof holds the object or an open
-  transaction spends or creates it
+- `rename_object(path, new_name)` — give a live object's file a new, safe
+  and unused name; refused for an object that is not live, or while a proof
+  holds it or an open transaction spends it
 - `import_object(dobj_json, requested_file_name)` — adopt an external
   `.dobj`, filed under the requested name (adjusted to be safe and unique)
   or a derived one; rejects if class identity doesn't match, the object is

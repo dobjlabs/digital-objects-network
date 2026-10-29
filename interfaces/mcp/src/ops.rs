@@ -44,7 +44,7 @@ pub trait DobjOps: Send + Sync + 'static {
     /// Returns the filed object's summary.
     fn import_object_file(&self, path: &str) -> anyhow::Result<ObjectSummary>;
 
-    /// Give an unspent object's file a new name (`.dobj` added when
+    /// Give a live object's file a new name (`.dobj` added when
     /// missing). Returns its summary under the new name.
     fn rename_object(&self, file_name: &str, new_name: &str) -> anyhow::Result<ObjectSummary>;
 

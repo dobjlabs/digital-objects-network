@@ -309,10 +309,11 @@ impl Driver {
         Ok(summary)
     }
 
-    /// Renames an unspent object's file to `new_name`, with `.dobj` added
-    /// when missing, and returns its summary under the new name. Refuses a
-    /// name that is unsafe or that another file has, and an object a proof
-    /// holds or an open transaction spends or has yet to create.
+    /// Renames a live object's file to `new_name`, with `.dobj` added when
+    /// missing, and returns its summary under the new name. Refuses a name
+    /// that is unsafe or that another file has, an object that is not live,
+    /// and an object a proof holds or an open transaction spends or has yet
+    /// to create.
     pub fn rename_object(&self, path: &Path, new_name: &str) -> Result<ObjectSummary> {
         let file_name = extract_basename(path)?;
         let _store = self.store_lock.lock().expect("store lock poisoned");
@@ -343,6 +344,13 @@ impl Driver {
                     ))
                     .into());
                 }
+            }
+            if record.status != FileStatus::Live {
+                return Err(DriverError::Conflict(format!(
+                    "{file_name} is not live (status: {:?})",
+                    record.status
+                ))
+                .into());
             }
             // On a case-insensitive filesystem a change of case finds the
             // file itself under the new name.

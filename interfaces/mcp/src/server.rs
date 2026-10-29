@@ -494,7 +494,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Rename an unspent object's file. `.dobj` is added to `new_name` when missing. Refuses names that are unsafe as file names, that another object file already has, or that look like a generated object name but are not this object's; refuses objects a run holds, an open transaction spends, or one still awaiting its transaction. When an action mutates an object with a custom name, the new version keeps the name once the transaction lands. Returns the object's summary under its new name."
+        description = "Rename a live object's file. `.dobj` is added to `new_name` when missing. Refuses names that are unsafe as file names, that another object file already has, or that look like a generated object name but are not this object's; refuses objects that are not live (including ones awaiting confirmation) and objects a run holds or an open transaction spends. When an action mutates an object with a custom name, the new version keeps the name once the transaction lands. Returns the object's summary under its new name."
     )]
     fn rename_object(
         &self,
