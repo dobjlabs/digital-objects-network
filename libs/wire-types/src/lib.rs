@@ -625,6 +625,8 @@ pub enum CpuUsage {
 }
 
 impl CpuUsage {
+    pub const ALL: [CpuUsage; 3] = [CpuUsage::Light, CpuUsage::Medium, CpuUsage::Full];
+
     pub fn as_str(&self) -> &'static str {
         match self {
             CpuUsage::Light => "light",
@@ -644,14 +646,10 @@ impl std::str::FromStr for CpuUsage {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.to_ascii_lowercase().as_str() {
-            "light" => Ok(CpuUsage::Light),
-            "medium" => Ok(CpuUsage::Medium),
-            "full" => Ok(CpuUsage::Full),
-            _ => Err(format!(
-                "unknown CPU usage {value:?}; expected light, medium or full"
-            )),
-        }
+        CpuUsage::ALL
+            .into_iter()
+            .find(|level| level.as_str().eq_ignore_ascii_case(value))
+            .ok_or_else(|| format!("unknown CPU usage {value:?}; expected light, medium or full"))
     }
 }
 
@@ -667,8 +665,7 @@ pub struct DriverSettings {
     /// Whether dobjd serves MCP on the adjacent port (default off).
     #[serde(default)]
     pub mcp_enabled: bool,
-    /// How much CPU proving may use (default medium). Applies from the next
-    /// proof.
+    /// How much CPU proving may use (default medium).
     #[serde(default)]
     pub cpu_usage: CpuUsage,
 }

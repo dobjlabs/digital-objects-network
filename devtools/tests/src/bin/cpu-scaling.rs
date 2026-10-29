@@ -6,11 +6,11 @@
 //! Usage: `cpu-scaling [--reps N] [--csv PATH] [ENTRY ...]`
 //!
 //! An ENTRY is a `cpuUsage` level (`light`, `medium`, `full`), measured with every logical CPU
-//! at the thread class dobjd gives that level, or `QOS:THREADS` for a pool of its own. QOS is `inherit` (threads keep the
-//! QoS they are spawned with), or on macOS one of `user-initiated`, `default`, `utility`,
-//! `background`. THREADS is a count, `all` for every logical CPU, or on macOS `p` / `e` for the
-//! performance / efficiency core count. With no entries it runs `inherit` at 1, 2, 4, ... threads
-//! (and on macOS at `p`), then the three levels.
+//! at the thread class dobjd gives that level, or `QOS:THREADS` for a pool of its own. QOS is
+//! `inherit` (threads keep the QoS they are spawned with), or on macOS one of `user-initiated`,
+//! `default`, `utility`, `background`. THREADS is a count, `all` for every logical CPU, or on
+//! macOS `p` / `e` for the performance / efficiency core count. With no entries it runs the three
+//! levels.
 //!
 //! Energy comes from the process's own counter on macOS, and on Linux from the RAPL package
 //! counters, which cover the whole CPU package and need root.
@@ -19,7 +19,7 @@
 
 use std::{
     collections::HashMap,
-    env, fs, iter,
+    env, fs,
     time::{Duration, Instant},
 };
 
@@ -69,14 +69,18 @@ impl Qos {
     fn apply_to_current_thread(self) {
         #[cfg(target_os = "macos")]
         {
+            use libc::qos_class_t::*;
+
             let class = match self {
                 Qos::Inherit => return,
-                Qos::UserInitiated => macos::QOS_CLASS_USER_INITIATED,
-                Qos::Default => macos::QOS_CLASS_DEFAULT,
-                Qos::Utility => macos::QOS_CLASS_UTILITY,
-                Qos::Background => macos::QOS_CLASS_BACKGROUND,
+                Qos::UserInitiated => QOS_CLASS_USER_INITIATED,
+                Qos::Default => QOS_CLASS_DEFAULT,
+                Qos::Utility => QOS_CLASS_UTILITY,
+                Qos::Background => QOS_CLASS_BACKGROUND,
             };
-            macos::set_current_thread_qos(class);
+            // SAFETY: takes plain values and only affects the calling thread.
+            let result = unsafe { libc::pthread_set_qos_class_self_np(class, 0) };
+            assert_eq!(result, 0, "pthread_set_qos_class_self_np({class:?}) failed");
         }
     }
 }
@@ -155,28 +159,7 @@ impl PlanEntry {
     }
 }
 
-const SINGLE_THREAD: PlanEntry = PlanEntry::Pool {
-    qos: Qos::Inherit,
-    threads: 1,
-};
-
-fn default_plan(topology: &Topology) -> Vec<PlanEntry> {
-    let mut thread_counts: Vec<usize> = iter::successors(Some(1), |count| Some(count * 2))
-        .take_while(|count| *count < topology.logical_cpus)
-        .chain(topology.performance_cpus)
-        .filter(|count| *count < topology.logical_cpus)
-        .collect();
-    thread_counts.sort();
-    thread_counts.dedup();
-    thread_counts
-        .into_iter()
-        .map(|threads| PlanEntry::Pool {
-            qos: Qos::Inherit,
-            threads,
-        })
-        .chain([CpuUsage::Full, CpuUsage::Medium, CpuUsage::Light].map(PlanEntry::Level))
-        .collect()
-}
+const FULL: PlanEntry = PlanEntry::Level(CpuUsage::Full);
 
 struct Options {
     reps: usize,
@@ -213,7 +196,11 @@ fn parse_options(topology: &Topology) -> Options {
         }
     }
     if plan.is_empty() {
-        plan = default_plan(topology);
+        plan = CpuUsage::ALL
+            .into_iter()
+            .rev()
+            .map(PlanEntry::Level)
+            .collect();
     }
     Options {
         reps,
@@ -223,7 +210,6 @@ fn parse_options(topology: &Topology) -> Options {
 }
 
 /// Cumulative process counters; samples are differences of two readings.
-#[derive(Clone)]
 struct Counters {
     cpu_seconds: f64,
     #[cfg(target_os = "macos")]
@@ -263,10 +249,9 @@ fn process_cpu_seconds() -> f64 {
 
 struct EnergySample {
     joules: f64,
-    /// macOS only.
-    performance_core_share: Option<f64>,
-    /// macOS only.
-    billed_qos: Option<&'static str>,
+    /// macOS only: the share of CPU time spent on performance cores, and the QoS class most of it
+    /// was billed to.
+    macos: Option<(f64, &'static str)>,
 }
 
 struct Sample {
@@ -287,8 +272,7 @@ fn energy_sample(before: &Counters, after: &Counters) -> Option<EnergySample> {
     if let (Some(before), Some(after)) = (&before.rapl, &after.rapl) {
         return Some(EnergySample {
             joules: linux::rapl_joules_between(before, after),
-            performance_core_share: None,
-            billed_qos: None,
+            macos: None,
         });
     }
     let _ = (before, after);
@@ -347,22 +331,20 @@ fn print_sample(sample: &Sample, num_samples: usize, index: usize) {
     );
     if let Some(energy) = &sample.energy {
         line += &format!("  energy {:>7.1} J", energy.joules);
-    }
-    if let Some(energy) = &sample.energy
-        && let (Some(share), Some(billed)) = (energy.performance_core_share, energy.billed_qos)
-    {
-        line += &format!("  P-core {:>5.1}%  billed {billed}", share * 100.0);
+        if let Some((share, billed)) = energy.macos {
+            line += &format!("  P-core {:>5.1}%  billed {billed}", share * 100.0);
+        }
     }
     println!("{line}");
 }
 
 fn print_report(plan: &[PlanEntry], samples: &[Sample]) {
-    let single_thread_wall = samples
+    let full_wall = samples
         .iter()
-        .filter(|sample| sample.entry == SINGLE_THREAD)
+        .filter(|sample| sample.entry == FULL)
         .map(|sample| sample.wall_seconds)
         .collect::<Vec<_>>();
-    let single_thread_wall = (!single_thread_wall.is_empty()).then(|| median(single_thread_wall));
+    let full_wall = (!full_wall.is_empty()).then(|| median(full_wall));
 
     println!();
     println!(
@@ -370,7 +352,7 @@ fn print_report(plan: &[PlanEntry], samples: &[Sample]) {
         "plan",
         "threads",
         "wall s",
-        "speedup",
+        "x full",
         "cpu s",
         "busy cores",
         "energy J",
@@ -383,14 +365,13 @@ fn print_report(plan: &[PlanEntry], samples: &[Sample]) {
             .filter(|sample| sample.entry == *entry)
             .collect();
         let wall = median_of(&entry_samples, |sample| sample.wall_seconds);
-        let speedup =
-            single_thread_wall.map_or("-".to_string(), |single| format!("{:.2}", single / wall));
+        let slowdown = full_wall.map_or("-".to_string(), |full| format!("{:.2}", wall / full));
         let mut line = format!(
             "{:<18} {:>7} {:>8.1} {:>8} {:>8.1} {:>10.2}",
             entry.label(),
             entry_samples[0].threads,
             wall,
-            speedup,
+            slowdown,
             median_of(&entry_samples, |sample| sample.cpu_seconds),
             median_of(&entry_samples, |sample| sample.cpu_seconds
                 / sample.wall_seconds),
@@ -403,11 +384,10 @@ fn print_report(plan: &[PlanEntry], samples: &[Sample]) {
                 median_of(&entry_samples, |sample| energy(sample)
                     / sample.wall_seconds),
             );
-            let first = entry_samples[0].energy.as_ref().unwrap();
-            if let (Some(_), Some(billed)) = (first.performance_core_share, first.billed_qos) {
+            if let Some((_, billed)) = entry_samples[0].energy.as_ref().unwrap().macos {
                 let share = |sample: &Sample| {
-                    let energy = sample.energy.as_ref().unwrap();
-                    energy.performance_core_share.unwrap_or(f64::NAN) * 100.0
+                    let (share, _) = sample.energy.as_ref().unwrap().macos.unwrap();
+                    share * 100.0
                 };
                 line += &format!(" {:>8.1}  {billed}", median_of(&entry_samples, share));
             }
@@ -421,10 +401,9 @@ fn write_csv(path: &str, samples: &[Sample]) {
     for sample in samples {
         let energy = sample.energy.as_ref();
         let joules = energy.map_or(String::new(), |energy| energy.joules.to_string());
-        let share = energy
-            .and_then(|energy| energy.performance_core_share)
-            .map_or(String::new(), |share| share.to_string());
-        let billed = energy.and_then(|energy| energy.billed_qos).unwrap_or("");
+        let macos = energy.and_then(|energy| energy.macos);
+        let share = macos.map_or(String::new(), |(share, _)| share.to_string());
+        let billed = macos.map_or("", |(_, billed)| billed);
         csv += &format!(
             "{},{},{},{},{},{joules},{share},{billed}\n",
             sample.rep,
@@ -489,24 +468,6 @@ mod macos {
     use std::ffi::{CStr, c_int, c_void};
 
     use super::EnergySample;
-
-    pub const QOS_CLASS_USER_INITIATED: u32 = 0x19;
-    pub const QOS_CLASS_DEFAULT: u32 = 0x15;
-    pub const QOS_CLASS_UTILITY: u32 = 0x11;
-    pub const QOS_CLASS_BACKGROUND: u32 = 0x09;
-
-    unsafe extern "C" {
-        fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: c_int) -> c_int;
-    }
-
-    pub fn set_current_thread_qos(class: u32) {
-        // SAFETY: takes plain integers and only affects the calling thread.
-        let result = unsafe { pthread_set_qos_class_self_np(class, 0) };
-        assert_eq!(
-            result, 0,
-            "pthread_set_qos_class_self_np({class:#x}) failed"
-        );
-    }
 
     pub fn sysctl_int(name: &CStr) -> Option<i32> {
         let mut value: i32 = 0;
@@ -638,8 +599,7 @@ mod macos {
             .unwrap();
         EnergySample {
             joules: (after.energy_nj - before.energy_nj) as f64 / 1e9,
-            performance_core_share: Some(performance_core_share),
-            billed_qos: Some(QOS_NAMES[billed]),
+            macos: Some((performance_core_share, QOS_NAMES[billed])),
         }
     }
 }
@@ -649,7 +609,6 @@ mod linux {
     use std::fs;
 
     /// One RAPL package domain's cumulative energy and the value it wraps at, in microjoules.
-    #[derive(Clone)]
     pub struct RaplReading {
         energy_uj: u64,
         max_energy_range_uj: u64,

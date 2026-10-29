@@ -496,7 +496,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Update the daemon's configuration. Send only the fields you want to change; any field you omit keeps its current value. Setting mcpEnabled to false shuts down the MCP server you are connected through. A cpuUsage change applies from the next proof."
+        description = "Update the daemon's configuration. Send only the fields you want to change; any field you omit keeps its current value. Setting mcpEnabled to false shuts down the MCP server you are connected through."
     )]
     fn write_settings(
         &self,

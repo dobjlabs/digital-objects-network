@@ -1379,14 +1379,6 @@ test("the Settings window saves the CPU for jobs chosen with its radio buttons",
   assert.equal(ui.document.querySelector("#settings-error"), null);
 });
 
-test("the Settings window selects medium when dobjd reports no CPU usage", async (context) => {
-  const ui = await page(context, {
-    url: "http://127.0.0.1:7727/bitcraft/?page=settings",
-    settings: { synchronizerApiUrl: "http://127.0.0.1:3000", relayerApiUrl: "http://127.0.0.1:3200", mcpEnabled: false },
-  });
-  assert.equal(ui.document.querySelector('#settings-view input[name="cpu-usage"]:checked').value, "medium");
-});
-
 test("the top bar and the window title show the Inventory Value of live objects", async (context) => {
   const wood = (fileName, status = "live") => ({ fileName, class: qname("Wood"), status, fields: { kvs: [] } });
   const ui = await page(context, { objects: [knife(), wood("wood-1.dobj"), wood("wood-2.dobj"), wood("wood-3.dobj", "pending")] });

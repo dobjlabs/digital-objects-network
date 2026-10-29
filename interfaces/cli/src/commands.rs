@@ -10,8 +10,9 @@ use crate::client::{DobjdClient, SLOW_REQUEST_TIMEOUT};
 use wire_types::transactions::TransactionRecord;
 use wire_types::{
     ActionArgValues, ActionInput, ActionSummary, CheckActionReport, ClassRef, ClassSummary,
-    CpuUsage, DriverSettings, ImportObjectRequest, ObjectSummary, ObjectsDirInfo, ProofJobState,
-    QualifiedName, RunAccepted, StartRunRequest, SubmitTransactionsRequest,
+    CpuUsage, DriverSettings, DriverSettingsPatch, ImportObjectRequest, ObjectSummary,
+    ObjectsDirInfo, ProofJobState, QualifiedName, RunAccepted, StartRunRequest,
+    SubmitTransactionsRequest,
 };
 
 fn parse_qualified(id: &str) -> Result<QualifiedName> {
@@ -182,20 +183,13 @@ pub async fn settings_set(
     mcp: Option<bool>,
     cpu_usage: Option<CpuUsage>,
 ) -> Result<()> {
-    let mut current: DriverSettings = client.get_json("/settings").await?;
-    if let Some(s) = synchronizer {
-        current.synchronizer_api_url = s;
-    }
-    if let Some(r) = relayer {
-        current.relayer_api_url = r;
-    }
-    if let Some(m) = mcp {
-        current.mcp_enabled = m;
-    }
-    if let Some(cpu_usage) = cpu_usage {
-        current.cpu_usage = cpu_usage;
-    }
-    let saved: DriverSettings = client.put_json("/settings", &current).await?;
+    let patch = DriverSettingsPatch {
+        synchronizer_api_url: synchronizer,
+        relayer_api_url: relayer,
+        mcp_enabled: mcp,
+        cpu_usage,
+    };
+    let saved: DriverSettings = client.put_json("/settings", &patch).await?;
     print_settings(&saved);
     Ok(())
 }

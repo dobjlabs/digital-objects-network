@@ -170,6 +170,6 @@ export interface AppSettingsPayload {
   relayerApiUrl: string;
   /** Whether dobjd serves MCP on the adjacent port (default off). */
   mcpEnabled: boolean;
-  /** How much CPU proving may use (default medium); applies from the next proof. */
+  /** How much CPU proving may use (default medium). */
   cpuUsage: CpuUsage;
 }

@@ -2936,7 +2936,7 @@
       const settings = await fetchJson("/settings");
       document.getElementById("settings-synchronizer").value = settings.synchronizerApiUrl ?? "";
       document.getElementById("settings-relayer").value = settings.relayerApiUrl ?? "";
-      watchCpuUsage(settings.cpuUsage ?? "medium");
+      watchCpuUsage(settings.cpuUsage);
     } catch (error) {
       showSettingsError(`Could not read settings: ${error.message}`);
     }
@@ -2987,7 +2987,7 @@
         enable(false);
         try {
           const settings = await sendJson("PUT", "/settings", { cpuUsage: option.value });
-          saved = settings.cpuUsage ?? option.value;
+          saved = settings.cpuUsage;
           show(saved);
           document.getElementById("settings-error")?.remove();
         } catch (error) {
