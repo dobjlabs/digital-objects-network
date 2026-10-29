@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use twilight_model::id::{
     Id,
-    marker::{ApplicationMarker, ChannelMarker, GuildMarker},
+    marker::{ApplicationMarker, GuildMarker},
 };
 
 use crate::store::StoreConfig;
@@ -15,8 +15,6 @@ pub struct Config {
     pub guild_id: Id<GuildMarker>,
     /// The application the desktop host shares presence as.
     pub bitcraft_application_id: Id<ApplicationMarker>,
-    /// Where new leaders are announced.
-    pub announce_channel_id: Id<ChannelMarker>,
     pub store: StoreConfig,
 }
 
@@ -32,9 +30,6 @@ pub fn load_config() -> Result<Config> {
         bitcraft_application_id: var("BITCRAFT_DISCORD_APPLICATION_ID")?
             .parse()
             .context("BITCRAFT_DISCORD_APPLICATION_ID must be a numeric Discord application ID")?,
-        announce_channel_id: var("DISCORD_ANNOUNCE_CHANNEL_ID")?
-            .parse()
-            .context("DISCORD_ANNOUNCE_CHANNEL_ID must be a numeric Discord channel ID")?,
         store: StoreConfig {
             endpoint: var("S3_ENDPOINT")?
                 .parse()

@@ -61,10 +61,6 @@ impl Leaderboard {
         true
     }
 
-    pub fn leader(&self) -> Option<Id<UserMarker>> {
-        self.entries.first().map(|entry| entry.user_id)
-    }
-
     pub fn has_entry(&self, user: Id<UserMarker>) -> bool {
         self.entries.iter().any(|entry| entry.user_id == user)
     }
@@ -228,7 +224,6 @@ mod tests {
         assert_eq!(order(&board), [2, 1, 3]);
         assert!(board.record(user(3), 25.0, at(4)));
         assert_eq!(order(&board), [3, 2, 1]);
-        assert_eq!(board.leader(), Some(user(3)));
         assert_eq!(board.entries[0].achieved_at, at(4));
         assert_eq!(board.entries[0].name, "3");
         assert!(board.rename(user(3), "Ada"));

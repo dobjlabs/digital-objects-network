@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow};
 use time::OffsetDateTime;
-use tokio::sync::{Notify, mpsc, watch};
+use tokio::sync::{Notify, watch};
 use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 use twilight_gateway::{
@@ -25,14 +25,14 @@ use twilight_model::{
 };
 use twilight_util::builder::InteractionResponseDataBuilder;
 
-mod announce;
 mod board;
 mod commands;
 mod config;
+mod messages;
 mod store;
 
 use board::{Leaderboard, presence_bits};
-use commands::Moderation;
+use commands::{Moderation, Request};
 use config::{Config, load_config};
 use store::Store;
 
@@ -52,7 +52,6 @@ struct Bot {
     http: Arc<Client>,
     state: Arc<Mutex<State>>,
     publish_now: Arc<Notify>,
-    announcements: mpsc::UnboundedSender<String>,
     /// The bot's own application, known once connected.
     application_id: OnceLock<Id<ApplicationMarker>>,
 }
@@ -68,7 +67,6 @@ async fn main() -> Result<()> {
         discord_token,
         guild_id,
         bitcraft_application_id,
-        announce_channel_id,
         store,
     } = load_config()?;
     let store = Arc::new(Store::new(store)?);
@@ -81,24 +79,16 @@ async fn main() -> Result<()> {
         "Loaded the leaderboard"
     );
 
-    let http = Arc::new(Client::new(discord_token.clone()));
-    let (announcements, to_announce) = mpsc::unbounded_channel();
-    tokio::spawn(announce::post(
-        http.clone(),
-        announce_channel_id,
-        to_announce,
-    ));
     let bot = Bot {
         guild_id,
         bitcraft_application_id,
-        http,
+        http: Arc::new(Client::new(discord_token.clone())),
         state: Arc::new(Mutex::new(State {
             leaderboard,
             unpublished: false,
             named_at: HashMap::new(),
         })),
         publish_now: Arc::new(Notify::new()),
-        announcements,
         application_id: OnceLock::new(),
     };
     let (stop_publishing, stopped) = watch::channel(());
@@ -184,16 +174,14 @@ impl Bot {
             Event::PresenceUpdate(update) if update.guild_id == self.guild_id => {
                 self.observe(std::slice::from_ref(&update.0));
             }
-            Event::InteractionCreate(interaction) => self.moderate(interaction.0),
+            Event::InteractionCreate(interaction) => self.answer(interaction.0),
             Event::GatewayClose(frame) => info!(?frame, "Discord closed the gateway"),
             _ => {}
         }
     }
 
-    /// A batch announces at most one new leader, however often first place changed within it.
     fn observe(&self, presences: &[Presence]) {
         let mut state = self.state.lock().unwrap();
-        let leader = state.leaderboard.leader();
         for presence in presences {
             let Some(bits) = presence_bits(presence, self.bitcraft_application_id) else {
                 continue;
@@ -217,25 +205,41 @@ impl Bot {
                 ));
             }
         }
-        if state.leaderboard.leader() != leader
-            && let Some(message) = announce::new_leader(&state.leaderboard)
-        {
-            info!(leader = ?state.leaderboard.leader(), "New leader");
-            let _ = self.announcements.send(message);
-        }
     }
 
-    fn moderate(&self, interaction: Interaction) {
+    fn answer(&self, interaction: Interaction) {
         if interaction.guild_id != Some(self.guild_id) {
             return;
         }
         let Some(InteractionData::ApplicationCommand(data)) = &interaction.data else {
             return;
         };
-        let Some(moderation) = commands::moderation(data) else {
+        let Some(request) = commands::request(data) else {
             return;
         };
-        info!(moderator = ?interaction.author_id(), ?moderation, "Leaderboard moderation");
+        let (reply, private) = match request {
+            Request::Leaderboard => (
+                messages::leaderboard(&self.state.lock().unwrap().leaderboard),
+                false,
+            ),
+            Request::Rank(player) => {
+                let Some(player) = player.or(interaction.author_id()) else {
+                    return;
+                };
+                (
+                    messages::rank(&self.state.lock().unwrap().leaderboard, player),
+                    false,
+                )
+            }
+            Request::Moderate(moderation) => {
+                info!(moderator = ?interaction.author_id(), ?moderation, "Leaderboard moderation");
+                (self.moderate(moderation), true)
+            }
+        };
+        tokio::spawn(respond(self.http.clone(), interaction, reply, private));
+    }
+
+    fn moderate(&self, moderation: Moderation) -> String {
         let (reply, changed) = {
             let mut state = self.state.lock().unwrap();
             let leaderboard = &mut state.leaderboard;
@@ -257,7 +261,7 @@ impl Bot {
         if changed {
             self.publish_now.notify_one();
         }
-        tokio::spawn(respond(self.http.clone(), interaction, reply));
+        reply
     }
 }
 
@@ -268,30 +272,31 @@ async fn register_commands(
 ) {
     if let Err(error) = http
         .interaction(application_id)
-        .set_guild_commands(guild_id, &[commands::leaderboard()])
+        .set_guild_commands(guild_id, &commands::definitions())
         .await
     {
-        warn!(?error, "Could not register the moderation commands");
+        warn!(?error, "Could not register the commands");
     }
 }
 
-async fn respond(http: Arc<Client>, interaction: Interaction, reply: String) {
+/// A private reply is shown only to whoever used the command.
+async fn respond(http: Arc<Client>, interaction: Interaction, reply: String, private: bool) {
+    let mut data = InteractionResponseDataBuilder::new()
+        .content(reply)
+        .allowed_mentions(AllowedMentions::default());
+    if private {
+        data = data.flags(MessageFlags::EPHEMERAL);
+    }
     let response = InteractionResponse {
         kind: InteractionResponseType::ChannelMessageWithSource,
-        data: Some(
-            InteractionResponseDataBuilder::new()
-                .content(reply)
-                .flags(MessageFlags::EPHEMERAL)
-                .allowed_mentions(AllowedMentions::default())
-                .build(),
-        ),
+        data: Some(data.build()),
     };
     if let Err(error) = http
         .interaction(interaction.application_id)
         .create_response(interaction.id, &interaction.token, &response)
         .await
     {
-        warn!(?error, "Could not answer a moderation command");
+        warn!(?error, "Could not answer a command");
     }
 }
 
