@@ -10,7 +10,10 @@ use twilight_model::{
     },
 };
 
-/// Each player's highest known Total Inventory Value, as published.
+/// How many players the published leaderboard lists.
+pub const TOP_SIZE: usize = 50;
+
+/// Each player's highest known Total Inventory Value.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Leaderboard {
@@ -18,8 +21,8 @@ pub struct Leaderboard {
     pub updated_at: Option<OffsetDateTime>,
     /// Highest score first.
     pub entries: Vec<Entry>,
-    /// Players a moderator removed; their presence is ignored.
-    #[serde(default)]
+    /// Players whose presence is ignored, listed by hand in the saved store.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub banned: BTreeSet<Id<UserMarker>>,
 }
 
@@ -61,6 +64,15 @@ impl Leaderboard {
         true
     }
 
+    /// The highest `count` scores alone, with no bans.
+    pub fn top(&self, count: usize) -> Leaderboard {
+        Leaderboard {
+            updated_at: self.updated_at,
+            entries: self.entries.iter().take(count).cloned().collect(),
+            banned: BTreeSet::new(),
+        }
+    }
+
     pub fn has_entry(&self, user: Id<UserMarker>) -> bool {
         self.entries.iter().any(|entry| entry.user_id == user)
     }
@@ -74,19 +86,6 @@ impl Leaderboard {
             }
             _ => false,
         }
-    }
-
-    /// Removes `user`'s entry and ignores them from now on. Returns whether they were not already
-    /// banned.
-    pub fn ban(&mut self, user: Id<UserMarker>) -> bool {
-        self.entries.retain(|entry| entry.user_id != user);
-        self.banned.insert(user)
-    }
-
-    /// Lets `user` back onto the leaderboard from their next presence. Returns whether they were
-    /// banned.
-    pub fn unban(&mut self, user: Id<UserMarker>) -> bool {
-        self.banned.remove(&user)
     }
 }
 
@@ -233,20 +232,13 @@ mod tests {
     }
 
     #[test]
-    fn banned_players_are_removed_and_ignored_until_unbanned() {
+    fn banned_players_are_ignored() {
         let mut board = Leaderboard::default();
-        board.record(user(1), 1_000_000.0, at(0));
-        board.record(user(2), 5.0, at(0));
-        assert!(board.ban(user(1)));
-        assert!(!board.ban(user(1)));
-        assert_eq!(board.entries.len(), 1);
+        board.banned.insert(user(1));
         assert!(!board.record(user(1), 2_000_000.0, at(1)));
         assert!(!board.rename(user(1), "Forger"));
-        assert!(board.ban(user(3)));
-        assert!(board.unban(user(1)));
-        assert!(!board.unban(user(1)));
-        assert!(board.record(user(1), 6.0, at(2)));
-        assert_eq!(board.entries[0].user_id, user(1));
+        assert!(board.record(user(2), 5.0, at(1)));
+        assert_eq!(board.entries.len(), 1);
     }
 
     #[test]
@@ -257,7 +249,7 @@ mod tests {
         };
         board.record(user(1_400_000_000_000_000_123), 31.12, at(0));
         board.rename(user(1_400_000_000_000_000_123), "Ada");
-        board.ban(user(5));
+        board.banned.insert(user(5));
         let value = serde_json::to_value(&board).unwrap();
         assert_eq!(
             value,
@@ -275,5 +267,25 @@ mod tests {
         assert_eq!(serde_json::from_value::<Leaderboard>(value).unwrap(), board);
         let minimal: Leaderboard = serde_json::from_value(json!({"entries": []})).unwrap();
         assert_eq!(minimal, Leaderboard::default());
+    }
+
+    #[test]
+    fn the_top_keeps_the_highest_scores_and_no_bans() {
+        let mut board = Leaderboard {
+            updated_at: Some(at(10)),
+            ..Leaderboard::default()
+        };
+        let players = TOP_SIZE as u64 + 2;
+        for player in 1..=players {
+            board.record(user(player), player as f64, at(0));
+        }
+        board.banned.insert(user(999));
+        let top = board.top(TOP_SIZE);
+        assert_eq!(top.updated_at, board.updated_at);
+        assert_eq!(top.entries, board.entries[..TOP_SIZE]);
+        assert_eq!(top.entries[0].user_id, user(players));
+        let value = serde_json::to_value(&top).unwrap();
+        assert!(value.get("banned").is_none(), "{value}");
+        assert_eq!(board.top(TOP_SIZE * 2).entries.len(), players as usize);
     }
 }

@@ -1,13 +1,17 @@
-use anyhow::{Context, Result};
+use std::time::Duration;
+
+use anyhow::{Context, Result, ensure};
 use twilight_model::id::{
     Id,
-    marker::{ApplicationMarker, GuildMarker},
+    marker::{ApplicationMarker, ChannelMarker, GuildMarker},
 };
 
-use crate::store::StoreConfig;
+use crate::store::S3Config;
 
 const DEFAULT_S3_REGION: &str = "auto";
-const DEFAULT_S3_OBJECT: &str = "leaderboard.json";
+const DEFAULT_PUBLIC_OBJECT: &str = "leaderboard.json";
+const DEFAULT_STATE_OBJECT: &str = "state.json";
+const DEFAULT_PUBLISH_INTERVAL_SECS: u64 = 3 * 60 * 60;
 
 pub struct Config {
     pub discord_token: String,
@@ -15,12 +19,39 @@ pub struct Config {
     pub guild_id: Id<GuildMarker>,
     /// The application the desktop host shares presence as.
     pub bitcraft_application_id: Id<ApplicationMarker>,
-    pub store: StoreConfig,
+    /// Where the leaderboard is posted.
+    pub leaderboard_channel_id: Id<ChannelMarker>,
+    pub s3: S3Config,
+    /// Where the leaderboard is published for anyone to read.
+    pub public_bucket: String,
+    pub public_object: String,
+    /// Where every player's score and the bans are kept, out of public view.
+    pub state_bucket: String,
+    pub state_object: String,
+    /// Time between publications of the leaderboard.
+    pub publish_interval: Duration,
 }
 
 pub fn load_config() -> Result<Config> {
     let _ = dotenvy::from_filename("apps/bitcraft/discord-bot/.env");
     let var = |name: &str| dotenvy::var(name).with_context(|| format!("{name} must be set"));
+    let optional =
+        |name: &str, default: &str| dotenvy::var(name).unwrap_or_else(|_| default.into());
+
+    let public_bucket = var("S3_PUBLIC_BUCKET")?;
+    let state_bucket = var("S3_STATE_BUCKET")?;
+    ensure!(
+        public_bucket != state_bucket,
+        "S3_STATE_BUCKET must differ from S3_PUBLIC_BUCKET, which anyone can read"
+    );
+    let publish_interval_secs = match dotenvy::var("PUBLISH_INTERVAL_SECS") {
+        Ok(value) => value
+            .parse::<u64>()
+            .ok()
+            .filter(|secs| *secs > 0)
+            .context("PUBLISH_INTERVAL_SECS must be a positive number of seconds")?,
+        Err(_) => DEFAULT_PUBLISH_INTERVAL_SECS,
+    };
 
     Ok(Config {
         discord_token: var("DISCORD_BOT_TOKEN")?,
@@ -30,15 +61,21 @@ pub fn load_config() -> Result<Config> {
         bitcraft_application_id: var("BITCRAFT_DISCORD_APPLICATION_ID")?
             .parse()
             .context("BITCRAFT_DISCORD_APPLICATION_ID must be a numeric Discord application ID")?,
-        store: StoreConfig {
+        leaderboard_channel_id: var("DISCORD_LEADERBOARD_CHANNEL_ID")?
+            .parse()
+            .context("DISCORD_LEADERBOARD_CHANNEL_ID must be a numeric Discord channel ID")?,
+        s3: S3Config {
             endpoint: var("S3_ENDPOINT")?
                 .parse()
                 .context("S3_ENDPOINT must be a URL")?,
-            bucket: var("S3_BUCKET")?,
-            region: dotenvy::var("S3_REGION").unwrap_or_else(|_| DEFAULT_S3_REGION.into()),
+            region: optional("S3_REGION", DEFAULT_S3_REGION),
             access_key_id: var("S3_ACCESS_KEY_ID")?,
             secret_access_key: var("S3_SECRET_ACCESS_KEY")?,
-            object: dotenvy::var("S3_OBJECT").unwrap_or_else(|_| DEFAULT_S3_OBJECT.into()),
         },
+        public_bucket,
+        public_object: optional("S3_PUBLIC_OBJECT", DEFAULT_PUBLIC_OBJECT),
+        state_bucket,
+        state_object: optional("S3_STATE_OBJECT", DEFAULT_STATE_OBJECT),
+        publish_interval: Duration::from_secs(publish_interval_secs),
     })
 }
