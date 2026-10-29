@@ -15,6 +15,7 @@ use wire_types::transactions::{TransactionRecord, TransactionState};
 use wire_types::{ExecutionPhase, ExecutionStage, ObjectSummary, QualifiedName};
 
 use crate::clients::SynchronizerMembership;
+use crate::cpu_usage::run_at_cpu_usage;
 use crate::driver::Driver;
 use crate::error::DriverError;
 use crate::execute::{decode_action_args, resolve_inputs, validate_execute_request};
@@ -184,37 +185,36 @@ impl Driver {
                 },
             );
         });
-        let proving_pool = self.proving_pool.get(settings.cpu_usage)?;
-        let (spendable_outputs, payload_bytes) = proving_pool.install(|| {
-            let spendable_outputs = catalog.execute_action_with_progress(
+        let spendable_outputs = run_at_cpu_usage(settings.cpu_usage, || {
+            catalog.execute_action_with_progress(
                 input.action.clone(),
                 grounding_witness,
                 execution_inputs,
                 &args,
                 progress,
-            )?;
-            if spendable_outputs.objs.len() != action.total_outputs.len() {
-                return Err(anyhow!(
-                    "action {} output mismatch: descriptor expects {}, engine returned {}",
-                    action.action,
-                    action.total_outputs.len(),
-                    spendable_outputs.objs.len()
-                ));
-            }
-            reporter.on_done(ExecutionPhase::GenerateProof);
+            )
+        })?;
+        if spendable_outputs.objs.len() != action.total_outputs.len() {
+            return Err(anyhow!(
+                "action {} output mismatch: descriptor expects {}, engine returned {}",
+                action.action,
+                action.total_outputs.len(),
+                spendable_outputs.objs.len()
+            ));
+        }
+        reporter.on_done(ExecutionPhase::GenerateProof);
 
-            let shrink_ctx = ExecutionStepContext {
-                stage: Some(ExecutionStage::Shrinking),
-                old_root: Some(grounding_root),
-                output_files: Vec::new(),
-                output_status: None,
-            };
-            reporter.on_step(ExecutionPhase::Commit, "Shrinking proof", &shrink_ctx);
-            let payload_bytes = self
-                .deps
+        let shrink_ctx = ExecutionStepContext {
+            stage: Some(ExecutionStage::Shrinking),
+            old_root: Some(grounding_root),
+            output_files: Vec::new(),
+            output_status: None,
+        };
+        reporter.on_step(ExecutionPhase::Commit, "Shrinking proof", &shrink_ctx);
+        let payload_bytes = run_at_cpu_usage(settings.cpu_usage, || {
+            self.deps
                 .payload_builder
-                .build_payload(&grounding_root, &spendable_outputs)?;
-            Ok((spendable_outputs, payload_bytes))
+                .build_payload(&grounding_root, &spendable_outputs)
         })?;
 
         let outputs = action

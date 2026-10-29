@@ -95,15 +95,16 @@ async fn run() -> Result<()> {
     // lt_eq_u256 intro pods) before accepting requests, so the first action
     // doesn't pay to build them. Ports are already bound, so a port conflict
     // still fails fast ahead of this. This only touches circuit data (no
-    // proving), so on a warm cache it's fast reads. Runs off the async runtime
+    // proving), so on a warm cache it's fast reads. Runs on the blocking pool
     // since circuit construction is CPU-bound and synchronous. A failure is
     // fatal (the warm panics internally): a circuit that can't build now would
     // fail every action, so refuse to start rather than serve a daemon that
     // cannot prove.
-    let warm_driver = driver.clone();
-    tokio::task::spawn_blocking(move || warm_driver.warm_proving_circuits())
+    tokio::task::spawn_blocking(driver::warm_proving_circuits)
         .await
-        .map_err(|err| anyhow!("circuit warm-up task panicked: {err}"))??;
+        .map_err(|err| anyhow!("circuit warm-up task panicked: {err}"))?;
+    // Warm-up ran at full speed; proving runs at the saved level from here.
+    driver::apply_cpu_usage(driver.load_settings()?.cpu_usage);
 
     // Circuits are warm; serve the pre-bound MCP listener (no-op when
     // disabled). Deferred to here so an MCP action can't land mid-warm-up.

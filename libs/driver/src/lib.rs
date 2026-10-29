@@ -19,7 +19,7 @@ mod warm;
 mod tests;
 
 pub use crate::catalog::ActionCatalog as DriverActionCatalog;
-pub use crate::cpu_usage::build_proving_pool;
+pub use crate::cpu_usage::{apply_cpu_usage, set_current_thread_cpu_usage};
 pub use crate::driver::{Driver, DriverDeps, PayloadBuilder};
 pub use crate::error::DriverError;
 pub use crate::object_record::{FileStatus, ObjectRecord, parse_object_record_file};
@@ -32,5 +32,6 @@ pub use crate::types::{
     ActionQuery, DriverPaths, ExecuteActionInput, ExecutionReporter, ExecutionStepContext,
     NoopExecutionReporter, ObjectQuery,
 };
+pub use crate::warm::warm_proving_circuits;
 pub use pexe::MAX_PEXE_BYTES;
 pub use pod2::middleware::Hash;
