@@ -18,7 +18,7 @@ webview shows a bare JSON response in the system's dark theme, and makes its
 text selectable, since the desktop app turns selection off on every page
 and the windows it opens inherit that.
 
-The outer page fills the window with scrolling and overscroll disabled, including on the desktop startup screen. Scrollable content stays within its inventory, jobs, details or secondary-view panel.
+The outer page fills the window with scrolling and overscroll disabled, including on the desktop startup screen. Scrollable content stays within its inventory, jobs, details or secondary-view panel. The object list is rebuilt on every inventory change, which leaves the browser's scroll anchoring nothing to hold on to, so it is turned off there and each redraw scrolls the list to keep the topmost row still listed where it was. A list scrolled to the top stays at the top.
 
 Settings (`?page=settings`) shows the synchronizer and relayer addresses
 from dobjd's `GET /settings` in read-only fields; they cannot be edited yet.

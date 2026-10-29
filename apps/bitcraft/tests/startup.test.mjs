@@ -2127,3 +2127,49 @@ test("pruning a completed transaction preserves its successful job", async (cont
   assert.match(ui.jobs()[0].textContent, /succeeded/);
   assert.equal(ui.jobs()[0].classList.contains("failed"), false);
 });
+
+test("redraws keep the rows in view where they were", async (context) => {
+  const woods = Array.from({ length: 30 }, (_, index) =>
+    knife("live", { fileName: `wood-${String(index).padStart(2, "0")}.dobj`, class: qname("Wood") }));
+  const ui = await page(context, { objects: [knife(), ...woods] });
+  const list = ui.document.querySelector("#object-list");
+  // jsdom lays nothing out: rows are stacked 24px apart in a 240px viewport.
+  const rowHeight = 24;
+  const viewportTop = 100;
+  let scrollTop = 0;
+  Object.defineProperty(list, "scrollTop", {
+    configurable: true,
+    get: () => scrollTop,
+    set: (value) => { scrollTop = Math.max(0, value); },
+  });
+  ui.dom.window.HTMLElement.prototype.getBoundingClientRect = function () {
+    if (this === list) return { top: viewportTop, bottom: viewportTop + 240 };
+    const top = viewportTop + [...list.children].indexOf(this) * rowHeight - scrollTop;
+    return { top, bottom: top + rowHeight };
+  };
+  const topRow = () => [...list.children]
+    .find((row) => row.getBoundingClientRect().bottom > viewportTop).dataset.fileName;
+
+  scrollTop = 10 * rowHeight + 5;
+  const shown = topRow();
+  await ui.event({ type: "object", ...woods[12] });
+  assert.equal(scrollTop, 10 * rowHeight + 5, "a redraw with nothing new leaves the view alone");
+
+  await ui.event({ type: "object", ...knife("live", { fileName: "aaa.dobj", class: qname("Wood") }) });
+  assert.equal(topRow(), shown, "an object listed above the view does not push it down");
+  assert.equal(scrollTop, 11 * rowHeight + 5);
+
+  await ui.event({ type: "object-removed", fileName: "wood-00.dobj" });
+  assert.equal(topRow(), shown, "nor does one removed above it");
+  assert.equal(scrollTop, 10 * rowHeight + 5);
+
+  const next = [...list.children][[...list.children].findIndex((row) => row.dataset.fileName === shown) + 1];
+  const nextTop = next.getBoundingClientRect().top;
+  await ui.event({ type: "object-removed", fileName: shown });
+  assert.equal(list.querySelector(`[data-file-name="${next.dataset.fileName}"]`).getBoundingClientRect().top, nextTop,
+    "when the top row goes, the next one stays where it was");
+
+  scrollTop = 0;
+  await ui.event({ type: "object", ...knife("live", { fileName: "aab.dobj", class: qname("Wood") }) });
+  assert.equal(scrollTop, 0, "a list scrolled to the top stays there");
+});
