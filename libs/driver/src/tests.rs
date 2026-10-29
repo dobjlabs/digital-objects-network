@@ -2284,6 +2284,33 @@ fn a_mutated_custom_named_object_takes_its_name_back_once_it_lands() {
 }
 
 #[test]
+fn reconciling_a_landed_mutation_spends_only_the_version_it_spent() {
+    let fx = pick_fixture("my pick.dobj");
+    let record = fx
+        .driver
+        .execute(fx.input("MineStoneWithWoodPick"))
+        .unwrap();
+    fx.land(&record);
+    fx.driver.settle().unwrap();
+
+    // A later transaction's output now has the input's name.
+    let mut later = fx.stored("my pick.dobj");
+    later.tx_final = Hash::default();
+    write_object_file(&fx.paths, &later, "my pick.dobj").unwrap();
+
+    let settled_at = fx
+        .driver
+        .get_transaction(&tx_final_of(&record))
+        .unwrap()
+        .settled_at_ms
+        .unwrap();
+    fx.driver.prune_transactions(settled_at).unwrap();
+    let after = fx.stored("my pick.dobj");
+    assert_eq!(after.status, FileStatus::Live);
+    assert!(fx.paths.objects_dir.join("my pick.dobj").exists());
+}
+
+#[test]
 fn an_expired_or_deleted_mutation_leaves_the_custom_named_object_as_it_was() {
     let fx = pick_fixture("my pick.dobj");
     let old_pick = fx.stored("my pick.dobj");

@@ -829,12 +829,15 @@ impl Driver {
                     continue;
                 }
                 let mut stored = crate::object_record::parse_object_record_file(&path)?;
-                // An input's name may already belong to the output that
-                // replaced it.
-                if output != (stored.tx_final == producing_tx_final) {
-                    continue;
-                }
                 if !output {
+                    // An input's name may since have passed to a later
+                    // version of the object, or to another object.
+                    let spent_here = object_nullifier_hash(&stored.obj).is_ok_and(|nullifier| {
+                        record.nullifiers.contains(&encode_hash_hex(&nullifier))
+                    });
+                    if !spent_here {
+                        continue;
+                    }
                     if stored.status != FileStatus::Nullified {
                         stored.status = FileStatus::Nullified;
                         let spent_name = nullify_object_file(&self.paths, &stored, file_name)?;
@@ -843,6 +846,9 @@ impl Driver {
                         }
                         changed_files.insert(spent_name);
                     }
+                    continue;
+                }
+                if stored.tx_final != producing_tx_final {
                     continue;
                 }
                 let mut changed = false;
