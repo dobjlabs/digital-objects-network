@@ -5,8 +5,8 @@
 //!
 //! Usage: `cpu-scaling [--reps N] [--csv PATH] [ENTRY ...]`
 //!
-//! An ENTRY is a `cpuUsage` level (`light`, `medium`, `full`), measured in the pool dobjd proves
-//! in at that level, or `QOS:THREADS` for a pool of its own. QOS is `inherit` (threads keep the
+//! An ENTRY is a `cpuUsage` level (`light`, `medium`, `full`), measured with every logical CPU
+//! at the thread class dobjd gives that level, or `QOS:THREADS` for a pool of its own. QOS is `inherit` (threads keep the
 //! QoS they are spawned with), or on macOS one of `user-initiated`, `default`, `utility`,
 //! `background`. THREADS is a count, `all` for every logical CPU, or on macOS `p` / `e` for the
 //! performance / efficiency core count. With no entries it runs `inherit` at 1, 2, 4, ... threads
@@ -23,7 +23,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use driver::build_proving_pool;
+use driver::set_current_thread_cpu_usage;
 use payload::shrink::ShrunkMainPodSetup;
 use pod2::middleware::{EMPTY_HASH, Params};
 use tests::{Prover, find_log_action};
@@ -142,7 +142,10 @@ impl PlanEntry {
 
     fn build_pool(self) -> rayon::ThreadPool {
         match self {
-            PlanEntry::Level(level) => build_proving_pool(level).unwrap(),
+            PlanEntry::Level(level) => rayon::ThreadPoolBuilder::new()
+                .start_handler(move |_| set_current_thread_cpu_usage(level))
+                .build()
+                .unwrap(),
             PlanEntry::Pool { qos, threads } => rayon::ThreadPoolBuilder::new()
                 .num_threads(threads)
                 .start_handler(move |_| qos.apply_to_current_thread())

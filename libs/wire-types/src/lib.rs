@@ -606,17 +606,17 @@ pub struct RunActionProgress {
 // Driver configuration
 // ===========================================================================
 
-/// How hard proving may work the machine. The mechanism differs per platform;
-/// each level makes the same promise about the rest of the machine, while the
-/// proving speed it costs varies by platform.
+/// How hard proving may work the machine. The mechanism, and how much each
+/// level saves, differ by platform.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum CpuUsage {
-    /// Proves only on spare capacity: near-silent, several times slower.
+    /// Gives way to other applications further than Medium; where the
+    /// platform allows, near-silent and several times slower.
     Light,
-    /// Gives way to other applications and runs cooler, at a moderate cost
-    /// in proving speed.
+    /// Gives way to other applications and, where the platform allows, runs
+    /// cooler, at a moderate cost in proving speed.
     #[default]
     Medium,
     /// Proves as fast as the machine allows; other applications may slow

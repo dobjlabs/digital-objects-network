@@ -12,22 +12,6 @@ use pod2::backends::plonky2::mainpod::cache_get_rec_main_pod_common_hash;
 use pod2::middleware::Params;
 use vdfpod::warm_standard_vdf_circuit;
 
-use wire_types::CpuUsage;
-
-use crate::Driver;
-
-impl Driver {
-    /// Warm the proving circuits at Full whatever the saved level: a cold
-    /// build takes minutes even at Full, and nothing can change the level
-    /// until it ends.
-    pub fn warm_proving_circuits(&self) -> anyhow::Result<()> {
-        self.proving_pool
-            .get(CpuUsage::Full)?
-            .install(warm_circuits);
-        Ok(())
-    }
-}
-
 /// Load (building on a cold cache) the proving artifacts the first action would
 /// otherwise build lazily, so the first `execute` doesn't pay for them:
 /// - the recursive MainPod circuit and its common hash,
@@ -38,7 +22,7 @@ impl Driver {
 /// Every step panics internally on a build/cache failure; the caller treats that
 /// as fatal, since an artifact that can't build now would fail every action.
 /// Idempotent: a warm disk cache makes each step a fast read.
-fn warm_circuits() {
+pub fn warm_proving_circuits() {
     let start = std::time::Instant::now();
     let params = Params::default();
     log::info!("warming proving circuits at startup...");

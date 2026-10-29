@@ -1,93 +1,61 @@
-//! The thread pool proofs run in, shaped by the `cpuUsage` setting.
-//!
-//! Each level makes the same promise about the rest of the machine on every
-//! platform, through whatever the platform offers: a thread QoS class on
-//! macOS, a thread priority plus EcoQoS on Windows, a thread priority on
-//! Linux, and a smaller pool wherever those alone do not lower power enough.
+//! Applies the `cpuUsage` setting as the class of the threads doing proving
+//! work: a QoS class on macOS, a thread priority plus EcoQoS on Windows, and
+//! a nice value on Linux. Thread counts stay as they are.
 
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU8, Ordering};
 
-use rayon::{ThreadPool, ThreadPoolBuildError, ThreadPoolBuilder};
+use anyhow::{Result, anyhow};
 use wire_types::CpuUsage;
 
-/// Logical CPUs per pool thread at the levels below Full.
-struct CpusPerThread {
-    medium: usize,
-    light: usize,
+static GLOBAL_POOL_LEVEL: AtomicU8 = AtomicU8::new(0);
+
+/// Re-classes the threads of Rayon's global pool, where proofs do their
+/// parallel work. Each thread applies the latest level when it gets to the
+/// broadcast, so an earlier change cannot land after a later one.
+pub fn apply_cpu_usage(level: CpuUsage) {
+    GLOBAL_POOL_LEVEL.store(level as u8, Ordering::Relaxed);
+    rayon::spawn_broadcast(|_| {
+        set_current_thread_cpu_usage(level_from_u8(GLOBAL_POOL_LEVEL.load(Ordering::Relaxed)));
+    });
 }
 
-const CPUS_PER_THREAD: CpusPerThread = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-    // The QoS class alone moves work to efficiency cores and lower clocks.
-    CpusPerThread {
-        medium: 1,
-        light: 1,
-    }
-} else if cfg!(windows) {
-    // EcoQoS does that for Medium; Light keeps Medium's priority and draws
-    // less power through fewer threads.
-    CpusPerThread {
-        medium: 1,
-        light: 2,
-    }
-} else {
-    CpusPerThread {
-        medium: 2,
-        light: 4,
-    }
-};
-
-/// A proof started while another waits on a pool thread can run nested on
-/// that thread's stack, so leave room for several.
-const STACK_SIZE: usize = 16 * 1024 * 1024;
-
-/// One pool shared by concurrent proofs, so the level bounds them together.
-/// Proofs already running when the level changes finish in the pool they
-/// started in.
-#[derive(Default)]
-pub(crate) struct ProvingPool {
-    current: Mutex<Option<(CpuUsage, Arc<ThreadPool>)>>,
+fn level_from_u8(value: u8) -> CpuUsage {
+    [CpuUsage::Light, CpuUsage::Medium, CpuUsage::Full]
+        .into_iter()
+        .find(|level| *level as u8 == value)
+        .expect("stored from a CpuUsage")
 }
 
-impl ProvingPool {
-    pub(crate) fn get(&self, level: CpuUsage) -> Result<Arc<ThreadPool>, ThreadPoolBuildError> {
-        let mut current = self.current.lock().expect("proving pool lock poisoned");
-        if let Some((current_level, pool)) = current.as_ref()
-            && *current_level == level
-        {
-            return Ok(pool.clone());
-        }
-        let pool = Arc::new(build_proving_pool(level)?);
-        *current = Some((level, pool.clone()));
-        Ok(pool)
+/// Runs `work` on a fresh thread classed for `level`, or on this thread at
+/// Full. A fresh thread because the calling thread is reused for other work,
+/// and on Linux a lowered priority cannot always be raised again.
+pub(crate) fn run_at_cpu_usage<T: Send>(
+    level: CpuUsage,
+    work: impl FnOnce() -> Result<T> + Send,
+) -> Result<T> {
+    if level == CpuUsage::Full {
+        return work();
     }
-}
-
-/// A fresh pool for `level`. Everything run inside it with `install`,
-/// including the single-threaded parts of a proof, stays within the level.
-pub fn build_proving_pool(level: CpuUsage) -> Result<ThreadPool, ThreadPoolBuildError> {
-    let logical_cpus = std::thread::available_parallelism().map_or(1, |count| count.get());
-    ThreadPoolBuilder::new()
-        .num_threads(thread_count(level, logical_cpus))
-        .thread_name(|index| format!("prover-{index}"))
-        .stack_size(STACK_SIZE)
-        .start_handler(move |_| configure_current_thread(level))
-        .build()
-}
-
-fn thread_count(level: CpuUsage, logical_cpus: usize) -> usize {
-    let cpus_per_thread = match level {
-        CpuUsage::Full => 1,
-        CpuUsage::Medium => CPUS_PER_THREAD.medium,
-        CpuUsage::Light => CPUS_PER_THREAD.light,
-    };
-    logical_cpus.div_ceil(cpus_per_thread)
+    std::thread::scope(|scope| {
+        let worker = std::thread::Builder::new()
+            .name("prover".to_string())
+            .spawn_scoped(scope, || {
+                set_current_thread_cpu_usage(level);
+                work()
+            })
+            .map_err(|err| anyhow!("could not start a proving thread: {err}"))?;
+        worker
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
 }
 
 #[cfg(target_os = "macos")]
-fn configure_current_thread(level: CpuUsage) {
+pub fn set_current_thread_cpu_usage(level: CpuUsage) {
     use std::ffi::c_int;
 
     // From <sys/qos.h>; libc does not export the QoS API.
+    const QOS_CLASS_DEFAULT: u32 = 0x15;
     const QOS_CLASS_UTILITY: u32 = 0x11;
     const QOS_CLASS_BACKGROUND: u32 = 0x09;
     unsafe extern "C" {
@@ -95,7 +63,7 @@ fn configure_current_thread(level: CpuUsage) {
     }
 
     let class = match level {
-        CpuUsage::Full => return,
+        CpuUsage::Full => QOS_CLASS_DEFAULT,
         CpuUsage::Medium => QOS_CLASS_UTILITY,
         CpuUsage::Light => QOS_CLASS_BACKGROUND,
     };
@@ -107,59 +75,89 @@ fn configure_current_thread(level: CpuUsage) {
 }
 
 #[cfg(target_os = "linux")]
-fn configure_current_thread(level: CpuUsage) {
-    let nice = match level {
-        CpuUsage::Full => return,
+pub fn set_current_thread_cpu_usage(level: CpuUsage) {
+    use std::sync::OnceLock;
+    use std::sync::atomic::AtomicBool;
+
+    // The nice value dobjd started with, read from a thread no level has
+    // touched yet. Levels never ask for a higher priority than this.
+    static STARTING_NICE: OnceLock<i32> = OnceLock::new();
+    static RAISE_REFUSED: AtomicBool = AtomicBool::new(false);
+
+    // On Linux the nice value belongs to the thread, and id 0 names the
+    // calling thread.
+    // SAFETY: getpriority and setpriority take plain values and only read or
+    // change the calling thread.
+    let current = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
+    let starting = *STARTING_NICE.get_or_init(|| current);
+    let level_nice = match level {
+        CpuUsage::Full => 0,
         CpuUsage::Medium => 10,
         CpuUsage::Light => 19,
     };
-    // On Linux the nice value belongs to the thread, and id 0 names the
-    // calling thread.
-    // SAFETY: takes plain values and only affects the calling thread.
-    let result = unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, nice) };
-    if result != 0 {
-        log::warn!(
-            "could not lower the priority of a proving thread: {}",
-            std::io::Error::last_os_error()
-        );
+    let target = level_nice.max(starting);
+    if target == current {
+        return;
+    }
+    // SAFETY: as above.
+    if unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, target) } == 0 {
+        return;
+    }
+    let error = std::io::Error::last_os_error();
+    if target < current {
+        if !RAISE_REFUSED.swap(true, Ordering::Relaxed) {
+            log::warn!("raising the priority of proving threads needs a dobjd restart: {error}");
+        }
+    } else {
+        log::warn!("could not lower the priority of a proving thread: {error}");
     }
 }
 
 #[cfg(windows)]
-fn configure_current_thread(level: CpuUsage) {
+pub fn set_current_thread_cpu_usage(level: CpuUsage) {
     use windows_sys::Win32::System::Threading::{
         GetCurrentThread, SetThreadInformation, SetThreadPriority,
         THREAD_POWER_THROTTLING_CURRENT_VERSION, THREAD_POWER_THROTTLING_EXECUTION_SPEED,
-        THREAD_POWER_THROTTLING_STATE, THREAD_PRIORITY_BELOW_NORMAL, ThreadPowerThrottling,
+        THREAD_POWER_THROTTLING_STATE, THREAD_PRIORITY_BELOW_NORMAL, THREAD_PRIORITY_LOWEST,
+        THREAD_PRIORITY_NORMAL, ThreadPowerThrottling,
     };
 
-    if level == CpuUsage::Full {
-        return;
-    }
-    let eco_qos = THREAD_POWER_THROTTLING_STATE {
+    let (priority, eco_qos) = match level {
+        CpuUsage::Full => (THREAD_PRIORITY_NORMAL, 0),
+        CpuUsage::Medium => (
+            THREAD_PRIORITY_BELOW_NORMAL,
+            THREAD_POWER_THROTTLING_EXECUTION_SPEED,
+        ),
+        CpuUsage::Light => (
+            THREAD_PRIORITY_LOWEST,
+            THREAD_POWER_THROTTLING_EXECUTION_SPEED,
+        ),
+    };
+    // A zero control mask hands power throttling back to the system.
+    let throttling = THREAD_POWER_THROTTLING_STATE {
         Version: THREAD_POWER_THROTTLING_CURRENT_VERSION,
-        ControlMask: THREAD_POWER_THROTTLING_EXECUTION_SPEED,
-        StateMask: THREAD_POWER_THROTTLING_EXECUTION_SPEED,
+        ControlMask: eco_qos,
+        StateMask: eco_qos,
     };
     // SAFETY: the pseudo-handle names the calling thread, and the buffer and
-    // its size describe `eco_qos`.
+    // its size describe `throttling`.
     unsafe {
         let thread = GetCurrentThread();
-        if SetThreadPriority(thread, THREAD_PRIORITY_BELOW_NORMAL) == 0 {
+        if SetThreadPriority(thread, priority) == 0 {
             log::warn!(
-                "could not lower the priority of a proving thread: {}",
+                "could not set the priority of a proving thread: {}",
                 std::io::Error::last_os_error()
             );
         }
         let set = SetThreadInformation(
             thread,
             ThreadPowerThrottling,
-            (&eco_qos as *const THREAD_POWER_THROTTLING_STATE).cast(),
+            (&throttling as *const THREAD_POWER_THROTTLING_STATE).cast(),
             size_of::<THREAD_POWER_THROTTLING_STATE>() as u32,
         );
         if set == 0 {
             log::warn!(
-                "could not enable EcoQoS on a proving thread: {}",
+                "could not set EcoQoS on a proving thread: {}",
                 std::io::Error::last_os_error()
             );
         }
@@ -167,40 +165,41 @@ fn configure_current_thread(level: CpuUsage) {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
-fn configure_current_thread(_level: CpuUsage) {}
+pub fn set_current_thread_cpu_usage(_level: CpuUsage) {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn pool_is_reused_until_the_level_changes() {
-        let pools = ProvingPool::default();
-        let medium = pools.get(CpuUsage::Medium).unwrap();
-        assert!(Arc::ptr_eq(&medium, &pools.get(CpuUsage::Medium).unwrap()));
-        let light = pools.get(CpuUsage::Light).unwrap();
-        assert!(!Arc::ptr_eq(&medium, &light));
-        assert!(Arc::ptr_eq(&light, &pools.get(CpuUsage::Light).unwrap()));
+    fn levels_round_trip_through_the_stored_byte() {
+        for level in [CpuUsage::Light, CpuUsage::Medium, CpuUsage::Full] {
+            assert_eq!(level_from_u8(level as u8), level);
+        }
     }
 
     #[test]
-    fn full_uses_every_cpu_and_lower_levels_never_use_more() {
-        for logical_cpus in [1, 2, 3, 10, 32] {
-            let full = thread_count(CpuUsage::Full, logical_cpus);
-            let medium = thread_count(CpuUsage::Medium, logical_cpus);
-            let light = thread_count(CpuUsage::Light, logical_cpus);
-            assert_eq!(full, logical_cpus);
-            assert!(full >= medium && medium >= light && light >= 1);
+    fn work_runs_and_its_error_comes_back() {
+        for level in [CpuUsage::Light, CpuUsage::Medium, CpuUsage::Full] {
+            assert_eq!(run_at_cpu_usage(level, || Ok(7)).unwrap(), 7);
+            let error = run_at_cpu_usage::<()>(level, || Err(anyhow!("failed"))).unwrap_err();
+            assert_eq!(error.to_string(), "failed");
         }
     }
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn pool_threads_carry_the_level() {
-        let nice = || unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
-        let at = |level| build_proving_pool(level).unwrap().install(nice);
-        assert_eq!(at(CpuUsage::Full), nice());
-        assert_eq!(at(CpuUsage::Medium), 10);
-        assert_eq!(at(CpuUsage::Light), 19);
+    fn work_runs_at_the_level_nice() {
+        let nice = || Ok(unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) });
+        let own = nice().unwrap();
+        assert_eq!(run_at_cpu_usage(CpuUsage::Full, nice).unwrap(), own);
+        assert_eq!(
+            run_at_cpu_usage(CpuUsage::Medium, nice).unwrap(),
+            10.max(own)
+        );
+        assert_eq!(
+            run_at_cpu_usage(CpuUsage::Light, nice).unwrap(),
+            19.max(own)
+        );
     }
 }
