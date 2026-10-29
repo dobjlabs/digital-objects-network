@@ -1273,7 +1273,7 @@ test("the Leaderboard lists players by score with their names as text, and runs 
   assert.equal(document.querySelector(".leaderboard-list b"), null, "names are not markup");
   assert.deepEqual([...document.querySelectorAll(".leaderboard-list li")].map((row) => row.classList.contains("podium")),
     [true, true, true, false]);
-  assert.match(document.querySelector(".leaderboard-note").textContent, /Share activity on Discord and leaderboard/);
+  assert.match(document.querySelector(".leaderboard-note").textContent, /Share my Bitcraft scores on Discord/);
 
   ui.backend.leaderboard = { updatedAt: "2026-10-29T10:49:00Z", entries: [player("Cy", 40), player("Ada", 31.12)] };
   ui.dom.window.dispatchEvent(new ui.dom.window.Event("focus"));

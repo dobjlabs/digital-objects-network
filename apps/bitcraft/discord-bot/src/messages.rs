@@ -3,7 +3,7 @@ use twilight_model::id::{Id, marker::UserMarker};
 use crate::board::{Leaderboard, TOP_SIZE};
 
 const JOIN_HINT: &str =
-    "It counts players who turn on Share activity on Discord and leaderboard in the Bitcraft menu.";
+    "It counts players who turn on Share my Bitcraft scores on Discord in Bitcraft's Settings.";
 const MESSAGE_LIMIT: usize = 2000;
 
 /// The leaderboard as Discord messages, split between lines to fit Discord's
