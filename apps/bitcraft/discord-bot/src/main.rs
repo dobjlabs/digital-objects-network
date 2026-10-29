@@ -35,20 +35,18 @@ use board::{Leaderboard, TOP_SIZE, presence_bits};
 use config::{Config, load_config};
 use store::Store;
 
-/// How often changed scores are saved. Online players' scores come back from
-/// their presence after a restart, so only this long of other changes, such as
-/// a peak a player has since spent below, can be lost.
+/// How often changed scores are saved, which bounds what a crash can lose.
 const SAVE_INTERVAL: Duration = Duration::from_secs(60);
 const NAME_REFRESH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const NAME_RETRY_DELAY: Duration = Duration::from_secs(10 * 60);
-/// How long shutdown waits for the gateway close to go out.
+/// How long shutdown waits for the gateway connection to close.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
 struct State {
     leaderboard: Leaderboard,
     unsaved: bool,
-    /// The leaderboard as last published, which `/rank` answers from.
+    /// Used by `/rank`.
     published: Leaderboard,
     /// When each player's display name is next due to be looked up.
     name_due: HashMap<Id<UserMarker>, Instant>,
@@ -75,7 +73,7 @@ async fn main() -> Result<()> {
         state_object,
         publish_interval,
     } = load_config()?;
-    // After the config, which may set RUST_LOG from .env.
+    // After load_config, so RUST_LOG can be set in .env.
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
@@ -146,8 +144,9 @@ async fn main() -> Result<()> {
         }
     };
     let _ = stop.send(());
+    // A normal close shows the bot offline right away. `close` only queues the
+    // frame, so keep polling the shard until the connection closes.
     shard.close(CloseFrame::NORMAL);
-    // The close frame goes out only while the shard is polled.
     let _ = tokio::time::timeout(CLOSE_TIMEOUT, async {
         while let Some(event) = shard.next_event(EventTypeFlags::empty()).await {
             if let Ok(Event::GatewayClose(_)) = event {
