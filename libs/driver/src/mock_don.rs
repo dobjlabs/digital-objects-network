@@ -352,7 +352,6 @@ impl RelayerClient for MockDon {
 
 #[cfg(test)]
 mod tests {
-    use pod2::backends::plonky2::primitives::merkletree;
     use txlib::MAX_STATE_ROOT_AGE_BLOCKS;
 
     use super::*;
@@ -399,11 +398,11 @@ mod tests {
         let witness = don.fetch_grounding_witness("", &[first]).unwrap();
         assert_eq!(witness.state_header.hash(), head.state_root);
         let (index, proof) = &witness.created_proofs[&first];
-        merkletree::verify(
+        Array::verify(
             witness.state_header.created_root,
             proof,
-            &Value::from(*index).raw(),
-            &Value::from(first).raw(),
+            *index as usize,
+            &Value::from(first),
         )
         .unwrap();
         assert_ne!(
