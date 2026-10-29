@@ -986,6 +986,45 @@ test("the welcome guide's name is semibold and object names are not", async (con
   assert.notEqual(weight("pocketknife.dobj"), "600");
 });
 
+test("capital goods are listed first, in bold, each group by name", async (context) => {
+  const object = (fileName, className) => ({
+    fileName, class: qname(className), status: "live", fields: { kvs: [] },
+  });
+  const ui = await page(context, {
+    objects: [
+      object("axe.dobj", "WoodAxe"), knife(), object("quarry.dobj", "Quarry"),
+      object("drill.dobj", "MiningDrill"), object("bucket.dobj", "BucketOfWood"),
+    ],
+  });
+  const rows = [...ui.document.querySelectorAll(".object-row")];
+  assert.deepEqual(rows.map((row) => row.dataset.fileName), [
+    "BITCRAFT_WELCOME.md", "drill.dobj", "quarry.dobj", "axe.dobj", "bucket.dobj", "pocketknife.dobj",
+  ]);
+  const weight = (row) => ui.dom.window.getComputedStyle(row.querySelector(".object-name")).fontWeight;
+  assert.deepEqual(rows.slice(1).map(weight).map((value) => value === "700"), [true, true, false, false, false]);
+});
+
+test("a capital good's icon shows its level in the object list and its Details pane", async (context) => {
+  const leveled = (fileName, className, level) => ({
+    fileName, class: qname(className), status: "live", fields: { kvs: [["level", { Int: String(level) }]] },
+  });
+  const ui = await page(context, {
+    objects: [knife(), leveled("quarry.dobj", "Quarry", 6), leveled("drill.dobj", "MiningDrill", 3)],
+  });
+  const { document } = ui;
+  const row = (fileName) => document.querySelector(`.object-row[data-file-name="${fileName}"]`);
+  const badge = (element) => element.querySelector(".icon-badge")?.textContent ?? null;
+  assert.equal(badge(row("quarry.dobj")), "6");
+  assert.equal(badge(row("drill.dobj")), "3");
+  assert.equal(badge(row("pocketknife.dobj")), null);
+
+  const select = (fileName) => row(fileName).dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  select("quarry.dobj");
+  assert.equal(badge(document.querySelector("#details-body .details-icon")), "6");
+  select("pocketknife.dobj");
+  assert.equal(badge(document.querySelector("#details-body .details-icon")), null);
+});
+
 const quarry = (level) => ({
   fileName: "quarry.dobj", class: qname("Quarry"), status: "live",
   fields: { kvs: [["level", { Int: String(level) }]] },

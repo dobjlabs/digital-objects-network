@@ -47,6 +47,13 @@ that block should be plugin-agnostic.
 - **Why:** the starter tool, the resources and what they make, then the
   tools, machines and buckets, roughly in the order a player meets them.
 
+### Capital goods head the object list, in bold, with their level
+
+- **Where:** `CAPITAL_GOOD_CLASSES`, applied through `isCapitalGood()` in `showObjects()` (order) and `renderObjects()` (weight), and through `iconBadgeText()` to the object list's icons and a single object's Details pane icon (level).
+- **What:** objects of the classes a `LevelUp*` action upgrades, Quarry and MiningDrill, are listed right after the welcome guide, with their names in bold, then every other object. Each group is sorted by file name. Their icons carry their `level` field as a white number on a bright blue badge over the icon's bottom right corner: on the object list's icon, and on the class art of the large icon in the object's Details pane.
+- **Generic behavior:** every object sorted by file name, in the regular weight, with plain class icons.
+- **Why:** they are the machines a player builds up and keeps, in an inventory mostly of resources that get spent.
+
 ### Only bitcraft activity appears in Jobs
 
 - **Where:** `activityInScope()`, applied to retained `/runs`, `/proof-jobs`, open transaction records and activity arriving on `/events`.
