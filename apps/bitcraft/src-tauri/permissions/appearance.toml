@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-set-appearance"
+description = "Allow applying the game's chosen theme to the desktop app."
+commands.allow = ["set_appearance"]

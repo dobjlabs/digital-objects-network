@@ -45,6 +45,8 @@ async function page(context, options = {}) {
     url: options.url ?? "http://127.0.0.1:7727/bitcraft/", runScripts: "dangerously", virtualConsole,
     beforeParse(window) {
       window.bitcraftDesktop = options.desktop ?? false;
+      if (options.desktopAppearance) window.bitcraftAppearance = options.desktopAppearance;
+      if (options.storedAppearance) window.localStorage.setItem("bitcraft-appearance", options.storedAppearance);
       if (options.desktop || options.invoke) {
         window.__TAURI__ = { core: { invoke: async (command, args) => {
           desktopCalls.push(command);
@@ -1408,6 +1410,63 @@ test("the Settings window shows the connection addresses read-only and runs no s
     assert.equal(field(id).textContent.trim(), text);
     assert.equal(field(id).target, "_blank", `${id} opens outside the Settings window`);
   }
+});
+
+test("the theme stays light until the player picks dark in Settings", async (context) => {
+  const settingsUrl = "http://127.0.0.1:7727/bitcraft/?page=settings";
+  const settings = await page(context, { url: settingsUrl });
+  const theme = settings.document.querySelector("#settings-appearance");
+  assert.equal(settings.document.documentElement.dataset.theme, "light");
+  assert.equal(theme.value, "light");
+  theme.value = "dark";
+  theme.dispatchEvent(new settings.dom.window.Event("change"));
+  assert.equal(settings.document.documentElement.dataset.theme, "dark");
+  assert.equal(settings.dom.window.localStorage.getItem("bitcraft-appearance"), "dark");
+
+  const reopened = await page(context, { url: settingsUrl, storedAppearance: "dark" });
+  assert.equal(reopened.document.documentElement.dataset.theme, "dark");
+  assert.equal(reopened.document.querySelector("#settings-appearance").value, "dark");
+});
+
+test("other windows follow a picked theme, and only the main window passes it to the desktop app", async (context) => {
+  const pick = (ui, appearance) => {
+    const { window } = ui.dom;
+    window.localStorage.setItem("bitcraft-appearance", appearance);
+    window.dispatchEvent(new window.StorageEvent("storage", { key: "bitcraft-appearance", newValue: appearance }));
+  };
+  const sent = [];
+  const invoke = (command, args) => { if (command === "set_appearance") sent.push(args.appearance); };
+  const main = await page(context, { desktop: true, objects: [knife()], invoke });
+  const summary = await page(context, {
+    desktop: true, objects: [knife()], invoke, url: "http://127.0.0.1:7727/bitcraft/?page=summary",
+  });
+  assert.deepEqual(sent, []);
+  pick(summary, "dark");
+  pick(main, "dark");
+  await flush();
+  assert.equal(summary.document.documentElement.dataset.theme, "dark");
+  assert.equal(main.document.documentElement.dataset.theme, "dark");
+  assert.deepEqual(sent, ["dark"]);
+
+  const browser = await page(context, { objects: [knife()], invoke });
+  pick(browser, "light");
+  await flush();
+  assert.equal(browser.document.documentElement.dataset.theme, "light");
+  assert.deepEqual(sent, ["dark"], "a browser page has no desktop app to tell");
+});
+
+test("the desktop app's theme stands in until the page has its own, and follows the page's", async (context) => {
+  const sent = [];
+  const invoke = (command, args) => { if (command === "set_appearance") sent.push(args.appearance); };
+  const fresh = await page(context, { desktop: true, objects: [knife()], invoke, desktopAppearance: "dark" });
+  assert.equal(fresh.document.documentElement.dataset.theme, "dark");
+  assert.deepEqual(sent, []);
+  const differing = await page(context, {
+    desktop: true, objects: [knife()], invoke, desktopAppearance: "dark", storedAppearance: "light",
+  });
+  await flush();
+  assert.equal(differing.document.documentElement.dataset.theme, "light");
+  assert.deepEqual(sent, ["light"]);
 });
 
 test("desktop Settings reads and changes the Discord sharing preference through the host", async (context) => {

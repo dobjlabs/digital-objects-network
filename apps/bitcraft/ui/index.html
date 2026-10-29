@@ -4,8 +4,36 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bitcraft</title>
+<script>
+  // Runs before the page paints, so no window shows in the wrong theme. The
+  // player picks it in Settings; the desktop app's copy stands in when this
+  // origin's storage holds no choice.
+  const APPEARANCE_STORAGE_KEY = "bitcraft-appearance";
+  const APPEARANCES = ["light", "dark"];
+
+  function storedAppearance() {
+    let stored = null;
+    try {
+      stored = localStorage.getItem(APPEARANCE_STORAGE_KEY);
+    } catch {}
+    const appearance = stored ?? window.bitcraftAppearance;
+    return APPEARANCES.includes(appearance) ? appearance : "light";
+  }
+
+  function applyAppearance(appearance) {
+    document.documentElement.dataset.theme = appearance;
+  }
+
+  applyAppearance(storedAppearance());
+  window.addEventListener("storage", (event) => {
+    if (event.key === APPEARANCE_STORAGE_KEY) {
+      applyAppearance(storedAppearance());
+    }
+  });
+</script>
 <style>
   :root {
+    color-scheme: light;
     --bg: #ffffff;
     --pane-header-bg: #f5f5f5;
     --border: #d4d4d4;
@@ -36,8 +64,13 @@
     --status-unknown: #a8a8a8;
     --progress-track: #e2e2e2;
     --progress-fill: #0a64d8;
+    --button-bg: #ffffff;
     --button-border: #c4c4c4;
     --faint-text: #a0a0a0;
+    --tooltip-bg: rgba(32, 32, 32, 0.92);
+    /* Class art is drawn for a white tile, so the tile stays white in the
+       dark theme too. */
+    --icon-tile-bg: #ffffff;
     --icon-badge: #0a84ff;
     --icon-badge-quantity: #3a3a3c;
     --icon-badge-level-1: #28a745;
@@ -54,6 +87,43 @@
     /* Blank strip kept below the last row of a full list, so a click on
        empty space to clear the selection always has a target. */
     --list-trailing-space: 48px;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #1e1e1e;
+    --pane-header-bg: #282828;
+    --border: #3d3d3d;
+    --text: #e4e4e4;
+    --muted: #9a9a9a;
+    --row-hover: #2d2d2d;
+    --row-selected: #1d3f66;
+    --error: #ff7b72;
+    --link: #6ea8fe;
+    --action-name: #b69cff;
+    --run-in-progress: #e3b341;
+    --run-failed: #ff7b72;
+    --object-unknown: #767676;
+    --object-pending: #e3b341;
+    --object-held: #767676;
+    --row-flash: #5a4a14;
+    --menu-bg: rgba(42, 42, 42, 0.94);
+    --menu-border: rgba(255, 255, 255, 0.14);
+    --menu-disabled: #6a6a6a;
+    --menu-divider: rgba(255, 255, 255, 0.12);
+    --toolbar-icon: #b4b4b4;
+    --toolbar-hover: rgba(255, 255, 255, 0.08);
+    --toolbar-pressed: rgba(255, 255, 255, 0.16);
+    --toolbar-selected: rgba(255, 255, 255, 0.12);
+    --status-connected: #22c55e;
+    --status-disconnected: #ef4444;
+    --status-unknown: #6e6e6e;
+    --progress-track: #3a3a3a;
+    --button-bg: #333333;
+    --button-border: #4d4d4d;
+    --faint-text: #6e6e6e;
+    --tooltip-bg: rgba(64, 64, 64, 0.96);
+    --shared-key-notice-bg: #33290d;
+    --shared-key-notice-border: #a16207;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -76,9 +146,8 @@
     flex-direction: column;
   }
   #inventory-app[hidden], #startup-screen[hidden] { display: none; }
-  /* A file's stored text, in a window of its own: light whatever the
-     system theme, and selectable although the desktop app turns selection
-     off for its pages. */
+  /* A file's stored text, in a window of its own: selectable although the
+     desktop app turns selection off for its pages. */
   #raw-view {
     flex: 1;
     min-height: 0;
@@ -175,7 +244,7 @@
     padding: 3px 12px;
     border: 1px solid var(--button-border);
     border-radius: 5px;
-    background: var(--bg);
+    background: var(--button-bg);
     box-shadow: 0 1px 1px rgba(0, 0, 0, 0.06);
     color: var(--text);
     text-decoration: none;
@@ -193,6 +262,12 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 12px;
   }
+  .settings-fields select {
+    justify-self: start;
+    min-width: 120px;
+    color: var(--text);
+    font: inherit;
+  }
   .summary-header {
     display: flex;
     align-items: center;
@@ -206,7 +281,7 @@
     width: 48px;
     height: 48px;
     border-radius: 10px;
-    background: var(--bg);
+    background: var(--icon-tile-bg);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25), inset 0 0 0 0.5px rgba(0, 0, 0, 0.08);
   }
   .summary-header-icon img {
@@ -376,7 +451,7 @@
     padding: 3px 12px;
     border: 1px solid var(--button-border);
     border-radius: 5px;
-    background: var(--bg);
+    background: var(--button-bg);
     box-shadow: 0 1px 1px rgba(0, 0, 0, 0.06);
     color: var(--text);
     font: inherit;
@@ -513,7 +588,7 @@
     z-index: 30;
     padding: 3px 7px;
     border-radius: 5px;
-    background: rgba(32, 32, 32, 0.92);
+    background: var(--tooltip-bg);
     color: #fff;
     font-size: 12px;
     white-space: pre;
@@ -530,7 +605,7 @@
     transform: translateX(-50%);
     padding: 3px 7px;
     border-radius: 5px;
-    background: rgba(32, 32, 32, 0.92);
+    background: var(--tooltip-bg);
     color: #fff;
     font-size: 12px;
     font-weight: 400;
@@ -786,7 +861,7 @@
     height: 16px;
     border-radius: 3px;
     overflow: hidden;
-    background: var(--bg);
+    background: var(--icon-tile-bg);
     box-shadow: 0 1px 1.5px rgba(0, 0, 0, 0.28);
   }
   .class-label { white-space: nowrap; }
@@ -1266,6 +1341,14 @@
   <div id="leaderboard-view" hidden></div>
   <div id="raw-view" hidden><pre id="raw-text"></pre></div>
   <div id="settings-view" hidden>
+    <div class="settings-fields">
+      <h1 class="settings-title">Appearance</h1>
+      <label for="settings-appearance">Theme</label>
+      <select id="settings-appearance">
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+    </div>
     <div class="settings-fields">
       <h1 class="settings-title">Connections</h1>
       <label for="settings-synchronizer">Synchronizer address</label>
@@ -2974,14 +3057,17 @@
     openedWindows.set(name, window.open(url, name, features));
   }
 
-  // The Settings window shows the connection addresses from dobjd's settings,
-  // which cannot be edited yet, so the fields are read-only, and the game's
-  // version, website and Discord server.
+  // The Settings window offers the theme, shows the connection addresses from
+  // dobjd's settings, which cannot be edited yet, so the fields are read-only,
+  // and the game's version, website and Discord server.
   async function loadSettingsWindow() {
     document.body.classList.add("secondary-window");
     document.title = "Bitcraft Settings";
     const view = document.getElementById("settings-view");
     view.hidden = false;
+    const appearance = document.getElementById("settings-appearance");
+    appearance.value = storedAppearance();
+    appearance.addEventListener("change", () => chooseAppearance(appearance.value));
     document.getElementById("settings-version").textContent = BITCRAFT_VERSION;
     const website = document.getElementById("settings-website");
     website.href = BITCRAFT_SITE_URL;
@@ -2997,6 +3083,25 @@
       message.className = "message error";
       message.textContent = `Could not read settings: ${error.message}`;
       view.append(message);
+    }
+  }
+
+  // The page's other windows follow through their storage event, and the
+  // main window passes the choice on to the desktop app.
+  function chooseAppearance(appearance) {
+    try {
+      localStorage.setItem(APPEARANCE_STORAGE_KEY, appearance);
+    } catch {}
+    applyAppearance(appearance);
+  }
+
+  // The desktop app restyles its window frames and its own startup and agent
+  // guide pages, which this origin's storage does not reach.
+  async function sendAppearanceToDesktop() {
+    try {
+      await window.__TAURI__.core.invoke("set_appearance", { appearance: storedAppearance() });
+    } catch (error) {
+      console.warn("Could not apply the theme to the desktop app:", error);
     }
   }
 
@@ -4895,6 +5000,16 @@
           () => window.open(`bitcraft://agent/${agent}`, "_blank", "noopener"));
       }
       document.getElementById("agent-divider").hidden = false;
+      window.addEventListener("storage", (event) => {
+        if (event.key === APPEARANCE_STORAGE_KEY) {
+          void sendAppearanceToDesktop();
+        }
+      });
+      // The desktop app keeps its copy in its home, while every home shares
+      // this origin's storage, so the two differ after a switch of home.
+      if (window.bitcraftAppearance !== undefined && window.bitcraftAppearance !== storedAppearance()) {
+        void sendAppearanceToDesktop();
+      }
     }
     document.getElementById("import-button").addEventListener("click", openImportSheet);
     document.getElementById("reference-button").addEventListener("click",
@@ -4906,7 +5021,7 @@
     document.getElementById("inventory-value").addEventListener("click",
       () => openPageWindow(SUMMARY_PAGE, SUMMARY_WINDOW_NAME, SUMMARY_WINDOW_FEATURES));
     document.getElementById("settings-button").addEventListener("click",
-      () => openPageWindow(SETTINGS_PAGE, SETTINGS_WINDOW_NAME, "popup,width=480,height=370"));
+      () => openPageWindow(SETTINGS_PAGE, SETTINGS_WINDOW_NAME, "popup,width=480,height=422"));
     document.getElementById("bitcraft-version").textContent = BITCRAFT_VERSION;
     refreshServiceStatus();
     setInterval(refreshServiceStatus, SERVICE_STATUS_INTERVAL_MS);
