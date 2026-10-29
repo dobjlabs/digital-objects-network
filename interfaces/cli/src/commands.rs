@@ -10,7 +10,7 @@ use crate::client::{DobjdClient, SLOW_REQUEST_TIMEOUT};
 use wire_types::transactions::TransactionRecord;
 use wire_types::{
     ActionArgValues, ActionInput, ActionSummary, CheckActionReport, ClassRef, ClassSummary,
-    DriverSettings, ImportObjectRequest, ObjectSummary, ObjectsDirInfo, ProofJobState,
+    CpuUsage, DriverSettings, ImportObjectRequest, ObjectSummary, ObjectsDirInfo, ProofJobState,
     QualifiedName, RunAccepted, StartRunRequest, SubmitTransactionsRequest,
 };
 
@@ -162,6 +162,7 @@ fn print_settings(settings: &DriverSettings) {
         "mcp          = {}",
         if settings.mcp_enabled { "on" } else { "off" }
     );
+    println!("cpu usage    = {}", settings.cpu_usage);
 }
 
 pub async fn settings_get(client: &DobjdClient, json: bool) -> Result<()> {
@@ -179,6 +180,7 @@ pub async fn settings_set(
     synchronizer: Option<String>,
     relayer: Option<String>,
     mcp: Option<bool>,
+    cpu_usage: Option<CpuUsage>,
 ) -> Result<()> {
     let mut current: DriverSettings = client.get_json("/settings").await?;
     if let Some(s) = synchronizer {
@@ -189,6 +191,9 @@ pub async fn settings_set(
     }
     if let Some(m) = mcp {
         current.mcp_enabled = m;
+    }
+    if let Some(cpu_usage) = cpu_usage {
+        current.cpu_usage = cpu_usage;
     }
     let saved: DriverSettings = client.put_json("/settings", &current).await?;
     print_settings(&saved);

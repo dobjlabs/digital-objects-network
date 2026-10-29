@@ -80,7 +80,7 @@ production implementation lives in
 | `delete_transaction`                                 | Abandon a record before any submission attempt                               |
 | `get_state_root`                                      | Current state root from the synchronizer                                       |
 | `import_object_file`                                  | Adopt an external `.dobj` from a local path into objects                       |
-| `read_settings` / `write_settings`                    | Synchronizer + relayer URLs and the `mcpEnabled` toggle (partial writes merge) |
+| `read_settings` / `write_settings`                    | Synchronizer + relayer URLs, the `mcpEnabled` toggle and `cpuUsage` (partial writes merge) |
 | `get_objects_dir`                                     | Path to `~/.dobj/objects/`                                                     |
 | `read_doc`                                            | Reference docs (see Resources)                                                 |
 | `define_command` / `delete_command` / `list_commands` | Manage user-authored commands                                                  |

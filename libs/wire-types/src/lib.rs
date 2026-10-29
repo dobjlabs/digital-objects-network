@@ -606,8 +606,58 @@ pub struct RunActionProgress {
 // Driver configuration
 // ===========================================================================
 
+/// How hard proving may work the machine. The mechanism differs per platform;
+/// each level makes the same promise about the rest of the machine, while the
+/// proving speed it costs varies by platform.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum CpuUsage {
+    /// Proves only on spare capacity: near-silent, several times slower.
+    Light,
+    /// Gives way to other applications and runs cooler, at a moderate cost
+    /// in proving speed.
+    #[default]
+    Medium,
+    /// Proves as fast as the machine allows; other applications may slow
+    /// down and fans may spin up.
+    Full,
+}
+
+impl CpuUsage {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CpuUsage::Light => "light",
+            CpuUsage::Medium => "medium",
+            CpuUsage::Full => "full",
+        }
+    }
+}
+
+impl fmt::Display for CpuUsage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for CpuUsage {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "light" => Ok(CpuUsage::Light),
+            "medium" => Ok(CpuUsage::Medium),
+            "full" => Ok(CpuUsage::Full),
+            _ => Err(format!(
+                "unknown CPU usage {value:?}; expected light, medium or full"
+            )),
+        }
+    }
+}
+
 /// The persisted configuration shared by the driver and dobjd:
-/// synchronizer + relayer URLs, plus the daemon's MCP server toggle.
+/// synchronizer + relayer URLs, the daemon's MCP server toggle, and how much
+/// CPU proving may use.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -617,6 +667,10 @@ pub struct DriverSettings {
     /// Whether dobjd serves MCP on the adjacent port (default off).
     #[serde(default)]
     pub mcp_enabled: bool,
+    /// How much CPU proving may use (default medium). Applies from the next
+    /// proof.
+    #[serde(default)]
+    pub cpu_usage: CpuUsage,
 }
 
 /// Partial update for [`DriverSettings`], accepted by `PUT /settings`. Absent
@@ -635,6 +689,8 @@ pub struct DriverSettingsPatch {
     pub relayer_api_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_usage: Option<CpuUsage>,
 }
 
 impl DriverSettingsPatch {
@@ -648,6 +704,9 @@ impl DriverSettingsPatch {
         }
         if let Some(enabled) = self.mcp_enabled {
             base.mcp_enabled = enabled;
+        }
+        if let Some(cpu_usage) = self.cpu_usage {
+            base.cpu_usage = cpu_usage;
         }
     }
 }
@@ -751,5 +810,27 @@ mod tests {
             "\"live\""
         );
         assert_eq!(ObjectStatus::Pending.to_string(), "pending");
+    }
+
+    #[test]
+    fn settings_without_cpu_usage_default_to_medium() {
+        let settings: DriverSettings =
+            serde_json::from_str(r#"{"synchronizerApiUrl":"s","relayerApiUrl":"r"}"#).unwrap();
+        assert_eq!(settings.cpu_usage, CpuUsage::Medium);
+    }
+
+    #[test]
+    fn settings_patch_overlays_cpu_usage_only_when_present() {
+        let mut settings: DriverSettings = serde_json::from_str(
+            r#"{"synchronizerApiUrl":"s","relayerApiUrl":"r","cpuUsage":"full"}"#,
+        )
+        .unwrap();
+        let patch: DriverSettingsPatch = serde_json::from_str(r#"{"mcpEnabled":true}"#).unwrap();
+        patch.apply_to(&mut settings);
+        assert_eq!(settings.cpu_usage, CpuUsage::Full);
+        let patch: DriverSettingsPatch = serde_json::from_str(r#"{"cpuUsage":"light"}"#).unwrap();
+        patch.apply_to(&mut settings);
+        assert_eq!(settings.cpu_usage, CpuUsage::Light);
+        assert!(settings.mcp_enabled);
     }
 }

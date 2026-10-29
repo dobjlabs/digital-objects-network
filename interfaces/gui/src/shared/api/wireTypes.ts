@@ -162,9 +162,14 @@ export interface RunActionProgress {
   elapsedMs?: number;
 }
 
+/** How much CPU proving may use. */
+export type CpuUsage = "light" | "medium" | "full";
+
 export interface AppSettingsPayload {
   synchronizerApiUrl: string;
   relayerApiUrl: string;
   /** Whether dobjd serves MCP on the adjacent port (default off). */
   mcpEnabled: boolean;
+  /** How much CPU proving may use (default medium); applies from the next proof. */
+  cpuUsage: CpuUsage;
 }

@@ -210,6 +210,12 @@
     gap: 8px;
     color: inherit;
   }
+  .settings-hint {
+    grid-column: 1 / -1;
+    margin: 0;
+    color: var(--muted);
+    font-size: 12px;
+  }
   /* The game's identity and links, set apart from the settings above like
      a Mac About window. */
   .settings-about {
@@ -251,7 +257,8 @@
     cursor: pointer;
   }
   .settings-about-links a:active { background: var(--row-hover); }
-  .settings-fields input {
+  .settings-fields input,
+  .settings-fields select {
     min-width: 0;
     padding: 4px 7px;
     border: 1px solid var(--border);
@@ -1355,6 +1362,16 @@
       <input id="settings-synchronizer" type="text" readonly spellcheck="false">
       <label for="settings-relayer">Relayer address</label>
       <input id="settings-relayer" type="text" readonly spellcheck="false">
+    </div>
+    <div class="settings-fields">
+      <h1 class="settings-title">Proving</h1>
+      <label for="settings-cpu-usage">CPU usage</label>
+      <select id="settings-cpu-usage" disabled>
+        <option value="light">Light</option>
+        <option value="medium">Medium</option>
+        <option value="full">Full</option>
+      </select>
+      <p id="settings-cpu-usage-hint" class="settings-hint"></p>
     </div>
     <div id="settings-sharing" class="settings-fields" hidden>
       <h1 class="settings-title">Sharing</h1>
@@ -3057,9 +3074,16 @@
     openedWindows.set(name, window.open(url, name, features));
   }
 
+  const CPU_USAGE_HINTS = {
+    light: "Proves only on spare capacity: near-silent, but several times slower.",
+    medium: "Gives way to other apps and runs cooler, at a moderate cost in speed.",
+    full: "Proves as fast as possible; other apps may slow down and fans may spin up.",
+  };
+
   // The Settings window offers the theme, shows the connection addresses from
   // dobjd's settings, which cannot be edited yet, so the fields are read-only,
-  // and the game's version, website and Discord server.
+  // the CPU usage level proving runs at, saved as soon as it is changed, and
+  // the game's version, website and Discord server.
   async function loadSettingsWindow() {
     document.body.classList.add("secondary-window");
     document.title = "Bitcraft Settings";
@@ -3078,11 +3102,9 @@
       const settings = await fetchJson("/settings");
       document.getElementById("settings-synchronizer").value = settings.synchronizerApiUrl ?? "";
       document.getElementById("settings-relayer").value = settings.relayerApiUrl ?? "";
+      watchCpuUsage(settings.cpuUsage ?? "medium");
     } catch (error) {
-      const message = document.createElement("p");
-      message.className = "message error";
-      message.textContent = `Could not read settings: ${error.message}`;
-      view.append(message);
+      showSettingsError(`Could not read settings: ${error.message}`);
     }
   }
 
@@ -3132,6 +3154,45 @@
       }
     });
     document.getElementById("settings-sharing").hidden = false;
+  }
+
+  function watchCpuUsage(initial) {
+    const select = document.getElementById("settings-cpu-usage");
+    const hint = document.getElementById("settings-cpu-usage-hint");
+    let saved = initial;
+    const show = (level) => {
+      select.value = level;
+      hint.textContent = CPU_USAGE_HINTS[level] ?? "";
+    };
+    show(saved);
+    select.disabled = false;
+    select.addEventListener("change", async () => {
+      const level = select.value;
+      show(level);
+      select.disabled = true;
+      try {
+        const settings = await sendJson("PUT", "/settings", { cpuUsage: level });
+        saved = settings.cpuUsage ?? level;
+        show(saved);
+        document.getElementById("settings-error")?.remove();
+      } catch (error) {
+        show(saved);
+        showSettingsError(`Could not save CPU usage: ${error.message}`);
+      } finally {
+        select.disabled = false;
+      }
+    });
+  }
+
+  function showSettingsError(text) {
+    let message = document.getElementById("settings-error");
+    if (!message) {
+      message = document.createElement("p");
+      message.id = "settings-error";
+      message.className = "message error";
+      document.getElementById("settings-view").append(message);
+    }
+    message.textContent = text;
   }
 
   // The window is titled with the file's name, which the desktop app shows
@@ -3981,8 +4042,12 @@
   }
 
   function postJson(path, body) {
+    return sendJson("POST", path, body);
+  }
+
+  function sendJson(method, path, body) {
     return fetchJson(path, {
-      method: "POST",
+      method,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
@@ -5019,7 +5084,7 @@
     document.getElementById("inventory-value").addEventListener("click",
       () => openPageWindow(SUMMARY_PAGE, SUMMARY_WINDOW_NAME, SUMMARY_WINDOW_FEATURES));
     document.getElementById("settings-button").addEventListener("click",
-      () => openPageWindow(SETTINGS_PAGE, SETTINGS_WINDOW_NAME, "popup,width=480,height=422"));
+      () => openPageWindow(SETTINGS_PAGE, SETTINGS_WINDOW_NAME, "popup,width=480,height=522"));
     document.getElementById("bitcraft-version").textContent = BITCRAFT_VERSION;
     refreshServiceStatus();
     setInterval(refreshServiceStatus, SERVICE_STATUS_INTERVAL_MS);

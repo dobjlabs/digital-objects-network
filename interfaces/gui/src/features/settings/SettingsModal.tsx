@@ -5,6 +5,7 @@ import {
   saveAppSettings,
   type AppSettingsPayload,
 } from "../../shared/api/httpClient";
+import type { CpuUsage } from "../../shared/api/wireTypes";
 import { normalizeErrorMessage } from "../../shared/error";
 
 interface SettingsModalProps {
@@ -20,6 +21,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     synchronizerApiUrl: "",
     relayerApiUrl: "",
     mcpEnabled: false,
+    cpuUsage: "medium",
   });
 
   useEffect(() => {
@@ -124,6 +126,24 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
               disabled={loading || saving}
               spellCheck={false}
             />
+          </label>
+
+          <label className="settings-field">
+            <span>CPU_USAGE</span>
+            <select
+              value={form.cpuUsage}
+              onChange={(event) =>
+                setForm((prev) => ({
+                  ...prev,
+                  cpuUsage: event.target.value as CpuUsage,
+                }))
+              }
+              disabled={loading || saving}
+            >
+              <option value="light">Light: spare capacity only, slowest</option>
+              <option value="medium">Medium: gives way to other apps</option>
+              <option value="full">Full: fastest, may slow other apps</option>
+            </select>
           </label>
 
           {error && <div className="settings-error">{error}</div>}

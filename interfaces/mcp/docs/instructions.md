@@ -75,8 +75,8 @@ grounded in a recent state root (within ~300 blocks / ~1 hour). The
 
 ### Configuration
 
-- `read_settings` — the daemon's current synchronizer + relayer URLs and its `mcpEnabled` toggle
-- `write_settings({ synchronizerApiUrl?, relayerApiUrl?, mcpEnabled? })` — update a subset of settings; any field you omit keeps its current value. Setting `mcpEnabled` to `false` shuts down the MCP server you are connected through.
+- `read_settings` — the daemon's current synchronizer + relayer URLs, its `mcpEnabled` toggle, and `cpuUsage` (`light`, `medium` or `full`: how much CPU proving may use)
+- `write_settings({ synchronizerApiUrl?, relayerApiUrl?, mcpEnabled?, cpuUsage? })` — update a subset of settings; any field you omit keeps its current value. Setting `mcpEnabled` to `false` shuts down the MCP server you are connected through. A `cpuUsage` change applies from the next proof.
 - `get_objects_dir` — filesystem path to `~/.dobj/objects/` (useful for showing the user where their objects live)
 
 ## Recommended workflow

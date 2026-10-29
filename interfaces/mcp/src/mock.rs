@@ -372,6 +372,7 @@ impl DobjOps for MockDobjOps {
             synchronizer_api_url: "http://127.0.0.1:3000".to_string(),
             relayer_api_url: "http://127.0.0.1:3200".to_string(),
             mcp_enabled: true,
+            cpu_usage: Default::default(),
         })
     }
 

@@ -1,5 +1,6 @@
 mod catalog;
 mod clients;
+mod cpu_usage;
 mod creation_proof;
 mod driver;
 mod error;
@@ -20,6 +21,7 @@ mod warm;
 mod tests;
 
 pub use crate::catalog::ActionCatalog as DriverActionCatalog;
+pub use crate::cpu_usage::build_proving_pool;
 pub use crate::driver::{Driver, DriverDeps, PayloadBuilder};
 pub use crate::error::DriverError;
 pub use crate::mock_don::DOBJ_MOCK_ENV;
@@ -33,6 +35,5 @@ pub use crate::types::{
     ActionQuery, DriverPaths, ExecuteActionInput, ExecutionReporter, ExecutionStepContext,
     NoopExecutionReporter, ObjectQuery,
 };
-pub use crate::warm::warm_proving_circuits;
 pub use pexe::MAX_PEXE_BYTES;
 pub use pod2::middleware::Hash;
