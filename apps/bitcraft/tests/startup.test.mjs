@@ -1004,18 +1004,24 @@ test("capital goods are listed first, in bold, each group by name", async (conte
   assert.deepEqual(rows.slice(1).map(weight).map((value) => value === "700"), [true, true, false, false, false]);
 });
 
-test("a capital good's icon shows its level in the object list and its Details pane", async (context) => {
+test("a capital good's icon shows its level, colored by level, in the object list and its Details pane", async (context) => {
   const leveled = (fileName, className, level) => ({
     fileName, class: qname(className), status: "live", fields: { kvs: [["level", { Int: String(level) }]] },
   });
   const ui = await page(context, {
-    objects: [knife(), leveled("quarry.dobj", "Quarry", 6), leveled("drill.dobj", "MiningDrill", 3)],
+    objects: [knife(), leveled("quarry.dobj", "Quarry", 6), leveled("drill.dobj", "MiningDrill", 3),
+      leveled("drill-9.dobj", "MiningDrill", 9)],
   });
   const { document } = ui;
   const row = (fileName) => document.querySelector(`.object-row[data-file-name="${fileName}"]`);
   const badge = (element) => element.querySelector(".icon-badge")?.textContent ?? null;
   assert.equal(badge(row("quarry.dobj")), "6");
   assert.equal(badge(row("drill.dobj")), "3");
+  const kind = (fileName) => [...row(fileName).querySelector(".icon-badge").classList];
+  assert.deepEqual(kind("quarry.dobj"), ["icon-badge", "level-6"]);
+  assert.deepEqual(kind("drill.dobj"), ["icon-badge", "level-3"]);
+  assert.equal(badge(row("drill-9.dobj")), "9");
+  assert.deepEqual(kind("drill-9.dobj"), ["icon-badge", "level-6"]);
   assert.equal(badge(row("pocketknife.dobj")), null);
 
   const select = (fileName) => row(fileName).dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
@@ -1023,6 +1029,28 @@ test("a capital good's icon shows its level in the object list and its Details p
   assert.equal(badge(document.querySelector("#details-body .details-icon")), "6");
   select("pocketknife.dobj");
   assert.equal(badge(document.querySelector("#details-body .details-icon")), null);
+});
+
+test("a bucket's icon shows the quantity it holds, abbreviated, in the object list and its Details pane", async (context) => {
+  const quantities = [0, 999, 1000, 5340, 9960, 53400, 999600, 5340000, 53400000];
+  const bucket = (quantity) => ({
+    fileName: `bucket-${quantity}.dobj`, class: qname("BucketOfWood"), status: "live",
+    fields: { kvs: [["n", { Int: String(quantity) }]] },
+  });
+  const ui = await page(context, { objects: [knife(), ...quantities.map(bucket)] });
+  const { document } = ui;
+  const row = (fileName) => document.querySelector(`.object-row[data-file-name="${fileName}"]`);
+  const badge = (element) => element.querySelector(".icon-badge")?.textContent ?? null;
+  assert.deepEqual(quantities.map((quantity) => badge(row(`bucket-${quantity}.dobj`))), [
+    "0", "999", "1.0K", "5.3K", "10K", "53K", "1.0M", "5.3M", "53M",
+  ]);
+  assert.equal(badge(row("pocketknife.dobj")), null);
+
+  const kinds = (element) => [...element.querySelector(".icon-badge").classList];
+  assert.deepEqual(kinds(row("bucket-5340.dobj")), ["icon-badge", "quantity"]);
+
+  row("bucket-5340.dobj").dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  assert.equal(badge(document.querySelector("#details-body .details-icon")), "5.3K");
 });
 
 const quarry = (level) => ({

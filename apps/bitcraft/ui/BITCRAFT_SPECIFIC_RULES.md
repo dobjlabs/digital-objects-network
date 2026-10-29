@@ -49,10 +49,17 @@ that block should be plugin-agnostic.
 
 ### Capital goods head the object list, in bold, with their level
 
-- **Where:** `CAPITAL_GOOD_CLASSES`, applied through `isCapitalGood()` in `showObjects()` (order) and `renderObjects()` (weight), and through `iconBadgeText()` to the object list's icons and a single object's Details pane icon (level).
-- **What:** objects of the classes a `LevelUp*` action upgrades, Quarry and MiningDrill, are listed right after the welcome guide, with their names in bold, then every other object. Each group is sorted by file name. Their icons carry their `level` field as a white number on a bright blue badge over the icon's bottom right corner: on the object list's icon, and on the class art of the large icon in the object's Details pane.
+- **Where:** `CAPITAL_GOOD_CLASSES`, applied through `isCapitalGood()` in `showObjects()` (order) and `renderObjects()` (weight), and through `iconBadgeFor()` to the object list's icons and a single object's Details pane icon (level).
+- **What:** objects of the classes a `LevelUp*` action upgrades, Quarry and MiningDrill, are listed right after the welcome guide, with their names in bold, then every other object. Each group is sorted by file name. Their icons carry their `level` field as a number on a badge over the icon's bottom right corner, colored by level like item rarity (`--icon-badge-level-1` to `-6`): 1 green, 2 blue, 3 purple, 4 orange, 5 red, and 6 gold with dark text; levels above `TOP_BADGE_LEVEL` (6) share level 6's gold. Levels 1 to 5 have white text. The badge shows on the object list's icon, and on the class art of the large icon in the object's Details pane.
 - **Generic behavior:** every object sorted by file name, in the regular weight, with plain class icons.
 - **Why:** they are the machines a player builds up and keeps, in an inventory mostly of resources that get spent.
+
+### Buckets show their quantity on their icon
+
+- **Where:** `BUCKET_CLASSES`, applied through `iconBadgeFor()` to the object list's icons and a single object's Details pane icon.
+- **What:** a BucketOfWood, BucketOfStone or BucketOfIron icon carries its `n` field on a dark gray badge (`--icon-badge-quantity`), in the same corner as a capital good's level badge, a neutral color no level uses, abbreviated by `abbreviatedQuantity()`: in full below 1000, two significant figures from 1000 up to 10K and from 1M up to 10M ("5.3K", "5.3M"), and no decimals from 10K up to 1M and from 10M ("53K", "53M"). A quantity that rounds up to the next unit takes it (999,600 is "1.0M"). The large icon in the object's Details pane carries it too, as a capital good's carries its level.
+- **Generic behavior:** plain class icons.
+- **Why:** a bucket's contents are what it is for, and otherwise show only in its Details pane.
 
 ### Only bitcraft activity appears in Jobs
 
