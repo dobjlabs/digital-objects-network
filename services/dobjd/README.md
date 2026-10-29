@@ -71,7 +71,11 @@ All routes return JSON unless noted; errors come back as
 
 ### Imported objects must match their content hash
 
-`POST /objects/import` refuses (`400`) a file whose `contentHash` is not the commitment of its `obj`, the hash the store and the chain know the object by. Files dobjd writes always match, so this only refuses edited or hand-made files.
+`POST /objects/import` refuses (`400`) a file whose `metadata.contentHash` is not the commitment of its `obj`, the hash the store and the chain know the object by. Files dobjd writes always match, so this only refuses edited or hand-made files.
+
+### Imported creation proofs are checked
+
+A file's `metadata.creationProof`, when present, proves the object's commitment is in the created set of a state root. `POST /objects/import` refuses (`400`) a proof that does not verify against the object or whose state root is not the one the synchronizer derived at the proof's block, and fails when the synchronizer cannot be asked. An object that imports as `live` without a proof gets one from the synchronizer, as outputs do when their transaction lands.
 
 ### Imported objects keep the name they are given
 

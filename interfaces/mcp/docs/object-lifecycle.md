@@ -13,7 +13,7 @@ When an action creates an object, it:
 
 The transaction payload includes the state's commitment even if a later event consumes it. Only surviving outputs are returned as spendable objects. After confirmation, the driver marks an output `live` if its commitment is published and its nullifier is absent.
 
-A `.dobj` file stores the object dictionary and metadata, including its class, status, and producing transaction's commitment. It does not contain the transaction proof; that proof is submitted with the transaction payload.
+A `.dobj` file stores the object dictionary (`obj`) and a `metadata` record: its class, content hash, status, and producing transaction's commitment. Once the object is confirmed, `metadata.creationProof` holds a Merkle proof that its commitment is in the created set of a state root, which import checks against the synchronizer. The file does not contain the transaction proof; that proof is submitted with the transaction payload.
 
 ## 2. Inspection
 
