@@ -279,6 +279,53 @@
   }
   /* A row's second value, its total BIT value, sits further from the count. */
   .summary-table dd + dd { padding-left: 24px; }
+  /* The Leaderboard window: the Inventory Summary's header over the ranking. */
+  #leaderboard-view {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 14px 16px 20px;
+  }
+  #leaderboard-view[hidden] { display: none; }
+  .summary-header-icon svg { color: var(--toolbar-icon); }
+  .leaderboard-list {
+    margin: 14px 0 0;
+    padding: 8px 0 0;
+    border-top: 1px solid var(--border);
+    list-style: none;
+  }
+  .leaderboard-list li {
+    display: grid;
+    grid-template-columns: 2.2em minmax(0, 1fr) max-content;
+    gap: 8px;
+    padding: 3px 0;
+  }
+  .leaderboard-rank {
+    color: var(--muted);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .leaderboard-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .leaderboard-bits {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .leaderboard-list li.podium .leaderboard-name,
+  .leaderboard-list li.podium .leaderboard-bits { font-weight: 600; }
+  .leaderboard-empty {
+    margin-top: 14px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+  .leaderboard-note {
+    margin-top: 14px;
+    color: var(--muted);
+    font-size: 12px;
+  }
   /* Laid out like the details pane: a document icon over a title and muted
      text. The desktop shell's preparation screen copies these values. */
   #startup-screen {
@@ -1131,6 +1178,16 @@
         <path d="M9 5.2C7.6 4.1 5.5 3.6 2.5 3.8v10c3-.2 5.1.3 6.5 1.4 1.4-1.1 3.5-1.6 6.5-1.4v-10c-3-.2-5.1.3-6.5 1.4zM9 5.2v10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
       </svg>
     </button>
+    <button type="button" id="leaderboard-button" class="toolbar-button" data-tooltip="Leaderboard" aria-label="Open Leaderboard">
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+        <g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round">
+          <path d="M5.5 2.75h7v4a3.5 3.5 0 0 1-7 0z"/>
+          <path d="M5.5 4.25H4.25a1.6 1.6 0 0 0 0 3.2h1.6M12.5 4.25h1.25a1.6 1.6 0 0 1 0 3.2h-1.6"/>
+          <path d="M9 10.25v2.75"/>
+          <rect x="6.25" y="13" width="5.5" height="2.25" rx="0.6"/>
+        </g>
+      </svg>
+    </button>
     <span class="toolbar-divider" role="separator"></span>
     <button type="button" id="claude-button" class="toolbar-button" data-tooltip="Automate with Claude" aria-label="Automate with Claude" hidden>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd" aria-hidden="true">
@@ -1209,6 +1266,7 @@
     </section>
   </div>
   <div id="summary-view" hidden></div>
+  <div id="leaderboard-view" hidden></div>
   <div id="raw-view" hidden><pre id="raw-text"></pre></div>
   <div id="settings-view" hidden>
     <div class="settings-fields">
@@ -1588,6 +1646,13 @@
   const BITCRAFT_SITE_URL = "https://bitcraft.sh/";
   const BITCRAFT_DISCORD_URL = "https://discord.gg/cWtZZYrer";
 
+  // The leaderboard the Bitcraft Discord bot publishes: each player's highest
+  // Total Inventory Value seen in the Discord presence the desktop shares.
+  const LEADERBOARD_URL = "https://LEADERBOARD_HOST/leaderboard.json";
+  // Under the Leaderboard: the desktop menu item that puts a player on it.
+  const LEADERBOARD_JOIN_NOTE = "To appear here, turn on Share activity on Discord and leaderboard "
+    + "in the Bitcraft menu. Each player's highest Total Inventory Value counts.";
+
   // ---- End of bitcraft-specific rules.
 
   const objectsDirHeader = document.getElementById("objects-dir");
@@ -1615,6 +1680,13 @@
   const initialParams = new URLSearchParams(location.search);
   const isReferenceWindow = initialParams.get(PAGE_PARAM) === RECIPEBOOK_PAGE;
   const isSummaryWindow = initialParams.get(PAGE_PARAM) === SUMMARY_PAGE;
+  // `?page=leaderboard` loads this page as the Leaderboard window.
+  const LEADERBOARD_PAGE = "leaderboard";
+  const LEADERBOARD_WINDOW_NAME = "bitcraft-leaderboard";
+  const LEADERBOARD_WINDOW_FEATURES = "popup,width=420,height=560";
+  // The bot publishes at most once a minute.
+  const LEADERBOARD_REFRESH_MS = 60000;
+  const isLeaderboardWindow = initialParams.get(PAGE_PARAM) === LEADERBOARD_PAGE;
   // `?page=settings` loads this page as the Settings window.
   const SETTINGS_PAGE = "settings";
   const SETTINGS_WINDOW_NAME = "bitcraft-settings";
@@ -1633,6 +1705,7 @@
   // Windows opened from the top bar, by name.
   const openedWindows = new Map();
   const summaryView = document.getElementById("summary-view");
+  const leaderboardView = document.getElementById("leaderboard-view");
   const rowTooltip = document.getElementById("row-tooltip");
   const ROW_TOOLTIP_DELAY_MS = 250;
   // Pending while the pointer rests on a row, and the pointer's last event.
@@ -3071,6 +3144,107 @@
       clearInterval(poll);
     });
     return { reload, records, accept, values };
+  }
+
+  // A failed read keeps the leaderboard already shown.
+  async function loadLeaderboardWindow() {
+    document.body.classList.add("secondary-window");
+    document.title = "Bitcraft Leaderboard";
+    leaderboardView.hidden = false;
+    let shown = false;
+    let reading = null;
+    const read = () => {
+      reading ??= (async () => {
+        try {
+          const response = await fetch(LEADERBOARD_URL, { cache: "no-cache" });
+          if (response.status === 404) {
+            renderLeaderboard({ entries: [] });
+          } else if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          } else {
+            renderLeaderboard(await response.json());
+          }
+          shown = true;
+        } catch (error) {
+          if (!shown) {
+            const message = document.createElement("div");
+            message.className = "message error";
+            message.textContent = `Could not read the leaderboard: ${error.message}`;
+            leaderboardView.replaceChildren(message);
+          }
+        } finally {
+          reading = null;
+        }
+      })();
+      return reading;
+    };
+    window.addEventListener("focus", read);
+    setInterval(read, LEADERBOARD_REFRESH_MS);
+    await read();
+  }
+
+  // Lists players in the published order, highest first. Names come from
+  // Discord, so they are only ever set as text.
+  function renderLeaderboard(board) {
+    const entries = (Array.isArray(board?.entries) ? board.entries : [])
+      .filter((entry) => typeof entry?.name === "string" && Number.isFinite(entry?.bits));
+
+    const header = document.createElement("div");
+    header.className = "summary-header";
+    const iconTile = document.createElement("div");
+    iconTile.className = "summary-header-icon";
+    const trophy = document.querySelector("#leaderboard-button svg").cloneNode(true);
+    trophy.setAttribute("width", "30");
+    trophy.setAttribute("height", "30");
+    iconTile.append(trophy);
+    const heading = document.createElement("div");
+    heading.className = "summary-heading";
+    const titleRow = document.createElement("div");
+    titleRow.className = "summary-title-row";
+    const title = document.createElement("span");
+    title.className = "summary-title";
+    title.textContent = "Leaderboard";
+    titleRow.append(title);
+    heading.append(titleRow);
+    const updatedAt = Date.parse(board?.updatedAt);
+    if (Number.isFinite(updatedAt)) {
+      const updated = document.createElement("div");
+      updated.className = "summary-subtitle";
+      updated.textContent = `Updated ${new Date(updatedAt)
+        .toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}`;
+      heading.append(updated);
+    }
+    header.append(iconTile, heading);
+
+    let ranking;
+    if (entries.length === 0) {
+      ranking = document.createElement("div");
+      ranking.className = "leaderboard-empty";
+      ranking.textContent = "No scores yet.";
+    } else {
+      ranking = document.createElement("ol");
+      ranking.className = "leaderboard-list";
+      entries.forEach((entry, index) => {
+        const row = document.createElement("li");
+        row.classList.toggle("podium", index < 3);
+        const rank = document.createElement("span");
+        rank.className = "leaderboard-rank";
+        rank.textContent = String(index + 1);
+        const name = document.createElement("span");
+        name.className = "leaderboard-name";
+        name.textContent = entry.name;
+        const bits = document.createElement("span");
+        bits.className = "leaderboard-bits";
+        bits.textContent = formatBitValue(entry.bits);
+        row.append(rank, name, bits);
+        ranking.append(row);
+      });
+    }
+
+    const note = document.createElement("p");
+    note.className = "leaderboard-note";
+    note.textContent = LEADERBOARD_JOIN_NOTE;
+    leaderboardView.replaceChildren(header, ranking, note);
   }
 
   async function loadSummaryWindow() {
@@ -4669,6 +4843,8 @@
     loadReferenceWindow();
   } else if (isSummaryWindow) {
     loadSummaryWindow();
+  } else if (isLeaderboardWindow) {
+    loadLeaderboardWindow();
   } else if (isSettingsWindow) {
     loadSettingsWindow();
   } else if (isRawWindow) {
@@ -4688,6 +4864,8 @@
       () => openPageWindow(RECIPEBOOK_PAGE, REFERENCE_WINDOW_NAME, REFERENCE_WINDOW_FEATURES));
     document.getElementById("summary-button").addEventListener("click",
       () => openPageWindow(SUMMARY_PAGE, SUMMARY_WINDOW_NAME, SUMMARY_WINDOW_FEATURES));
+    document.getElementById("leaderboard-button").addEventListener("click",
+      () => openPageWindow(LEADERBOARD_PAGE, LEADERBOARD_WINDOW_NAME, LEADERBOARD_WINDOW_FEATURES));
     document.getElementById("inventory-value").addEventListener("click",
       () => openPageWindow(SUMMARY_PAGE, SUMMARY_WINDOW_NAME, SUMMARY_WINDOW_FEATURES));
     document.getElementById("settings-button").addEventListener("click",

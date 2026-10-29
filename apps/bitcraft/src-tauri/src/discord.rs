@@ -176,6 +176,7 @@ fn activity(runs: &[Run], started_at: u64, inventory_metrics: Option<&InventoryM
         1 => "1 active job".to_owned(),
         count => format!("{count} active jobs"),
     };
+    // The leaderboard bot (apps/bitcraft/discord-bot) reads the total from this state.
     let state = match inventory_metrics {
         Some(metrics) => format!(
             "{} BIT | {} BIT/sec | {jobs}",

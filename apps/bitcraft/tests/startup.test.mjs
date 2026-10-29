@@ -8,6 +8,7 @@ import { JSDOM, VirtualConsole } from "jsdom";
 const presentationScript = await readFile(new URL("../ui/presentation.js", import.meta.url), "utf8");
 const html = (await readFile(new URL("../ui/index.html", import.meta.url), "utf8"))
   .replace('<script src="presentation.js"></script>', () => `<script>${presentationScript}</script>`);
+const leaderboardUrl = html.match(/const LEADERBOARD_URL = "([^"]+)";/)[1];
 const inventoryValues = JSON.parse(await readFile(new URL("../ui/inventory-values.json", import.meta.url), "utf8"));
 const qname = (name, pluginName = "bitcraft") => ({ pluginName, name });
 const recipe = (name = "CraftPocketknife") => ({
@@ -29,7 +30,7 @@ async function page(context, options = {}) {
   const backend = {
     objects: [], transactions: [], proofJobs: new Map(), submissions: [], actions: [recipe()], states: new Map(), posts: [], discards: [], imports: [], importFileNames: [],
     inventoryError: false, listError: false, runError: false, postError: false, syncError: false,
-    inventoryReads: 0, runReads: 0, runGate: null, ...options,
+    inventoryReads: 0, runReads: 0, leaderboardReads: 0, runGate: null, ...options,
   };
   const timers = new Map();
   const holds = new Map();
@@ -84,6 +85,12 @@ async function page(context, options = {}) {
       window.fetch = async (url, init = {}) => {
         const respond = (value, status = 200) => ({ ok: status < 400, status, json: async () => copy(value) });
         if (url === "BITCRAFT_WELCOME.md") return { ok: true, text: async () => "# Welcome" };
+        if (url === leaderboardUrl) {
+          backend.leaderboardReads++;
+          if (backend.leaderboardDown) throw new TypeError("Failed to fetch");
+          if (backend.leaderboardStatus) return respond({}, backend.leaderboardStatus);
+          return backend.leaderboard ? respond(backend.leaderboard) : respond({}, 404);
+        }
         const parsed = new URL(url);
         assert.equal(parsed.origin, "http://127.0.0.1:7727");
         // Presentation packs are files served beside the page; by default
@@ -1152,7 +1159,7 @@ test("desktop values inventory locally and takes only the rate from the host", a
 test("browser and secondary pages do not request native metrics", async (context) => {
   const browser = await page(context, { objects: [knife()], invoke: () => {} });
   assert.deepEqual(browser.desktopCalls, []);
-  for (const mode of ["summary", "settings", "recipebook", "raw&file=pocketknife.dobj"]) {
+  for (const mode of ["summary", "leaderboard", "settings", "recipebook", "raw&file=pocketknife.dobj"]) {
     const secondary = await page(context, { desktop: true, objects: [knife()], url: `http://127.0.0.1:7727/bitcraft/?page=${mode}` });
     assert.ok(!secondary.desktopCalls.includes("inventory_metrics"), mode);
   }
@@ -1188,6 +1195,90 @@ test("the summary icon opens the Inventory Summary in one window", async (contex
   assert.deepEqual(opened, [
     { url: "http://127.0.0.1:7727/bitcraft/?page=summary", name: "bitcraft-inventory-summary" },
   ]);
+});
+
+test("the trophy opens the Leaderboard in one window", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  const opened = [];
+  ui.dom.window.open = (url, name) => {
+    opened.push({ url: String(url), name });
+    return { closed: false, focus() {} };
+  };
+  const button = ui.document.querySelector("#leaderboard-button");
+  assert.equal(button.dataset.tooltip, "Leaderboard");
+  button.click();
+  button.click();
+  assert.deepEqual(opened, [
+    { url: "http://127.0.0.1:7727/bitcraft/?page=leaderboard", name: "bitcraft-leaderboard" },
+  ]);
+  assert.equal(ui.backend.leaderboardReads, 0, "the main window does not read the leaderboard");
+});
+
+const player = (name, bits) => ({ userId: "1400000000000000123", name, bits, achievedAt: "2026-10-29T10:00:00Z" });
+
+test("the Leaderboard lists players by score with their names as text, and runs no startup", async (context) => {
+  const ui = await page(context, {
+    url: "http://127.0.0.1:7727/bitcraft/?page=leaderboard",
+    leaderboard: {
+      updatedAt: "2026-10-29T10:48:00Z",
+      entries: [
+        player("Ada", 31.12), player("<b>Bo</b>", 5), player("Cy", 1.5), player("Dee", 0.25),
+        { name: 7, bits: 1 }, { name: "No score" },
+      ],
+      banned: ["1400000000000000456"],
+    },
+  });
+  const { document } = ui;
+  const rows = () => [...document.querySelectorAll(".leaderboard-list li")]
+    .map((row) => [...row.children].map((cell) => cell.textContent));
+  assert.equal(document.title, "Bitcraft Leaderboard");
+  assert.equal(document.body.classList.contains("secondary-window"), true);
+  assert.equal(document.querySelector("#leaderboard-view").hidden, false);
+  assert.equal(ui.backend.inventoryReads, 0);
+  assert.deepEqual(ui.backend.posts, []);
+  assert.equal(document.querySelector(".summary-title").textContent, "Leaderboard");
+  assert.match(document.querySelector(".summary-subtitle").textContent, /^Updated \S/);
+  assert.deepEqual(rows(), [
+    ["1", "Ada", "31.12 BIT"],
+    ["2", "<b>Bo</b>", "5.00 BIT"],
+    ["3", "Cy", "1.50 BIT"],
+    ["4", "Dee", "0.25 BIT"],
+  ]);
+  assert.equal(document.querySelector(".leaderboard-list b"), null, "names are not markup");
+  assert.deepEqual([...document.querySelectorAll(".leaderboard-list li")].map((row) => row.classList.contains("podium")),
+    [true, true, true, false]);
+  assert.match(document.querySelector(".leaderboard-note").textContent, /Share activity on Discord and leaderboard/);
+
+  ui.backend.leaderboard = { updatedAt: "2026-10-29T10:49:00Z", entries: [player("Cy", 40), player("Ada", 31.12)] };
+  ui.dom.window.dispatchEvent(new ui.dom.window.Event("focus"));
+  await flush();
+  assert.deepEqual(rows(), [["1", "Cy", "40.00 BIT"], ["2", "Ada", "31.12 BIT"]]);
+  const refresh = [...ui.timers.values()].find((timer) => timer.delay === 60000);
+  ui.backend.leaderboard = { entries: [player("Dee", 50)] };
+  refresh.callback();
+  await flush();
+  assert.deepEqual(rows(), [["1", "Dee", "50.00 BIT"]]);
+  assert.equal(document.querySelector(".summary-subtitle"), null, "no update time when none is published");
+});
+
+test("the Leaderboard says when there are no scores and keeps the last one through failed reads", async (context) => {
+  const empty = await page(context, { url: "http://127.0.0.1:7727/bitcraft/?page=leaderboard" });
+  assert.equal(empty.document.querySelector(".leaderboard-empty").textContent, "No scores yet.");
+  assert.equal(empty.document.querySelector(".leaderboard-list"), null);
+
+  const down = await page(context, { url: "http://127.0.0.1:7727/bitcraft/?page=leaderboard", leaderboardStatus: 503 });
+  assert.equal(down.document.querySelector("#leaderboard-view .message.error").textContent,
+    "Could not read the leaderboard: HTTP 503");
+  down.backend.leaderboardStatus = 0;
+  down.backend.leaderboard = { entries: [player("Ada", 2)] };
+  down.dom.window.dispatchEvent(new down.dom.window.Event("focus"));
+  await flush();
+  assert.equal(down.document.querySelector("#leaderboard-view .message"), null);
+  down.backend.leaderboardDown = true;
+  down.dom.window.dispatchEvent(new down.dom.window.Event("focus"));
+  await flush();
+  assert.equal(down.document.querySelector(".leaderboard-name").textContent, "Ada");
+  assert.equal(down.document.querySelector("#leaderboard-view .message"), null);
 });
 
 test("the Inventory Summary applies object events and reconciles untracked outputs", async (context) => {
@@ -1375,7 +1466,7 @@ test("a worn tool is worth the fraction of its durability it has left", async (c
 test("the top bar's icons have tooltips", async (context) => {
   const ui = await page(context, { objects: [knife()] });
   assert.deepEqual([...ui.document.querySelectorAll("#top-bar .toolbar-button:not([hidden])")].map((button) => button.dataset.tooltip),
-    ["Objects", "Stats", "Reference", "Settings"]);
+    ["Objects", "Stats", "Reference", "Leaderboard", "Settings"]);
 });
 
 const dobjContents = (name, contentHash, pluginName = "bitcraft") => JSON.stringify({
