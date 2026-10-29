@@ -55,7 +55,7 @@ older name) opens Recipe Info with that entry selected and shown.
 Resting the pointer on a row of the object list for a quarter second
 (`ROW_TOOLTIP_DELAY_MS`) shows a tooltip with the object's Total Bit Value
 alone; the welcome guide's row shows none. The welcome guide's name is set
-in semibold, so it stands out from the objects below it. Capital goods (see `BITCRAFT_SPECIFIC_RULES.md`) come next, in bold, ahead of the other objects, with their level on a blue badge over their icon's bottom right corner, here and in the Details pane. Names are cut to
+in semibold, so it stands out from the objects below it. Capital goods (see `BITCRAFT_SPECIFIC_RULES.md`) come next, in bold, ahead of the other objects, with their level on a badge over their icon's bottom right corner, colored by level from green (1) to gold (6 and above), here and in the Details pane. Buckets carry the quantity they hold on a dark gray badge in the same corner, abbreviated ("5.3K", "53K"), in both places. Names are cut to
 fit in each row's own font. Rows carry their file name in `data-file-name` rather than a `title`, so
 no delayed native tooltip competes with it; the tooltip is a single element
 outside the list, placed by the script, since the scrolling list would clip
