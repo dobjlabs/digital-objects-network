@@ -1958,6 +1958,13 @@
     return true;
   }
 
+  // In the desktop app a window's own focus() leaves it behind the main
+  // window, so the desktop host is also asked to raise it.
+  function raiseWindow(opened, page) {
+    opened.focus();
+    if (window.bitcraftDesktop) window.open(`bitcraft://window/${page}`, "_blank", "noopener");
+  }
+
   // An open Recipe Info window is asked to select the entry, and is sent to
   // its address when it cannot.
   function openReference(reference) {
@@ -1971,7 +1978,7 @@
       if (!shown) {
         opened.location.href = url.href;
       }
-      opened.focus();
+      raiseWindow(opened, RECIPEBOOK_PAGE);
       return;
     }
     openedWindows.set(REFERENCE_WINDOW_NAME, window.open(url, REFERENCE_WINDOW_NAME, REFERENCE_WINDOW_FEATURES));
@@ -2960,7 +2967,7 @@
   function openPageWindow(page, name, features) {
     const opened = openedWindows.get(name);
     if (opened && !opened.closed) {
-      opened.focus();
+      raiseWindow(opened, page);
       return;
     }
     const url = new URL(location.href);
