@@ -2,7 +2,7 @@
 /* The game page's theme variables, light and dark, under the same names and
    with the same values, so both startup screens look the same. */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --bg: #ffffff;
   --pane-header-bg: #f5f5f5;
   --border: #d4d4d4;
@@ -16,20 +16,19 @@
   --button-bg: #ffffff;
   --button-border: #c4c4c4;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1e1e1e;
-    --pane-header-bg: #282828;
-    --border: #3d3d3d;
-    --text: #e4e4e4;
-    --muted: #9a9a9a;
-    --row-hover: #2d2d2d;
-    --row-selected: #1d3f66;
-    --error: #ff7b72;
-    --progress-track: #3a3a3a;
-    --button-bg: #333333;
-    --button-border: #4d4d4d;
-  }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1e1e1e;
+  --pane-header-bg: #282828;
+  --border: #3d3d3d;
+  --text: #e4e4e4;
+  --muted: #9a9a9a;
+  --row-hover: #2d2d2d;
+  --row-selected: #1d3f66;
+  --error: #ff7b72;
+  --progress-track: #3a3a3a;
+  --button-bg: #333333;
+  --button-border: #4d4d4d;
 }
 html, body { height: 100%; margin: 0; overflow: hidden; overscroll-behavior: none; }
 body {

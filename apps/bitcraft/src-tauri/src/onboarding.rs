@@ -58,11 +58,15 @@ pub fn show(app: &tauri::AppHandle, error: Option<&str>) -> Result<()> {
         window
     } else {
         let dev_url = crate::shell_dev_url(app);
+        let appearance = crate::appearance::current(app);
         WebviewWindowBuilder::new(app, "agent-guide", WebviewUrl::App("agent.html".into()))
             .title("Play with agents")
             .inner_size(720.0, 660.0)
             .min_inner_size(560.0, 480.0)
+            .theme(Some(appearance.theme()))
+            .background_color(appearance.background())
             .initialization_script(format!("window.bitcraftAgentGuide = {context};"))
+            .initialization_script(appearance.initialization_script())
             .on_navigation(move |url| crate::is_local_app_url(url, dev_url.as_ref()))
             .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
             .build()?

@@ -6,18 +6,16 @@ const pageHtml = await readFile(new URL("../ui/index.html", import.meta.url), "u
 const pageCss = pageHtml.match(/<style>([\s\S]*?)<\/style>/)[1];
 const shellCss = await readFile(new URL("../shell/style.css", import.meta.url), "utf8");
 
-// The custom properties of the first `:root` block at or after `start`.
-function rootVariables(css, start = 0) {
-  const block = css.slice(start).match(/:root\s*\{([^}]*)\}/)[1];
+function rootVariables(css, selector) {
+  const escaped = selector.replace(/[[\]"]/g, "\\$&");
+  const block = css.match(new RegExp(`(?:^|\\n)\\s*${escaped}\\s*\\{([^}]*)\\}`))[1];
   return Object.fromEntries([...block.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)]
     .map(([, name, value]) => [name, value.trim()]));
 }
 
 function themes(css) {
-  const light = rootVariables(css);
-  const darkStart = css.indexOf("@media (prefers-color-scheme: dark)");
-  assert.notEqual(darkStart, -1);
-  const overrides = rootVariables(css, darkStart);
+  const light = rootVariables(css, ":root");
+  const overrides = rootVariables(css, ':root[data-theme="dark"]');
   for (const name of Object.keys(overrides)) assert.ok(name in light, `${name} has no light value`);
   return { light, dark: { ...light, ...overrides } };
 }

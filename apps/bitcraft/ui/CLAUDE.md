@@ -18,16 +18,28 @@ than leaving a bare JSON response to the webview's default styling, and
 makes its text selectable, since the desktop app turns selection off on
 every page and the windows it opens inherit that.
 
-Every window follows the system's light or dark appearance
-(`prefers-color-scheme`). Colors come from the `:root` variables, which a
-dark block redefines; give a new color a variable with a value in both
-themes rather than a literal. Class icon tiles stay white in both themes,
-since the class art is drawn for a white tile, and so do the paper file
-icons.
+The page is light unless the player picks Dark in Settings; it does not
+follow the system's appearance, since some art assumes a light page. The
+choice is kept in this origin's `localStorage` and applied as
+`data-theme` on the root element by a script at the top of `<head>`, so no
+window paints in the wrong theme; other windows follow through the storage
+event. Colors come from the `:root` variables, which the
+`:root[data-theme="dark"]` block redefines; give a new color a variable
+with a value in both themes rather than a literal. Class icon tiles stay
+white in both themes, since the class art is drawn for a white tile, and
+so do the paper file icons.
+
+In the desktop app, the main window passes the choice to the host
+(`set_appearance`), which keeps its own copy in `<home>/appearance.json`
+and applies it to every window's frame and background and to the desktop
+shell's pages, which this origin's storage does not reach. Pages read the
+host's copy, `window.bitcraftAppearance`, only when the storage holds no
+choice; when the two differ at startup, the main window sends the page's.
 
 The outer page fills the window with scrolling and overscroll disabled, including on the desktop startup screen. Scrollable content stays within its inventory, jobs, details or secondary-view panel.
 
-Settings (`?page=settings`) shows the synchronizer and relayer addresses
+Settings (`?page=settings`) offers the theme (Light or Dark) under
+Appearance, then shows the synchronizer and relayer addresses
 from dobjd's `GET /settings` in read-only fields; they cannot be edited yet.
 Below them, set apart like a Mac About window, it shows the Bitcraft name
 and version, the website's address as a link, and a Discord button; both
