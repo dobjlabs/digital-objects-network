@@ -1,0 +1,14 @@
+[package]
+name = "aggregation"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+itertools = { workspace = true }
+plonky2 = { workspace = true }
+pod2 = { workspace = true }
+
+[dev-dependencies]
+payload = { path = "../payload" }

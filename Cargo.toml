@@ -10,6 +10,7 @@ members = [
     "libs/sdk",
     "libs/txlib",
     "libs/payload",
+    "libs/aggregation",
     "libs/wire-types",
     "libs/pod2utils",
     "libs/pexe",
