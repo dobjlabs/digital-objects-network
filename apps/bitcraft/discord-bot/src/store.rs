@@ -53,7 +53,14 @@ impl Store {
             .sign(SIGNED_URL_LIFETIME);
         let response = self.client.get(url).send().await?;
         match response.status() {
-            StatusCode::NOT_FOUND => Ok(Leaderboard::default()),
+            StatusCode::NOT_FOUND => {
+                let body = response.text().await.unwrap_or_default();
+                // A missing bucket is a 404 too, and must not read as an empty store.
+                if !body.contains("<Code>NoSuchKey</Code>") {
+                    bail!("Reading {} failed with 404: {body}", self.object);
+                }
+                Ok(Leaderboard::default())
+            }
             status if status.is_success() => serde_json::from_slice(&response.bytes().await?)
                 .with_context(|| format!("{} is not a leaderboard", self.object)),
             status => bail!(
@@ -115,6 +122,7 @@ pub mod mock {
     pub struct Service {
         pub objects: HashMap<String, Vec<u8>>,
         pub fail: bool,
+        pub no_bucket: bool,
         /// Each write's `bucket/key` and headers, in order.
         pub writes: Vec<(String, HeaderMap)>,
         pub queries: Vec<String>,
@@ -131,6 +139,9 @@ pub mod mock {
         service.queries.push(query.unwrap_or_default());
         if service.fail {
             return (StatusCode::INTERNAL_SERVER_ERROR, b"down".to_vec());
+        }
+        if service.no_bucket {
+            return (StatusCode::NOT_FOUND, b"<Code>NoSuchBucket</Code>".to_vec());
         }
         match service.objects.get(&format!("{bucket}/{key}")) {
             Some(object) => (StatusCode::OK, object.clone()),
@@ -211,6 +222,9 @@ mod tests {
     #[tokio::test]
     async fn unreadable_leaderboards_are_errors_not_empty() {
         let (store, service) = mock_store().await;
+        service.lock().unwrap().no_bucket = true;
+        assert!(store.load().await.is_err());
+        service.lock().unwrap().no_bucket = false;
         service.lock().unwrap().objects.insert(
             "bitcraft/leaderboards/bitcraft.json".into(),
             b"<html>".to_vec(),

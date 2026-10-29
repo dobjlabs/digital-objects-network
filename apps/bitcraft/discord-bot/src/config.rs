@@ -25,7 +25,7 @@ pub struct Config {
     /// Where the leaderboard is published for anyone to read.
     pub public_bucket: String,
     pub public_object: String,
-    /// Where every player's score and the bans are kept, out of public view.
+    /// Where every player's score is kept, out of public view.
     pub state_bucket: String,
     pub state_object: String,
     /// Time between publications of the leaderboard.
@@ -34,9 +34,10 @@ pub struct Config {
 
 pub fn load_config() -> Result<Config> {
     let _ = dotenvy::from_filename("apps/bitcraft/discord-bot/.env");
-    let var = |name: &str| dotenvy::var(name).with_context(|| format!("{name} must be set"));
-    let optional =
-        |name: &str, default: &str| dotenvy::var(name).unwrap_or_else(|_| default.into());
+    // A blank value, as in a copied .env.example, counts as unset.
+    let setting = |name: &str| dotenvy::var(name).ok().filter(|value| !value.is_empty());
+    let var = |name: &str| setting(name).with_context(|| format!("{name} must be set"));
+    let optional = |name: &str, default: &str| setting(name).unwrap_or_else(|| default.into());
 
     let public_bucket = var("S3_PUBLIC_BUCKET")?;
     let state_bucket = var("S3_STATE_BUCKET")?;
@@ -44,13 +45,13 @@ pub fn load_config() -> Result<Config> {
         public_bucket != state_bucket,
         "S3_STATE_BUCKET must differ from S3_PUBLIC_BUCKET, which anyone can read"
     );
-    let publish_interval_secs = match dotenvy::var("PUBLISH_INTERVAL_SECS") {
-        Ok(value) => value
+    let publish_interval_secs = match setting("PUBLISH_INTERVAL_SECS") {
+        Some(value) => value
             .parse::<u64>()
             .ok()
             .filter(|secs| *secs > 0)
             .context("PUBLISH_INTERVAL_SECS must be a positive number of seconds")?,
-        Err(_) => DEFAULT_PUBLISH_INTERVAL_SECS,
+        None => DEFAULT_PUBLISH_INTERVAL_SECS,
     };
 
     Ok(Config {

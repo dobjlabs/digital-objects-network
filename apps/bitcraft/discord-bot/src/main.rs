@@ -40,14 +40,17 @@ use store::Store;
 /// a peak a player has since spent below, can be lost.
 const SAVE_INTERVAL: Duration = Duration::from_secs(60);
 const NAME_REFRESH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+const NAME_RETRY_DELAY: Duration = Duration::from_secs(10 * 60);
+/// How long shutdown waits for the gateway close to go out.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct State {
     leaderboard: Leaderboard,
     unsaved: bool,
     /// The leaderboard as last published, which `/rank` answers from.
     published: Leaderboard,
-    /// When each player's display name was last looked up.
-    named_at: HashMap<Id<UserMarker>, Instant>,
+    /// When each player's display name is next due to be looked up.
+    name_due: HashMap<Id<UserMarker>, Instant>,
 }
 
 struct Bot {
@@ -61,11 +64,6 @@ struct Bot {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
     let Config {
         discord_token,
         guild_id,
@@ -78,6 +76,12 @@ async fn main() -> Result<()> {
         state_object,
         publish_interval,
     } = load_config()?;
+    // After the config, which may set RUST_LOG from .env.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
     let public_store = Store::new(&s3, public_bucket, public_object)?;
     let state_store = Store::new(&s3, state_bucket, state_object)?;
     let leaderboard = state_store
@@ -103,7 +107,7 @@ async fn main() -> Result<()> {
             leaderboard,
             unsaved: false,
             published,
-            named_at: HashMap::new(),
+            name_due: HashMap::new(),
         })),
         application_id: OnceLock::new(),
     };
@@ -146,8 +150,17 @@ async fn main() -> Result<()> {
             },
         }
     };
-    shard.close(CloseFrame::NORMAL);
     let _ = stop.send(());
+    shard.close(CloseFrame::NORMAL);
+    // The close frame goes out only while the shard is polled.
+    let _ = tokio::time::timeout(CLOSE_TIMEOUT, async {
+        while let Some(event) = shard.next_event(EventTypeFlags::empty()).await {
+            if let Ok(Event::GatewayClose(_)) = event {
+                break;
+            }
+        }
+    })
+    .await;
     publisher.await?;
     saver.await?;
     outcome
@@ -217,11 +230,13 @@ impl Bot {
                 state.unsaved = true;
             }
             let name_is_due = state
-                .named_at
+                .name_due
                 .get(&player)
-                .is_none_or(|named_at| named_at.elapsed() >= NAME_REFRESH_INTERVAL);
+                .is_none_or(|due| *due <= Instant::now());
             if name_is_due && state.leaderboard.has_entry(player) {
-                state.named_at.insert(player, Instant::now());
+                state
+                    .name_due
+                    .insert(player, Instant::now() + NAME_REFRESH_INTERVAL);
                 tokio::spawn(refresh_name(
                     self.http.clone(),
                     self.guild_id,
@@ -306,7 +321,9 @@ async fn refresh_name(
         }
         Err(error) => {
             warn!(%player, ?error, "Could not look up a player's name");
-            state.named_at.remove(&player);
+            state
+                .name_due
+                .insert(player, Instant::now() + NAME_RETRY_DELAY);
         }
     }
 }
@@ -368,8 +385,9 @@ async fn publish_loop(
             _ = tokio::time::sleep(wait) => {}
             _ = stopped.changed() => return,
         }
-        let top = publish_top(&store, &state).await;
-        post(&http, channel_id, &top).await;
+        if let Some(top) = publish_top(&store, &state).await {
+            post(&http, channel_id, &top).await;
+        }
         next = next_publication(period, next.max(unix_now()));
     }
 }
@@ -383,19 +401,22 @@ fn unix_now() -> u64 {
     u64::try_from(OffsetDateTime::now_utc().unix_timestamp()).unwrap_or(0)
 }
 
-async fn publish_top(store: &Store, state: &Mutex<State>) -> Leaderboard {
-    let top = {
-        let mut state = state.lock().unwrap();
-        let mut top = state.leaderboard.top(TOP_SIZE);
-        top.updated_at = Some(now());
-        state.published = top.clone();
-        top
-    };
+/// Publishes the top scores, or nothing if the upload fails, so that the public file, the posts
+/// and `/rank` keep agreeing.
+async fn publish_top(store: &Store, state: &Mutex<State>) -> Option<Leaderboard> {
+    let mut top = state.lock().unwrap().leaderboard.top(TOP_SIZE);
+    top.updated_at = Some(now());
     match store.save(&top).await {
-        Ok(()) => info!(entries = top.entries.len(), "Published the leaderboard"),
-        Err(error) => warn!(?error, "Could not publish the leaderboard"),
+        Ok(()) => {
+            info!(entries = top.entries.len(), "Published the leaderboard");
+            state.lock().unwrap().published = top.clone();
+            Some(top)
+        }
+        Err(error) => {
+            warn!(?error, "Could not publish the leaderboard");
+            None
+        }
     }
-    top
 }
 
 async fn post(http: &Client, channel_id: Id<ChannelMarker>, top: &Leaderboard) {
@@ -452,7 +473,6 @@ mod tests {
         for player in 1..=count {
             leaderboard.record(Id::new(player), player as f64, now());
         }
-        leaderboard.banned.insert(Id::new(999));
         leaderboard
     }
 
@@ -464,7 +484,7 @@ mod tests {
             leaderboard: players(3),
             unsaved: true,
             published: Leaderboard::default(),
-            named_at: HashMap::new(),
+            name_due: HashMap::new(),
         }));
         let (stop, stopped) = watch::channel(());
         let saver = tokio::spawn(save_loop(
@@ -496,30 +516,44 @@ mod tests {
         let saved = stored(&service, SAVED).unwrap();
         assert_eq!(saved.entries[0].bits, 30.0);
         assert_eq!(saved.entries.len(), 3);
-        assert!(saved.banned.contains(&Id::new(999)));
     }
 
     #[tokio::test]
-    async fn the_published_leaderboard_is_the_top_without_bans() {
+    async fn the_published_leaderboard_is_the_top() {
         let (s3, service) = store::mock::start().await;
         let state = Mutex::new(State {
             leaderboard: players(TOP_SIZE as u64 + 5),
             unsaved: false,
             published: Leaderboard::default(),
-            named_at: HashMap::new(),
+            name_due: HashMap::new(),
         });
         let store = Store::new(&s3, "public".into(), "leaderboard.json".into()).unwrap();
-        let top = publish_top(&store, &state).await;
+        let top = publish_top(&store, &state).await.unwrap();
         assert_eq!(stored(&service, "public/leaderboard.json").unwrap(), top);
         assert_eq!(top.entries.len(), TOP_SIZE);
         assert_eq!(top.entries[0].user_id, Id::new(TOP_SIZE as u64 + 5));
-        assert!(top.banned.is_empty());
         assert!(top.updated_at.is_some());
         assert_eq!(
             state.lock().unwrap().published,
             top,
             "/rank answers from it"
         );
+    }
+
+    #[tokio::test]
+    async fn a_failed_publication_changes_nothing() {
+        let (s3, service) = store::mock::start().await;
+        service.lock().unwrap().fail = true;
+        let previous = players(1);
+        let state = Mutex::new(State {
+            leaderboard: players(3),
+            unsaved: false,
+            published: previous.clone(),
+            name_due: HashMap::new(),
+        });
+        let store = Store::new(&s3, "public".into(), "leaderboard.json".into()).unwrap();
+        assert!(publish_top(&store, &state).await.is_none());
+        assert_eq!(state.lock().unwrap().published, previous);
     }
 
     #[test]

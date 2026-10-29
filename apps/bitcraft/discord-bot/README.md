@@ -6,9 +6,9 @@ Keeps each player's highest known Total Inventory Value, read from the Discord p
 
 - **Consent.** The desktop shares presence only while the player has **Share activity on Discord and leaderboard** turned on. That setting is the player's consent to appear on the public leaderboard.
 - **Who counts.** The bot follows one Discord server. It sees the presence of members who are online (not invisible) and whose Discord privacy settings share their activity. Only activities shared as the Bitcraft application count. A player's score only goes up: the bot keeps the highest value seen, not the current one.
-- **Store.** Every player's score and the bans live in a private bucket. The bot saves changes to it at most once a minute and on shutdown. On startup it reads the store back: a missing object starts empty, and any other failure stops startup, so an outage cannot replace the scores with nothing. Online players' scores come back from their presence after a restart, so a crash loses at most a minute of other changes, such as a peak a player has since spent below. Run one instance per store.
-- **Leaderboard.** Every `PUBLISH_INTERVAL_SECS` (3 hours by default) the bot takes the top 50 from the store, publishes them to a public bucket and posts them to the leaderboard channel. Publications fall on multiples of the interval in UTC, such as 00:00, 03:00 and 06:00 for 3 hours, so restarts neither add publications nor move them. Nothing else publishes, so the public file, the posts and `/rank` all show the scores as of the last publication.
-- **Trust.** Scores are not verified. Anyone can share a presence as the Bitcraft application, since its ID is public. Forged scores can be removed by hand; see [Removing a player](#removing-a-player).
+- **Store.** Every player's score lives in a private bucket. The bot saves changes to it at most once a minute and on shutdown. On startup it reads the store back: a missing object starts empty, and any other failure stops startup, so an outage cannot replace the scores with nothing. Online players' scores come back from their presence after a restart, so a crash loses at most a minute of other changes, such as a peak a player has since spent below. Run one instance per store. To reset the leaderboard, for example after a change to how inventory is valued, stop the bot and delete the private object.
+- **Leaderboard.** Every `PUBLISH_INTERVAL_SECS` (3 hours by default) the bot takes the top 50 from the store, publishes them to a public bucket and posts them to the leaderboard channel. Publications fall on multiples of the interval in UTC, such as 00:00, 03:00 and 06:00 for 3 hours, so restarts neither add publications nor move them. Nothing else publishes, so the public file, the posts and `/rank` all show the scores as of the last publication. If the upload fails, that publication is skipped: nothing is posted and `/rank` keeps the previous one.
+- **Trust.** Scores are not verified. Anyone can share a presence as the Bitcraft application, since its ID is public, so a score can be forged.
 
 ## Published format
 
@@ -34,7 +34,7 @@ The public file holds the top 50:
 - `bits` is the highest Total Inventory Value seen.
 - `updatedAt` is when the bot took this top 50 from the store.
 
-The private store has the same format with every player, plus `banned`, the user IDs whose presence the bot ignores.
+The private store has the same format with every player.
 
 The Bitcraft app's Leaderboard window reads the public file from `LEADERBOARD_URL` in `apps/bitcraft/ui/index.html`.
 
@@ -47,12 +47,6 @@ Each publication is also posted to the leaderboard channel: a "Bitcraft leaderbo
 - `/rank` shows your place and score on the last published leaderboard, and how long ago it was published, in a Discord timestamp each reader sees in their own time. A player outside the top 50 is told so, with how players get counted. After a restart it answers from the public file until the next publication.
 
 It replies in the channel for everyone to see, with mentions that notify nobody.
-
-## Removing a player
-
-There is no moderation command. To remove a player, for example one who forged a score, stop the bot, delete their entry from the private object and add their user ID to its `banned` list, then start the bot again. The bot ignores their presence from then on, and the next publication leaves them out.
-
-Other corrections work the same way: stop the bot, edit or delete the private object, and start it again. Deleting the private object resets the leaderboard, for example after a change to how inventory is valued.
 
 ## Setup
 

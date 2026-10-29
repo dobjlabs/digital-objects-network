@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use twilight_model::{
@@ -21,9 +19,6 @@ pub struct Leaderboard {
     pub updated_at: Option<OffsetDateTime>,
     /// Highest score first.
     pub entries: Vec<Entry>,
-    /// Players whose presence is ignored, listed by hand in the saved store.
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub banned: BTreeSet<Id<UserMarker>>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -39,9 +34,6 @@ pub struct Entry {
 impl Leaderboard {
     /// Records `bits` for `user` if it beats their known score. Returns whether anything changed.
     pub fn record(&mut self, user: Id<UserMarker>, bits: f64, now: OffsetDateTime) -> bool {
-        if self.banned.contains(&user) {
-            return false;
-        }
         match self.entries.iter_mut().find(|entry| entry.user_id == user) {
             Some(entry) if bits <= entry.bits => return false,
             Some(entry) => {
@@ -64,12 +56,11 @@ impl Leaderboard {
         true
     }
 
-    /// The highest `count` scores alone, with no bans.
+    /// The highest `count` scores.
     pub fn top(&self, count: usize) -> Leaderboard {
         Leaderboard {
             updated_at: self.updated_at,
             entries: self.entries.iter().take(count).cloned().collect(),
-            banned: BTreeSet::new(),
         }
     }
 
@@ -103,9 +94,10 @@ fn activity_bits(activity: &Activity) -> Option<f64> {
     let state = activity.state.as_deref()?;
     let bits = state_bits(state);
     // Presence without inventory metrics has no total. One that mentions BIT but does not parse
-    // is a forgery or a desktop format this parser does not know.
+    // is a forgery or a desktop format this parser does not know. Anyone can send forgeries, as
+    // often as they like, so this is not a warning.
     if bits.is_none() && state.contains(" BIT") {
-        tracing::warn!(state, "Bitcraft presence without a readable BIT total");
+        tracing::debug!(state, "Bitcraft presence without a readable BIT total");
     }
     bits
 }
@@ -232,16 +224,6 @@ mod tests {
     }
 
     #[test]
-    fn banned_players_are_ignored() {
-        let mut board = Leaderboard::default();
-        board.banned.insert(user(1));
-        assert!(!board.record(user(1), 2_000_000.0, at(1)));
-        assert!(!board.rename(user(1), "Forger"));
-        assert!(board.record(user(2), 5.0, at(1)));
-        assert_eq!(board.entries.len(), 1);
-    }
-
-    #[test]
     fn published_format_round_trips() {
         let mut board = Leaderboard {
             updated_at: Some(at(10)),
@@ -249,7 +231,6 @@ mod tests {
         };
         board.record(user(1_400_000_000_000_000_123), 31.12, at(0));
         board.rename(user(1_400_000_000_000_000_123), "Ada");
-        board.banned.insert(user(5));
         let value = serde_json::to_value(&board).unwrap();
         assert_eq!(
             value,
@@ -261,7 +242,6 @@ mod tests {
                     "bits": 31.12,
                     "achievedAt": "2025-10-29T01:06:40Z",
                 }],
-                "banned": ["5"],
             })
         );
         assert_eq!(serde_json::from_value::<Leaderboard>(value).unwrap(), board);
@@ -270,7 +250,7 @@ mod tests {
     }
 
     #[test]
-    fn the_top_keeps_the_highest_scores_and_no_bans() {
+    fn the_top_keeps_the_highest_scores() {
         let mut board = Leaderboard {
             updated_at: Some(at(10)),
             ..Leaderboard::default()
@@ -279,13 +259,10 @@ mod tests {
         for player in 1..=players {
             board.record(user(player), player as f64, at(0));
         }
-        board.banned.insert(user(999));
         let top = board.top(TOP_SIZE);
         assert_eq!(top.updated_at, board.updated_at);
         assert_eq!(top.entries, board.entries[..TOP_SIZE]);
         assert_eq!(top.entries[0].user_id, user(players));
-        let value = serde_json::to_value(&top).unwrap();
-        assert!(value.get("banned").is_none(), "{value}");
         assert_eq!(board.top(TOP_SIZE * 2).entries.len(), players as usize);
     }
 }
