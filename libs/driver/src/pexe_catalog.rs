@@ -52,8 +52,13 @@ pub struct PexeCatalog {
 impl PexeCatalog {
     /// Scan `actions_dir` for `.pexe` files, unpack them, and assemble the catalog.
     pub fn load(actions_dir: &Path) -> Result<Self> {
+        Self::load_with(actions_dir, false)
+    }
+
+    /// Like [`Self::load`], proving with the MockProver when `mock_proofs` is set.
+    pub fn load_with(actions_dir: &Path, mock_proofs: bool) -> Result<Self> {
         let plugins = discover_plugins(actions_dir)?;
-        Self::from_plugins(plugins, false)
+        Self::from_plugins(plugins, mock_proofs)
     }
 
     /// Assemble a catalog from already-loaded plugin sources. Used by tests that

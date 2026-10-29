@@ -164,6 +164,16 @@ just dobjd
 DOBJD_PORT=7727 cargo run --release -p dobjd
 ```
 
+### Mock mode
+
+With `DOBJ_MOCK=1` (any value but empty or `0`), dobjd makes no network calls.
+Actions prove with the MockProver, and an in-memory DON stands in for the
+synchronizer and relayer: it checks each submitted transaction with the
+synchronizer's rules and lands it in a new block at once. The settings URLs are
+ignored. The DON starts empty on every launch, so objects left in the store
+from an earlier run can no longer be spent; use a separate `DOBJ_HOME`.
+`just dev-mock` sets both and clears the mock store first.
+
 Released binaries are signed + notarized on macOS. The bundle is just
 the four executables (`dobjd`, `dobj`, `dobj-mcp-proxy`, `pexe`).
 Windows binaries are not codesigned yet — first run shows a SmartScreen warning.

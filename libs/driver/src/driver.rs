@@ -17,6 +17,7 @@ use crate::clients::{
 use crate::error::DriverError;
 use crate::execute::{build_relayer_payload, obj_type_hash};
 use crate::holds::HoldTable;
+use crate::mock_don::{MockDon, MockPayloadBuilder, mock_mode_from_env};
 use crate::object_record::{FileStatus, ObjectRecord, parse_object_record_file};
 use crate::object_store::{
     ObjectFileEntry, ensure_store_dirs, imported_file_name, key_fingerprint, load_imported_keys,
@@ -59,31 +60,51 @@ pub struct DriverDeps {
     pub synchronizer: Arc<dyn SynchronizerClient>,
     pub relayer: Arc<dyn RelayerClient>,
     pub payload_builder: Arc<dyn PayloadBuilder>,
+    /// Whether catalogs, including reloaded ones, prove with the MockProver.
+    pub mock_proofs: bool,
 }
 
 impl DriverDeps {
     /// Build deps with a catalog loaded from `paths.actions_dir`.
     pub fn load(paths: &DriverPaths) -> Result<Self> {
-        let start = std::time::Instant::now();
-        log::info!(
-            "loading action catalog from {}...",
-            paths.actions_dir.display()
-        );
-        let catalog = PexeCatalog::load(&paths.actions_dir)?;
-        log::info!("action catalog loaded in {:?}", start.elapsed());
-        if catalog.plugin_count() == 0 {
-            log::warn!(
-                "no .pexe plugins installed in {}; run `just install-plugins`",
-                paths.actions_dir.display()
-            );
-        }
         Ok(Self {
-            catalog: Arc::new(RwLock::new(Arc::new(catalog))),
+            catalog: Arc::new(RwLock::new(Arc::new(load_catalog(paths, false)?))),
             synchronizer: Arc::new(HttpSynchronizerClient::new()),
             relayer: Arc::new(HttpRelayerClient::new()),
             payload_builder: Arc::new(DefaultPayloadBuilder),
+            mock_proofs: false,
         })
     }
+
+    /// Build deps that make no network calls: mock proofs, and an in-memory DON that
+    /// applies each submitted transaction at once.
+    pub fn load_mock(paths: &DriverPaths) -> Result<Self> {
+        let don = Arc::new(MockDon::new());
+        Ok(Self {
+            catalog: Arc::new(RwLock::new(Arc::new(load_catalog(paths, true)?))),
+            synchronizer: don.clone(),
+            relayer: don,
+            payload_builder: Arc::new(MockPayloadBuilder),
+            mock_proofs: true,
+        })
+    }
+}
+
+fn load_catalog(paths: &DriverPaths, mock_proofs: bool) -> Result<PexeCatalog> {
+    let start = std::time::Instant::now();
+    log::info!(
+        "loading action catalog from {}...",
+        paths.actions_dir.display()
+    );
+    let catalog = PexeCatalog::load_with(&paths.actions_dir, mock_proofs)?;
+    log::info!("action catalog loaded in {:?}", start.elapsed());
+    if catalog.plugin_count() == 0 {
+        log::warn!(
+            "no .pexe plugins installed in {}; run `just install-plugins`",
+            paths.actions_dir.display()
+        );
+    }
+    Ok(catalog)
 }
 
 #[derive(Clone)]
@@ -99,9 +120,18 @@ pub struct Driver {
 }
 
 impl Driver {
+    /// Open the store at the default root, in mock mode when [`crate::DOBJ_MOCK_ENV`] is set.
     pub fn open_default() -> Result<Self> {
         let paths = crate::paths::default_paths()?;
-        let deps = DriverDeps::load(&paths)?;
+        let deps = if mock_mode_from_env() {
+            log::warn!(
+                "mock mode ({}): no network, mock proofs, in-memory DON",
+                crate::DOBJ_MOCK_ENV
+            );
+            DriverDeps::load_mock(&paths)?
+        } else {
+            DriverDeps::load(&paths)?
+        };
         Self::open(paths, deps)
     }
 
@@ -135,6 +165,10 @@ impl Driver {
         &self.paths
     }
 
+    pub fn is_mock(&self) -> bool {
+        self.deps.mock_proofs
+    }
+
     pub(crate) fn catalog(&self) -> Arc<dyn ActionCatalog> {
         self.deps
             .catalog
@@ -147,7 +181,7 @@ impl Driver {
     /// first, so a failed load (e.g. a bad .pexe) leaves the current catalog
     /// intact. Returns the new plugin count.
     pub fn reload_catalog(&self) -> Result<usize> {
-        let catalog = PexeCatalog::load(&self.paths.actions_dir)?;
+        let catalog = PexeCatalog::load_with(&self.paths.actions_dir, self.deps.mock_proofs)?;
         let count = catalog.plugin_count();
         *self.deps.catalog.write().expect("catalog lock poisoned") = Arc::new(catalog);
         Ok(count)
