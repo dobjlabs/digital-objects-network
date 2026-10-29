@@ -3626,9 +3626,7 @@
     title.className = "shared-key-notice-title";
     title.append(sharedKeyBadge(), "This file was recently imported.");
     const risk = document.createElement("p");
-    risk.textContent = "Someone else on the network might have a usable copy of this file. "
-      + "If they modify, spend, or perform any other action with it, your copy of the file "
-      + "will be invalidated.";
+    risk.textContent = "Someone else on the network might have a usable copy of this file.";
     const claim = document.createElement("p");
     claim.textContent = "You can fully claim this item by rekeying it (right-click > Rekey). "
       + "This invalidates all other copies of this file on the network.";
