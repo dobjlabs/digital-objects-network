@@ -367,13 +367,6 @@ throughput-test N:
 client-e2e-test ACTION:
     cargo run -p tests --bin client-e2e --release -- {{ACTION}}
 
-# Prove FindLog offline at each cpuUsage level or a given pool size and (macOS)
-# thread QoS class, reporting wall time, CPU time and energy (per process on
-# macOS, RAPL package energy on Linux as root). Plan syntax is in
-# devtools/tests/src/bin/cpu-scaling.rs.
-cpu-scaling *ARGS:
-    cargo run -p tests --bin cpu-scaling --release -- {{ARGS}}
-
 # Build all workspace crates
 build:
     cargo build --workspace
