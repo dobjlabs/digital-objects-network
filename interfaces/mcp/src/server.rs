@@ -486,7 +486,7 @@ impl<T: DobjOps> DobjMcpService<T> {
     }
 
     #[tool(
-        description = "Read the daemon's current configuration: synchronizer + relayer URLs and the MCP server toggle."
+        description = "Read the daemon's current configuration: synchronizer + relayer URLs, the MCP server toggle, and cpuUsage (light, medium or full: how much CPU proving may use)."
     )]
     fn read_settings(&self) -> Result<Json<DriverSettings>, String> {
         self.ops

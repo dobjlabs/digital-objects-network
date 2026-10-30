@@ -20,16 +20,7 @@ and the windows it opens inherit that.
 
 The outer page fills the window with scrolling and overscroll disabled, including on the desktop startup screen. Scrollable content stays within its inventory, jobs, details or secondary-view panel. The object list is rebuilt on every inventory change, which leaves the browser's scroll anchoring nothing to hold on to, so it is turned off there and each redraw scrolls the list to keep the topmost row still listed where it was. A list scrolled to the top stays at the top.
 
-Settings (`?page=settings`) shows the synchronizer and relayer addresses
-from dobjd's `GET /settings` in read-only fields; they cannot be edited yet.
-In the desktop app a Sharing section follows, with a "Share my Bitcraft
-scores on Discord" checkbox backed by the host's `discord_sharing` and
-`set_discord_sharing` commands (see [the desktop README](../README.md#discord-rich-presence));
-it stays hidden in a standalone browser.
-Below them, set apart like a Mac About window, it shows the Bitcraft name
-and version, the website's address as a link, and a Discord button; both
-open in the player's browser. The window's opening height counts the title
-bar in the desktop app, so it leaves room for one.
+Settings (`?page=settings`) shows the synchronizer and relayer addresses from dobjd's `GET /settings` in read-only fields; they cannot be edited yet. In the desktop app a Sharing section follows, with a "Share my Bitcraft scores on Discord" checkbox backed by the host's `discord_sharing` and `set_discord_sharing` commands (see [the desktop README](../README.md#discord-rich-presence)); it stays hidden in a standalone browser. Last comes "Performance (Advanced)", a disclosure that starts collapsed, with a triangle after the label that points down while it is open, holding a row of radio buttons labelled "CPU for jobs" (Light, Medium, Full) that shows dobjd's `cpuUsage`. The label names what the CPU is for; "CPU usage" alone would read as a live measurement. Choosing a level saves it at once with `PUT /settings`; if the save fails, the saved level is selected again and an error appears below. Below them, set apart like a Mac About window, it shows the Bitcraft name and version, the website's address as a link, and a Discord button; both open in the player's browser. The window's opening height counts the title bar in the desktop app, so it leaves room for one, and fits the Performance options when they are opened.
 
 In the desktop app, the host builds every window the page opens. Links to
 the daemon open as app windows; links to a site listed in the host's

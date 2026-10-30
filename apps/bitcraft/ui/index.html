@@ -141,6 +141,30 @@
     gap: 8px;
     color: inherit;
   }
+  .settings-advanced { margin-top: 18px; }
+  .settings-advanced > summary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    list-style: none;
+    cursor: default;
+  }
+  .settings-advanced > summary::-webkit-details-marker { display: none; }
+  .settings-advanced[open] .settings-disclosure { transform: rotate(90deg); }
+  .settings-advanced > .settings-fields { margin-top: 8px; }
+  #settings-cpu-usage-label { color: var(--muted); }
+  .cpu-usage-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+  }
+  .settings-fields .cpu-usage-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--text);
+  }
+  .cpu-usage-option input { margin: 0; }
   /* The game's identity and links, set apart from the settings above like
      a Mac About window. */
   .settings-about {
@@ -182,7 +206,7 @@
     cursor: pointer;
   }
   .settings-about-links a:active { background: var(--row-hover); }
-  .settings-fields input {
+  .settings-fields input[type="text"] {
     min-width: 0;
     padding: 4px 7px;
     border: 1px solid var(--border);
@@ -1277,6 +1301,17 @@
       <h1 class="settings-title">Sharing</h1>
       <label class="settings-checkbox"><input id="settings-discord-sharing" type="checkbox"> Share my Bitcraft scores on Discord</label>
     </div>
+    <details id="settings-performance" class="settings-advanced">
+      <summary class="settings-title">Performance (Advanced)<svg class="settings-disclosure" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 1 8.5 5l-6 4z" fill="currentColor"/></svg></summary>
+      <div class="settings-fields">
+        <span id="settings-cpu-usage-label">CPU for jobs</span>
+        <div class="cpu-usage-options" role="radiogroup" aria-labelledby="settings-cpu-usage-label">
+          <label class="cpu-usage-option"><input type="radio" name="cpu-usage" value="light" disabled>Light</label>
+          <label class="cpu-usage-option"><input type="radio" name="cpu-usage" value="medium" disabled>Medium</label>
+          <label class="cpu-usage-option"><input type="radio" name="cpu-usage" value="full" disabled>Full</label>
+        </div>
+      </div>
+    </details>
     <div class="settings-about">
       <div class="settings-about-name">Bitcraft</div>
       <div class="settings-about-version">Version <span id="settings-version"></span></div>
@@ -2975,8 +3010,9 @@
   }
 
   // The Settings window shows the connection addresses from dobjd's settings,
-  // which cannot be edited yet, so the fields are read-only, and the game's
-  // version, website and Discord server.
+  // which cannot be edited yet, so the fields are read-only, how much CPU
+  // jobs may use (dobjd's `cpuUsage`), saved as soon as it is changed, and
+  // the game's version, website and Discord server.
   async function loadSettingsWindow() {
     document.body.classList.add("secondary-window");
     document.title = "Bitcraft Settings";
@@ -2992,11 +3028,9 @@
       const settings = await fetchJson("/settings");
       document.getElementById("settings-synchronizer").value = settings.synchronizerApiUrl ?? "";
       document.getElementById("settings-relayer").value = settings.relayerApiUrl ?? "";
+      watchCpuUsage(settings.cpuUsage);
     } catch (error) {
-      const message = document.createElement("p");
-      message.className = "message error";
-      message.textContent = `Could not read settings: ${error.message}`;
-      view.append(message);
+      showSettingsError(`Could not read settings: ${error.message}`);
     }
   }
 
@@ -3027,6 +3061,46 @@
       }
     });
     document.getElementById("settings-sharing").hidden = false;
+  }
+
+  function watchCpuUsage(initial) {
+    const options = [...document.querySelectorAll('#settings-view input[name="cpu-usage"]')];
+    let saved = initial;
+    const show = (level) => {
+      for (const option of options) option.checked = option.value === level;
+    };
+    const enable = (enabled) => {
+      for (const option of options) option.disabled = !enabled;
+    };
+    show(saved);
+    enable(true);
+    for (const option of options) {
+      option.addEventListener("change", async () => {
+        enable(false);
+        try {
+          const settings = await sendJson("PUT", "/settings", { cpuUsage: option.value });
+          saved = settings.cpuUsage;
+          show(saved);
+          document.getElementById("settings-error")?.remove();
+        } catch (error) {
+          show(saved);
+          showSettingsError(`Could not save the CPU setting: ${error.message}`);
+        } finally {
+          enable(true);
+        }
+      });
+    }
+  }
+
+  function showSettingsError(text) {
+    let message = document.getElementById("settings-error");
+    if (!message) {
+      message = document.createElement("p");
+      message.id = "settings-error";
+      message.className = "message error";
+      document.getElementById("settings-view").append(message);
+    }
+    message.textContent = text;
   }
 
   // The window is titled with the file's name, which the desktop app shows
@@ -3876,8 +3950,12 @@
   }
 
   function postJson(path, body) {
+    return sendJson("POST", path, body);
+  }
+
+  function sendJson(method, path, body) {
     return fetchJson(path, {
-      method: "POST",
+      method,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
@@ -4906,7 +4984,7 @@
     document.getElementById("inventory-value").addEventListener("click",
       () => openPageWindow(SUMMARY_PAGE, SUMMARY_WINDOW_NAME, SUMMARY_WINDOW_FEATURES));
     document.getElementById("settings-button").addEventListener("click",
-      () => openPageWindow(SETTINGS_PAGE, SETTINGS_WINDOW_NAME, "popup,width=480,height=370"));
+      () => openPageWindow(SETTINGS_PAGE, SETTINGS_WINDOW_NAME, "popup,width=480,height=430"));
     document.getElementById("bitcraft-version").textContent = BITCRAFT_VERSION;
     refreshServiceStatus();
     setInterval(refreshServiceStatus, SERVICE_STATUS_INTERVAL_MS);

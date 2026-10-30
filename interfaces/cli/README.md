@@ -31,7 +31,7 @@ Two flavors of commands.
 | `objects-dir`                                   | `GET /objects/dir`                                                                                                  |
 | `import <path>`                                 | `POST /objects/import` (reads the `.dobj` file locally, sends contents)                                             |
 | `settings get`                                  | `GET /settings`                                                                                                     |
-| `settings set [--synchronizer URL] [--relayer URL] [--mcp on\|off]` | `PUT /settings` (omitted flags left unchanged; the MCP toggle starts/stops the server immediately) |
+| `settings set [--synchronizer URL] [--relayer URL] [--mcp on\|off] [--cpu-usage light\|medium\|full]` | `PUT /settings` (omitted flags left unchanged; the MCP toggle starts/stops the server immediately) |
 | `run <action> [paths...]`                       | `POST /runs`, then follows `/runs/{id}/events` and polls `/runs/{id}` to the terminal result |
 | `prove <action> [paths...] [--wait]`             | `POST /proof-jobs`; with `--wait`, follows the job through recording |
 | `proof-jobs [--active]`                          | `GET /proof-jobs`; lists retained proof jobs |

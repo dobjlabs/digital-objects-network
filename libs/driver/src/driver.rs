@@ -14,6 +14,7 @@ use crate::catalog::{ActionCatalog, CatalogClass};
 use crate::clients::{
     HttpRelayerClient, HttpSynchronizerClient, RelayerClient, SynchronizerClient,
 };
+use crate::cpu_usage::apply_cpu_usage;
 use crate::error::DriverError;
 use crate::execute::{build_relayer_payload, obj_type_hash};
 use crate::holds::HoldTable;
@@ -215,6 +216,7 @@ impl Driver {
 
     pub fn save_settings(&self, settings: &DriverSettings) -> Result<DriverSettings> {
         write_settings(&self.paths, settings)?;
+        apply_cpu_usage(settings.cpu_usage);
         Ok(settings.clone())
     }
 

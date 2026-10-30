@@ -28,7 +28,7 @@ const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(setImm
 
 async function page(context, options = {}) {
   const backend = {
-    objects: [], transactions: [], proofJobs: new Map(), submissions: [], actions: [recipe()], states: new Map(), posts: [], discards: [], imports: [], importFileNames: [],
+    objects: [], transactions: [], proofJobs: new Map(), submissions: [], actions: [recipe()], states: new Map(), posts: [], discards: [], imports: [], importFileNames: [], settingsWrites: [],
     inventoryError: false, listError: false, runError: false, postError: false, syncError: false,
     inventoryReads: 0, runReads: 0, leaderboardReads: 0, runGate: null, ...options,
   };
@@ -170,7 +170,15 @@ async function page(context, options = {}) {
           backend.objects.push(copy(summary));
           return respond(summary);
         }
-        if (parsed.pathname === "/settings") return respond(backend.settings ?? {});
+        if (parsed.pathname === "/settings") {
+          if (init.method === "PUT") {
+            const patch = JSON.parse(init.body);
+            backend.settingsWrites.push(patch);
+            if (backend.settingsWriteError) return respond({}, 503);
+            backend.settings = { ...backend.settings, ...patch };
+          }
+          return respond(backend.settings ?? {});
+        }
         const raw = parsed.pathname.match(/^\/objects\/([^/]+)\/raw$/);
         if (raw) {
           const object = backend.objects.find((candidate) => candidate.fileName === decodeURIComponent(raw[1]));
@@ -1451,6 +1459,45 @@ test("Settings hides Discord sharing without a host, and when the host cannot be
   });
   await flush();
   assert.equal(failing.document.querySelector("#settings-sharing").hidden, true);
+});
+
+test("the Settings window saves the CPU for jobs chosen with its radio buttons", async (context) => {
+  const ui = await page(context, {
+    url: "http://127.0.0.1:7727/bitcraft/?page=settings",
+    settings: { synchronizerApiUrl: "http://127.0.0.1:3000", relayerApiUrl: "http://127.0.0.1:3200", mcpEnabled: false, cpuUsage: "light" },
+  });
+  const radio = (level) => ui.document.querySelector(`#settings-view input[name="cpu-usage"][value="${level}"]`);
+  const checked = () => ui.document.querySelector('#settings-view input[name="cpu-usage"]:checked')?.value;
+  const choose = async (level) => {
+    radio(level).click();
+    await flush();
+  };
+  const performance = ui.document.querySelector("#settings-performance");
+  assert.equal(performance.open, false, "the options start collapsed");
+  assert.equal(performance.querySelector("summary").textContent, "Performance (Advanced)");
+  assert.equal(ui.document.querySelector("#settings-sharing").nextElementSibling, performance);
+  assert.equal(checked(), "light");
+  assert.equal(radio("full").disabled, false);
+  assert.equal(ui.document.querySelector("#settings-cpu-usage-label").textContent, "CPU for jobs");
+  for (const [level, label] of [["light", "Light"], ["medium", "Medium"], ["full", "Full"]]) {
+    assert.equal(radio(level).closest("label").textContent.trim(), label);
+  }
+
+  await choose("full");
+  assert.deepEqual(ui.backend.settingsWrites, [{ cpuUsage: "full" }]);
+  assert.equal(checked(), "full");
+  assert.equal(ui.document.querySelector("#settings-error"), null);
+
+  ui.backend.settingsWriteError = true;
+  await choose("medium");
+  assert.equal(checked(), "full", "a failed save selects the saved level again");
+  assert.match(ui.document.querySelector("#settings-error").textContent, /Could not save the CPU setting/);
+  assert.equal(radio("medium").disabled, false);
+
+  ui.backend.settingsWriteError = false;
+  await choose("medium");
+  assert.equal(checked(), "medium");
+  assert.equal(ui.document.querySelector("#settings-error"), null);
 });
 
 test("the top bar and the window title show the Inventory Value of live objects", async (context) => {

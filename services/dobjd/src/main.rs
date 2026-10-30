@@ -103,6 +103,8 @@ async fn run() -> Result<()> {
     tokio::task::spawn_blocking(driver::warm_proving_circuits)
         .await
         .map_err(|err| anyhow!("circuit warm-up task panicked: {err}"))?;
+    // Warm-up ran at full speed; proving runs at the saved level from here.
+    driver::apply_cpu_usage(driver.load_settings()?.cpu_usage);
 
     // Circuits are warm; serve the pre-bound MCP listener (no-op when
     // disabled). Deferred to here so an MCP action can't land mid-warm-up.
