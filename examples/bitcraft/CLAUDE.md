@@ -21,3 +21,15 @@ in `presentation/generate.py`, and the rules, values and class order in
 The presentation pack and the Bitcraft UI have their own rules; see
 `presentation/README.md`, `presentation/CLAUDE.md` and
 `apps/bitcraft/ui/BITCRAFT_SPECIFIC_RULES.md`.
+
+## Mining is tied to the tool
+
+Every proof-of-work action grinds an output that records the mutated tool's
+`nonce` (as `tool_nonce`), and the key the grind finds becomes the tool's next
+`nonce`. A tool's first `nonce` is the grounding block's hash. So work toward
+a tool's next use can only start once its previous use is mined, and a key
+mined for one tool state does not prove for any other: resources cannot be
+premined. The nonce is deliberately not the tool's `key`: the player chooses
+keys (including through the built-in `Rekey<Class>`), and the key is the
+tool's secret, which mined outputs would otherwise reveal. A new tool that
+mines needs `Tool::mines` to return true, so it carries a `nonce`.

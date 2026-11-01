@@ -58,6 +58,20 @@ const MAX_LEVEL: usize = 10;
 // gathering wood; at level N, 1/N of that.
 const GEM_POW_FACTOR: usize = 1024;
 
+// For each gem rarer than quartz, the highest mined value that still cracks
+// into that gem or a rarer one, as `set` entries named after the gem.
+fn gem_threshold_initializers(pow_target: usize) -> Vec<String> {
+    GEMS.iter()
+        .enumerate()
+        .skip(1)
+        .map(|(tier, gem)| {
+            let threshold = pow_target / GEM_RARITY.pow(tier as u32);
+            let field = format!("{gem}").to_lowercase();
+            format!(r#"["{field}", action.top_limb_u256({threshold})]"#)
+        })
+        .collect()
+}
+
 // Top-limb difficulty target for a proof-of-work weight. A higher weight
 // gives a smaller target, so a longer grind.
 fn pow_target(pow: usize) -> usize {
@@ -76,6 +90,14 @@ enum Tool {
     // Holds a count `n` of oil, which is not an object of its own. Nothing
     // adds to or takes from it yet.
     BarrelOfOil,
+}
+
+impl Tool {
+    // Tools whose actions mine: each carries a `nonce` that the proof-of-work
+    // of its next use is tied to.
+    fn mines(self) -> bool {
+        !matches!(self, Tool::Pumpjack | Tool::BarrelOfOil)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -432,25 +454,31 @@ fn main() -> Result<(), io::Error> {
         if let Some(out_tool) = action.out_tool {
             let name = format!("{out_tool}").to_lowercase();
             writeln!(o, "  var {name} = action.output(\"{out_tool}\");")?;
-            for tag in &action.tags {
-                match tag {
-                    SetDurability => {
-                        writeln!(o, r#"  {name}.set([["durability", 100]]);"#)?;
-                    }
-                    SetLevel => {
-                        writeln!(o, r#"  {name}.set([["level", 1]]);"#)?;
-                    }
-                    SetEmpty => {
-                        writeln!(o, r#"  {name}.set([["n", 0]]);"#)?;
-                    }
+            let mut initializers: Vec<String> = action
+                .tags
+                .iter()
+                .filter_map(|tag| match tag {
+                    SetDurability => Some(format!(r#"["durability", 100]"#)),
+                    SetLevel => Some(format!(r#"["level", 1]"#)),
+                    SetEmpty => Some(format!(r#"["n", 0]"#)),
                     InheritDurability => {
-                        writeln!(
-                            o,
-                            r#"  {name}.set([["durability", {last_in_tool}.durability]]);"#
-                        )?;
+                        Some(format!(r#"["durability", {last_in_tool}.durability]"#))
                     }
-                    _ => {}
-                }
+                    _ => Option::None,
+                })
+                .collect();
+            // `set` only adds literal fields, so the nonce starts as a
+            // placeholder that the `update` below replaces.
+            if out_tool.mines() {
+                initializers.push(format!(r#"["nonce", 0]"#));
+            }
+            if !initializers.is_empty() {
+                writeln!(o, "  {name}.set([{}]);", initializers.join(", "))?;
+            }
+            // The grounding block's hash is unknown until shortly before the
+            // tool exists, so no work toward its first use can start earlier.
+            if out_tool.mines() {
+                writeln!(o, r#"  {name}.update("nonce", state_header.block_hash);"#)?;
             }
         }
         if let Some(mut_tool) = action.mut_tool {
@@ -589,23 +617,6 @@ fn main() -> Result<(), io::Error> {
   var work = action.intro_vdf(vdf_steps, {barrel});"#
                     )?;
                 }
-                SetGemThresholds => {
-                    let initializers: Vec<String> = GEMS
-                        .iter()
-                        .enumerate()
-                        .skip(1)
-                        .map(|(tier, gem)| {
-                            let threshold = action.pow_target / GEM_RARITY.pow(tier as u32);
-                            let field = format!("{gem}").to_lowercase();
-                            format!(r#"["{field}", action.top_limb_u256({threshold})]"#)
-                        })
-                        .collect();
-                    writeln!(
-                        o,
-                        "  {last_out_resource}.set([{}]);",
-                        initializers.join(", ")
-                    )?;
-                }
                 CrackGeode(tier) => {
                     // The stable identifier is the commitment of the geode as
                     // mined, which is the value its proof-of-work bounded.
@@ -625,14 +636,35 @@ fn main() -> Result<(), io::Error> {
         }
 
         if action.pow_target > 0 {
+            // The mined output records the tool's nonce before the grind, and
+            // the key the grind finds becomes the tool's next nonce. Each use's
+            // work can only start once the previous use's work is done, and
+            // only with that tool.
+            let tool = action
+                .mut_tool
+                .filter(|tool| tool.mines())
+                .expect("a mining action mutates the tool it mines with");
+            let tool = format!("{tool}").to_lowercase();
+            let mut initializers = vec![format!(r#"["tool_nonce", 0]"#)];
+            if action
+                .tags
+                .iter()
+                .any(|tag| matches!(tag, SetGemThresholds))
+            {
+                initializers.extend(gem_threshold_initializers(action.pow_target));
+            }
             writeln!(
                 o,
-                r#"  let target = action.top_limb_u256({n});
+                r#"  {var}.set([{initializers}]);
+  {var}.update("tool_nonce", {tool}.nonce);
+  let target = action.top_limb_u256({n});
   var grind_key = unsafe {{ arg("grind_key") ?? action.pow_obj_grind({var}, target) }};
   {var}.update("key", grind_key);
-  action.intro_lt_eq_u256({var}, target);"#,
+  action.intro_lt_eq_u256({var}, target);
+  {tool}.update("nonce", grind_key);"#,
                 n = action.pow_target,
-                var = last_out_resource
+                var = last_out_resource,
+                initializers = initializers.join(", "),
             )?;
         }
 
