@@ -2,8 +2,8 @@ use anyhow::{Result, anyhow, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use payload::{db_bytes_to_hash, hash_to_db_bytes};
 use pod2::{
-    backends::plonky2::primitives::merkletree::{self, MerkleProof},
-    middleware::{Hash, RawValue, Value},
+    backends::plonky2::primitives::merkletree::MerkleProof,
+    middleware::{Hash, RawValue, Value, containers::Array},
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use txlib::StateHeader;
@@ -141,11 +141,13 @@ impl CreationProof {
     /// array, and returns the state root the header hashes to. Whether that
     /// root is one the chain reached is for the caller to check.
     pub(crate) fn verify(&self, commitment: Hash) -> Result<Hash> {
-        merkletree::verify(
+        let index = usize::try_from(self.index)
+            .map_err(|_| anyhow!("creation proof has a negative index {}", self.index))?;
+        Array::verify(
             self.state_header.created_root,
             &self.proof,
-            &Value::from(self.index).raw(),
-            &Value::from(commitment).raw(),
+            index,
+            &Value::from(commitment),
         )
         .map_err(|err| anyhow!("creation proof does not prove the object's creation: {err}"))?;
         Ok(self.state_header.hash())
@@ -192,6 +194,17 @@ mod tests {
             proof.state_header.hash()
         );
         assert!(decoded.verify(commitment(4)).is_err());
+    }
+
+    #[test]
+    fn a_proof_with_a_negative_index_does_not_verify() {
+        let mut state = TestState::default();
+        state.apply_tx((0..5).map(commitment), []);
+        let mut proof = proof_for(&state, commitment(0));
+        proof.index = -1;
+        let decoded = CreationProof::decode(&proof.encode().unwrap()).unwrap();
+        let err = decoded.verify(commitment(0)).unwrap_err();
+        assert!(err.to_string().contains("negative index"), "{err}");
     }
 
     #[test]
