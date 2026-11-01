@@ -1700,7 +1700,7 @@ impl ActionHandle {
         }
         Ok(ArgHandle::new(self.clone(), value))
     }
-    fn pow_obj_grind(self, obj: Dynamic, target: Dynamic) -> RuntimeResult<ArgHandle> {
+    fn pow_obj_grind(self, obj: Dynamic, key_name: String, target: Dynamic) -> RuntimeResult<ArgHandle> {
         self.0.borrow().assert_unsafe(true)?;
         // Target is a full u256 (Raw). To build one with a desired top-limb
         // difficulty, scripts use `action.top_limb_u256(n)`.
@@ -1708,7 +1708,7 @@ impl ActionHandle {
         if let VarOrValue::Var(var) = &*obj.borrow() {
             self.0.borrow_mut().mark_dict_read(&var.name);
         }
-        let key = temporary(Type::Raw);
+        let value = temporary(Type::Raw);
         if let Some(exe_ctx) = self.0.borrow().exe_ref() {
             if let Some(progress) = &exe_ctx.progress {
                 progress(ExecutionStage::Mining);
@@ -1716,18 +1716,19 @@ impl ActionHandle {
             // This is a copy of the object, we don't modify the obj argument.
             let mut obj = obj.borrow().to_dict();
             let target_raw = target.borrow().as_value().raw();
-            // Initialize k to obj's current key so that when the loop body doesn't run (mock mode,
-            // or the initial random already satisfies the constraint), the returned k still
+            // Initialize v to obj's current key so that when the loop body doesn't run (mock mode,
+            // or the initial random already satisfies the constraint), the returned v still
             // matches what's in obj.
-            let mut k = obj
-                .get(&StrKey::from("key"))
+            let key_name = StrKey::from(key_name.as_str());
+            let mut v = obj
+                .get(&key_name)
                 .expect("dict op")
                 .expect("obj has key");
             if !exe_ctx.mock {
                 let mut i = 0;
                 while u256_gt(&RawValue::from(obj.commitment()), &target_raw) {
-                    k = exe_ctx.rand_value();
-                    obj.update(&StrKey::from("key"), &k).unwrap();
+                    v = exe_ctx.rand_value();
+                    obj.update(&key_name, &v).unwrap();
                     i += 1;
                     // After 256 iterations, make a deep copy of the dictionary as a form of
                     // garbage collection for old merkle tree nodes.
@@ -1744,12 +1745,12 @@ impl ActionHandle {
                     }
                 }
             }
-            key.borrow_mut().set_value(k);
+            value.borrow_mut().set_value(v);
             if let Some(progress) = &exe_ctx.progress {
                 progress(ExecutionStage::Building);
             }
         }
-        Ok(ArgHandle::new(self.clone(), key))
+        Ok(ArgHandle::new(self.clone(), value))
     }
     /// Returns the dictionary entry at `key` and emits `DictContains`.
     fn dict_get(self, dict: Dynamic, key: Dynamic) -> RuntimeResult<ArgHandle> {
