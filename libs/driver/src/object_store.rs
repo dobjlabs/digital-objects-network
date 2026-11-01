@@ -164,7 +164,8 @@ pub(crate) fn pending_file_name(final_name: &str, is_taken: impl Fn(&str) -> boo
 /// Whether `file_name` is one a player chose rather than the object's
 /// generated name.
 pub(crate) fn has_custom_file_name(file_name: &str, record: &ObjectRecord) -> bool {
-    object_file_name(&record.class, &record.obj).is_ok_and(|generated| generated != file_name)
+    object_file_name(&record.metadata.class, &record.obj)
+        .is_ok_and(|generated| generated != file_name)
 }
 
 /// Whether any store directory holds a file called `file_name`.
@@ -259,8 +260,8 @@ pub(crate) fn nullify_object_file(
     record: &ObjectRecord,
     file_name: &str,
 ) -> Result<String> {
-    let spent_name =
-        object_file_name(&record.class, &record.obj).unwrap_or_else(|_| file_name.to_string());
+    let spent_name = object_file_name(&record.metadata.class, &record.obj)
+        .unwrap_or_else(|_| file_name.to_string());
     write_object_file(paths, record, &spent_name)?;
     if spent_name != file_name {
         match fs::remove_file(paths.objects_dir.join(file_name)) {
@@ -435,7 +436,7 @@ mod tests {
 
     use super::{load_object_files, object_file_name, write_object_file};
     use crate::object_record::{
-        FileStatus, ObjectRecord, ensure_extra_pod_deserializers_registered,
+        FileStatus, ObjectMetadata, ObjectRecord, ensure_extra_pod_deserializers_registered,
         parse_object_record_file,
     };
 
@@ -479,12 +480,15 @@ mod tests {
         let tx_final = outputs.tx.dict().commitment();
         let spendable = outputs.obj(0);
         ObjectRecord {
-            content_hash: spendable.obj.commitment(),
-            class: wire_types::QualifiedName::new("craft-basics", "Log"),
-            status: FileStatus::Live,
-            tx_hash: None,
+            metadata: ObjectMetadata {
+                class: wire_types::QualifiedName::new("craft-basics", "Log"),
+                content_hash: spendable.obj.commitment(),
+                status: FileStatus::Live,
+                tx_final,
+                tx_hash: None,
+                creation_proof: None,
+            },
             obj: spendable.obj,
-            tx_final,
         }
     }
 
@@ -496,7 +500,10 @@ mod tests {
         let loaded = load_object_files(&paths).unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].file_name, "log_test.dobj");
-        assert_eq!(loaded[0].record.content_hash, record.content_hash);
+        assert_eq!(
+            loaded[0].record.metadata.content_hash,
+            record.metadata.content_hash
+        );
     }
 
     #[test]
@@ -505,7 +512,7 @@ mod tests {
         let record = make_record();
         write_object_file(&paths, &record, "log_test.dobj").unwrap();
         let loaded = parse_object_record_file(&paths.objects_dir.join("log_test.dobj")).unwrap();
-        assert_eq!(loaded.content_hash, record.content_hash);
+        assert_eq!(loaded.metadata.content_hash, record.metadata.content_hash);
     }
 
     #[test]
@@ -540,7 +547,7 @@ mod tests {
     #[test]
     fn test_executed_output_file_name_uses_stable_identifier() {
         let record = make_record();
-        let name = object_file_name(&record.class, &record.obj).unwrap();
+        let name = object_file_name(&record.metadata.class, &record.obj).unwrap();
         let token = name
             .strip_prefix("craft-basics__log_")
             .and_then(|rest| rest.strip_suffix(".dobj"))

@@ -13,14 +13,33 @@ window that shows the file's stored text (an object's from dobjd's
 `GET /objects/{file_name}/raw`, or the welcome guide's Markdown), titled with
 the file's name. It opens wide enough for the title bar to show the whole
 name (the name measured in the title font, plus room for the window buttons;
-at least 480px). It sets its own light background, since the desktop app's
-webview shows a bare JSON response in the system's dark theme, and makes its
-text selectable, since the desktop app turns selection off on every page
-and the windows it opens inherit that.
+at least 480px). It sets its own background from the page's theme, rather
+than leaving a bare JSON response to the webview's default styling, and
+makes its text selectable, since the desktop app turns selection off on
+every page and the windows it opens inherit that.
+
+The page is light unless the player picks Dark in Settings; it does not
+follow the system's appearance, since some art assumes a light page. The
+choice is kept in this origin's `localStorage` and applied as
+`data-theme` on the root element by a script at the top of `<head>`, so no
+window paints in the wrong theme; other windows follow through the storage
+event. Colors come from the `:root` variables, which the
+`:root[data-theme="dark"]` block redefines; give a new color a variable
+with a value in both themes rather than a literal. Class icon tiles stay
+white in both themes, since the class art is drawn for a white tile, and
+so do the paper file icons.
+
+In the desktop app, the main window passes the choice to the host
+(`set_appearance`), which keeps its own copy in `<home>/appearance.json`
+and applies it to every window's frame and background and to the desktop
+shell's pages, which this origin's storage does not reach. Pages read the
+host's copy, `window.bitcraftAppearance`, only when the storage holds no
+choice; when the two differ at startup, the main window sends the page's.
 
 The outer page fills the window with scrolling and overscroll disabled, including on the desktop startup screen. Scrollable content stays within its inventory, jobs, details or secondary-view panel. The object list is rebuilt on every inventory change, which leaves the browser's scroll anchoring nothing to hold on to, so it is turned off there and each redraw scrolls the list to keep the topmost row still listed where it was. A list scrolled to the top stays at the top.
 
-Settings (`?page=settings`) shows the synchronizer and relayer addresses
+Settings (`?page=settings`) offers the theme (Light or Dark) under
+Appearance, then shows the synchronizer and relayer addresses
 from dobjd's `GET /settings` in read-only fields; they cannot be edited yet.
 In the desktop app a Sharing section follows, with a "Share my Bitcraft
 scores on Discord" checkbox backed by the host's `discord_sharing` and
@@ -40,7 +59,7 @@ else. A new external link from the page needs its host added there.
 
 The Inventory Summary (`?page=summary`) is laid out like Finder's Get Info window: the inventory's Total Inventory Value beside an icon, then an "Objects (N)" section, N being the live bitcraft objects it lists, with a count and a summed value per class, which can be collapsed. Both inventory views apply `object` and `object-removed` events from dobjd's `/events` stream, including changes made by other clients. They read inventory and transaction snapshots on load, stream connection or reconnection, sequence gaps, and window focus. Changes received during a snapshot read are reapplied to its result. Recorded transactions settle in the daemon and need no UI polling; pending or unknown objects with no open local transaction record are reconciled every 10 seconds.
 
-Import, from a plus button at the right end of the object list's header, which shows the objects directory's path (tooltip "Import"), or from "Import..." at the top of the context menu on the object list's empty space, opens a sheet over the main window that adds `.dobj` files to the inventory through dobjd's `POST /objects/import`. "Choose Files..." lists the chosen files in the sheet, replacing any chosen before; "Import" then imports them one at a time, followed by any contents pasted into the text box. A chosen file keeps its name in the inventory, with the changes dobjd makes to keep names safe and unique (see `services/dobjd/README.md`); pasted contents get the name dobjd derives. Files are read in the page, so no file path or host permission is involved, and there is no file-type filter: dobjd checks every file's contents. Each file gets a result line: its class and whether it is ready to use or waits for the network to confirm it, or dobjd's reason for refusing it. `fetchJson` keeps only the status code, so the import request reads dobjd's `error` message itself. Imported objects are listed and selected as soon as dobjd answers, without waiting for their events, and the sheet stays open to show the results. After an import of an object whose key is shared (below), the sheet says that whoever gave the player the file can still use their copy until it is rekeyed, and that until then it is marked. While the sheet is open the top bar and panes are inert; Escape or Cancel (Done once results show) closes it. On macOS, pasting into it depends on the desktop app's Edit menu (see `../README.md`).
+Import, from a plus button at the right end of the object list's header, which shows the objects directory's path (tooltip "Import"), or from "Import..." at the top of the context menu on the object list's empty space, opens a sheet over the main window that adds `.dobj` files to the inventory through dobjd's `POST /objects/import`. "Choose Files..." lists the chosen files in the sheet, replacing any chosen before; "Import" then imports them one at a time, followed by any contents pasted into the text box. A chosen file keeps its name in the inventory, with the changes dobjd makes to keep names safe and unique (see `services/dobjd/README.md`); pasted contents get the name dobjd derives. Files are read in the page, so no file path or host permission is involved, and there is no file-type filter: dobjd checks every file's contents. Each file gets a result line: its class, since dobjd imports an object only once the network reports it created, or dobjd's reason for refusing it. `fetchJson` keeps only the status code, so the import request reads dobjd's `error` message itself. Imported objects are listed and selected as soon as dobjd answers, without waiting for their events, and the sheet stays open to show the results. After an import of an object whose key is shared (below), the sheet says that whoever gave the player the file can still use their copy until it is rekeyed, and that until then it is marked. While the sheet is open the top bar and panes are inert; Escape or Cancel (Done once results show) closes it. On macOS, pasting into it depends on the desktop app's Edit menu (see `../README.md`).
 
 An object's file can be renamed in place, as in Finder: "Rename" in a single object's context menu, or Return with one object selected, turns its name in the row into a text field with all but the extension selected. Return or leaving the field saves through dobjd's `POST /objects/{file_name}/rename`, Escape or an unchanged name cancels, and dobjd's reason for refusing a name is shown under the field until it is edited. The renamed object stays selected, unless the player saved by clicking another row, which stays selected instead. Only live objects no action holds can be renamed. dobjd keeps a custom name across mutations: while the action that mutates `knife.dobj` awaits the chain, its new version is listed as `knife-pending.dobj`, and it becomes `knife.dobj` once the action lands (see `services/dobjd/README.md`).
 
@@ -91,8 +110,9 @@ Automatic setup jobs stay out of Jobs; manual jobs stay visible. Failures
 offer retry and never open the inventory. See `BITCRAFT_SPECIFIC_RULES.md`.
 The startup screen shows the Bitcraft logo, a 16px heading and a progress
 bar in the blue accent, and the same layout appears in the desktop `shell/`,
-whose `style.css` copies this page's values as literals. The logo is the app
-icon (`../src-tauri/icons/icon.png`), copied to `assets/bitcraft-logo.png`
+whose `style.css` repeats the theme variables it needs from this page,
+under the same names and with the same light and dark values. The logo is
+the app icon (`../src-tauri/icons/icon.png`), copied to `assets/bitcraft-logo.png`
 here and `../shell/bitcraft-logo.png`; replace all three together. Keep both
 splash screens visually consistent, including the bottom status bar, which
 both show. On this page the bar is live: it reads the service addresses from

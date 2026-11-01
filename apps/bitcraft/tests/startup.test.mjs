@@ -45,6 +45,8 @@ async function page(context, options = {}) {
     url: options.url ?? "http://127.0.0.1:7727/bitcraft/", runScripts: "dangerously", virtualConsole,
     beforeParse(window) {
       window.bitcraftDesktop = options.desktop ?? false;
+      if (options.desktopAppearance) window.bitcraftAppearance = options.desktopAppearance;
+      if (options.storedAppearance) window.localStorage.setItem("bitcraft-appearance", options.storedAppearance);
       if (options.desktop || options.invoke) {
         window.__TAURI__ = { core: { invoke: async (command, args) => {
           desktopCalls.push(command);
@@ -167,10 +169,11 @@ async function page(context, options = {}) {
           } catch (error) {
             return respond({ error: `invalid input: could not parse .dobj contents: ${error.message}` }, 400);
           }
-          if (record.class.pluginName !== "bitcraft") {
-            return respond({ error: `unknown class: ${record.class.pluginName}::${record.class.name}` }, 404);
+          const { class: objectClass, contentHash } = record.metadata;
+          if (objectClass.pluginName !== "bitcraft") {
+            return respond({ error: `unknown class: ${objectClass.pluginName}::${objectClass.name}` }, 404);
           }
-          const generatedName = `${record.class.name.toLowerCase()}_${record.contentHash}.dobj`;
+          const generatedName = `${objectClass.name.toLowerCase()}_${contentHash}.dobj`;
           if (backend.objects.some((object) => object.fileName === generatedName)) {
             return respond({ error: `conflict: object already present: ${generatedName}` }, 409);
           }
@@ -178,7 +181,7 @@ async function page(context, options = {}) {
             ? generatedName
             : requestedName.endsWith(".dobj") ? requestedName : `${requestedName}.dobj`;
           const summary = {
-            fileName, class: record.class, status: backend.importStatus ?? "live", fields: { kvs: [] }, sharedKey: true,
+            fileName, class: objectClass, status: "live", fields: { kvs: [] }, sharedKey: true,
           };
           backend.objects.push(copy(summary));
           return respond(summary);
@@ -1423,6 +1426,63 @@ test("the Settings window shows the connection addresses read-only and runs no s
   }
 });
 
+test("the theme stays light until the player picks dark in Settings", async (context) => {
+  const settingsUrl = "http://127.0.0.1:7727/bitcraft/?page=settings";
+  const settings = await page(context, { url: settingsUrl });
+  const theme = settings.document.querySelector("#settings-appearance");
+  assert.equal(settings.document.documentElement.dataset.theme, "light");
+  assert.equal(theme.value, "light");
+  theme.value = "dark";
+  theme.dispatchEvent(new settings.dom.window.Event("change"));
+  assert.equal(settings.document.documentElement.dataset.theme, "dark");
+  assert.equal(settings.dom.window.localStorage.getItem("bitcraft-appearance"), "dark");
+
+  const reopened = await page(context, { url: settingsUrl, storedAppearance: "dark" });
+  assert.equal(reopened.document.documentElement.dataset.theme, "dark");
+  assert.equal(reopened.document.querySelector("#settings-appearance").value, "dark");
+});
+
+test("other windows follow a picked theme, and only the main window passes it to the desktop app", async (context) => {
+  const pick = (ui, appearance) => {
+    const { window } = ui.dom;
+    window.localStorage.setItem("bitcraft-appearance", appearance);
+    window.dispatchEvent(new window.StorageEvent("storage", { key: "bitcraft-appearance", newValue: appearance }));
+  };
+  const sent = [];
+  const invoke = (command, args) => { if (command === "set_appearance") sent.push(args.appearance); };
+  const main = await page(context, { desktop: true, objects: [knife()], invoke });
+  const summary = await page(context, {
+    desktop: true, objects: [knife()], invoke, url: "http://127.0.0.1:7727/bitcraft/?page=summary",
+  });
+  assert.deepEqual(sent, []);
+  pick(summary, "dark");
+  pick(main, "dark");
+  await flush();
+  assert.equal(summary.document.documentElement.dataset.theme, "dark");
+  assert.equal(main.document.documentElement.dataset.theme, "dark");
+  assert.deepEqual(sent, ["dark"]);
+
+  const browser = await page(context, { objects: [knife()], invoke });
+  pick(browser, "light");
+  await flush();
+  assert.equal(browser.document.documentElement.dataset.theme, "light");
+  assert.deepEqual(sent, ["dark"], "a browser page has no desktop app to tell");
+});
+
+test("the desktop app's theme stands in until the page has its own, and follows the page's", async (context) => {
+  const sent = [];
+  const invoke = (command, args) => { if (command === "set_appearance") sent.push(args.appearance); };
+  const fresh = await page(context, { desktop: true, objects: [knife()], invoke, desktopAppearance: "dark" });
+  assert.equal(fresh.document.documentElement.dataset.theme, "dark");
+  assert.deepEqual(sent, []);
+  const differing = await page(context, {
+    desktop: true, objects: [knife()], invoke, desktopAppearance: "dark", storedAppearance: "light",
+  });
+  await flush();
+  assert.equal(differing.document.documentElement.dataset.theme, "light");
+  assert.deepEqual(sent, ["light"]);
+});
+
 test("desktop Settings reads and changes the Discord sharing preference through the host", async (context) => {
   let sharing = false;
   const requests = [];
@@ -1509,7 +1569,7 @@ test("the top bar's icons have tooltips", async (context) => {
 });
 
 const dobjContents = (name, contentHash, pluginName = "bitcraft") => JSON.stringify({
-  class: qname(name, pluginName), contentHash, obj: { kind: "d--", kvs: [] }, status: "live",
+  metadata: { class: qname(name, pluginName), contentHash, status: "live" }, obj: { kind: "d--", kvs: [] },
 });
 const importResultTexts = (document) => [...document.querySelectorAll("#import-results li")]
   .map((item) => item.textContent.trim());
@@ -1562,7 +1622,7 @@ test("pasted contents are imported, selected, and come with a rekey reminder", a
 });
 
 test("chosen files wait for Import, are imported in turn, and refusals show dobjd's reason", async (context) => {
-  const ui = await page(context, { objects: [knife(), knife("live", { fileName: "wood_bb22.dobj", class: qname("Wood") })], importStatus: "unknown" });
+  const ui = await page(context, { objects: [knife(), knife("live", { fileName: "wood_bb22.dobj", class: qname("Wood") })] });
   const { document, dom } = ui;
   const submit = document.querySelector("#import-submit");
   const chosen = document.querySelector("#import-chosen");
@@ -1600,14 +1660,14 @@ test("chosen files wait for Import, are imported in turn, and refusals show dobj
   ]);
   assert.deepEqual(ui.backend.importFileNames, ["stone.dobj", "copy-of-wood.dobj", "log.dobj", "notes.txt"]);
   const results = importResultTexts(document);
-  assert.equal(results[0], "bitcraft::Stone imported, usable once the network confirms it");
+  assert.equal(results[0], "bitcraft::Stone imported, ready to use");
   assert.equal(results[1], "copy-of-wood.dobj: conflict: object already present: wood_bb22.dobj");
   assert.equal(results[2], "log.dobj: unknown class: craft-basics::Log");
   assert.match(results[3], /^notes\.txt: invalid input: could not parse \.dobj contents/);
   assert.deepEqual([...document.querySelectorAll("#import-results li.error")].length, 3);
   assert.deepEqual([...document.querySelectorAll(".object-row.selected")].map((row) => row.dataset.fileName),
     ["stone.dobj"], "the chosen file's name is kept");
-  assert.ok(document.querySelector('.object-row[data-file-name="stone.dobj"]').classList.contains("unknown"));
+  assert.ok(!document.querySelector('.object-row[data-file-name="stone.dobj"]').classList.contains("unknown"));
   assert.equal(document.querySelector("#import-sheet").hidden, false, "the sheet stays open to show the results");
 });
 

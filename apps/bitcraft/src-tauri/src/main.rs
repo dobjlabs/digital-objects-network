@@ -18,6 +18,7 @@ use tauri::{
 use tokio::sync::watch;
 
 mod agents;
+mod appearance;
 mod discord;
 mod metrics;
 mod onboarding;
@@ -38,6 +39,7 @@ struct Args {
 
 struct Desktop {
     home: PathBuf,
+    appearance: Mutex<appearance::Appearance>,
     discord: discord::Presence,
     inventory_metrics: watch::Sender<Option<metrics::InventoryMetrics>>,
     metrics_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
@@ -52,6 +54,7 @@ impl Desktop {
     fn new(home: PathBuf, message: String) -> Self {
         Self {
             discord: discord::Presence::new(&home),
+            appearance: Mutex::new(appearance::load(&home)),
             home,
             inventory_metrics: watch::Sender::new(None),
             metrics_task: Mutex::new(None),
@@ -335,7 +338,8 @@ fn main() -> Result<()> {
             inventory_metrics,
             discord_sharing,
             set_discord_sharing,
-            raise_window
+            raise_window,
+            appearance::set_appearance
         ])
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
             if !args.iter().any(|arg| arg == "--background") {
@@ -360,11 +364,14 @@ fn main() -> Result<()> {
             let next_window_number = AtomicUsize::new(1);
             let dev_url = shell_dev_url(app.handle());
             let main_dev_url = dev_url.clone();
+            let main_appearance = appearance::current(app.handle());
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("Bitcraft")
                 .on_document_title_changed(show_page_title)
                 .inner_size(1100.0, 760.0)
                 .min_inner_size(720.0, 480.0)
+                .theme(Some(main_appearance.theme()))
+                .background_color(main_appearance.background())
                 .on_navigation(move |url| allow_navigation(url, main_dev_url.as_ref()))
                 // Built here rather than by the webview's default, so a window the
                 // page opens keeps the same navigation limits and shows its page's
@@ -383,8 +390,11 @@ fn main() -> Result<()> {
                     }
                     let label = format!("page-{}", next_window_number.fetch_add(1, Ordering::Relaxed));
                     let dev_url = dev_url.clone();
+                    let appearance = appearance::current(&new_window_app);
                     match WebviewWindowBuilder::new(&new_window_app, label, WebviewUrl::External(url))
                         .window_features(features)
+                        .theme(Some(appearance.theme()))
+                        .background_color(appearance.background())
                         .on_navigation(move |url| allow_navigation(url, dev_url.as_ref()))
                         .on_document_title_changed(show_page_title)
                         // Such a window opens only listed sites, in the browser.
@@ -410,6 +420,7 @@ fn main() -> Result<()> {
                     }
                 })
                 .initialization_script("window.bitcraftDesktop = true; document.addEventListener('DOMContentLoaded', () => { const style = document.createElement('style'); style.textContent = 'body { user-select: none; -webkit-user-select: none; } input, textarea, [contenteditable] { user-select: text; -webkit-user-select: text; }'; document.head.appendChild(style); });")
+                .initialization_script(main_appearance.initialization_script())
                 .build()?;
             let app_menu = menu(app.handle())?;
             let submenu = Submenu::with_items(app, "Bitcraft", true, &app_menu.items()?.iter().map(|item| item as &dyn tauri::menu::IsMenuItem<tauri::Wry>).collect::<Vec<_>>())?;
