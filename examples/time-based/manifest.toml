@@ -1,0 +1,20 @@
+[plugin]
+name = "time-based"
+version = "0.1.0"
+# Rewritten by `cargo run -p pexe -- build examples/craft-basics`.
+module_hash = "83f270d8252bb99ab4e83ed739f30520e822ae5c217b5ef646842e0548fcad79"
+
+[[classes]]
+name = "Fortuna"
+emoji = "🌲"
+description = "Claimed globally periodically."
+
+[[actions]]
+name = "ClaimFortuna"
+emoji = "🌲"
+description = "Claim Fortuna."
+
+[[actions]]
+name = "BurnFortuna"
+emoji = "🪵"
+description = "Burn Fortuna."

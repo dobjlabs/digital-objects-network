@@ -3483,6 +3483,7 @@ fn new_engine() -> Engine {
         .register_fn("top_limb_u256", ActionHandle::top_limb_u256)
         .register_fn("dict_get", ActionHandle::dict_get)
         .register_fn("array_get", ActionHandle::array_get)
+        .register_fn("state_header", ActionHandle::state_header)
         .register_type_with_name::<ArgHandle>("ArgContext")
         .register_fn("set", ArgHandle::set)
         .register_fn("get", ArgHandle::get)
