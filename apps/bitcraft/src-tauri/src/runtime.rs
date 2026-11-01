@@ -10,7 +10,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use bitcraft_launchers::{Connection, connection_path};
-use serde::Deserialize;
+use serde::{Deserialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 
 pub use bitcraft_launchers::DEFAULT_HTTP_PORT as HTTP_PORT;
@@ -72,13 +72,38 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut temporary = tempfile::NamedTempFile::new_in(
         path.parent().context("File path has no parent directory")?,
     )?;
     temporary.write_all(bytes)?;
     temporary.persist(path)?;
     Ok(())
+}
+
+pub(crate) fn daemon_client() -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(2))
+        .build()
+}
+
+pub(crate) async fn get_verified_json<T: DeserializeOwned>(
+    connection: &Connection,
+    client: &reqwest::Client,
+    path: &str,
+) -> Result<T> {
+    connection.verify_with_client(client).await?;
+    Ok(client
+        .get(format!(
+            "{}{path}",
+            connection.http_url.trim_end_matches('/')
+        ))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?)
 }
 
 fn wait_for_port(port: u16, timeout: Duration) -> Result<()> {
@@ -98,6 +123,10 @@ fn wait_for_port(port: u16, timeout: Duration) -> Result<()> {
 }
 
 impl Runtime {
+    pub fn connection(&self) -> Connection {
+        self.connection.clone()
+    }
+
     pub fn launch(home: &Path, resources: &Path, binary: &Path) -> Result<Self> {
         let release: Release = serde_json::from_slice(&fs::read(resources.join("release.json"))?)?;
         let state_root = home.to_path_buf();
@@ -136,10 +165,7 @@ impl Runtime {
     }
 
     pub async fn wait_until_ready(&self) -> Result<()> {
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .timeout(Duration::from_secs(2))
-            .build()?;
+        let client = daemon_client()?;
         let deadline = Instant::now() + Duration::from_secs(15 * 60);
         loop {
             {

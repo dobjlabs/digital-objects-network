@@ -10,6 +10,7 @@ use wire_types::{ActionArgValues, ExecutionPhase, ExecutionStage, ObjectStatus, 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverPaths {
     pub settings_path: PathBuf,
+    pub imported_keys_path: PathBuf,
     pub objects_dir: PathBuf,
     pub nullified_objects_dir: PathBuf,
     pub discarded_objects_dir: PathBuf,

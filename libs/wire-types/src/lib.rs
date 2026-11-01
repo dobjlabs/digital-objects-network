@@ -195,6 +195,11 @@ pub struct ObjectSummary {
     /// never stored; `status` still gives the object's on-chain state.
     #[serde(default)]
     pub held_by_run_id: Option<String>,
+    /// The object's key is still one it was imported with, so whoever gave
+    /// it the file can still spend it. Cleared by any action that replaces
+    /// the key, such as the class's built-in Rekey action.
+    #[serde(default)]
+    pub shared_key: bool,
 }
 
 /// `POST /objects/import` body — the raw JSON contents of an external `.dobj`
@@ -209,6 +214,12 @@ pub struct ObjectSummary {
 #[serde(rename_all = "camelCase")]
 pub struct ImportObjectRequest {
     pub dobj: String,
+    /// The name to file the object under, typically that of the file it came
+    /// in. dobjd adds `.dobj` when it is missing and a numbered suffix when
+    /// the name is taken, and refuses an unsafe name. Without one, the object
+    /// gets a name derived from its commitment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_name: Option<String>,
 }
 
 // ===========================================================================

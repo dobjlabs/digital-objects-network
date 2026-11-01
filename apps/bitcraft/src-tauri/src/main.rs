@@ -15,8 +15,12 @@ use tauri::{
     menu::{Menu, MenuItem, Submenu},
     tray::TrayIconBuilder,
 };
+use tokio::sync::watch;
 
 mod agents;
+mod appearance;
+mod discord;
+mod metrics;
 mod onboarding;
 mod runtime;
 
@@ -35,11 +39,32 @@ struct Args {
 
 struct Desktop {
     home: PathBuf,
+    appearance: Mutex<appearance::Appearance>,
+    discord: discord::Presence,
+    inventory_metrics: watch::Sender<Option<metrics::InventoryMetrics>>,
+    metrics_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     runtime: Mutex<Option<Arc<runtime::Runtime>>>,
     message: Mutex<String>,
     tray_available: AtomicBool,
     #[cfg(target_os = "linux")]
     background_pending: AtomicBool,
+}
+
+impl Desktop {
+    fn new(home: PathBuf, message: String) -> Self {
+        Self {
+            discord: discord::Presence::new(&home),
+            appearance: Mutex::new(appearance::load(&home)),
+            home,
+            inventory_metrics: watch::Sender::new(None),
+            metrics_task: Mutex::new(None),
+            runtime: Mutex::new(None),
+            message: Mutex::new(message),
+            tray_available: AtomicBool::new(false),
+            #[cfg(target_os = "linux")]
+            background_pending: AtomicBool::new(false),
+        }
+    }
 }
 
 fn show_window(app: &tauri::AppHandle) {
@@ -108,6 +133,48 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     Menu::with_items(app, &[&open, &agents, &close, &quit])
 }
 
+/// The editing commands, whose items carry the shortcuts that let pages cut,
+/// copy, paste and select text on macOS.
+#[cfg(target_os = "macos")]
+fn edit_menu(app: &tauri::AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
+    use tauri::menu::PredefinedMenuItem;
+    Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )
+}
+
+fn shows_page(url: &tauri::Url, page: &str) -> bool {
+    is_daemon_url(url)
+        && url
+            .query_pairs()
+            .any(|(key, value)| key == "page" && value == page)
+}
+
+/// Brings the window showing `page` to the front, which the page's own
+/// `focus()` on that window does not.
+#[tauri::command]
+fn raise_window(app: tauri::AppHandle, page: String) {
+    let window = app
+        .webview_windows()
+        .into_values()
+        .find(|window| window.url().is_ok_and(|url| shows_page(&url, &page)));
+    if let Some(window) = window {
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 fn is_daemon_url(url: &tauri::Url) -> bool {
     url.scheme() == "http"
         && url.host_str() == Some("127.0.0.1")
@@ -133,6 +200,26 @@ fn is_external_link(url: &tauri::Url) -> bool {
 
 fn show_page_title(window: tauri::WebviewWindow, title: String) {
     let _ = window.set_title(&title);
+}
+
+#[tauri::command]
+fn inventory_metrics(desktop: tauri::State<Desktop>) -> Option<metrics::InventoryMetrics> {
+    desktop.inventory_metrics.borrow().clone()
+}
+
+#[tauri::command]
+fn discord_sharing(desktop: tauri::State<Desktop>) -> bool {
+    desktop.discord.enabled()
+}
+
+/// Returns the preference now in effect, which is the requested one even
+/// when saving it fails.
+#[tauri::command]
+fn set_discord_sharing(desktop: tauri::State<Desktop>, enabled: bool) -> bool {
+    if let Err(error) = desktop.discord.set_enabled(enabled) {
+        eprintln!("Could not save Discord sharing preference: {error}");
+    }
+    desktop.discord.enabled()
 }
 
 fn shell_dev_url(app: &tauri::AppHandle) -> Option<tauri::Url> {
@@ -234,19 +321,26 @@ fn watch_tray(app: tauri::AppHandle) {
 fn main() -> Result<()> {
     let args = Args::parse();
     let home = bitcraft_launchers::resolve_home(args.home)?;
-    let desktop = Desktop {
-        home: home.clone(),
-        runtime: Mutex::new(None),
-        message: Mutex::new(if args.no_runtime {
+    let desktop = Desktop::new(
+        home.clone(),
+        if args.no_runtime {
             "Desktop shell only. Start without --no-runtime to launch the game.".into()
         } else {
             "Preparing artifacts...".into()
-        }),
-        tray_available: AtomicBool::new(false),
-        #[cfg(target_os = "linux")]
-        background_pending: AtomicBool::new(args.background),
-    };
+        },
+    );
+    #[cfg(target_os = "linux")]
+    desktop
+        .background_pending
+        .store(args.background, Ordering::Relaxed);
     let app = tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![
+            inventory_metrics,
+            discord_sharing,
+            set_discord_sharing,
+            raise_window,
+            appearance::set_appearance
+        ])
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
             if !args.iter().any(|arg| arg == "--background") {
                 show_window(app);
@@ -270,11 +364,14 @@ fn main() -> Result<()> {
             let next_window_number = AtomicUsize::new(1);
             let dev_url = shell_dev_url(app.handle());
             let main_dev_url = dev_url.clone();
+            let main_appearance = appearance::current(app.handle());
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("Bitcraft")
                 .on_document_title_changed(show_page_title)
                 .inner_size(1100.0, 760.0)
                 .min_inner_size(720.0, 480.0)
+                .theme(Some(main_appearance.theme()))
+                .background_color(main_appearance.background())
                 .on_navigation(move |url| allow_navigation(url, main_dev_url.as_ref()))
                 // Built here rather than by the webview's default, so a window the
                 // page opens keeps the same navigation limits and shows its page's
@@ -293,8 +390,11 @@ fn main() -> Result<()> {
                     }
                     let label = format!("page-{}", next_window_number.fetch_add(1, Ordering::Relaxed));
                     let dev_url = dev_url.clone();
+                    let appearance = appearance::current(&new_window_app);
                     match WebviewWindowBuilder::new(&new_window_app, label, WebviewUrl::External(url))
                         .window_features(features)
+                        .theme(Some(appearance.theme()))
+                        .background_color(appearance.background())
                         .on_navigation(move |url| allow_navigation(url, dev_url.as_ref()))
                         .on_document_title_changed(show_page_title)
                         // Such a window opens only listed sites, in the browser.
@@ -320,10 +420,14 @@ fn main() -> Result<()> {
                     }
                 })
                 .initialization_script("window.bitcraftDesktop = true; document.addEventListener('DOMContentLoaded', () => { const style = document.createElement('style'); style.textContent = 'body { user-select: none; -webkit-user-select: none; } input, textarea, [contenteditable] { user-select: text; -webkit-user-select: text; }'; document.head.appendChild(style); });")
+                .initialization_script(main_appearance.initialization_script())
                 .build()?;
             let app_menu = menu(app.handle())?;
             let submenu = Submenu::with_items(app, "Bitcraft", true, &app_menu.items()?.iter().map(|item| item as &dyn tauri::menu::IsMenuItem<tauri::Wry>).collect::<Vec<_>>())?;
-            app.set_menu(Menu::with_items(app, &[&submenu])?)?;
+            let menu_bar = Menu::with_items(app, &[&submenu])?;
+            #[cfg(target_os = "macos")]
+            menu_bar.append(&edit_menu(app.handle())?)?;
+            app.set_menu(menu_bar)?;
             if !args.no_tray {
                 match TrayIconBuilder::with_id("bitcraft")
                     .menu(&menu(app.handle())?)
@@ -355,6 +459,9 @@ fn main() -> Result<()> {
                             *handle.state::<Desktop>().runtime.lock().unwrap() = Some(runtime.clone());
                             match runtime.wait_until_ready().await {
                                 Ok(()) => {
+                                    let desktop = handle.state::<Desktop>();
+                                    *desktop.metrics_task.lock().unwrap() = Some(tauri::async_runtime::spawn(metrics::run(runtime.connection(), desktop.inventory_metrics.clone())));
+                                    desktop.discord.start(runtime.connection(), desktop.inventory_metrics.subscribe());
                                     if let Some(window) = handle.get_webview_window("main") {
                                         let _ = window.navigate(format!("http://127.0.0.1:{}/bitcraft/", runtime::HTTP_PORT).parse().unwrap());
                                     }
@@ -378,6 +485,10 @@ fn main() -> Result<()> {
         .build(tauri::generate_context!())?;
     app.run(|app, event| match event {
         RunEvent::Exit => {
+            if let Some(task) = app.state::<Desktop>().metrics_task.lock().unwrap().take() {
+                task.abort();
+            }
+            app.state::<Desktop>().discord.stop();
             if let Some(runtime) = app.state::<Desktop>().runtime.lock().unwrap().take() {
                 let _ = runtime.stop();
             }
@@ -393,6 +504,40 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_capabilities_use_the_runtime_port() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        for identifier in ["main-page", "discord-sharing"] {
+            let capability = config["app"]["security"]["capabilities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|capability| capability["identifier"] == identifier)
+                .unwrap_or_else(|| panic!("{identifier} capability must exist"));
+            assert_eq!(
+                capability["remote"]["urls"],
+                serde_json::json!([format!("http://127.0.0.1:{}/*", runtime::HTTP_PORT)]),
+                "{identifier}"
+            );
+        }
+    }
+
+    #[test]
+    fn settings_window_calls_are_allowed_under_the_main_window_label() {
+        // On macOS a window the page opens shares the main window's webview
+        // configuration, so its IPC calls arrive labelled as the main window's.
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let capability = config["app"]["security"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|capability| capability["identifier"] == "discord-sharing")
+            .unwrap();
+        assert_eq!(capability["windows"], serde_json::json!(["main", "page-*"]));
+    }
 
     #[test]
     fn navigation_stays_on_the_app_or_its_daemon() {
@@ -416,6 +561,31 @@ mod tests {
         ));
         assert!(!is_daemon_url(
             &"tauri://localhost/index.html".parse().unwrap()
+        ));
+    }
+
+    #[test]
+    fn a_page_matches_only_the_daemon_window_showing_it() {
+        let window = |url: &str| -> tauri::Url { url.parse().unwrap() };
+        assert!(shows_page(
+            &window("http://127.0.0.1:7727/bitcraft/?page=summary"),
+            "summary"
+        ));
+        assert!(shows_page(
+            &window("http://127.0.0.1:7727/bitcraft/?page=recipebook&class=bitcraft::Wood"),
+            "recipebook"
+        ));
+        assert!(!shows_page(
+            &window("http://127.0.0.1:7727/bitcraft/?page=settings"),
+            "summary"
+        ));
+        assert!(!shows_page(
+            &window("http://127.0.0.1:7727/bitcraft/"),
+            "summary"
+        ));
+        assert!(!shows_page(
+            &window("https://example.com/?page=summary"),
+            "summary"
         ));
     }
 

@@ -78,6 +78,7 @@ jobs:
     env:
       TARGET: ${{ matrix.target }}
       BITCRAFT_VERSION: ${{ needs.validate.outputs.version }}
+      BITCRAFT_DISCORD_APPLICATION_ID: ${{ vars.BITCRAFT_DISCORD_APPLICATION_ID }}
       SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
       DOBJ_RELEASE_TAG: ${{ inputs.tag_name }}
       PUBLISH: ${{ inputs.publish || false }}

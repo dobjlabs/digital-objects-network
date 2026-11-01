@@ -14,13 +14,15 @@ use crate::catalog::{ActionCatalog, CatalogClass};
 use crate::clients::{
     HttpRelayerClient, HttpSynchronizerClient, RelayerClient, SynchronizerClient,
 };
+use crate::creation_proof::CreationProof;
 use crate::error::DriverError;
 use crate::execute::{build_relayer_payload, obj_type_hash};
 use crate::holds::HoldTable;
+use crate::mock_don::{MockDon, MockPayloadBuilder, mock_mode_from_env};
 use crate::object_record::{FileStatus, ObjectRecord, parse_object_record_file};
 use crate::object_store::{
-    ObjectFileEntry, ensure_store_dirs, load_object_files, matches_query, object_file_name,
-    write_object_file,
+    ObjectFileEntry, ensure_store_dirs, imported_file_name, key_fingerprint, load_imported_keys,
+    load_object_files, matches_query, object_file_name, record_imported_key, write_object_file,
 };
 use crate::pexe_catalog::PexeCatalog;
 use crate::pipeline::RecordIndex;
@@ -59,31 +61,51 @@ pub struct DriverDeps {
     pub synchronizer: Arc<dyn SynchronizerClient>,
     pub relayer: Arc<dyn RelayerClient>,
     pub payload_builder: Arc<dyn PayloadBuilder>,
+    /// Whether catalogs, including reloaded ones, prove with the MockProver.
+    pub mock_proofs: bool,
 }
 
 impl DriverDeps {
     /// Build deps with a catalog loaded from `paths.actions_dir`.
     pub fn load(paths: &DriverPaths) -> Result<Self> {
-        let start = std::time::Instant::now();
-        log::info!(
-            "loading action catalog from {}...",
-            paths.actions_dir.display()
-        );
-        let catalog = PexeCatalog::load(&paths.actions_dir)?;
-        log::info!("action catalog loaded in {:?}", start.elapsed());
-        if catalog.plugin_count() == 0 {
-            log::warn!(
-                "no .pexe plugins installed in {}; run `just install-plugins`",
-                paths.actions_dir.display()
-            );
-        }
         Ok(Self {
-            catalog: Arc::new(RwLock::new(Arc::new(catalog))),
+            catalog: Arc::new(RwLock::new(Arc::new(load_catalog(paths, false)?))),
             synchronizer: Arc::new(HttpSynchronizerClient::new()),
             relayer: Arc::new(HttpRelayerClient::new()),
             payload_builder: Arc::new(DefaultPayloadBuilder),
+            mock_proofs: false,
         })
     }
+
+    /// Build deps that make no network calls: mock proofs, and an in-memory DON that
+    /// applies each submitted transaction at once.
+    pub fn load_mock(paths: &DriverPaths) -> Result<Self> {
+        let don = Arc::new(MockDon::new());
+        Ok(Self {
+            catalog: Arc::new(RwLock::new(Arc::new(load_catalog(paths, true)?))),
+            synchronizer: don.clone(),
+            relayer: don,
+            payload_builder: Arc::new(MockPayloadBuilder),
+            mock_proofs: true,
+        })
+    }
+}
+
+fn load_catalog(paths: &DriverPaths, mock_proofs: bool) -> Result<PexeCatalog> {
+    let start = std::time::Instant::now();
+    log::info!(
+        "loading action catalog from {}...",
+        paths.actions_dir.display()
+    );
+    let catalog = PexeCatalog::load_with(&paths.actions_dir, mock_proofs)?;
+    log::info!("action catalog loaded in {:?}", start.elapsed());
+    if catalog.plugin_count() == 0 {
+        log::warn!(
+            "no .pexe plugins installed in {}; run `just install-plugins`",
+            paths.actions_dir.display()
+        );
+    }
+    Ok(catalog)
 }
 
 #[derive(Clone)]
@@ -99,9 +121,18 @@ pub struct Driver {
 }
 
 impl Driver {
+    /// Open the store at the default root, in mock mode when [`crate::DOBJ_MOCK_ENV`] is set.
     pub fn open_default() -> Result<Self> {
         let paths = crate::paths::default_paths()?;
-        let deps = DriverDeps::load(&paths)?;
+        let deps = if mock_mode_from_env() {
+            log::warn!(
+                "mock mode ({}): no network, mock proofs, in-memory DON",
+                crate::DOBJ_MOCK_ENV
+            );
+            DriverDeps::load_mock(&paths)?
+        } else {
+            DriverDeps::load(&paths)?
+        };
         Self::open(paths, deps)
     }
 
@@ -135,6 +166,10 @@ impl Driver {
         &self.paths
     }
 
+    pub fn is_mock(&self) -> bool {
+        self.deps.mock_proofs
+    }
+
     pub(crate) fn catalog(&self) -> Arc<dyn ActionCatalog> {
         self.deps
             .catalog
@@ -147,7 +182,7 @@ impl Driver {
     /// first, so a failed load (e.g. a bad .pexe) leaves the current catalog
     /// intact. Returns the new plugin count.
     pub fn reload_catalog(&self) -> Result<usize> {
-        let catalog = PexeCatalog::load(&self.paths.actions_dir)?;
+        let catalog = PexeCatalog::load_with(&self.paths.actions_dir, self.deps.mock_proofs)?;
         let count = catalog.plugin_count();
         *self.deps.catalog.write().expect("catalog lock poisoned") = Arc::new(catalog);
         Ok(count)
@@ -352,7 +387,7 @@ impl Driver {
     pub fn list_classes(&self) -> Result<Vec<ClassSummary>> {
         let live_objects = load_object_files(&self.paths)?
             .into_iter()
-            .filter(|entry| entry.record.status == FileStatus::Live)
+            .filter(|entry| entry.record.metadata.status == FileStatus::Live)
             .collect::<Vec<_>>();
         Ok(self
             .catalog()
@@ -361,7 +396,7 @@ impl Driver {
             .map(|class_info| ClassSummary {
                 live_count: live_objects
                     .iter()
-                    .filter(|entry| entry.record.class == class_info.class)
+                    .filter(|entry| entry.record.metadata.class == class_info.class)
                     .count(),
                 ..self.class_summary(class_info)
             })
@@ -375,7 +410,10 @@ impl Driver {
             .ok_or_else(|| anyhow!("unknown class: {class}"))?;
         let live_count = load_object_files(&self.paths)?
             .into_iter()
-            .filter(|entry| entry.record.status == FileStatus::Live && entry.record.class == *class)
+            .filter(|entry| {
+                entry.record.metadata.status == FileStatus::Live
+                    && entry.record.metadata.class == *class
+            })
             .count();
         Ok(ClassSummary {
             live_count,
@@ -394,7 +432,7 @@ impl Driver {
         let live_objects = entries
             .iter()
             .filter(|entry| {
-                entry.record.status == FileStatus::Live
+                entry.record.metadata.status == FileStatus::Live
                     && !locked.contains(&entry.file_name)
                     && !held.contains_key(&entry.file_name)
             })
@@ -413,18 +451,18 @@ impl Driver {
         for required in &action_summary.total_inputs {
             let expected_hash = decode_hash_hex(required.hash.as_str()).ok();
             let candidate = live_objects.iter().find(|entry| {
-                entry.record.class == required.class
-                    && !used_content_hashes.contains(&entry.record.content_hash)
+                entry.record.metadata.class == required.class
+                    && !used_content_hashes.contains(&entry.record.metadata.content_hash)
                     && matches!(
                         (expected_hash, obj_type_hash(&entry.record.obj)),
                         (Some(expected), Some(actual)) if expected == actual
                     )
             });
             if let Some(entry) = candidate {
-                used_content_hashes.insert(entry.record.content_hash);
+                used_content_hashes.insert(entry.record.metadata.content_hash);
                 available.push(CheckActionCandidate {
                     class: required.class.clone(),
-                    content_hash: encode_hash_hex(&entry.record.content_hash),
+                    content_hash: encode_hash_hex(&entry.record.metadata.content_hash),
                     file_name: entry.file_name.clone(),
                 });
             } else {
@@ -453,21 +491,35 @@ impl Driver {
     /// (e.g. a file from outside `~/.dobj/`) — into the local object store.
     ///
     /// `dobj_json` is the raw JSON contents of a `.dobj` file. The object is
-    /// filed under a name derived from its commitment — the file's
-    /// own `id` and filename are not trusted.
+    /// filed under `requested_file_name` when given (typically the name of
+    /// the file it came in), otherwise under a name derived from its
+    /// commitment. A requested name gets `.dobj` added when it lacks it and a
+    /// numbered suffix when another file holds it, and is refused when unsafe
+    /// as a file name or when it has the form of a derived name without being
+    /// this object's.
     ///
     /// Validation:
     /// - the `class` must be one this driver's catalog knows, and the object's
     ///   committed `obj["type"]` predicate hash must equal that class's hash
     ///   (the same belt-and-suspenders check `execute` runs on its inputs);
+    /// - the file's `contentHash` must be the commitment of its `obj`;
     /// - the object must not already be present (live or nullified);
+    /// - a `creationProof`, when the file has one, must place the object in
+    ///   the created set of the state root the synchronizer derived at the
+    ///   proof's block; a block the synchronizer has derived no state at
+    ///   fails the import;
+    /// - the object must be on chain: in the created set the synchronizer
+    ///   reports, whether or not the file carries a proof;
     /// - the object's nullifier must not already be spent on-chain.
     ///
-    /// Status is decided by grounding: `Live` if the source tx is committed,
-    /// otherwise `Unknown` (a later `sync_objects` promotes it). If the
-    /// synchronizer is unreachable the object is imported as `Unknown` rather
-    /// than failing, so the flow still works offline.
-    pub fn import_object(&self, dobj_json: &str) -> Result<ObjectSummary> {
+    /// Every check against the chain needs the synchronizer, so an
+    /// unreachable one fails the import. An imported object is always `Live`;
+    /// one without a creation proof gets one from the synchronizer.
+    pub fn import_object(
+        &self,
+        dobj_json: &str,
+        requested_file_name: Option<&str>,
+    ) -> Result<ObjectSummary> {
         let mut record: ObjectRecord = serde_json::from_str(dobj_json).map_err(|err| {
             DriverError::InvalidInput(format!("could not parse .dobj contents: {err}"))
         })?;
@@ -478,12 +530,12 @@ impl Driver {
         //    object's actual pod-level identity.
         let class_info = self
             .catalog()
-            .get_class(&record.class)
-            .ok_or_else(|| DriverError::UnknownClass(record.class.to_string()))?;
+            .get_class(&record.metadata.class)
+            .ok_or_else(|| DriverError::UnknownClass(record.metadata.class.to_string()))?;
         let expected_class_hash = decode_hash_hex(class_info.hash.as_str()).map_err(|err| {
             anyhow!(
                 "catalog class {} has an unreadable hash: {err}",
-                record.class
+                record.metadata.class
             )
         })?;
         let actual_class_hash = obj_type_hash(&record.obj).ok_or_else(|| {
@@ -492,72 +544,172 @@ impl Driver {
         if actual_class_hash != expected_class_hash {
             return Err(DriverError::InvalidInput(format!(
                 "class hash mismatch: pod 'type' = {actual_class_hash:#}, class {} expects {}",
-                record.class, class_info.hash
+                record.metadata.class, class_info.hash
             ))
             .into());
         }
 
-        // 2. Recompute content hash + file name from the commitment; never
-        //    trust the sender's. The content hash is self-certifying -- it IS
-        //    the commitment.
+        // 2. The file's content hash must be the object's commitment, which
+        //    is what the store and the chain know the object by. The file
+        //    name is generated from the commitment, never the sender's.
         let commitment = record.obj.commitment();
-        let file_name = object_file_name(&record.class, &record.obj)
+        if record.metadata.content_hash != commitment {
+            return Err(DriverError::InvalidInput(format!(
+                "content hash mismatch: the file says {}, the object's is {}",
+                encode_hash_hex(&record.metadata.content_hash),
+                encode_hash_hex(&commitment)
+            ))
+            .into());
+        }
+        let generated_file_name = object_file_name(&record.metadata.class, &record.obj)
             .map_err(|err| DriverError::InvalidInput(format!("imported {err:#}")))?;
-        record.content_hash = commitment;
 
-        // 3. Reject if we already hold this object (live or nullified).
-        let entries = load_object_files(&self.paths)?;
-        if entries
-            .iter()
-            .any(|entry| entry.record.content_hash == commitment || entry.file_name == file_name)
-        {
-            return Err(
-                DriverError::Conflict(format!("object already present: {file_name}")).into(),
-            );
+        // 3. Reject if we already hold this object or refuse its name, before
+        //    asking the synchronizer. Checked again under the store lock
+        //    before filing, since the store can change meanwhile.
+        self.import_file_name(&record, &generated_file_name, requested_file_name)?;
+
+        // 4. A creation proof the file carries must place the object in the
+        //    created set of a state root the synchronizer derived.
+        let settings = self.load_settings()?;
+        if let Some(proof) = &record.metadata.creation_proof {
+            self.check_creation_proof(&settings.synchronizer_api_url, proof, commitment)?;
         }
 
-        // 4. Grounding decides status. A nullifier already on-chain means the
-        //    object has been spent — reject it. Otherwise Live if the object's
-        //    commitment is in the created set, else Unknown. Tolerate
-        //    an unreachable synchronizer by importing as Unknown.
-        let settings = self.load_settings()?;
-        let commitment = record.obj.commitment();
+        // 5. The object must be on chain: created according to the
+        //    synchronizer. A nullifier already on-chain means the object has
+        //    been spent.
         let nullifier = object_nullifier_hash(&record.obj).map_err(|err| {
             DriverError::InvalidInput(format!(
                 "could not derive nullifier from imported object: {err}"
             ))
         })?;
-        let status = match self.deps.synchronizer.fetch_membership_with_nullifiers(
-            &settings.synchronizer_api_url,
-            &[commitment],
-            &[nullifier],
-        ) {
-            Ok(membership) => {
-                if membership.on_chain_nullifiers.contains(&nullifier) {
-                    return Err(DriverError::Conflict(
-                        "imported object has already been spent on-chain".to_string(),
-                    )
-                    .into());
-                } else if membership.created_objects.contains(&commitment) {
-                    FileStatus::Live
-                } else {
-                    FileStatus::Unknown
-                }
+        let membership = self
+            .deps
+            .synchronizer
+            .fetch_membership_with_nullifiers(
+                &settings.synchronizer_api_url,
+                &[commitment],
+                &[nullifier],
+            )
+            .with_context(|| {
+                format!(
+                    "could not check imported object contentHash {} against the network",
+                    encode_hash_hex(&commitment)
+                )
+            })?;
+        if membership.on_chain_nullifiers.contains(&nullifier) {
+            return Err(DriverError::Conflict(format!(
+                "imported object contentHash {} has already been spent in the network",
+                encode_hash_hex(&commitment)
+            ))
+            .into());
+        }
+        if !membership.created_objects.contains(&commitment) {
+            return Err(DriverError::InvalidInput(format!(
+                "imported object contentHash {} is not registered in the network broadcast history",
+                encode_hash_hex(&commitment)
+            ))
+            .into());
+        }
+        record.metadata.status = FileStatus::Live;
+        if record.metadata.creation_proof.is_none() {
+            match self.fetch_creation_proofs(&settings.synchronizer_api_url, &[commitment]) {
+                Ok(mut proofs) => record.metadata.creation_proof = proofs.remove(&commitment),
+                Err(err) => log::warn!(
+                    "import: could not fetch a creation proof for {generated_file_name}: {err:#}"
+                ),
             }
-            Err(err) => {
-                log::warn!(
-                    "import: grounding check failed, importing {file_name} as unknown: {err:#}"
-                );
-                FileStatus::Unknown
-            }
-        };
-        record.status = status;
+        }
 
-        // 5. File it. `write_object_file` routes to the live or nullified dir
-        //    based on status, so a freshly-imported Unknown/Live lands live.
-        write_object_file(&self.paths, &record, &file_name)?;
+        let file_name = {
+            let _store = self.store_lock.lock().expect("store lock poisoned");
+            let file_name =
+                self.import_file_name(&record, &generated_file_name, requested_file_name)?;
+
+            // Recorded before the object is filed, so a filed import is never
+            // missing its fingerprint.
+            if let Some(fingerprint) = key_fingerprint(&record.obj) {
+                record_imported_key(&self.paths, &fingerprint)?;
+            }
+
+            // 6. File it.
+            write_object_file(&self.paths, &record, &file_name)?;
+            file_name
+        };
 
         self.summary_of(ObjectFileEntry { file_name, record })
+    }
+
+    /// Refuses a creation proof that does not place `commitment` in the
+    /// created set of the state root the synchronizer derived at the proof's
+    /// block, a block it has derived no state at included.
+    fn check_creation_proof(
+        &self,
+        sync_api_url: &str,
+        proof: &CreationProof,
+        commitment: Hash,
+    ) -> Result<()> {
+        let state_root = proof
+            .verify(commitment)
+            .map_err(|err| DriverError::InvalidInput(format!("{err:#}")))?;
+        let block_number = proof.state_header.block_number;
+        let derived = self
+            .deps
+            .synchronizer
+            .fetch_state_at(sync_api_url, block_number)
+            .context("could not check the creation proof's state root")?;
+        if derived.map(|state| state.state_root) != Some(state_root) {
+            return Err(DriverError::InvalidInput(format!(
+                "creation proof's state root {} is not the synchronizer's at block {block_number}",
+                encode_hash_hex(&state_root)
+            ))
+            .into());
+        }
+        Ok(())
+    }
+
+    /// The name an imported `record` is filed under: `requested`, adjusted
+    /// as [`imported_file_name`] does, or `generated`. Refuses an object the
+    /// store already holds, live or nullified, and a requested name it
+    /// refuses. A requested name skips past names in the discarded
+    /// directory too, so discarding it later cannot replace another file.
+    fn import_file_name(
+        &self,
+        record: &ObjectRecord,
+        generated: &str,
+        requested: Option<&str>,
+    ) -> Result<String> {
+        let entries = load_object_files(&self.paths)?;
+        if let Some(held) = entries
+            .iter()
+            .find(|entry| entry.record.metadata.content_hash == record.metadata.content_hash)
+        {
+            return Err(DriverError::Conflict(format!(
+                "object already present: {}",
+                held.file_name
+            ))
+            .into());
+        }
+        let file_name = match requested {
+            None => generated.to_string(),
+            Some(requested) => imported_file_name(requested, generated, |name| {
+                [
+                    &self.paths.objects_dir,
+                    &self.paths.nullified_objects_dir,
+                    &self.paths.discarded_objects_dir,
+                ]
+                .iter()
+                .any(|dir| dir.join(name).exists())
+            })
+            .map_err(|err| DriverError::InvalidInput(format!("{err:#}")))?,
+        };
+        if entries.iter().any(|entry| entry.file_name == file_name) {
+            return Err(
+                DriverError::Conflict(format!("object already present: {file_name}")).into(),
+            );
+        }
+        Ok(file_name)
     }
 
     pub fn generated_podlang(&self) -> Option<String> {
@@ -579,9 +731,15 @@ impl Driver {
         let index = RecordIndex::new(records);
         let held = self.holds.labels();
         let catalog = self.catalog();
+        let imported_keys = load_imported_keys(&self.paths).unwrap_or_else(|err| {
+            log::warn!("treating no object keys as shared: {err:#}");
+            HashSet::new()
+        });
         entries
             .into_iter()
-            .map(|entry| self.object_summary(entry, &index, &held, catalog.as_ref()))
+            .map(|entry| {
+                self.object_summary(entry, &index, &held, &imported_keys, catalog.as_ref())
+            })
             .collect()
     }
 
@@ -592,11 +750,15 @@ impl Driver {
         entry: &ObjectFileEntry,
         index: &RecordIndex<'_>,
         held: &HashMap<String, String>,
+        imported_keys: &HashSet<Hash>,
         catalog: &dyn ActionCatalog,
     ) -> ObjectSummary {
-        let class_info = catalog.get_class(&entry.record.class);
-        let record = index.by_tx_final.get(&entry.record.tx_final);
-        let status = match (entry.record.status, record.map(|record| record.state)) {
+        let class_info = catalog.get_class(&entry.record.metadata.class);
+        let record = index.by_tx_final.get(&entry.record.metadata.tx_final);
+        let status = match (
+            entry.record.metadata.status,
+            record.map(|record| record.state),
+        ) {
             (FileStatus::Unknown, Some(TransactionState::Submitted)) => ObjectStatus::Pending,
             (status, _) => status.into(),
         };
@@ -607,12 +769,12 @@ impl Driver {
                 .map(|owner| owner.to_string())
         });
         ObjectSummary {
-            content_hash: encode_hash_hex(&entry.record.content_hash),
+            content_hash: encode_hash_hex(&entry.record.metadata.content_hash),
             file_name: entry.file_name.clone(),
             file_size: fs::metadata(self.resolve_managed_path(&entry.file_name))
                 .ok()
                 .map(|metadata| metadata.len()),
-            class: entry.record.class.clone(),
+            class: entry.record.metadata.class.clone(),
             class_hash: class_info
                 .as_ref()
                 .map(|c| c.hash.clone())
@@ -624,10 +786,12 @@ impl Driver {
             status,
             tx_hash: record
                 .and_then(|record| record.tx_hash.clone())
-                .or_else(|| entry.record.tx_hash.clone()),
+                .or_else(|| entry.record.metadata.tx_hash.clone()),
             description: class_info.as_ref().map(|c| c.description.clone()),
             fields: entry.record.fields_map(),
             held_by_run_id,
+            shared_key: key_fingerprint(&entry.record.obj)
+                .is_some_and(|fingerprint| imported_keys.contains(&fingerprint)),
         }
     }
 

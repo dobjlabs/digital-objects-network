@@ -28,15 +28,33 @@ def build_runtime(target, dev=False):
         "--bin", "dobjd", "--bin", "dobj", "--bin", "dobj-mcp-proxy", "--bin", "pexe")
 
 
+def bitcraft_ui_marker():
+    root = APP / "ui"
+    excluded = set((REPO / "services" / "dobjd" / "ui-excluded-files.txt").read_text().splitlines())
+    assets = []
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise RuntimeError(f"UI build must not contain symlinks: {path}")
+        if path.is_file() and path.name not in excluded:
+            assets.append((path.relative_to(root).as_posix(), path))
+    fingerprint = hashlib.sha256(b"dobjd-ui-v1\0")
+    for name, path in sorted(assets):
+        encoded = name.encode("utf-8")
+        fingerprint.update(len(encoded).to_bytes(8, "little"))
+        fingerprint.update(encoded)
+        fingerprint.update(hashlib.sha256(path.read_bytes()).digest())
+    return f"dobjd-BITCRAFT_ASSETS-sha256-v1:{fingerprint.hexdigest()}".encode("ascii")
+
+
 def ensure_current_bitcraft_ui(binary, target, dev=False):
-    page = (APP / "ui" / "index.html").read_bytes()
-    if page in binary.read_bytes():
+    marker = bitcraft_ui_marker()
+    if marker in binary.read_bytes():
         return
     print("The daemon contains an outdated Bitcraft UI; rebuilding dobjd.", flush=True)
     selection = [] if dev else ["--target", target]
     run("cargo", "clean", "--release", *selection, "-p", "dobjd")
     build_runtime(target, dev=dev)
-    if page not in binary.read_bytes():
+    if marker not in binary.read_bytes():
         raise RuntimeError(
             f"{binary} still contains a different Bitcraft UI after rebuilding. "
             "Check Cargo's target directory and build-cache configuration. "

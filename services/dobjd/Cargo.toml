@@ -35,6 +35,9 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 futures-util = "0.3"
 uuid = { version = "1.18.1", features = ["v4"] }
 
+[build-dependencies]
+sha2 = "0.10.9"
+
 [dev-dependencies]
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }

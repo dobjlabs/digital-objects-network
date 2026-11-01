@@ -30,9 +30,10 @@ class BundledUiTests(unittest.TestCase):
         self.app_patch = patch.object(prepare, "APP", self.app)
         self.app_patch.start()
         self.addCleanup(self.app_patch.stop)
+        self.marker = prepare.bitcraft_ui_marker()
 
     def test_current_ui_requires_no_rebuild(self):
-        self.binary.write_bytes(b"executable prefix" + self.page + b"executable suffix")
+        self.binary.write_bytes(b"executable prefix" + self.marker + b"executable suffix")
         with patch.object(prepare, "run") as run:
             prepare.ensure_current_bitcraft_ui(self.binary, self.target)
         run.assert_not_called()
@@ -40,7 +41,7 @@ class BundledUiTests(unittest.TestCase):
     def test_stale_ui_rebuilds_daemon_before_accepting_binary(self):
         def rebuild(*command):
             if command[:2] == ("cargo", "build"):
-                self.binary.write_bytes(b"rebuilt executable" + self.page)
+                self.binary.write_bytes(b"rebuilt executable" + self.page + self.marker)
 
         with patch.object(prepare, "run", side_effect=rebuild) as run:
             prepare.ensure_current_bitcraft_ui(self.binary, self.target)
@@ -57,7 +58,7 @@ class BundledUiTests(unittest.TestCase):
     def test_native_dev_rebuild_uses_native_cache(self):
         def rebuild(*command):
             if command[:2] == ("cargo", "build"):
-                self.binary.write_bytes(self.page)
+                self.binary.write_bytes(self.marker)
 
         with patch.object(prepare, "run", side_effect=rebuild) as run:
             prepare.ensure_current_bitcraft_ui(self.binary, self.target, dev=True)
@@ -70,6 +71,52 @@ class BundledUiTests(unittest.TestCase):
         with patch.object(prepare, "run", side_effect=subprocess.CalledProcessError(1, "cargo")):
             with self.assertRaises(subprocess.CalledProcessError):
                 prepare.ensure_current_bitcraft_ui(self.binary, self.target)
+
+    def test_matching_index_without_bundle_marker_is_rejected(self):
+        self.binary.write_bytes(self.page)
+        with patch.object(prepare, "run") as run:
+            with self.assertRaisesRegex(RuntimeError, "outdated daemon will not be staged"):
+                prepare.ensure_current_bitcraft_ui(self.binary, self.target)
+        self.assertEqual(run.call_count, 2)
+
+    def test_supporting_asset_changes_rebuild_without_changing_index(self):
+        asset = self.app / "ui" / "inventory-values.json"
+        renamed = self.app / "ui" / "renamed-values.json"
+        changes = [
+            ("added", lambda: asset.write_bytes(b'{"Wood":1}')),
+            ("changed", lambda: asset.write_bytes(b'{"Wood":2}')),
+            ("renamed", lambda: asset.rename(renamed)),
+            ("removed", lambda: renamed.unlink()),
+        ]
+        for name, change in changes:
+            with self.subTest(name=name):
+                self.binary.write_bytes(self.page + prepare.bitcraft_ui_marker())
+                change()
+
+                def rebuild(*command):
+                    if command[:2] == ("cargo", "build"):
+                        self.binary.write_bytes(self.page + prepare.bitcraft_ui_marker())
+
+                with patch.object(prepare, "run", side_effect=rebuild) as run:
+                    prepare.ensure_current_bitcraft_ui(self.binary, self.target)
+                self.assertEqual(run.call_count, 2)
+                self.assertEqual((self.app / "ui" / "index.html").read_bytes(), self.page)
+
+    def test_nested_assets_are_included_and_contributor_docs_are_excluded(self):
+        nested = self.app / "ui" / "presentation" / "bitcraft"
+        nested.mkdir(parents=True)
+        for name in ["AGENTS.md", "CLAUDE.md", "BITCRAFT_SPECIFIC_RULES.md"]:
+            (nested / name).write_text("Contributor instructions")
+        self.assertEqual(prepare.bitcraft_ui_marker(), self.marker)
+        (nested / "pack.json").write_text('{"plugin":"bitcraft"}')
+        self.assertNotEqual(prepare.bitcraft_ui_marker(), self.marker)
+
+    def test_fingerprint_ignores_timestamps_and_tracks_runtime_markdown(self):
+        index = self.app / "ui" / "index.html"
+        index.touch()
+        self.assertEqual(prepare.bitcraft_ui_marker(), self.marker)
+        (self.app / "ui" / "guide.md").write_text("Player instructions")
+        self.assertNotEqual(prepare.bitcraft_ui_marker(), self.marker)
 
 
 class PreparationTests(unittest.TestCase):
@@ -84,6 +131,9 @@ class PreparationTests(unittest.TestCase):
         page = b"<html>Current UI</html>"
         (app / "ui").mkdir(parents=True)
         (app / "ui" / "index.html").write_bytes(page)
+        policy = root / "services" / "dobjd" / "ui-excluded-files.txt"
+        policy.parent.mkdir(parents=True)
+        policy.write_bytes((prepare.REPO / "services" / "dobjd" / policy.name).read_bytes())
         (app / "skills" / "bitcraft-play").mkdir(parents=True)
         (app / "skills" / "bitcraft-play" / "SKILL.md").write_text("Play Bitcraft")
         tauri.mkdir()
@@ -110,7 +160,8 @@ class PreparationTests(unittest.TestCase):
                 names = ["bitcraft-dobj", "bitcraft-dobj-mcp-proxy"] if launcher else [
                     "dobjd", "dobj", "dobj-mcp-proxy", "pexe"]
                 for name in names:
-                    (directory / name).write_bytes(str(directory / name).encode() + page)
+                    (directory / name).write_bytes(
+                        str(directory / name).encode() + page + prepare.bitcraft_ui_marker())
             elif "--out-dir" in command:
                 destination = Path(command[command.index("--out-dir") + 1])
                 destination.mkdir(parents=True)

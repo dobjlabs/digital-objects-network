@@ -6,22 +6,45 @@ For the desktop app, run `just bitcraft-dev` from the repository root. It prepar
 
 For standalone browser development, serve this directory with `python3 -m http.server 4170 --bind 127.0.0.1 --directory apps/bitcraft/ui` and open `http://127.0.0.1:4170`. Without the daemon-injected API origin, the page connects to the standalone Digital Objects daemon at `http://127.0.0.1:7717` (MCP uses `7718` when enabled). See [the desktop README](../README.md) for build and bundle commands.
 
-The main window always shows the inventory (the files view). Its top bar has three groups of controls, separated by thin dividers, and at its right end the inventory's value, read like a balance ("Total Inventory Value:", the Bit icon and "N.NN BIT"), which opens the Inventory Summary. Just left of it, past a divider, "N.NN BIT/sec" shows how fast that value grew over the last 5 minutes (`VALUE_RATE_WINDOW_MS`): the value now minus the value at the window's start, divided by the full 300 seconds, from samples taken on every inventory change and kept in session storage so a reload does not restart it. Before the first sample the value counts as that sample's, so a new session's first gains do not spike. It refreshes every second and can be negative. The window title repeats both: "Bitcraft (N.NN BIT - N.NN BIT/sec)". A rate that rounds to 0.00 is left out of both, with its divider, and the title is then "Bitcraft (N.NN BIT)". The game views: a folder, permanently selected, for the files view; a bar chart that opens the Inventory Summary; and an open book that opens Recipe Info. Then the desktop agent buttons, drawn slightly smaller than the other icons since their logo marks fill more of the box, with the tooltips "Automate with Claude" and "Automate with Codex". They use monochrome Claude and ChatGPT/OpenAI logo marks. They open Claude Code or Codex with the game's home directory and a player prompt; these controls are hidden in a standalone browser. The host handles their `bitcraft://agent/claude` and `bitcraft://agent/codex` requests, constructing the external deep links from its own installation and game home paths. The app and tray menus also offer "Play with agents...", a native guide window backed by `shell/agent.html`. It shares the startup shell's base styling and shows the same player prompt as the deep links, with copy controls; installation paths are included in the prompt. Missing URL handlers and launch errors open this guide with an explanatory message on macOS, Windows and Linux. Last, a gear opens Settings. Toolbar tooltips are drawn by the page's CSS (`data-tooltip`), so they appear without the system's hover delay. Recipe Info, the Inventory Summary and Settings each open their window once, and a later click focuses it. These windows load this same page in a mode of their own and run none of the main window's startup.
+The main window always shows the inventory (the files view). Its top bar has three groups of controls, separated by thin dividers, and at its right end the inventory's value, read like a balance ("Total Inventory Value:", the Bit icon and "N.NN BIT"), which opens the Inventory Summary. Just left of it, past a divider, "N.NN BIT/sec" shows how fast that value grew over the last 5 minutes (`VALUE_RATE_WINDOW_MS`): the value now minus the value at the window's start, divided by the full 300 seconds, from samples taken on every inventory change and kept in session storage so a reload does not restart it. Before the first sample the value counts as that sample's, so a new session's first gains do not spike. It refreshes every second and can be negative. The window title repeats both: "Bitcraft (N.NN BIT - N.NN BIT/sec)". A rate that rounds to 0.00 is left out of both, with its divider, and the title is then "Bitcraft (N.NN BIT)". In the desktop the rate comes from the native host instead, which keeps sampling while the window is hidden; the page reads it through `inventory_metrics` (see [the desktop README](../README.md#discord-rich-presence)). The game views: a folder, permanently selected, for the files view; a bar chart that opens the Inventory Summary; an open book that opens Recipe Info; and a trophy that opens the Leaderboard. Then the desktop agent buttons, drawn slightly smaller than the other icons since their logo marks fill more of the box, with the tooltips "Automate with Claude" and "Automate with Codex". They use monochrome Claude and ChatGPT/OpenAI logo marks. They open Claude Code or Codex with the game's home directory and a player prompt; these controls are hidden in a standalone browser. The host handles their `bitcraft://agent/claude` and `bitcraft://agent/codex` requests, constructing the external deep links from its own installation and game home paths. The app and tray menus also offer "Play with agents...", a native guide window backed by `shell/agent.html`. It shares the startup shell's base styling and shows the same player prompt as the deep links, with copy controls; installation paths are included in the prompt. Missing URL handlers and launch errors open this guide with an explanatory message on macOS, Windows and Linux. Last, a gear opens Settings. Toolbar tooltips are drawn by the page's CSS (`data-tooltip`), so they appear without the system's hover delay. Recipe Info, the Inventory Summary, the Leaderboard and Settings each open their window once, and a later click brings it to the front. In the desktop app the window's own `focus()` leaves it behind the main window, so the page also asks the host to raise it through `raise_window`. These windows load this same page in a mode of their own and run none of the main window's startup.
 
 "View raw", Open and a double-click on a row open `?page=raw&file=NAME`, a
 window that shows the file's stored text (an object's from dobjd's
 `GET /objects/{file_name}/raw`, or the welcome guide's Markdown), titled with
 the file's name. It opens wide enough for the title bar to show the whole
 name (the name measured in the title font, plus room for the window buttons;
-at least 480px). It sets its own light background, since the desktop app's
-webview shows a bare JSON response in the system's dark theme, and makes its
-text selectable, since the desktop app turns selection off on every page
-and the windows it opens inherit that.
+at least 480px). It sets its own background from the page's theme, rather
+than leaving a bare JSON response to the webview's default styling, and
+makes its text selectable, since the desktop app turns selection off on
+every page and the windows it opens inherit that.
 
-The outer page fills the window with scrolling and overscroll disabled, including on the desktop startup screen. Scrollable content stays within its inventory, jobs, details or secondary-view panel.
+The page is light unless the player picks Dark in Settings; it does not
+follow the system's appearance, since some art assumes a light page. The
+choice is kept in this origin's `localStorage` and applied as
+`data-theme` on the root element by a script at the top of `<head>`, so no
+window paints in the wrong theme; other windows follow through the storage
+event. Colors come from the `:root` variables, which the
+`:root[data-theme="dark"]` block redefines; give a new color a variable
+with a value in both themes rather than a literal. Class icon tiles stay
+white in both themes, since the class art is drawn for a white tile, and
+so do the paper file icons.
 
-Settings (`?page=settings`) shows the synchronizer and relayer addresses
+In the desktop app, the main window passes the choice to the host
+(`set_appearance`), which keeps its own copy in `<home>/appearance.json`
+and applies it to every window's frame and background and to the desktop
+shell's pages, which this origin's storage does not reach. Pages read the
+host's copy, `window.bitcraftAppearance`, only when the storage holds no
+choice; when the two differ at startup, the main window sends the page's.
+
+The outer page fills the window with scrolling and overscroll disabled, including on the desktop startup screen. Scrollable content stays within its inventory, jobs, details or secondary-view panel. The object list is rebuilt on every inventory change, which leaves the browser's scroll anchoring nothing to hold on to, so it is turned off there and each redraw scrolls the list to keep the topmost row still listed where it was. A list scrolled to the top stays at the top.
+
+Settings (`?page=settings`) offers the theme (Light or Dark) under
+Appearance, then shows the synchronizer and relayer addresses
 from dobjd's `GET /settings` in read-only fields; they cannot be edited yet.
+In the desktop app a Sharing section follows, with a "Share my Bitcraft
+scores on Discord" checkbox backed by the host's `discord_sharing` and
+`set_discord_sharing` commands (see [the desktop README](../README.md#discord-rich-presence));
+it stays hidden in a standalone browser.
 Below them, set apart like a Mac About window, it shows the Bitcraft name
 and version, the website's address as a link, and a Discord button; both
 open in the player's browser. The window's opening height counts the title
@@ -35,6 +58,12 @@ Settings, send listed sites to the browser the same way and open nothing
 else. A new external link from the page needs its host added there.
 
 The Inventory Summary (`?page=summary`) is laid out like Finder's Get Info window: the inventory's Total Inventory Value beside an icon, then an "Objects (N)" section, N being the live bitcraft objects it lists, with a count and a summed value per class, which can be collapsed. Both inventory views apply `object` and `object-removed` events from dobjd's `/events` stream, including changes made by other clients. They read inventory and transaction snapshots on load, stream connection or reconnection, sequence gaps, and window focus. Changes received during a snapshot read are reapplied to its result. Recorded transactions settle in the daemon and need no UI polling; pending or unknown objects with no open local transaction record are reconciled every 10 seconds.
+
+Import, from a plus button at the right end of the object list's header, which shows the objects directory's path (tooltip "Import"), or from "Import..." at the top of the context menu on the object list's empty space, opens a sheet over the main window that adds `.dobj` files to the inventory through dobjd's `POST /objects/import`. "Choose Files..." lists the chosen files in the sheet, replacing any chosen before; "Import" then imports them one at a time, followed by any contents pasted into the text box. A chosen file keeps its name in the inventory, with the changes dobjd makes to keep names safe and unique (see `services/dobjd/README.md`); pasted contents get the name dobjd derives. Files are read in the page, so no file path or host permission is involved, and there is no file-type filter: dobjd checks every file's contents. Each file gets a result line: its class, since dobjd imports an object only once the network reports it created, or dobjd's reason for refusing it. `fetchJson` keeps only the status code, so the import request reads dobjd's `error` message itself. Imported objects are listed and selected as soon as dobjd answers, without waiting for their events, and the sheet stays open to show the results. After an import of an object whose key is shared (below), the sheet says that whoever gave the player the file can still use their copy until it is rekeyed, and that until then it is marked. While the sheet is open the top bar and panes are inert; Escape or Cancel (Done once results show) closes it. On macOS, pasting into it depends on the desktop app's Edit menu (see `../README.md`).
+
+An object whose key is shared, reported by dobjd as `sharedKey` (its key is still one it was imported with, so whoever gave it the file can still spend it), has a yellow warning triangle with a black "!" over the top right corner of its icon in the object list. Its Details pane opens with a yellow notice, above the icon, headed "This file was recently imported." and explaining this; it points the player to the object's context menu, which offers the class's built-in `Rekey<Class>` action. The mark goes once an action gives the object a new key, whether Rekey or another action whose script sets the key, from this page or any other client. An action that keeps the key, as many mutations do, keeps the mark. The page keeps no record of its own: dobjd decides.
+
+The Leaderboard (`?page=leaderboard`) shows the leaderboard the Bitcraft Discord bot publishes (see [its README](../discord-bot/README.md)), fetched straight from `LEADERBOARD_URL`, so the bucket's CORS policy must allow the page's origin. It reads it when the window opens, when it is focused, and every minute; rereading an unchanged leaderboard only revalidates it. Under the Inventory Summary's header, with the time the leaderboard was published, it lists players in the published order: rank, name and highest Total Inventory Value, the first three in semibold. Names come from Discord and are only ever set as text. With nothing published it says "No scores yet."; a failed first read shows the error, and a failed later read keeps the leaderboard already shown.
 
 Actions using independent inputs can run concurrently, including actions with no inputs. Selected inputs must be live and unheld. The page reserves inputs while the start request is pending and until the action finishes; daemon holds also cover work started in another window or client.
 
@@ -53,9 +82,10 @@ selection, so `?page=recipebook&class=bitcraft::Wood` or
 older name) opens Recipe Info with that entry selected and shown.
 
 Resting the pointer on a row of the object list for a quarter second
-(`ROW_TOOLTIP_DELAY_MS`) shows a tooltip with the object's Total Bit Value
-alone; the welcome guide's row shows none. The welcome guide's name is set
-in semibold, so it stands out from the objects below it; names are cut to
+(`ROW_TOOLTIP_DELAY_MS`) shows a tooltip with the object's Total Bit Value,
+followed by "Shared key, not yet rekeyed" for an object whose key is shared
+(below); the welcome guide's row shows none. The welcome guide's name is set
+in semibold, so it stands out from the objects below it. Capital goods (see `BITCRAFT_SPECIFIC_RULES.md`) come next, in bold, ahead of the other objects, with their level on a badge over their icon's bottom right corner, colored by level from green (1) to gold (6 and above), here and in the Details pane. Buckets carry the quantity they hold on a dark gray badge in the same corner, abbreviated ("5.3K", "53K"), in both places. Names are cut to
 fit in each row's own font. Rows carry their file name in `data-file-name` rather than a `title`, so
 no delayed native tooltip competes with it; the tooltip is a single element
 outside the list, placed by the script, since the scrolling list would clip
@@ -78,8 +108,9 @@ Automatic setup jobs stay out of Jobs; manual jobs stay visible. Failures
 offer retry and never open the inventory. See `BITCRAFT_SPECIFIC_RULES.md`.
 The startup screen shows the Bitcraft logo, a 16px heading and a progress
 bar in the blue accent, and the same layout appears in the desktop `shell/`,
-whose `style.css` copies this page's values as literals. The logo is the app
-icon (`../src-tauri/icons/icon.png`), copied to `assets/bitcraft-logo.png`
+whose `style.css` repeats the theme variables it needs from this page,
+under the same names and with the same light and dark values. The logo is
+the app icon (`../src-tauri/icons/icon.png`), copied to `assets/bitcraft-logo.png`
 here and `../shell/bitcraft-logo.png`; replace all three together. Keep both
 splash screens visually consistent, including the bottom status bar, which
 both show. On this page the bar is live: it reads the service addresses from
@@ -134,4 +165,4 @@ knows something about the `bitcraft` plugin that the API does not report
   missing instead (see that folder's `CLAUDE.md`).
 - Total Bit Values are hardcoded per class from the recipes (see
   `BITCRAFT_SPECIFIC_RULES.md`). When a recipe's inputs or outputs change,
-  recompute them in `index.html` and that file.
+  recompute them in `inventory-values.json` and that file.

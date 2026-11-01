@@ -46,7 +46,7 @@ All routes return JSON unless noted; errors come back as
 | `GET`  | `/actions`                      | `list_actions`                                               |
 | `GET`  | `/state-root`                   | `get_state_root`                                             |
 | `GET`  | `/objects/dir`                  | `paths().objects_dir`                                        |
-| `POST` | `/objects/import`               | `import_object` (body: `{ "dobj": "<json>" }`)               |
+| `POST` | `/objects/import`               | `import_object` (body: `{ "dobj": "<json>", "fileName"?: "<name>" }`; see below) |
 | `GET`  | `/objects/{file_name}`          | `read_object(&Path)` (basename in `~/.dobj/objects/`)        |
 | `GET`  | `/objects/{file_name}/raw`      | `read_object_raw(&Path)` (file contents verbatim)            |
 | `POST` | `/objects/{file_name}/discard_unsafe` | `discard_object_unsafe(&Path)` (see below; no state guarantees) |
@@ -68,6 +68,26 @@ All routes return JSON unless noted; errors come back as
 | `GET`  | `/transactions/{tx_final}`      | `get_transaction`; `?wait=true&timeoutMs=` holds until landed or expired |
 | `DELETE` | `/transactions/{tx_final}`    | `delete_transaction`: abandon a recorded transaction never offered to the relayer |
 | `GET`  | `/events`                       | every state change (SSE), numbered by `seq`                  |
+
+### Imported objects must match their content hash
+
+`POST /objects/import` refuses (`400`) a file whose `metadata.contentHash` is not the commitment of its `obj`, the hash the store and the chain know the object by. Files dobjd writes always match, so this only refuses edited or hand-made files.
+
+### Imported creation proofs are checked
+
+A file's `metadata.creationProof`, when present, proves the object's commitment is in the created set of a state root. `POST /objects/import` refuses (`400`) a proof that does not verify against the object or whose state root is not the one the synchronizer derived at the proof's block, including when the synchronizer has derived no state at that block because it has not reached it yet. To import an object whose proof the synchronizer does not back, remove `creationProof` from the file and import it again once the synchronizer reports the object created; the daemon then fetches a fresh proof. An object that imports without a proof gets one from the synchronizer, as outputs do when their transaction lands.
+
+### Imported objects must be on chain
+
+`POST /objects/import` refuses (`400`) an object the synchronizer does not report created, whether or not the file carries a `creationProof`, so a well-formed file for an object that was never created is not imported, and neither is an output whose transaction has not landed yet. Import never files an object as `unknown`: an imported object is always `live`. Every check asks the synchronizer, so the import fails when it cannot be reached.
+
+### Imported objects keep the name they are given
+
+`POST /objects/import` files the object under `fileName` when the request has one, typically the name of the file the object came in, and otherwise under a name derived from its commitment, as action outputs are named. A given name gets `.dobj` added when it lacks it, and `name 2.dobj`, `name 3.dobj` and so on when another file, live, spent or discarded, already has it. It is refused (`400`) when it is empty, starts with `.`, contains a path separator, control character or a character Windows forbids, is a Windows device name, is longer than 200 bytes, or has the form of a derived name without being this object's. The name lasts until an action spends the object: its outputs get derived names.
+
+### Imported objects share their key
+
+An imported object's file carries its spending key, so whoever exported it can still spend it. `POST /objects/import` records a hash of the object's key in `imported-keys` in the data directory, and every object summary reports `sharedKey: true` while the object's key is one of those. An action that keeps the key keeps the flag, as most mutations do unless the plugin's script sets a new key. An action that replaces the key, such as the class's built-in `Rekey<Class>` action, clears it.
 
 ### Discarding objects is unsafe
 
@@ -151,6 +171,16 @@ just dobjd
 # different HTTP port; MCP binds to the adjacent port, 127.0.0.1:7728:
 DOBJD_PORT=7727 cargo run --release -p dobjd
 ```
+
+### Mock mode
+
+With `DOBJ_MOCK=1` (any value but empty or `0`), dobjd makes no network calls.
+Actions prove with the MockProver, and an in-memory DON stands in for the
+synchronizer and relayer: it checks each submitted transaction with the
+synchronizer's rules and lands it in a new block at once. The settings URLs are
+ignored. The DON starts empty on every launch, so objects left in the store
+from an earlier run can no longer be spent; use a separate `DOBJ_HOME`.
+`just dev-mock` sets both and clears the mock store first.
 
 Released binaries are signed + notarized on macOS. The bundle is just
 the four executables (`dobjd`, `dobj`, `dobj-mcp-proxy`, `pexe`).

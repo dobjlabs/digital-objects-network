@@ -127,7 +127,13 @@ pub async fn import(client: &DobjdClient, path: PathBuf, json: bool) -> Result<(
     let dobj =
         std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let obj: ObjectSummary = client
-        .post_json("/objects/import", &ImportObjectRequest { dobj })
+        .post_json(
+            "/objects/import",
+            &ImportObjectRequest {
+                dobj,
+                file_name: None,
+            },
+        )
         .await?;
     if json {
         println!(

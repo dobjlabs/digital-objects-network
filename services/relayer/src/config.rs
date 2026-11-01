@@ -91,8 +91,8 @@ pub fn load_config() -> Result<AppConfig> {
     let fee_bump_multiplier_pct = dotenvy::var("FEE_BUMP_MULTIPLIER_PCT")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(20)
-        .max(13); // EIP-1559 requires ~12.5% minimum increase for replacement
+        .unwrap_or(100)
+        .max(100); // Blob pools (geth, reth) only replace a blob tx when every fee cap at least doubles
 
     let fee_bump_max = dotenvy::var("FEE_BUMP_MAX")
         .ok()

@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-inventory-metrics"
+description = "Allow reading native inventory metrics."
+commands.allow = ["inventory_metrics"]

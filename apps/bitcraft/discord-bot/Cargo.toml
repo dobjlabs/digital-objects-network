@@ -1,0 +1,25 @@
+[package]
+name = "bitcraft-discord-bot"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+dotenvy = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+time = { workspace = true, features = ["serde-well-known"] }
+tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+rusty-s3 = { version = "0.11", default-features = false, features = ["rustcrypto"] }
+twilight-gateway = "0.17"
+twilight-http = "0.17"
+twilight-model = "0.17"
+twilight-util = { version = "0.17", features = ["builder"] }
+
+[dev-dependencies]
+axum = "0.8.6"
+twilight-validate = "0.17"

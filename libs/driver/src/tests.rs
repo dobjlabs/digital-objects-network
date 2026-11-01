@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{Result, anyhow};
-use payload::decode_hash_hex;
 use payload::test_state::TestState;
+use payload::{decode_hash_hex, encode_hash_hex};
 use pod2::middleware::Hash;
 use sdk::SpendableObjects;
 use tempfile::tempdir;
@@ -17,8 +17,12 @@ use crate::clients::{
     SynchronizerTxStatus,
 };
 use crate::driver::{Driver, DriverDeps, PayloadBuilder};
-use crate::object_record::{FileStatus, ObjectRecord, ensure_extra_pod_deserializers_registered};
-use crate::object_store::{ensure_store_dirs, load_object_files, write_object_file};
+use crate::object_record::{
+    FileStatus, ObjectMetadata, ObjectRecord, ensure_extra_pod_deserializers_registered,
+};
+use crate::object_store::{
+    ensure_store_dirs, load_object_files, object_file_name, write_object_file,
+};
 use crate::pexe_catalog::{PexeCatalog, test_plugin_bytes};
 use crate::{ActionQuery, DriverPaths, ExecuteActionInput, NoopExecutionReporter, ObjectQuery};
 use wire_types::{ObjectStatus, QualifiedName};
@@ -103,30 +107,34 @@ fn fixture(file_name: &str) -> Fixture {
     let source_tx = outputs.tx.clone();
     let spendable = outputs.obj(0);
     let record = ObjectRecord {
-        content_hash: spendable.obj.commitment(),
-        class: craft_basics("Log"),
-        status: FileStatus::Live,
-        tx_hash: None,
+        metadata: ObjectMetadata {
+            class: craft_basics("Log"),
+            content_hash: spendable.obj.commitment(),
+            status: FileStatus::Live,
+            tx_final: tx_hash(&source_tx),
+            tx_hash: None,
+            creation_proof: None,
+        },
         obj: spendable.obj,
-        tx_final: tx_hash(&source_tx),
     };
     let mut state = TestState::default();
     apply_tx(&mut state, &source_tx);
     let chain = Arc::new(Mutex::new(MockChain {
         head_block: state.block_number,
+        state,
         ..MockChain::default()
     }));
     let relayer = Arc::new(Mutex::new(MockRelayerState::default()));
     let deps = DriverDeps {
         catalog: Arc::new(RwLock::new(Arc::new(catalog))),
         synchronizer: Arc::new(MockSynchronizer {
-            state,
             chain: chain.clone(),
         }),
         relayer: Arc::new(MockRelayer {
             inner: relayer.clone(),
         }),
         payload_builder: Arc::new(MockPayloadBuilder),
+        mock_proofs: true,
     };
     let paths = temp_paths();
     write_object_file(&paths, &record, file_name).unwrap();
@@ -156,12 +164,19 @@ impl Fixture {
     /// Apply the transaction's effects to the chain and record it as applied by `tx_hash`.
     fn land_with_tx_hash(&self, record: &TransactionRecord, tx_hash: &str) {
         let mut chain = self.chain.lock().unwrap();
-        for hex in &record.created {
-            chain.created.insert(decode_hash_hex(hex).unwrap());
-        }
-        for hex in &record.nullifiers {
-            chain.nullifiers.insert(decode_hash_hex(hex).unwrap());
-        }
+        let created = record
+            .created
+            .iter()
+            .map(|hex| decode_hash_hex(hex).unwrap())
+            .collect::<Vec<_>>();
+        let nullifiers = record
+            .nullifiers
+            .iter()
+            .map(|hex| decode_hash_hex(hex).unwrap())
+            .collect::<Vec<_>>();
+        chain.state.apply_tx(created.clone(), nullifiers.clone());
+        chain.created.extend(created);
+        chain.nullifiers.extend(nullifiers);
         let status = SynchronizerTxStatus {
             tx_hash: tx_hash.to_string(),
             block_number: chain.head_block,
@@ -367,6 +382,10 @@ impl PayloadBuilder for MockPayloadBuilder {
 
 #[derive(Default)]
 struct MockChain {
+    /// Source of grounding witnesses and of the one state root
+    /// `fetch_state_at` knows; status and membership reads use the
+    /// fields below instead.
+    state: TestState,
     created: HashSet<Hash>,
     nullifiers: HashSet<Hash>,
     /// Transactions carried by a committed blob, applied or rejected.
@@ -382,8 +401,6 @@ struct MockChain {
 }
 
 struct MockSynchronizer {
-    /// Source of grounding witnesses; status and membership reads use `chain` instead.
-    state: TestState,
     chain: Arc<Mutex<MockChain>>,
 }
 
@@ -395,7 +412,7 @@ impl SynchronizerClient for MockSynchronizer {
             return Err(anyhow!("synchronizer head unavailable"));
         }
         let head = SynchronizerHead {
-            state_root: state_header(&self.state).hash(),
+            state_root: state_header(&chain.state).hash(),
             block_number: chain.head_block,
         };
         let on_head = chain.on_head.take();
@@ -430,15 +447,46 @@ impl SynchronizerClient for MockSynchronizer {
         _sync_api_url: &str,
         object_commitments: &[Hash],
     ) -> Result<GroundingWitness> {
+        let chain = self.chain.lock().unwrap();
+        if let Some(absent) = object_commitments
+            .iter()
+            .find(|commitment| !chain.state.contains_created(**commitment))
+        {
+            return Err(anyhow!(
+                "input not yet synchronized; wait and retry: {absent:#}"
+            ));
+        }
         let created_proofs = object_commitments
             .iter()
             .copied()
-            .map(|commitment| (commitment, self.state.created_membership_proof(commitment)))
+            .map(|commitment| (commitment, chain.state.created_membership_proof(commitment)))
             .collect::<HashMap<_, _>>();
         Ok(GroundingWitness::new(
-            state_header(&self.state),
+            state_header(&chain.state),
             created_proofs,
         ))
+    }
+
+    fn fetch_state_at(
+        &self,
+        _sync_api_url: &str,
+        block_number: i64,
+    ) -> Result<Option<wire_types::synchronizer::StateHeadResponse>> {
+        let chain = self.chain.lock().unwrap();
+        if chain.fail_membership {
+            return Err(anyhow!("synchronizer unreachable"));
+        }
+        Ok((block_number == chain.state.block_number).then(|| {
+            wire_types::synchronizer::StateHeadResponse {
+                slot: 0,
+                state_root: state_header(&chain.state).hash(),
+                block_number,
+                block_hash: Default::default(),
+                created_count: 0,
+                nullifier_count: 0,
+                state_root_count: 0,
+            }
+        }))
     }
 
     fn fetch_membership_with_nullifiers(
@@ -535,13 +583,13 @@ fn mock_deps() -> (DriverDeps, Arc<Mutex<MockChain>>) {
     let deps = DriverDeps {
         catalog: Arc::new(RwLock::new(Arc::new(make_catalog()))),
         synchronizer: Arc::new(MockSynchronizer {
-            state: TestState::default(),
             chain: chain.clone(),
         }),
         relayer: Arc::new(MockRelayer {
             inner: Arc::new(Mutex::new(MockRelayerState::default())),
         }),
         payload_builder: Arc::new(MockPayloadBuilder),
+        mock_proofs: true,
     };
     (deps, chain)
 }
@@ -621,7 +669,7 @@ fn execute_records_and_submits_and_settle_lands() {
         assert_eq!(record.relayer_job_id.as_deref(), Some("job-1"));
         assert!(record.submit_attempted_at_ms.is_some());
 
-        assert_eq!(fx.stored(&fx.input_file).status, FileStatus::Live);
+        assert_eq!(fx.stored(&fx.input_file).metadata.status, FileStatus::Live);
         assert_eq!(
             fx.summary(&fx.input_file).held_by_run_id.as_deref(),
             Some("execute")
@@ -636,7 +684,7 @@ fn execute_records_and_submits_and_settle_lands() {
         );
         assert!(!report.feasible);
         for file_name in &result.output_files {
-            assert_eq!(fx.stored(file_name).status, FileStatus::Unknown);
+            assert_eq!(fx.stored(file_name).metadata.status, FileStatus::Unknown);
             let summary = fx.summary(file_name);
             assert_eq!(summary.status, ObjectStatus::Pending);
             assert_eq!(summary.tx_hash, None);
@@ -665,10 +713,10 @@ fn execute_records_and_submits_and_settle_lands() {
 
         assert!(!fx.paths.objects_dir.join(&fx.input_file).exists());
         let consumed = fx.stored(&fx.input_file);
-        assert_eq!(consumed.status, FileStatus::Nullified);
+        assert_eq!(consumed.metadata.status, FileStatus::Nullified);
         assert_eq!(fx.summary(&fx.input_file).held_by_run_id, None);
         for file_name in &result.output_files {
-            assert_eq!(fx.stored(file_name).status, FileStatus::Live);
+            assert_eq!(fx.stored(file_name).metadata.status, FileStatus::Live);
             let summary = fx.summary(file_name);
             assert_eq!(summary.status, ObjectStatus::Live);
             assert_eq!(summary.tx_hash.as_deref(), Some("0xtx"));
@@ -704,7 +752,7 @@ fn execute_keeps_the_record_when_the_relayer_refuses() {
     for file_name in &record.output_files {
         assert_eq!(fx.summary(file_name).status, ObjectStatus::Unknown);
     }
-    assert_eq!(fx.stored(&fx.input_file).status, FileStatus::Live);
+    assert_eq!(fx.stored(&fx.input_file).metadata.status, FileStatus::Live);
 
     // A failed request may have reached the relayer; keep the input locked.
     let err = fx
@@ -767,8 +815,8 @@ fn prove_holds_its_inputs_until_recorded() {
     );
     for file_name in &record.output_files {
         let stored = fx.stored(file_name);
-        assert_eq!(stored.status, FileStatus::Unknown);
-        assert_eq!(stored.tx_final, tx_final_of(&record));
+        assert_eq!(stored.metadata.status, FileStatus::Unknown);
+        assert_eq!(stored.metadata.tx_final, tx_final_of(&record));
     }
     assert_eq!(
         crate::transactions::read_payload(&fx.paths, &tx_final_of(&record)).unwrap(),
@@ -893,12 +941,15 @@ fn record_refuses_an_output_file_that_exists() {
         .unwrap();
     let output_files = proved.output_files().unwrap();
     let squatter = ObjectRecord {
-        content_hash: proved.outputs[0].obj.commitment(),
-        class: proved.outputs[0].class.clone(),
-        status: FileStatus::Unknown,
-        tx_hash: None,
+        metadata: ObjectMetadata {
+            class: proved.outputs[0].class.clone(),
+            content_hash: proved.outputs[0].obj.commitment(),
+            status: FileStatus::Unknown,
+            tx_final: Hash::default(),
+            tx_hash: None,
+            creation_proof: None,
+        },
         obj: proved.outputs[0].obj.clone(),
-        tx_final: Hash::default(),
     };
     write_object_file(&fx.paths, &squatter, &output_files[0]).unwrap();
 
@@ -915,7 +966,10 @@ fn record_refuses_an_output_file_that_exists() {
             .count(),
         0
     );
-    assert_eq!(fx.stored(&output_files[0]).tx_final, Hash::default());
+    assert_eq!(
+        fx.stored(&output_files[0]).metadata.tx_final,
+        Hash::default()
+    );
 }
 
 #[test]
@@ -989,7 +1043,7 @@ fn settle_expires_an_aged_grounding_and_frees_its_inputs() {
     for file_name in &record.output_files {
         assert!(!fx.paths.objects_dir.join(file_name).exists());
     }
-    assert_eq!(fx.stored(&fx.input_file).status, FileStatus::Live);
+    assert_eq!(fx.stored(&fx.input_file).metadata.status, FileStatus::Live);
     assert_eq!(fx.summary(&fx.input_file).status, ObjectStatus::Live);
     assert!(
         fx.driver
@@ -1102,10 +1156,11 @@ fn transactions_without_a_record_file_are_not_transactions() {
         Some(crate::DriverError::TransactionNotFound(_))
     ));
     // A crash before record persistence leaves an output without a transaction record.
-    let stray = ObjectRecord {
-        status: FileStatus::Unknown,
-        tx_final: orphan,
-        ..fx.stored(&fx.input_file)
+    let stray = {
+        let mut updated = fx.stored(&fx.input_file);
+        updated.metadata.status = FileStatus::Unknown;
+        updated.metadata.tx_final = orphan;
+        updated
     };
     write_object_file(&fx.paths, &stray, "stray.dobj").unwrap();
     assert_eq!(fx.summary("stray.dobj").status, ObjectStatus::Unknown);
@@ -1124,9 +1179,10 @@ fn test_execute_rejects_class_hash_mismatch_with_matching_class_id() {
     // forged class of "craft-basics::Wood". CraftSticks consumes a Wood, so
     // the qualified-name check passes; the cryptographic hash check then fires.
     let fx = fixture("forged_wood.dobj");
-    let forged = ObjectRecord {
-        class: craft_basics("Wood"),
-        ..fx.stored(&fx.input_file)
+    let forged = {
+        let mut updated = fx.stored(&fx.input_file);
+        updated.metadata.class = craft_basics("Wood");
+        updated
     };
     write_object_file(&fx.paths, &forged, &fx.input_file).unwrap();
 
@@ -1155,12 +1211,15 @@ fn make_importable_log() -> (String, Hash, Hash) {
     let commitment = spendable.obj.commitment();
     let nullifier = txlib::object_nullifier_hash(&spendable.obj).unwrap();
     let record = ObjectRecord {
-        content_hash: commitment,
-        class: craft_basics("Log"),
-        status: FileStatus::Live,
-        tx_hash: None,
+        metadata: ObjectMetadata {
+            class: craft_basics("Log"),
+            content_hash: commitment,
+            status: FileStatus::Live,
+            tx_final: outputs.tx.dict().commitment(),
+            tx_hash: None,
+            creation_proof: None,
+        },
         obj: spendable.obj,
-        tx_final: outputs.tx.dict().commitment(),
     };
     let json = serde_json::to_string(&record).unwrap();
     (json, commitment, nullifier)
@@ -1176,6 +1235,7 @@ fn import_driver(
     let (deps, chain) = mock_deps();
     {
         let mut chain = chain.lock().unwrap();
+        chain.state.apply_tx(grounded.iter().copied(), []);
         chain.created = grounded;
         chain.nullifiers = nullifiers;
         chain.fail_membership = fail_membership;
@@ -1187,26 +1247,73 @@ fn import_driver(
 fn test_import_grounded_object_is_live() {
     let (json, source_tx, _nullifier) = make_importable_log();
     let (driver, _) = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
-    let summary = driver.import_object(&json).unwrap();
+    let summary = driver.import_object(&json, None).unwrap();
     assert_eq!(summary.class, craft_basics("Log"));
     assert_eq!(summary.status, ObjectStatus::Live);
     assert!(summary.file_name.starts_with("craft-basics__log_"));
 }
 
 #[test]
-fn test_import_ungrounded_object_is_unknown() {
-    let (json, _source_tx, _nullifier) = make_importable_log();
+fn imported_objects_share_their_key_until_an_action_replaces_it() {
+    use pod2::middleware::{StrKey, Value};
+
+    let (json, source_tx, _nullifier) = make_importable_log();
+    let (driver, _) = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
+    assert!(driver.import_object(&json, None).unwrap().shared_key);
+
+    let imported: ObjectRecord = serde_json::from_str(&json).unwrap();
+    let file_version = |obj: pod2::middleware::containers::Dictionary| {
+        let mut record = imported.clone();
+        record.metadata.content_hash = obj.commitment();
+        record.obj = obj;
+        let file_name = object_file_name(&record.metadata.class, &record.obj).unwrap();
+        write_object_file(driver.paths(), &record, &file_name).unwrap();
+        driver
+            .read_object(std::path::Path::new(&file_name))
+            .unwrap()
+    };
+
+    let mut changed_keeping_key = imported.obj.clone();
+    changed_keeping_key
+        .insert(&StrKey::from("durability"), &Value::from(1))
+        .unwrap();
+    assert!(file_version(changed_keeping_key).shared_key);
+
+    let mut rekeyed = imported.obj.clone();
+    rekeyed
+        .update(&StrKey::from("key"), &Value::from(42))
+        .unwrap();
+    assert!(!file_version(rekeyed).shared_key);
+}
+
+#[test]
+fn test_import_ungrounded_object_is_rejected() {
+    let (json, _commitment, _nullifier) = make_importable_log();
     let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
-    let summary = driver.import_object(&json).unwrap();
-    assert_eq!(summary.status, ObjectStatus::Unknown);
+    let err = driver.import_object(&json, None).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("not registered in the network broadcast history"),
+        "got: {err}"
+    );
+    assert!(driver.list_objects(None).unwrap().is_empty());
 }
 
 #[test]
 fn sync_objects_follows_the_chain_forward_only() {
     let (json, commitment, nullifier) = make_importable_log();
     let (driver, chain) = import_driver(HashSet::new(), HashSet::new(), false);
-    let summary = driver.import_object(&json).unwrap();
-    assert_eq!(summary.status, ObjectStatus::Unknown);
+    let mut record: ObjectRecord = serde_json::from_str(&json).unwrap();
+    record.metadata.status = FileStatus::Unknown;
+    let file_name = "awaiting.dobj".to_string();
+    write_object_file(driver.paths(), &record, &file_name).unwrap();
+    assert_eq!(
+        driver
+            .read_object(std::path::Path::new(&file_name))
+            .unwrap()
+            .status,
+        ObjectStatus::Unknown
+    );
 
     chain.lock().unwrap().created.insert(commitment);
     let synced = driver.sync_objects(None).unwrap().objects;
@@ -1220,7 +1327,7 @@ fn sync_objects_follows_the_chain_forward_only() {
         driver
             .paths()
             .nullified_objects_dir
-            .join(&summary.file_name)
+            .join(&file_name)
             .exists()
     );
 
@@ -1245,7 +1352,7 @@ fn sync_objects_follows_the_chain_forward_only() {
 fn test_read_object_raw_returns_stored_file() {
     let (json, source_tx, _nullifier) = make_importable_log();
     let (driver, _) = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
-    let summary = driver.import_object(&json).unwrap();
+    let summary = driver.import_object(&json, None).unwrap();
     let raw = driver
         .read_object_raw(std::path::Path::new(&summary.file_name))
         .unwrap();
@@ -1271,9 +1378,10 @@ fn test_discard_object_unsafe_moves_file_out_of_store() {
     let (json, _source_tx, _nullifier) = make_importable_log();
     let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
     let record: ObjectRecord = serde_json::from_str(&json).unwrap();
-    let record = ObjectRecord {
-        status: FileStatus::Unknown,
-        ..record
+    let record = {
+        let mut updated = record;
+        updated.metadata.status = FileStatus::Unknown;
+        updated
     };
     write_object_file(driver.paths(), &record, "stale.dobj").unwrap();
     let on_disk = std::fs::read_to_string(driver.paths().objects_dir.join("stale.dobj")).unwrap();
@@ -1287,9 +1395,10 @@ fn test_discard_object_unsafe_moves_file_out_of_store() {
         std::fs::read_to_string(driver.paths().discarded_objects_dir.join("stale.dobj")).unwrap();
     assert_eq!(discarded, on_disk);
 
-    let spent = ObjectRecord {
-        status: FileStatus::Nullified,
-        ..record
+    let spent = {
+        let mut updated = record;
+        updated.metadata.status = FileStatus::Nullified;
+        updated
     };
     write_object_file(driver.paths(), &spent, "spent.dobj").unwrap();
     for file_name in ["stale.dobj", "spent.dobj"] {
@@ -1315,9 +1424,10 @@ fn test_list_objects_can_exclude_nullified() {
     let (json, _source_tx, _nullifier) = make_importable_log();
     let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
     let live_record: ObjectRecord = serde_json::from_str(&json).unwrap();
-    let nullified_record = ObjectRecord {
-        status: FileStatus::Nullified,
-        ..live_record.clone()
+    let nullified_record = {
+        let mut updated = live_record.clone();
+        updated.metadata.status = FileStatus::Nullified;
+        updated
     };
     write_object_file(driver.paths(), &live_record, "live.dobj").unwrap();
     write_object_file(driver.paths(), &nullified_record, "spent.dobj").unwrap();
@@ -1389,7 +1499,7 @@ fn test_import_spent_object_is_rejected() {
         HashSet::from([nullifier]),
         false,
     );
-    let err = driver.import_object(&json).unwrap_err();
+    let err = driver.import_object(&json, None).unwrap_err();
     assert!(
         err.to_string().contains("spent"),
         "expected already-spent error, got: {err}"
@@ -1400,8 +1510,8 @@ fn test_import_spent_object_is_rejected() {
 fn test_import_duplicate_is_rejected() {
     let (json, source_tx, _nullifier) = make_importable_log();
     let (driver, _) = import_driver(HashSet::from([source_tx]), HashSet::new(), false);
-    driver.import_object(&json).unwrap();
-    let err = driver.import_object(&json).unwrap_err();
+    driver.import_object(&json, None).unwrap();
+    let err = driver.import_object(&json, None).unwrap_err();
     assert!(
         err.to_string().contains("already present"),
         "expected duplicate error, got: {err}"
@@ -1409,25 +1519,109 @@ fn test_import_duplicate_is_rejected() {
 }
 
 #[test]
-fn test_import_sync_unreachable_falls_back_to_unknown() {
-    let (json, _source_tx, _nullifier) = make_importable_log();
-    let (driver, _) = import_driver(HashSet::new(), HashSet::new(), true);
-    let summary = driver.import_object(&json).unwrap();
-    assert_eq!(summary.status, ObjectStatus::Unknown);
+fn imported_objects_keep_their_requested_file_name() {
+    let (first, first_commitment, _nullifier) = make_importable_log();
+    let (second, second_commitment, _) = make_importable_log();
+    let (driver, _) = import_driver(
+        HashSet::from([first_commitment, second_commitment]),
+        HashSet::new(),
+        false,
+    );
+
+    let summary = driver.import_object(&first, Some("my log")).unwrap();
+    assert_eq!(summary.file_name, "my log.dobj");
+    assert_eq!(summary.status, ObjectStatus::Live);
+    assert!(driver.paths().objects_dir.join("my log.dobj").exists());
+    let summary = driver.import_object(&second, Some("my log.dobj")).unwrap();
+    assert_eq!(summary.file_name, "my log 2.dobj");
+
+    let err = driver
+        .import_object(&first, Some("another name.dobj"))
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("already present: my log.dobj"),
+        "expected duplicate error naming the held file, got: {err}"
+    );
+}
+
+#[test]
+fn imported_file_names_skip_discarded_files_and_refuse_foreign_generated_names() {
+    let (json, commitment, _nullifier) = make_importable_log();
+    let (driver, _) = import_driver(HashSet::from([commitment]), HashSet::new(), false);
+    std::fs::create_dir_all(&driver.paths().discarded_objects_dir).unwrap();
+    std::fs::write(driver.paths().discarded_objects_dir.join("log.dobj"), "{}").unwrap();
+
+    let err = driver
+        .import_object(
+            &json,
+            Some("craft-basics__log_0123456789abcdef_0123456789abcdef.dobj"),
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("generated object name"),
+        "expected generated-name error, got: {err}"
+    );
+    let err = driver
+        .import_object(&json, Some("../log.dobj"))
+        .unwrap_err();
+    assert!(err.to_string().contains("invalid input"), "got: {err}");
+
+    let summary = driver.import_object(&json, Some("log.dobj")).unwrap();
+    assert_eq!(summary.file_name, "log 2.dobj");
+}
+
+#[test]
+fn imported_objects_may_keep_their_own_generated_name() {
+    let (json, commitment, _nullifier) = make_importable_log();
+    let record: ObjectRecord = serde_json::from_str(&json).unwrap();
+    let generated = object_file_name(&record.metadata.class, &record.obj).unwrap();
+    let (driver, _) = import_driver(HashSet::from([commitment]), HashSet::new(), false);
+    let summary = driver.import_object(&json, Some(&generated)).unwrap();
+    assert_eq!(summary.file_name, generated);
+}
+
+#[test]
+fn test_import_sync_unreachable_is_rejected() {
+    let (json, commitment, _nullifier) = make_importable_log();
+    let (driver, _) = import_driver(HashSet::from([commitment]), HashSet::new(), true);
+    let err = driver.import_object(&json, None).unwrap_err();
+    assert!(
+        err.to_string().contains("against the network"),
+        "got: {err}"
+    );
+    assert!(driver.list_objects(None).unwrap().is_empty());
 }
 
 #[test]
 fn test_import_unknown_class_is_rejected() {
     let (json, _source_tx, _nullifier) = make_importable_log();
     let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
-    value["class"]["name"] = serde_json::Value::String("Diamond".to_string());
+    value["metadata"]["class"]["name"] = serde_json::Value::String("Diamond".to_string());
     let tampered = serde_json::to_string(&value).unwrap();
     let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
-    let err = driver.import_object(&tampered).unwrap_err();
+    let err = driver.import_object(&tampered, None).unwrap_err();
     assert!(
         err.to_string().contains("unknown class"),
         "expected unknown-class error, got: {err}"
     );
+}
+
+#[test]
+fn test_import_content_hash_mismatch_is_rejected() {
+    let (json, commitment, _nullifier) = make_importable_log();
+    let (driver, _) = import_driver(HashSet::from([commitment]), HashSet::new(), false);
+    let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    value["metadata"]["contentHash"] = serde_json::Value::String("00".repeat(32));
+    let tampered = serde_json::to_string(&value).unwrap();
+    let err = driver.import_object(&tampered, None).unwrap_err();
+    assert!(
+        err.to_string().contains("content hash mismatch"),
+        "expected content-hash error, got: {err}"
+    );
+    assert!(load_object_files(driver.paths()).unwrap().is_empty());
+
+    let summary = driver.import_object(&json, None).unwrap();
+    assert_eq!(summary.content_hash, encode_hash_hex(&commitment));
 }
 
 #[test]
@@ -1437,10 +1631,10 @@ fn test_import_class_hash_mismatch_is_rejected() {
     // hash check must fire -- the same guarantee execute relies on.
     let (json, _source_tx, _nullifier) = make_importable_log();
     let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
-    value["class"]["name"] = serde_json::Value::String("Wood".to_string());
+    value["metadata"]["class"]["name"] = serde_json::Value::String("Wood".to_string());
     let tampered = serde_json::to_string(&value).unwrap();
     let (driver, _) = import_driver(HashSet::new(), HashSet::new(), false);
-    let err = driver.import_object(&tampered).unwrap_err();
+    let err = driver.import_object(&tampered, None).unwrap_err();
     assert!(
         err.to_string().contains("class hash mismatch"),
         "expected hash-mismatch error, got: {err}"
@@ -1514,7 +1708,7 @@ fn record_rolls_back_outputs_and_payload_when_persistence_fails() {
         assert!(!transaction_dir.exists());
         assert!(fx.driver.list_transactions().unwrap().is_empty());
         assert_eq!(fx.summary(&fx.input_file).held_by_run_id, None);
-        assert_eq!(fx.stored(&fx.input_file).status, FileStatus::Live);
+        assert_eq!(fx.stored(&fx.input_file).metadata.status, FileStatus::Live);
         fx.driver
             .prove(fx.input("CraftWood"), "run-2", &NoopExecutionReporter)
             .unwrap();
@@ -1525,7 +1719,7 @@ fn record_rolls_back_outputs_and_payload_when_persistence_fails() {
 fn landed_objects_keep_creation_hashes_after_transaction_pruning_and_restart() {
     let fx = fixture("log_1.dobj");
     let mut input = fx.stored(&fx.input_file);
-    input.tx_hash = Some("original-creation".to_string());
+    input.metadata.tx_hash = Some("original-creation".to_string());
     write_object_file(&fx.paths, &input, &fx.input_file).unwrap();
     let record = fx.driver.execute(fx.input("CraftWood")).unwrap();
     fx.land_with_tx_hash(&record, "landed-creation");
@@ -1541,17 +1735,17 @@ fn landed_objects_keep_creation_hashes_after_transaction_pruning_and_restart() {
     assert_eq!(pruned.next_cleanup_at_ms, None);
     assert!(!fx.paths.transactions_dir.join(&landed.tx_final).exists());
     assert_eq!(
-        fx.stored(&fx.input_file).tx_hash.as_deref(),
+        fx.stored(&fx.input_file).metadata.tx_hash.as_deref(),
         Some("original-creation")
     );
     let restarted = Driver::open(fx.paths.clone(), fx.driver.deps.clone()).unwrap();
     assert!(restarted.list_transactions().unwrap().is_empty());
     for file in &record.output_files {
         let stored = fx.stored(file);
-        assert_eq!(stored.status, FileStatus::Live);
-        assert_eq!(stored.tx_hash.as_deref(), Some("landed-creation"));
+        assert_eq!(stored.metadata.status, FileStatus::Live);
+        assert_eq!(stored.metadata.tx_hash.as_deref(), Some("landed-creation"));
         let summary = restarted.read_object(std::path::Path::new(file)).unwrap();
-        assert_eq!(summary.tx_hash, stored.tx_hash);
+        assert_eq!(summary.tx_hash, stored.metadata.tx_hash);
     }
 }
 
@@ -1605,7 +1799,7 @@ fn expired_transactions_are_pruned_after_outputs_are_removed() {
         vec![expired.tx_final]
     );
     assert_eq!(fx.summary(&fx.input_file).held_by_run_id, None);
-    assert_eq!(fx.stored(&fx.input_file).status, FileStatus::Live);
+    assert_eq!(fx.stored(&fx.input_file).metadata.status, FileStatus::Live);
     for file in &record.output_files {
         assert!(!fx.paths.objects_dir.join(file).exists());
     }
@@ -1633,10 +1827,16 @@ fn pruning_repairs_committed_settlement_after_restart_and_retains_unreadable_out
         restarted.prune_transactions(cleanup_at).unwrap().tx_finals,
         vec![record.tx_final]
     );
-    assert_eq!(fx.stored(&fx.input_file).status, FileStatus::Nullified);
+    assert_eq!(
+        fx.stored(&fx.input_file).metadata.status,
+        FileStatus::Nullified
+    );
     for file in &record.output_files {
-        assert_eq!(fx.stored(file).status, FileStatus::Live);
-        assert_eq!(fx.stored(file).tx_hash.as_deref(), Some("creation"));
+        assert_eq!(fx.stored(file).metadata.status, FileStatus::Live);
+        assert_eq!(
+            fx.stored(file).metadata.tx_hash.as_deref(),
+            Some("creation")
+        );
     }
 }
 
@@ -1685,12 +1885,15 @@ fn reconciliation_cache_rechecks_changed_records_and_after_restart() {
     crate::transactions::write_record(&fx.paths, &landed).unwrap();
     fx.driver.prune_transactions(settled_at + 1).unwrap();
     for file in &record.output_files {
-        assert_eq!(fx.stored(file).tx_hash.as_deref(), Some("late-creation"));
+        assert_eq!(
+            fx.stored(file).metadata.tx_hash.as_deref(),
+            Some("late-creation")
+        );
     }
     let file = &record.output_files[0];
     let mut output = fx.stored(file);
-    output.tx_hash = None;
-    output.status = FileStatus::Unknown;
+    output.metadata.tx_hash = None;
+    output.metadata.status = FileStatus::Unknown;
     write_object_file(&fx.paths, &output, file).unwrap();
     let restarted = Driver::open(fx.paths.clone(), fx.driver.deps.clone()).unwrap();
     let recovered = restarted.prune_transactions(settled_at + 2).unwrap();
@@ -1702,20 +1905,23 @@ fn reconciliation_cache_rechecks_changed_records_and_after_restart() {
             .any(|object| object.file_name == *file
                 && object.tx_hash.as_deref() == Some("late-creation"))
     );
-    assert_eq!(fx.stored(file).status, FileStatus::Live);
-    assert_eq!(fx.stored(file).tx_hash.as_deref(), Some("late-creation"));
+    assert_eq!(fx.stored(file).metadata.status, FileStatus::Live);
+    assert_eq!(
+        fx.stored(file).metadata.tx_hash.as_deref(),
+        Some("late-creation")
+    );
 }
 
 #[test]
 fn object_hash_metadata_is_optional_and_survives_import() {
     let (json, commitment, _) = make_importable_log();
     let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert!(value.get("txHash").is_none());
-    let legacy: ObjectRecord = serde_json::from_value(value.clone()).unwrap();
-    assert_eq!(legacy.tx_hash, None);
-    value["txHash"] = serde_json::json!("creation");
+    assert!(value["metadata"].get("txHash").is_none());
+    let without: ObjectRecord = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(without.metadata.tx_hash, None);
+    value["metadata"]["txHash"] = serde_json::json!("creation");
     let (driver, _) = import_driver(HashSet::from([commitment]), HashSet::new(), false);
-    let summary = driver.import_object(&value.to_string()).unwrap();
+    let summary = driver.import_object(&value.to_string(), None).unwrap();
     assert_eq!(summary.tx_hash.as_deref(), Some("creation"));
     assert_eq!(
         driver
@@ -1785,7 +1991,10 @@ fn attempted_records_without_acknowledgement_still_query_status() {
     assert_eq!(fx.chain.lock().unwrap().queried_statuses.len(), 1);
     assert_eq!(outcome.unattempted_records, 0);
     for file in &record.output_files {
-        assert_eq!(fx.stored(file).tx_hash.as_deref(), Some("0xunacknowledged"));
+        assert_eq!(
+            fx.stored(file).metadata.tx_hash.as_deref(),
+            Some("0xunacknowledged")
+        );
     }
 }
 
@@ -1813,7 +2022,7 @@ fn settle_expires_a_rejected_transaction_before_its_grounding_ages_out() {
     for file in &record.output_files {
         assert!(!fx.paths.objects_dir.join(file).exists());
     }
-    assert_eq!(fx.stored(&fx.input_file).status, FileStatus::Live);
+    assert_eq!(fx.stored(&fx.input_file).metadata.status, FileStatus::Live);
     assert_eq!(fx.summary(&fx.input_file).held_by_run_id, None);
     assert!(
         fx.driver
@@ -2019,4 +2228,200 @@ fn a_failed_submission_releases_the_lock_for_a_waiting_retry() {
     assert!(retried.submit_attempted_at_ms.is_some());
     assert_eq!(fx.relayer.lock().unwrap().submit_calls, 2);
     assert_eq!(fx.relayer.lock().unwrap().submitted.len(), 1);
+}
+
+fn mock_don_driver() -> Driver {
+    ensure_extra_pod_deserializers_registered();
+    let don = Arc::new(crate::mock_don::MockDon::new());
+    let deps = DriverDeps {
+        catalog: Arc::new(RwLock::new(Arc::new(make_catalog()))),
+        synchronizer: don.clone(),
+        relayer: don,
+        payload_builder: Arc::new(crate::mock_don::MockPayloadBuilder),
+        mock_proofs: true,
+    };
+    Driver::open(temp_paths(), deps).unwrap()
+}
+
+fn execute_and_settle(driver: &Driver, action: &str, inputs: Vec<String>) -> TransactionRecord {
+    let submitted = driver
+        .execute(ExecuteActionInput {
+            action: craft_basics(action),
+            input_objects: inputs,
+            args: Default::default(),
+        })
+        .unwrap();
+    driver.settle().unwrap();
+    driver.get_transaction(&tx_final_of(&submitted)).unwrap()
+}
+
+#[test]
+fn mock_don_lands_chained_actions() {
+    let driver = mock_don_driver();
+    let found = execute_and_settle(&driver, "FindLog", vec![]);
+    assert_eq!(found.state, TransactionState::Landed);
+    let log = found.output_files[0].clone();
+    let read_status = |file_name: &str| {
+        driver
+            .read_object(std::path::Path::new(file_name))
+            .unwrap()
+            .status
+    };
+    assert_eq!(read_status(&log), ObjectStatus::Live);
+
+    let crafted = execute_and_settle(&driver, "CraftWood", vec![log.clone()]);
+    assert_eq!(crafted.state, TransactionState::Landed, "{crafted:?}");
+    assert_eq!(read_status(&log), ObjectStatus::Nullified);
+    for file_name in &crafted.output_files {
+        assert_eq!(read_status(file_name), ObjectStatus::Live);
+    }
+}
+/// The creation proof `record` carries, checked against its object; returns
+/// the state root it proves against.
+fn verified_creation_proof(record: &ObjectRecord) -> Hash {
+    record
+        .metadata
+        .creation_proof
+        .as_ref()
+        .expect("record has a creation proof")
+        .verify(record.obj.commitment())
+        .unwrap()
+}
+
+#[test]
+fn objects_get_a_creation_proof_once_the_chain_has_them() {
+    let fx = fixture("log_1.dobj");
+    let input = fx.stored(&fx.input_file);
+    assert_eq!(input.metadata.creation_proof, None);
+    fx.chain
+        .lock()
+        .unwrap()
+        .created
+        .insert(input.obj.commitment());
+    fx.driver.sync_objects(None).unwrap();
+    verified_creation_proof(&fx.stored(&fx.input_file));
+
+    let result = fx.driver.execute(fx.input("CraftWood")).unwrap();
+    for file_name in &result.output_files {
+        assert_eq!(fx.stored(file_name).metadata.creation_proof, None);
+    }
+    fx.land(&result);
+    fx.driver.settle().unwrap();
+    let head_root = state_header(&fx.chain.lock().unwrap().state).hash();
+    for file_name in &result.output_files {
+        let stored = fx.stored(file_name);
+        assert_eq!(stored.metadata.status, FileStatus::Live);
+        assert_eq!(verified_creation_proof(&stored), head_root);
+    }
+}
+
+#[test]
+fn landing_without_a_creation_proof_waits_for_a_later_pass() {
+    let fx = fixture("log_1.dobj");
+    let result = fx.driver.execute(fx.input("CraftWood")).unwrap();
+    fx.land(&result);
+    let landed_state = std::mem::take(&mut fx.chain.lock().unwrap().state);
+    fx.driver.settle().unwrap();
+    for file_name in &result.output_files {
+        let stored = fx.stored(file_name);
+        assert_eq!(stored.metadata.status, FileStatus::Live);
+        assert_eq!(stored.metadata.creation_proof, None);
+    }
+    fx.chain.lock().unwrap().state = landed_state;
+    fx.driver.sync_objects(None).unwrap();
+    for file_name in &result.output_files {
+        verified_creation_proof(&fx.stored(file_name));
+    }
+}
+
+#[test]
+fn importing_a_live_object_adds_its_creation_proof() {
+    let (json, commitment, _) = make_importable_log();
+    let (driver, _) = import_driver(HashSet::from([commitment]), HashSet::new(), false);
+    let summary = driver.import_object(&json, None).unwrap();
+    let stored = crate::object_record::parse_object_record_file(
+        &driver.paths().objects_dir.join(&summary.file_name),
+    )
+    .unwrap();
+    verified_creation_proof(&stored);
+}
+
+/// An importable Log file carrying a creation proof, and the commitment it
+/// proves.
+fn importable_log_with_creation_proof() -> (String, Hash) {
+    let (json, commitment, _) = make_importable_log();
+    let (driver, _) = import_driver(HashSet::from([commitment]), HashSet::new(), false);
+    let summary = driver.import_object(&json, None).unwrap();
+    let contents =
+        std::fs::read_to_string(driver.paths().objects_dir.join(&summary.file_name)).unwrap();
+    (contents, commitment)
+}
+
+#[test]
+fn import_keeps_a_valid_creation_proof() {
+    let (json, commitment) = importable_log_with_creation_proof();
+    let sent: ObjectRecord = serde_json::from_str(&json).unwrap();
+    let (driver, _) = import_driver(HashSet::from([commitment]), HashSet::new(), false);
+    let summary = driver.import_object(&json, None).unwrap();
+    assert_eq!(summary.status, ObjectStatus::Live);
+    let stored = crate::object_record::parse_object_record_file(
+        &driver.paths().objects_dir.join(&summary.file_name),
+    )
+    .unwrap();
+    assert_eq!(stored.metadata.creation_proof, sent.metadata.creation_proof);
+}
+
+#[test]
+fn import_refuses_a_creation_proof_the_synchronizer_does_not_back() {
+    let (json, commitment) = importable_log_with_creation_proof();
+    let refused = |driver: &Driver, contents: &str| {
+        let err = driver.import_object(contents, None).unwrap_err();
+        assert!(driver.list_objects(None).unwrap().is_empty());
+        err.to_string()
+    };
+
+    // The proof's state root is not the one derived at its block.
+    let (driver, chain) = import_driver(HashSet::from([commitment]), HashSet::new(), false);
+    chain.lock().unwrap().state.next_block(12);
+    let err = refused(&driver, &json);
+    assert!(err.contains("is not the synchronizer's at block"), "{err}");
+
+    // The synchronizer has a state at the proof's block, but the proof's
+    // header is not that state's: the Merkle proof still verifies against
+    // the header's created root.
+    let mut forged_header: ObjectRecord = serde_json::from_str(&json).unwrap();
+    let proof = forged_header.metadata.creation_proof.as_mut().unwrap();
+    proof.state_header.block_timestamp += 1;
+    proof.verify(commitment).unwrap();
+    let (driver, _) = import_driver(HashSet::from([commitment]), HashSet::new(), false);
+    let err = refused(&driver, &serde_json::to_string(&forged_header).unwrap());
+    assert!(err.contains("is not the synchronizer's at block"), "{err}");
+
+    // The synchronizer cannot say.
+    let (driver, chain) = import_driver(HashSet::from([commitment]), HashSet::new(), false);
+    chain.lock().unwrap().fail_membership = true;
+    let err = refused(&driver, &json);
+    assert!(err.contains("could not check the creation proof"), "{err}");
+
+    // The proof is another object's.
+    let (other_json, other_commitment) = importable_log_with_creation_proof();
+    let other: ObjectRecord = serde_json::from_str(&other_json).unwrap();
+    let mut forged: ObjectRecord = serde_json::from_str(&json).unwrap();
+    forged.metadata.creation_proof = other.metadata.creation_proof;
+    let (driver, _) = import_driver(
+        HashSet::from([commitment, other_commitment]),
+        HashSet::new(),
+        false,
+    );
+    let err = refused(&driver, &serde_json::to_string(&forged).unwrap());
+    assert!(
+        err.contains("does not prove the object's creation"),
+        "{err}"
+    );
+
+    // The proof does not decode.
+    let mut undecodable = serde_json::to_value(&forged).unwrap();
+    undecodable["metadata"]["creationProof"] = serde_json::json!("not base64!");
+    let err = refused(&driver, &undecodable.to_string());
+    assert!(err.contains("not base64"), "{err}");
 }
