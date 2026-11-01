@@ -5,15 +5,15 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use payload::encode_hash_hex;
 use pod2::middleware::{
-    F, Hash, Value,
     containers::{Array, Set},
+    Hash, Value, F,
 };
 use sdk::SpendableObjects;
 use serde::{Deserialize, Serialize};
-use txlib::{GroundingWitness, StateHeader, grounding_aged_out};
+use txlib::{grounding_aged_out, GroundingWitness, StateHeader};
 use wire_types::relayer::{JobStatus, JobStatusResponse, SubmitProofResponse};
 
 use crate::clients::{
@@ -171,7 +171,7 @@ impl MockDonState {
         let block_number = self.head.block_number + 1;
         self.head = StateHeader::new(
             block_number,
-            now_secs().max(self.head.block_timestamp),
+            now_secs().max(self.head.block_timestamp + 1),
             block_hash(block_number),
             self.created.commitment(),
             self.nullifiers.commitment(),
@@ -471,11 +471,9 @@ mod tests {
             )
             .unwrap();
         let status = don.fetch_tx_status("", &late.tx_final).unwrap().unwrap();
-        assert!(
-            status
-                .error
-                .unwrap()
-                .starts_with("Blob proof state_root is too old")
-        );
+        assert!(status
+            .error
+            .unwrap()
+            .starts_with("Blob proof state_root is too old"));
     }
 }
