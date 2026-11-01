@@ -1881,6 +1881,114 @@ test("PumpOil asks how many steps to run, and sends the count as n_steps", async
   assert.deepEqual([...ui.backend.posts[0].inputObjectPaths].sort(), inputs.map((object) => object.fileName).sort());
 });
 
+const action = (name, inputs, outputs, mutatedObjects = []) => ({
+  action: qname(name), predicateSource: "", mutatedObjects,
+  totalInputs: inputs.map((input) => ({ class: qname(input) })),
+  totalOutputs: outputs.map((output) => ({ class: qname(output) })),
+});
+const intObject = (fileName, name, fields = {}) => ({
+  fileName, class: qname(name), status: "live",
+  fields: { kvs: Object.entries(fields).map(([key, value]) => [key, { Int: String(value) }]) },
+});
+// The bitcraft actions the context menu offers for the selected files.
+function offeredActions(ui, fileNames) {
+  const { document, dom } = ui;
+  const rows = fileNames.map((fileName) => document.querySelector(`.object-row[data-file-name="${fileName}"]`));
+  rows[0].dispatchEvent(new dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  for (const row of rows.slice(1)) {
+    row.dispatchEvent(new dom.window.MouseEvent("mousedown", { button: 0, ctrlKey: true, bubbles: true }));
+  }
+  rows[0].dispatchEvent(new dom.window.MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  const labels = [...document.querySelectorAll(".context-menu .menu-item-label")].map((label) => label.textContent);
+  dom.window.closeContextMenu();
+  return labels.filter((label) => label.startsWith("bitcraft::"));
+}
+
+test("the context menu offers a geode only the crack its mined value allows", async (context) => {
+  const gems = ["Quartz", "Amethyst", "Sapphire", "Emerald", "Ruby", "Diamond"];
+  // MineGeode1's thresholds, as top limbs: the highest value that cracks into
+  // each gem or a rarer one.
+  const thresholds = { amethyst: 509014584n, sapphire: 31813411n, emerald: 1988338n, ruby: 124271n, diamond: 7766n };
+  const raw = (topLimb, low = 0n) => ({ Untyped: ((topLimb << 192n) + low).toString(16).padStart(64, "0") });
+  const geode = (fileName, topLimb, low = 1n) => ({
+    fileName, class: qname("Geode"), status: "live",
+    fields: { kvs: [["stable_identifier", raw(topLimb, low)],
+      ...Object.entries(thresholds).map(([gem, limb]) => [gem, raw(limb)])] },
+  });
+  const geodes = {
+    "quartz.dobj": [8144233356n, ["Quartz"]],
+    "amethyst.dobj": [509014583n, ["Amethyst"]],
+    "sapphire.dobj": [31813410n, ["Sapphire"]],
+    "emerald.dobj": [1988337n, ["Emerald"]],
+    "ruby.dobj": [124270n, ["Ruby"]],
+    "diamond.dobj": [7765n, ["Diamond"]],
+  };
+  const objects = [knife(), ...Object.entries(geodes).map(([fileName, [limb]]) => geode(fileName, limb)),
+    geode("boundary.dobj", thresholds.amethyst, 0n)];
+  const ui = await page(context, {
+    objects, actions: [recipe(), ...gems.map((gem) => action(`CrackGeode${gem}`, ["Geode"], [gem]))],
+  });
+  for (const [fileName, [, cracks]] of Object.entries(geodes)) {
+    assert.deepEqual(offeredActions(ui, [fileName]), cracks.map((gem) => `bitcraft::CrackGeode${gem}`), fileName);
+  }
+  assert.deepEqual(offeredActions(ui, ["boundary.dobj"]), ["bitcraft::CrackGeodeQuartz", "bitcraft::CrackGeodeAmethyst"],
+    "a value exactly on a threshold, as the circuit's <= allows, fits both bands");
+});
+
+test("the context menu offers a drill's mining actions only at its level", async (context) => {
+  const drillInputs = ["MiningDrill", "Wood", "Wood", "Wood", "Wood", "Wood"];
+  const mutated = [{ inputIndex: 0, outputIndex: 0 }];
+  const actions = [recipe(),
+    ...[2, 3, 4].map((level) => action(`MineIron${level}`, drillInputs, ["MiningDrill", "Iron"], mutated)),
+    ...[3, 5].map((level) => action(`MineCoal${level}`, drillInputs, ["MiningDrill", "Coal"], mutated)),
+    ...[3, 10].map((level) => action(`MineGeode${level}`, drillInputs, ["MiningDrill", "Geode"], mutated))];
+  const woodFiles = [1, 2, 3, 4, 5].map((index) => `wood-${index}.dobj`);
+  const objects = [knife(), intObject("drill.dobj", "MiningDrill", { level: 3 }),
+    ...woodFiles.map((fileName) => intObject(fileName, "Wood"))];
+  const ui = await page(context, { objects, actions });
+  assert.deepEqual(offeredActions(ui, ["drill.dobj", ...woodFiles]),
+    ["bitcraft::MineIron3", "bitcraft::MineCoal3", "bitcraft::MineGeode3"]);
+});
+
+test("the context menu offers BuildPumpjack only when its buckets hold enough", async (context) => {
+  const build = action("BuildPumpjack", ["Quartz", "BucketOfStone", "BucketOfIron"],
+    ["Pumpjack", "BucketOfStone", "BucketOfIron"], [{ inputIndex: 1, outputIndex: 1 }, { inputIndex: 2, outputIndex: 2 }]);
+  const offered = async (stone, iron) => {
+    const objects = [knife(), intObject("quartz.dobj", "Quartz"),
+      intObject("stone.dobj", "BucketOfStone", { n: stone }), intObject("iron.dobj", "BucketOfIron", { n: iron })];
+    const ui = await page(context, { objects, actions: [recipe(), build] });
+    return offeredActions(ui, ["quartz.dobj", "stone.dobj", "iron.dobj"]).includes("bitcraft::BuildPumpjack");
+  };
+  assert.equal(await offered(50, 100), true, "exactly the cost");
+  assert.equal(await offered(500, 1000), true, "more than the cost");
+  assert.equal(await offered(49, 100), false, "too little stone");
+  assert.equal(await offered(50, 99), false, "too little iron");
+});
+
+test("level-ups are offered when the buckets hold at least the cost", async (context) => {
+  const levelUp = (name, tool, buckets) => action(name, [tool, ...buckets], [tool, ...buckets],
+    [tool, ...buckets].map((_, index) => ({ inputIndex: index, outputIndex: index })));
+  const actions = [recipe(),
+    levelUp("LevelUpQuarry2", "Quarry", ["BucketOfWood", "BucketOfStone"]),
+    levelUp("LevelUpPumpjack1", "Pumpjack", ["BucketOfStone", "BucketOfIron", "BucketOfQuartz"])];
+  const offered = async (objects, fileNames, name) => {
+    const ui = await page(context, { objects: [knife(), ...objects], actions });
+    return offeredActions(ui, fileNames).includes(`bitcraft::${name}`);
+  };
+  const quarry = (wood, stone) => [intObject("quarry.dobj", "Quarry", { level: 2 }),
+    intObject("wood.dobj", "BucketOfWood", { n: wood }), intObject("stone.dobj", "BucketOfStone", { n: stone })];
+  const quarryFiles = ["quarry.dobj", "wood.dobj", "stone.dobj"];
+  assert.equal(await offered(quarry(100, 45), quarryFiles, "LevelUpQuarry2"), true, "more than the 80 wood and 40 stone");
+  assert.equal(await offered(quarry(80, 39), quarryFiles, "LevelUpQuarry2"), false, "too little stone");
+  const pumpjack = (stone, iron, quartz) => [intObject("pumpjack.dobj", "Pumpjack", { level: 1 }),
+    intObject("stone.dobj", "BucketOfStone", { n: stone }), intObject("iron.dobj", "BucketOfIron", { n: iron }),
+    intObject("quartz.dobj", "BucketOfQuartz", { n: quartz })];
+  const pumpjackFiles = ["pumpjack.dobj", "stone.dobj", "iron.dobj", "quartz.dobj"];
+  assert.equal(await offered(pumpjack(100, 200, 2), pumpjackFiles, "LevelUpPumpjack1"), true, "exactly 100 stone, 200 iron, 2 quartz");
+  assert.equal(await offered(pumpjack(150, 300, 5), pumpjackFiles, "LevelUpPumpjack1"), true, "more than the cost");
+  assert.equal(await offered(pumpjack(100, 200, 1), pumpjackFiles, "LevelUpPumpjack1"), false, "too little quartz");
+});
+
 const wood = (fileName, extra = {}) => knife("live", { fileName, class: qname("Wood"), ...extra });
 const transaction = (state = "submitted", extra = {}) => ({
   txFinal: "0xabc", state, owner: "lost-run", action: qname("CraftPocketknife"),

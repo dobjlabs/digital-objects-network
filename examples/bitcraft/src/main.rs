@@ -73,9 +73,15 @@ fn gem_threshold_initializers(pow_target: usize) -> Vec<String> {
 }
 
 // Top-limb difficulty target for a proof-of-work weight. A higher weight
-// gives a smaller target, so a longer grind.
+// gives a smaller target, so a longer grind. A zero target would read as "no
+// proof-of-work", so weights past where the curve reaches zero are refused.
 fn pow_target(pow: usize) -> usize {
-    (1.93e13 - 4.76e12 * ((pow as f64).ln())) as usize
+    let target = 1.93e13 - 4.76e12 * (pow as f64).ln();
+    assert!(
+        target >= 1.0,
+        "proof-of-work weight {pow} gives no positive target"
+    );
+    target as usize
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum_macros::Display)]

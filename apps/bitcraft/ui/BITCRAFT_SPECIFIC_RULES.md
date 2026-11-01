@@ -149,8 +149,8 @@ the selected objects.
 | `LevelUpPumpjack1` .. `LevelUpPumpjack9` | the selected `Pumpjack`'s `level` equals N, and the stone, iron and quartz buckets hold at least 50, 100 and 1 x 2^N | `action.st_equal(pumpjack.level, N)` and one `st_gt_eq` per bucket |
 
 - **Generic behavior:** offer every action whose input classes match the
-  selection. A level-1 drill with 5 wood would show all six
-  `MineIronN`, all six `MineCoalN` and all six `MineGeodeN` actions, and any geode all six
+  selection. A level-1 drill with 5 wood would show all ten
+  `MineIronN`, all ten `MineCoalN` and all ten `MineGeodeN` actions, and any geode all six
   `CrackGeode` actions.
 
 ### Known constraints not yet encoded
