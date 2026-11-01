@@ -5,7 +5,7 @@ use pod2::{
     backends::plonky2::primitives::merkletree::{self, MerkleProof},
     middleware::{Hash, RawValue, Value},
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use txlib::StateHeader;
 
 const FORMAT_VERSION: u8 = 1;
@@ -21,9 +21,9 @@ const FIXED_BYTES: usize = 1 + 2 * I64_BYTES + 4 * HASH_BYTES + I64_BYTES;
 /// Encoded as base64 of: version byte, block number, block timestamp, block
 /// hash, created root, nullifiers root, prior state history root, index,
 /// then the Merkle siblings from the root down. Integers are little-endian
-/// i64 and hashes 32 little-endian limb bytes.
-#[derive(Debug, Clone)]
-pub(crate) struct CreationProof {
+/// i64 and hashes 32 little-endian limb bytes. Serializes as that string.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreationProof {
     pub(crate) state_header: StateHeader,
     pub(crate) index: i64,
     pub(crate) proof: MerkleProof,
@@ -54,6 +54,20 @@ impl ByteReader<'_> {
 
     fn hash(&mut self) -> Result<Hash> {
         db_bytes_to_hash(self.take(HASH_BYTES))
+    }
+}
+
+impl Serialize for CreationProof {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let encoded = self.encode().map_err(serde::ser::Error::custom)?;
+        serializer.serialize_str(&encoded)
+    }
+}
+
+impl<'de> Deserialize<'de> for CreationProof {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let encoded = String::deserialize(deserializer)?;
+        Self::decode(&encoded).map_err(serde::de::Error::custom)
     }
 }
 

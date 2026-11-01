@@ -382,7 +382,7 @@ impl PayloadBuilder for MockPayloadBuilder {
 #[derive(Default)]
 struct MockChain {
     /// Source of grounding witnesses and of the one state root
-    /// `fetch_state_root_at` knows; status and membership reads use the
+    /// `fetch_state_at` knows; status and membership reads use the
     /// fields below instead.
     state: TestState,
     created: HashSet<Hash>,
@@ -466,12 +466,26 @@ impl SynchronizerClient for MockSynchronizer {
         ))
     }
 
-    fn fetch_state_root_at(&self, _sync_api_url: &str, block_number: i64) -> Result<Option<Hash>> {
+    fn fetch_state_at(
+        &self,
+        _sync_api_url: &str,
+        block_number: i64,
+    ) -> Result<Option<wire_types::synchronizer::StateHeadResponse>> {
         let chain = self.chain.lock().unwrap();
         if chain.fail_membership {
             return Err(anyhow!("synchronizer unreachable"));
         }
-        Ok((block_number == chain.state.block_number).then(|| state_header(&chain.state).hash()))
+        Ok((block_number == chain.state.block_number).then(|| {
+            wire_types::synchronizer::StateHeadResponse {
+                slot: 0,
+                state_root: state_header(&chain.state).hash(),
+                block_number,
+                block_hash: Default::default(),
+                created_count: 0,
+                nullifier_count: 0,
+                state_root_count: 0,
+            }
+        }))
     }
 
     fn fetch_membership_with_nullifiers(
@@ -2217,13 +2231,11 @@ fn a_failed_submission_releases_the_lock_for_a_waiting_retry() {
 /// The creation proof `record` carries, checked against its object; returns
 /// the state root it proves against.
 fn verified_creation_proof(record: &ObjectRecord) -> Hash {
-    let encoded = record
+    record
         .metadata
         .creation_proof
-        .as_deref()
-        .expect("record has a creation proof");
-    crate::creation_proof::CreationProof::decode(encoded)
-        .unwrap()
+        .as_ref()
+        .expect("record has a creation proof")
         .verify(record.obj.commitment())
         .unwrap()
 }
@@ -2349,7 +2361,8 @@ fn import_refuses_a_creation_proof_the_synchronizer_does_not_back() {
     );
 
     // The proof does not decode.
-    forged.metadata.creation_proof = Some("not base64!".to_string());
-    let err = refused(&driver, &serde_json::to_string(&forged).unwrap());
+    let mut undecodable = serde_json::to_value(&forged).unwrap();
+    undecodable["metadata"]["creationProof"] = serde_json::json!("not base64!");
+    let err = refused(&driver, &undecodable.to_string());
     assert!(err.contains("not base64"), "{err}");
 }

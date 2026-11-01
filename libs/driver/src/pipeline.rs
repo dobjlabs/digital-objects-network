@@ -769,7 +769,7 @@ impl Driver {
         &self,
         sync_api_url: &str,
         commitments: &[Hash],
-    ) -> Result<HashMap<Hash, String>> {
+    ) -> Result<HashMap<Hash, CreationProof>> {
         let mut proofs = HashMap::new();
         for batch in commitments.chunks(HASH_BATCH_LIMIT) {
             let witness = self
@@ -777,12 +777,14 @@ impl Driver {
                 .synchronizer
                 .fetch_grounding_witness(sync_api_url, batch)?;
             for (commitment, (index, proof)) in witness.created_proofs {
-                let creation_proof = CreationProof {
-                    state_header: witness.state_header.clone(),
-                    index,
-                    proof,
-                };
-                proofs.insert(commitment, creation_proof.encode()?);
+                proofs.insert(
+                    commitment,
+                    CreationProof {
+                        state_header: witness.state_header.clone(),
+                        index,
+                        proof,
+                    },
+                );
             }
         }
         Ok(proofs)
@@ -798,7 +800,7 @@ impl Driver {
         records: &[TransactionRecord],
         statuses: &HashMap<String, Option<SynchronizerTxStatus>>,
         membership: Option<&SynchronizerMembership>,
-    ) -> HashMap<Hash, String> {
+    ) -> HashMap<Hash, CreationProof> {
         let landed_outputs = records
             .iter()
             .filter(|record| {

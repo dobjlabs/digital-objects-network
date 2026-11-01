@@ -538,8 +538,8 @@ impl Driver {
         // 4. A creation proof the file carries must place the object in the
         //    created set of a state root the synchronizer derived.
         let settings = self.load_settings()?;
-        if let Some(encoded) = &record.metadata.creation_proof {
-            self.check_creation_proof(&settings.synchronizer_api_url, encoded, commitment)?;
+        if let Some(proof) = &record.metadata.creation_proof {
+            self.check_creation_proof(&settings.synchronizer_api_url, proof, commitment)?;
         }
 
         // 5. The object must be on chain: created according to the
@@ -613,19 +613,19 @@ impl Driver {
     fn check_creation_proof(
         &self,
         sync_api_url: &str,
-        encoded: &str,
+        proof: &CreationProof,
         commitment: Hash,
     ) -> Result<()> {
-        let invalid = |err: anyhow::Error| DriverError::InvalidInput(format!("{err:#}"));
-        let proof = CreationProof::decode(encoded).map_err(invalid)?;
-        let state_root = proof.verify(commitment).map_err(invalid)?;
+        let state_root = proof
+            .verify(commitment)
+            .map_err(|err| DriverError::InvalidInput(format!("{err:#}")))?;
         let block_number = proof.state_header.block_number;
-        let derived_root = self
+        let derived = self
             .deps
             .synchronizer
-            .fetch_state_root_at(sync_api_url, block_number)
+            .fetch_state_at(sync_api_url, block_number)
             .context("could not check the creation proof's state root")?;
-        if derived_root != Some(state_root) {
+        if derived.map(|state| state.state_root) != Some(state_root) {
             return Err(DriverError::InvalidInput(format!(
                 "creation proof's state root {} is not the synchronizer's at block {block_number}",
                 encode_hash_hex(&state_root)

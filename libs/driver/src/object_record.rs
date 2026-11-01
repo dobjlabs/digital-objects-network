@@ -5,6 +5,8 @@ use std::{fs, path::Path};
 
 use wire_types::{ObjectStatus, QualifiedName};
 
+use crate::creation_proof::CreationProof;
+
 /// Persisted chain status. Pending status is derived from transaction records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -44,10 +46,9 @@ pub struct ObjectMetadata {
     pub tx_final: Hash,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tx_hash: Option<String>,
-    /// Base64 [`crate::creation_proof::CreationProof`] that the object is in
-    /// the created set of a state root.
+    /// Proof that the object is in the created set of a state root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub creation_proof: Option<String>,
+    pub creation_proof: Option<CreationProof>,
 }
 
 impl ObjectRecord {
