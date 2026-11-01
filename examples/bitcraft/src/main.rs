@@ -112,15 +112,12 @@ struct Action {
     in_resources: Vec<(usize, Resource)>,
     out_resources: Vec<(usize, Resource)>,
     // Buckets the action mutates, taking this many resources out of each.
-    // They are not rekeyed: the count only falls, so a bucket never returns
-    // to a state whose nullifier is already spent.
     spend_from_buckets: Vec<(usize, Resource)>,
     mut_bucket: Option<Resource>,
     out_bucket: Option<Resource>,
     in_tool: Option<Tool>,
     out_tool: Option<Tool>,
     mut_tool: Option<Tool>,
-    rekey: bool,
     // Zero means the action does no proof-of-work.
     pow_target: usize,
     vdf: usize,
@@ -138,8 +135,7 @@ enum Tag {
     SetEmpty,
     // Adds `n_steps` times the mutated pumpjack's level to a barrel of oil,
     // behind 50 VDF steps per step. `n_steps` is caller data, 1 if omitted,
-    // and at least 1, so the barrel's count always rises and it needs no
-    // rekey.
+    // and at least 1.
     PumpOil,
     IncLevel,
     ReqLevel(usize),
@@ -160,6 +156,17 @@ enum Tag {
     CrackGeode(usize),
 }
 
+// Gives the mutated object `name` a new random key. Every mutated object is
+// rekeyed: its next state is then never one already spent, and whoever holds
+// a copy of its previous state cannot predict the next one.
+fn rekey(o: &mut File, name: &str) -> Result<(), io::Error> {
+    writeln!(
+        o,
+        r#"  var {name}_key = unsafe {{ action.random() }};
+  {name}.update("key", {name}_key);"#
+    )
+}
+
 fn main() -> Result<(), io::Error> {
     let mut rhai_output = File::create("plugin.rhai")?;
     let mut manifest_output = File::create("manifest.toml")?;
@@ -177,21 +184,16 @@ fn main() -> Result<(), io::Error> {
 
     // Gather
     //
-    // The pocketknife is mutated rather than consumed, and must be rekeyed:
-    // a nullifier is derived from the object and its key, so a pocketknife
-    // returned unchanged would carry the nullifier its input just spent.
-    //
-    // Rekeying adds a `key` wildcard, bringing the action predicate to 9
-    // wildcards over 5 statements. pod2 caps a predicate at 8 wildcards, and
-    // splits a predicate into a chain of smaller ones (each within the
-    // wildcard cap) only when it exceeds 5 statements. At exactly 5 nothing
-    // is split and the predicate fails to compile, so PadForSplit adds a
-    // no-op sixth statement to trigger the split.
+    // Rekeying the pocketknife adds a key wildcard, bringing the action
+    // predicate to 9 wildcards over 5 statements. pod2 caps a predicate at 8
+    // wildcards, and splits a predicate into a chain of smaller ones (each
+    // within the wildcard cap) only when it exceeds 5 statements. At exactly
+    // 5 nothing is split and the predicate fails to compile, so PadForSplit
+    // adds a no-op sixth statement to trigger the split.
     for (pow, out) in [(10, Wood), (20, Stone), (40, Iron)] {
         actions.push(Action {
             name: format!("Gather{out}"),
             mut_tool: Some(Pocketknife),
-            rekey: true,
             out_resources: vec![(1, out)],
             pow_target: pow_target(pow),
             tags: vec![PadForSplit],
@@ -224,7 +226,6 @@ fn main() -> Result<(), io::Error> {
                 name: format!("{}Add{n}", bucket_class(*resource)),
                 in_resources: vec![(n, *resource)],
                 mut_bucket: Some(*resource),
-                rekey: true,
                 tags: vec![AddToBucket(n)],
                 ..Default::default()
             });
@@ -234,7 +235,6 @@ fn main() -> Result<(), io::Error> {
             name: format!("{}Take1", bucket_class(*resource)),
             out_resources: vec![(1, *resource)],
             mut_bucket: Some(*resource),
-            rekey: true,
             tags: vec![TakeFromBucket(1)],
             ..Default::default()
         });
@@ -289,7 +289,6 @@ fn main() -> Result<(), io::Error> {
         actions.push(Action {
             name: format!("UseQuarry{lvl}"),
             mut_tool: Some(Quarry),
-            rekey: true,
             out_resources: vec![(lvl + 1, Stone)],
             pow_target: pow_target(20),
             tags: vec![ReqLevel(lvl)],
@@ -298,7 +297,6 @@ fn main() -> Result<(), io::Error> {
         actions.push(Action {
             name: format!("MineIron{lvl}"),
             mut_tool: Some(MiningDrill),
-            rekey: true,
             in_resources: vec![(5, Wood)],
             out_resources: vec![(lvl + 1, Iron)],
             pow_target: pow_target(40),
@@ -308,7 +306,6 @@ fn main() -> Result<(), io::Error> {
         actions.push(Action {
             name: format!("MineCoal{lvl}"),
             mut_tool: Some(MiningDrill),
-            rekey: true,
             in_resources: vec![(5, Wood)],
             out_resources: vec![(lvl, Coal)],
             pow_target: pow_target(40),
@@ -379,7 +376,6 @@ fn main() -> Result<(), io::Error> {
     actions.push(Action {
         name: format!("PumpOil"),
         mut_tool: Some(Pumpjack),
-        rekey: true,
         in_resources: vec![(5, Coal)],
         tags: vec![PumpOil],
         ..Default::default()
@@ -394,7 +390,6 @@ fn main() -> Result<(), io::Error> {
         actions.push(Action {
             name: format!("MineGeode{lvl}"),
             mut_tool: Some(MiningDrill),
-            rekey: true,
             in_resources: vec![(5, Wood)],
             out_resources: vec![(1, Geode)],
             pow_target: pow_target(10) * lvl / GEM_POW_FACTOR,
@@ -440,7 +435,6 @@ fn main() -> Result<(), io::Error> {
             name: format!("BitsFrom{gem}"),
             in_resources: vec![(1, *gem)],
             mut_bucket: Some(Bit),
-            rekey: true,
             tags: vec![AddToBucket(bits)],
             ..Default::default()
         });
@@ -485,14 +479,7 @@ fn main() -> Result<(), io::Error> {
         if let Some(mut_tool) = action.mut_tool {
             let name = format!("{mut_tool}").to_lowercase();
             writeln!(o, "  var {name} = action.mutate(\"{mut_tool}\");")?;
-
-            if action.rekey {
-                writeln!(
-                    o,
-                    r#"  var key = unsafe {{ action.random() }};
-  {name}.update("key", key);"#
-                )?;
-            }
+            rekey(o, &name)?;
 
             for tag in &action.tags {
                 match tag {
@@ -541,10 +528,11 @@ fn main() -> Result<(), io::Error> {
         for (n, res) in &action.spend_from_buckets {
             let name = format!("{res}bucket").to_lowercase();
             let class = bucket_class(*res);
+            writeln!(o, r#"  var {name} = action.mutate("{class}");"#)?;
+            rekey(o, &name)?;
             writeln!(
                 o,
-                r#"  var {name} = action.mutate("{class}");
-  action.st_gt_eq({name}.n, {n});
+                r#"  action.st_gt_eq({name}.n, {n});
   var {name}_n = unsafe {{ {name}.n - {n} }};
   action.st_sum({name}_n, {n}, {name}.n);
   {name}.update("n", {name}_n);"#
@@ -565,14 +553,7 @@ fn main() -> Result<(), io::Error> {
             let name = format!("{res}bucket").to_lowercase();
             let class = bucket_class(res);
             writeln!(o, r#"  var {name} = action.mutate("{class}");"#)?;
-
-            if action.rekey {
-                writeln!(
-                    o,
-                    r#"  var key = unsafe {{ action.random() }};
-  {name}.update("key", key);"#
-                )?;
-            }
+            rekey(o, &name)?;
 
             for tag in &action.tags {
                 match tag {
@@ -603,10 +584,11 @@ fn main() -> Result<(), io::Error> {
                 PumpOil => {
                     let pumpjack = format!("{Pumpjack}").to_lowercase();
                     let barrel = format!("{BarrelOfOil}").to_lowercase();
+                    writeln!(o, r#"  var {barrel} = action.mutate("{BarrelOfOil}");"#)?;
+                    rekey(o, &barrel)?;
                     writeln!(
                         o,
-                        r#"  var {barrel} = action.mutate("{BarrelOfOil}");
-  var n_steps = unsafe {{ arg("n_steps") ?? 1 }};
+                        r#"  var n_steps = unsafe {{ arg("n_steps") ?? 1 }};
   action.st_gt_eq(n_steps, 1);
   var pumped = unsafe {{ n_steps * {pumpjack}.level }};
   action.st_product(n_steps, {pumpjack}.level, pumped);
