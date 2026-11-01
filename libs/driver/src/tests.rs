@@ -2338,6 +2338,17 @@ fn import_refuses_a_creation_proof_the_synchronizer_does_not_back() {
     let err = refused(&driver, &json);
     assert!(err.contains("is not the synchronizer's at block"), "{err}");
 
+    // The synchronizer has a state at the proof's block, but the proof's
+    // header is not that state's: the Merkle proof still verifies against
+    // the header's created root.
+    let mut forged_header: ObjectRecord = serde_json::from_str(&json).unwrap();
+    let proof = forged_header.metadata.creation_proof.as_mut().unwrap();
+    proof.state_header.block_timestamp += 1;
+    proof.verify(commitment).unwrap();
+    let (driver, _) = import_driver(HashSet::from([commitment]), HashSet::new(), false);
+    let err = refused(&driver, &serde_json::to_string(&forged_header).unwrap());
+    assert!(err.contains("is not the synchronizer's at block"), "{err}");
+
     // The synchronizer cannot say.
     let (driver, chain) = import_driver(HashSet::from([commitment]), HashSet::new(), false);
     chain.lock().unwrap().fail_membership = true;
