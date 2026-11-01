@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-discord-sharing"
+description = "Allow reading and changing the Discord sharing preference."
+commands.allow = ["discord_sharing", "set_discord_sharing"]

@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-raise-window"
+description = "Allow raising a window the page opened."
+commands.allow = ["raise_window"]

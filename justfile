@@ -98,6 +98,10 @@ bitcraft-dev-local: bitcraft-prepare-dev
 bitcraft-bundle: bitcraft-prepare
     cd apps/bitcraft && npx --yes @tauri-apps/cli@2.12.2 build --config src-tauri/tauri.bundle.conf.json
 
+# Run the Bitcraft leaderboard bot (loads env from apps/bitcraft/discord-bot/.env if present)
+bitcraft-discord-bot:
+    cargo run --bin bitcraft-discord-bot --release
+
 # Run the documentation site (Vocs dev server) with hot reload
 docs:
     cd docs && pnpm install && pnpm dev
