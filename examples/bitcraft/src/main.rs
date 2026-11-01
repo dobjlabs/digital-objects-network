@@ -473,18 +473,13 @@ fn main() -> Result<(), io::Error> {
                     _ => Option::None,
                 })
                 .collect();
-            // `set` only adds literal fields, so the nonce starts as a
-            // placeholder that the `update` below replaces.
-            if out_tool.mines() {
-                initializers.push(format!(r#"["nonce", 0]"#));
-            }
-            if !initializers.is_empty() {
-                writeln!(o, "  {name}.set([{}]);", initializers.join(", "))?;
-            }
             // The grounding block's hash is unknown until shortly before the
             // tool exists, so no work toward its first use can start earlier.
             if out_tool.mines() {
-                writeln!(o, r#"  {name}.update("nonce", state_header.block_hash);"#)?;
+                initializers.push(format!(r#"["nonce", state_header.block_hash]"#));
+            }
+            if !initializers.is_empty() {
+                writeln!(o, "  {name}.set([{}]);", initializers.join(", "))?;
             }
         }
         if let Some(mut_tool) = action.mut_tool {
@@ -651,7 +646,7 @@ fn main() -> Result<(), io::Error> {
                 .filter(|tool| tool.mines())
                 .expect("a mining action mutates the tool it mines with");
             let tool = format!("{tool}").to_lowercase();
-            let mut initializers = vec![format!(r#"["tool_nonce", 0]"#)];
+            let mut initializers = vec![format!(r#"["tool_nonce", {tool}.nonce]"#)];
             if action
                 .tags
                 .iter()
@@ -662,7 +657,6 @@ fn main() -> Result<(), io::Error> {
             writeln!(
                 o,
                 r#"  {var}.set([{initializers}]);
-  {var}.update("tool_nonce", {tool}.nonce);
   let target = action.top_limb_u256({n});
   var grind_key = unsafe {{ arg("grind_key") ?? action.pow_obj_grind({var}, target) }};
   {var}.update("key", grind_key);
