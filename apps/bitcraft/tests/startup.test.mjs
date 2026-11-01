@@ -1810,7 +1810,7 @@ test("the context menu offers only the level-up the tool's level and buckets all
   assert.deepEqual(menuFor(), ["Open all", "No available actions"]);
 });
 
-test("PumpOil asks how many steps to run, and sends the count as n_steps", async (context) => {
+test("PumpOil asks how many steps to run, up to 8, and sends the count as n_steps", async (context) => {
   const pumpOil = {
     action: qname("PumpOil"), predicateSource: "",
     mutatedObjects: [{ inputIndex: 0, outputIndex: 0 }, { inputIndex: 6, outputIndex: 1 }],
@@ -1844,8 +1844,10 @@ test("PumpOil asks how many steps to run, and sends the count as n_steps", async
   };
   const press = (key) => input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key, bubbles: true }));
 
+  const warning = document.querySelector("#steps-warning");
   choosePumpOil();
   assert.equal(sheet.hidden, false);
+  assert.equal(warning.hidden, true, "1 step is within the limit");
   assert.equal(document.querySelector("#steps-title").textContent, "How many steps should the pumpjack run?");
   assert.equal(document.querySelector("#steps-note").textContent, "Each step takes about 5 minutes on a typical laptop.");
   assert.equal(input.value, "1");
@@ -1868,16 +1870,28 @@ test("PumpOil asks how many steps to run, and sends the count as n_steps", async
   for (const text of ["", "0", "-2", "1.5", "3 steps", "99999999999999999999"]) {
     type(text);
     assert.equal(confirm.disabled, true, `"${text}" is not a number of steps`);
+    assert.equal(warning.hidden, true, `"${text}" is not over the limit, just not a count`);
     press("Enter");
     assert.equal(sheet.hidden, false, `Enter does not confirm "${text}"`);
   }
-  type(" 12 ");
+  for (const text of ["9", " 12 "]) {
+    type(text);
+    assert.equal(confirm.disabled, true, `"${text}" is more than 8 steps`);
+    assert.equal(warning.hidden, false, `"${text}" warns that the action may time out`);
+    assert.equal(warning.textContent,
+      "More than 8 steps can take longer than the network allows, so the action may time out. Choose 8 or fewer.");
+    confirm.click();
+    press("Enter");
+    assert.equal(sheet.hidden, false, `neither Confirm nor Enter accepts "${text}"`);
+  }
+  type(" 8 ");
   assert.equal(confirm.disabled, false);
+  assert.equal(warning.hidden, true);
   press("Enter");
   await flush();
   assert.equal(sheet.hidden, true);
   assert.equal(ui.backend.posts.length, 1);
-  assert.deepEqual(ui.backend.posts[0].args, { n_steps: { Int: "12" } });
+  assert.deepEqual(ui.backend.posts[0].args, { n_steps: { Int: "8" } });
   assert.deepEqual([...ui.backend.posts[0].inputObjectPaths].sort(), inputs.map((object) => object.fileName).sort());
 });
 
