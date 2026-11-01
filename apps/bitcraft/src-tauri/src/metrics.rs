@@ -364,7 +364,7 @@ mod tests {
     fn shared_rules_value_levels_contents_and_wear() {
         let rules = serde_json::from_str(include_str!("../../ui/inventory-values.json")).unwrap();
         for (class, fields, expected) in [
-            ("Quarry", json!([["level", {"Int":"3"}]]), 300.0),
+            ("Quarry", json!([["level", {"Int":"3"}]]), 140.0),
             ("BucketOfIron", json!([["n", {"Int":"10"}]]), 55.0),
             ("IronAxe", json!([["durability", {"Int":"50"}]]), 4.5),
         ] {

@@ -1128,30 +1128,30 @@ const valueSamples = (...samples) => ({
 });
 
 test("BIT/sec shows how fast the inventory's value grew over the last 5 minutes", async (context) => {
-  // A level 3 quarry is worth 300; the inventory was worth nothing 10 minutes
-  // ago, so over the 5-minute window it grew 300 BIT in 300 seconds.
+  // A level 3 quarry is worth 140; the inventory was worth 20 BIT 10 minutes
+  // ago, so over the 5-minute window it grew 120 BIT in 300 seconds.
   const ui = await page(context, {
-    objects: [knife(), quarry(3)], sessionStorage: valueSamples([600000, 0]),
+    objects: [knife(), quarry(3)], sessionStorage: valueSamples([600000, 20]),
   });
   const rate = () => ui.document.querySelector("#inventory-rate").textContent;
-  assert.equal(rate(), "1.00 BIT/sec");
-  assert.equal(ui.document.title, "Bitcraft (300.00 BIT - 1.00 BIT/sec)");
+  assert.equal(rate(), "0.40 BIT/sec");
+  assert.equal(ui.document.title, "Bitcraft (140.00 BIT - 0.40 BIT/sec)");
   const ticks = [...ui.timers.values()].filter((timer) => timer.delay === 1000);
   assert.ok(ticks.length > 0, "the rate is refreshed every second");
 
   const stored = JSON.parse(ui.dom.window.sessionStorage.getItem("bitcraft.inventory-value-samples"));
-  assert.deepEqual(stored.map((sample) => sample.value), [0, 300], "the samples are kept for a reload");
+  assert.deepEqual(stored.map((sample) => sample.value), [20, 140], "the samples are kept for a reload");
 });
 
 test("BIT/sec counts only the window, and can fall", async (context) => {
-  // 200 BIT 8 minutes ago is the value the window starts from; 400 a minute
-  // ago, 300 now: 100 BIT more over 300 seconds.
+  // 50 BIT 8 minutes ago is the value the window starts from; 400 a minute
+  // ago, 140 now: 90 BIT more over 300 seconds.
   const ui = await page(context, {
-    objects: [knife(), quarry(3)], sessionStorage: valueSamples([900000, 0], [480000, 200], [60000, 400]),
+    objects: [knife(), quarry(3)], sessionStorage: valueSamples([900000, 0], [480000, 50], [60000, 400]),
   });
-  assert.equal(ui.document.querySelector("#inventory-rate").textContent, "0.33 BIT/sec");
+  assert.equal(ui.document.querySelector("#inventory-rate").textContent, "0.30 BIT/sec");
   const fell = await page(context, {
-    objects: [knife(), quarry(3)], sessionStorage: valueSamples([600000, 450]),
+    objects: [knife(), quarry(3)], sessionStorage: valueSamples([600000, 290]),
   });
   assert.equal(fell.document.querySelector("#inventory-rate").textContent, "-0.50 BIT/sec");
 });
@@ -1161,27 +1161,27 @@ test("BIT/sec always averages over 5 minutes, and a 0.00 rate is not shown", asy
   const rateShown = (page) => !page.document.querySelector("#inventory-rate").hidden
     && !page.document.querySelector("#inventory-rate-divider").hidden;
   assert.equal(rateShown(ui), false, "with one sample nothing has grown, and a 0.00 rate is not shown");
-  assert.equal(ui.document.title, "Bitcraft (300.00 BIT)");
-  // 270 BIT ten seconds ago, 300 now: 30 BIT more, spread over 300 seconds
+  assert.equal(ui.document.title, "Bitcraft (140.00 BIT)");
+  // 110 BIT ten seconds ago, 140 now: 30 BIT more, spread over 300 seconds
   // rather than 10.
   const recent = await page(context, {
-    objects: [knife(), quarry(3)], sessionStorage: valueSamples([10000, 270]),
+    objects: [knife(), quarry(3)], sessionStorage: valueSamples([10000, 110]),
   });
   assert.equal(recent.document.querySelector("#inventory-rate").textContent, "0.10 BIT/sec");
   assert.equal(rateShown(recent), true);
-  assert.equal(recent.document.title, "Bitcraft (300.00 BIT - 0.10 BIT/sec)");
+  assert.equal(recent.document.title, "Bitcraft (140.00 BIT - 0.10 BIT/sec)");
 });
 
 test("desktop values inventory locally and takes only the rate from the host", async (context) => {
   const ui = await page(context, {
-    desktop: true, objects: [knife(), quarry(3)], invoke: () => ({ totalBits: 630, bitsPerSecond: -0.5 }),
+    desktop: true, objects: [knife(), quarry(3)], invoke: () => ({ totalBits: 300, bitsPerSecond: -0.5 }),
     sessionStorage: valueSamples([600000, 0]),
   });
-  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "300.00 BIT");
+  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "140.00 BIT");
   assert.equal(ui.document.querySelector("#inventory-rate").textContent, "-0.50 BIT/sec");
   assert.ok(ui.desktopCalls.every((command) => command === "inventory_metrics"));
   await ui.event({ type: "object", ...quarry(4) });
-  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "630.00 BIT");
+  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "300.00 BIT");
   assert.equal(ui.document.querySelector("#inventory-rate").textContent, "-0.50 BIT/sec");
 });
 
@@ -1198,17 +1198,17 @@ test("an unavailable native rate hides only the rate, and later reads recover", 
   let available = false;
   const ui = await page(context, {
     desktop: true, objects: [knife(), quarry(3)],
-    invoke: () => { if (!available) throw new Error("Unavailable"); return { totalBits: 300, bitsPerSecond: 1 }; },
+    invoke: () => { if (!available) throw new Error("Unavailable"); return { totalBits: 140, bitsPerSecond: 1 }; },
   });
   assert.equal(ui.app.hidden, false);
-  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "300.00 BIT");
+  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "140.00 BIT");
   assert.equal(ui.document.querySelector("#inventory-rate").hidden, true);
   available = true;
   for (const timer of ui.timers.values()) if (timer.delay === 1000) timer.callback();
   await flush();
-  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "300.00 BIT");
+  assert.equal(ui.document.querySelector("#inventory-value-amount").textContent, "140.00 BIT");
   assert.equal(ui.document.querySelector("#inventory-rate").textContent, "1.00 BIT/sec");
-  assert.equal(ui.document.title, "Bitcraft (300.00 BIT - 1.00 BIT/sec)");
+  assert.equal(ui.document.title, "Bitcraft (140.00 BIT - 1.00 BIT/sec)");
 });
 
 test("the summary icon opens the Inventory Summary in one window", async (context) => {
@@ -1904,6 +1904,199 @@ test("the context menu offers only the level-up the tool's level and buckets all
   dom.window.dispatchEvent(new dom.window.Event("focus"));
   await flush();
   assert.deepEqual(menuFor(), ["Open all", "No available actions"]);
+});
+
+test("PumpOil asks how many steps to run, up to 8, and sends the count as n_steps", async (context) => {
+  const pumpOil = {
+    action: qname("PumpOil"), predicateSource: "",
+    mutatedObjects: [{ inputIndex: 0, outputIndex: 0 }, { inputIndex: 6, outputIndex: 1 }],
+    totalInputs: ["Pumpjack", "Coal", "Coal", "Coal", "Coal", "Coal", "BarrelOfOil"].map((name) => ({ class: qname(name) })),
+    totalOutputs: ["Pumpjack", "BarrelOfOil"].map((name) => ({ class: qname(name) })),
+  };
+  const item = (fileName, name, fields = {}) => ({
+    fileName, class: qname(name), status: "live",
+    fields: { kvs: Object.entries(fields).map(([key, value]) => [key, { Int: String(value) }]) },
+  });
+  const inputs = [item("pumpjack.dobj", "Pumpjack", { level: 1 }),
+    ...[1, 2, 3, 4, 5].map((index) => item(`coal-${index}.dobj`, "Coal")), item("barrel.dobj", "BarrelOfOil", { n: 0 })];
+  const ui = await page(context, { objects: [knife(), ...inputs], actions: [recipe(), pumpOil] });
+  const { document, dom } = ui;
+  const sheet = document.querySelector("#steps-sheet");
+  const input = document.querySelector("#steps-input");
+  const confirm = document.querySelector("#steps-confirm");
+  const choosePumpOil = () => {
+    const rows = inputs.map((object) => document.querySelector(`.object-row[data-file-name="${object.fileName}"]`));
+    rows[0].dispatchEvent(new dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+    for (const row of rows.slice(1)) {
+      row.dispatchEvent(new dom.window.MouseEvent("mousedown", { button: 0, ctrlKey: true, bubbles: true }));
+    }
+    rows[0].dispatchEvent(new dom.window.MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    [...document.querySelectorAll('.context-menu [role="menuitem"]')]
+      .find((entry) => entry.textContent.includes("PumpOil")).click();
+  };
+  const type = (text) => {
+    input.value = text;
+    input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  };
+  const press = (key) => input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key, bubbles: true }));
+
+  const warning = document.querySelector("#steps-warning");
+  choosePumpOil();
+  assert.equal(sheet.hidden, false);
+  assert.equal(warning.hidden, true, "1 step is within the limit");
+  assert.equal(document.querySelector("#steps-title").textContent, "How many steps should the pumpjack run?");
+  assert.equal(document.querySelector("#steps-note").textContent, "Each step takes about 5 minutes on a typical laptop.");
+  assert.equal(input.value, "1");
+  assert.equal(document.activeElement, input);
+  assert.equal(document.querySelector("#top-bar").inert, true, "the sheet keeps the inventory out of reach");
+  assert.equal(ui.backend.posts.length, 0, "nothing runs before the player answers");
+  document.querySelector("#steps-cancel").click();
+  await flush();
+  assert.equal(sheet.hidden, true);
+  assert.equal(document.querySelector("#top-bar").inert, false);
+  assert.equal(ui.backend.posts.length, 0, "Cancel starts nothing");
+
+  choosePumpOil();
+  press("Escape");
+  await flush();
+  assert.equal(sheet.hidden, true);
+  assert.equal(ui.backend.posts.length, 0, "Escape starts nothing");
+
+  choosePumpOil();
+  for (const text of ["", "0", "-2", "1.5", "3 steps", "99999999999999999999"]) {
+    type(text);
+    assert.equal(confirm.disabled, true, `"${text}" is not a number of steps`);
+    assert.equal(warning.hidden, true, `"${text}" is not over the limit, just not a count`);
+    press("Enter");
+    assert.equal(sheet.hidden, false, `Enter does not confirm "${text}"`);
+  }
+  for (const text of ["9", " 12 "]) {
+    type(text);
+    assert.equal(confirm.disabled, true, `"${text}" is more than 8 steps`);
+    assert.equal(warning.hidden, false, `"${text}" warns that the action may time out`);
+    assert.equal(warning.textContent,
+      "More than 8 steps can take longer than the network allows, so the action may time out. Choose 8 or fewer.");
+    confirm.click();
+    press("Enter");
+    assert.equal(sheet.hidden, false, `neither Confirm nor Enter accepts "${text}"`);
+  }
+  type(" 8 ");
+  assert.equal(confirm.disabled, false);
+  assert.equal(warning.hidden, true);
+  press("Enter");
+  await flush();
+  assert.equal(sheet.hidden, true);
+  assert.equal(ui.backend.posts.length, 1);
+  assert.deepEqual(ui.backend.posts[0].args, { n_steps: { Int: "8" } });
+  assert.deepEqual([...ui.backend.posts[0].inputObjectPaths].sort(), inputs.map((object) => object.fileName).sort());
+});
+
+const action = (name, inputs, outputs, mutatedObjects = []) => ({
+  action: qname(name), predicateSource: "", mutatedObjects,
+  totalInputs: inputs.map((input) => ({ class: qname(input) })),
+  totalOutputs: outputs.map((output) => ({ class: qname(output) })),
+});
+const intObject = (fileName, name, fields = {}) => ({
+  fileName, class: qname(name), status: "live",
+  fields: { kvs: Object.entries(fields).map(([key, value]) => [key, { Int: String(value) }]) },
+});
+// The bitcraft actions the context menu offers for the selected files.
+function offeredActions(ui, fileNames) {
+  const { document, dom } = ui;
+  const rows = fileNames.map((fileName) => document.querySelector(`.object-row[data-file-name="${fileName}"]`));
+  rows[0].dispatchEvent(new dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  for (const row of rows.slice(1)) {
+    row.dispatchEvent(new dom.window.MouseEvent("mousedown", { button: 0, ctrlKey: true, bubbles: true }));
+  }
+  rows[0].dispatchEvent(new dom.window.MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  const labels = [...document.querySelectorAll(".context-menu .menu-item-label")].map((label) => label.textContent);
+  dom.window.closeContextMenu();
+  return labels.filter((label) => label.startsWith("bitcraft::"));
+}
+
+test("the context menu offers a geode only the crack its mined value allows", async (context) => {
+  const gems = ["Quartz", "Amethyst", "Sapphire", "Emerald", "Ruby", "Diamond"];
+  // MineGeode1's thresholds, as top limbs: the highest value that cracks into
+  // each gem or a rarer one.
+  const thresholds = { amethyst: 509014584n, sapphire: 31813411n, emerald: 1988338n, ruby: 124271n, diamond: 7766n };
+  const raw = (topLimb, low = 0n) => ({ Untyped: ((topLimb << 192n) + low).toString(16).padStart(64, "0") });
+  const geode = (fileName, topLimb, low = 1n) => ({
+    fileName, class: qname("Geode"), status: "live",
+    fields: { kvs: [["stable_identifier", raw(topLimb, low)],
+      ...Object.entries(thresholds).map(([gem, limb]) => [gem, raw(limb)])] },
+  });
+  const geodes = {
+    "quartz.dobj": [8144233356n, ["Quartz"]],
+    "amethyst.dobj": [509014583n, ["Amethyst"]],
+    "sapphire.dobj": [31813410n, ["Sapphire"]],
+    "emerald.dobj": [1988337n, ["Emerald"]],
+    "ruby.dobj": [124270n, ["Ruby"]],
+    "diamond.dobj": [7765n, ["Diamond"]],
+  };
+  const objects = [knife(), ...Object.entries(geodes).map(([fileName, [limb]]) => geode(fileName, limb)),
+    geode("boundary.dobj", thresholds.amethyst, 0n)];
+  const ui = await page(context, {
+    objects, actions: [recipe(), ...gems.map((gem) => action(`CrackGeode${gem}`, ["Geode"], [gem]))],
+  });
+  for (const [fileName, [, cracks]] of Object.entries(geodes)) {
+    assert.deepEqual(offeredActions(ui, [fileName]), cracks.map((gem) => `bitcraft::CrackGeode${gem}`), fileName);
+  }
+  assert.deepEqual(offeredActions(ui, ["boundary.dobj"]), ["bitcraft::CrackGeodeQuartz", "bitcraft::CrackGeodeAmethyst"],
+    "a value exactly on a threshold, as the circuit's <= allows, fits both bands");
+});
+
+test("the context menu offers a drill's mining actions only at its level", async (context) => {
+  const drillInputs = ["MiningDrill", "Wood", "Wood", "Wood", "Wood", "Wood"];
+  const mutated = [{ inputIndex: 0, outputIndex: 0 }];
+  const actions = [recipe(),
+    ...[2, 3, 4].map((level) => action(`MineIron${level}`, drillInputs, ["MiningDrill", "Iron"], mutated)),
+    ...[3, 5].map((level) => action(`MineCoal${level}`, drillInputs, ["MiningDrill", "Coal"], mutated)),
+    ...[3, 10].map((level) => action(`MineGeode${level}`, drillInputs, ["MiningDrill", "Geode"], mutated))];
+  const woodFiles = [1, 2, 3, 4, 5].map((index) => `wood-${index}.dobj`);
+  const objects = [knife(), intObject("drill.dobj", "MiningDrill", { level: 3 }),
+    ...woodFiles.map((fileName) => intObject(fileName, "Wood"))];
+  const ui = await page(context, { objects, actions });
+  assert.deepEqual(offeredActions(ui, ["drill.dobj", ...woodFiles]),
+    ["bitcraft::MineIron3", "bitcraft::MineCoal3", "bitcraft::MineGeode3"]);
+});
+
+test("the context menu offers BuildPumpjack only when its buckets hold enough", async (context) => {
+  const build = action("BuildPumpjack", ["Quartz", "BucketOfStone", "BucketOfIron"],
+    ["Pumpjack", "BucketOfStone", "BucketOfIron"], [{ inputIndex: 1, outputIndex: 1 }, { inputIndex: 2, outputIndex: 2 }]);
+  const offered = async (stone, iron) => {
+    const objects = [knife(), intObject("quartz.dobj", "Quartz"),
+      intObject("stone.dobj", "BucketOfStone", { n: stone }), intObject("iron.dobj", "BucketOfIron", { n: iron })];
+    const ui = await page(context, { objects, actions: [recipe(), build] });
+    return offeredActions(ui, ["quartz.dobj", "stone.dobj", "iron.dobj"]).includes("bitcraft::BuildPumpjack");
+  };
+  assert.equal(await offered(50, 100), true, "exactly the cost");
+  assert.equal(await offered(500, 1000), true, "more than the cost");
+  assert.equal(await offered(49, 100), false, "too little stone");
+  assert.equal(await offered(50, 99), false, "too little iron");
+});
+
+test("level-ups are offered when the buckets hold at least the cost", async (context) => {
+  const levelUp = (name, tool, buckets) => action(name, [tool, ...buckets], [tool, ...buckets],
+    [tool, ...buckets].map((_, index) => ({ inputIndex: index, outputIndex: index })));
+  const actions = [recipe(),
+    levelUp("LevelUpQuarry2", "Quarry", ["BucketOfWood", "BucketOfStone"]),
+    levelUp("LevelUpPumpjack1", "Pumpjack", ["BucketOfStone", "BucketOfIron", "BucketOfQuartz"])];
+  const offered = async (objects, fileNames, name) => {
+    const ui = await page(context, { objects: [knife(), ...objects], actions });
+    return offeredActions(ui, fileNames).includes(`bitcraft::${name}`);
+  };
+  const quarry = (wood, stone) => [intObject("quarry.dobj", "Quarry", { level: 2 }),
+    intObject("wood.dobj", "BucketOfWood", { n: wood }), intObject("stone.dobj", "BucketOfStone", { n: stone })];
+  const quarryFiles = ["quarry.dobj", "wood.dobj", "stone.dobj"];
+  assert.equal(await offered(quarry(100, 45), quarryFiles, "LevelUpQuarry2"), true, "more than the 80 wood and 40 stone");
+  assert.equal(await offered(quarry(80, 39), quarryFiles, "LevelUpQuarry2"), false, "too little stone");
+  const pumpjack = (stone, iron, quartz) => [intObject("pumpjack.dobj", "Pumpjack", { level: 1 }),
+    intObject("stone.dobj", "BucketOfStone", { n: stone }), intObject("iron.dobj", "BucketOfIron", { n: iron }),
+    intObject("quartz.dobj", "BucketOfQuartz", { n: quartz })];
+  const pumpjackFiles = ["pumpjack.dobj", "stone.dobj", "iron.dobj", "quartz.dobj"];
+  assert.equal(await offered(pumpjack(100, 200, 2), pumpjackFiles, "LevelUpPumpjack1"), true, "exactly 100 stone, 200 iron, 2 quartz");
+  assert.equal(await offered(pumpjack(150, 300, 5), pumpjackFiles, "LevelUpPumpjack1"), true, "more than the cost");
+  assert.equal(await offered(pumpjack(100, 200, 1), pumpjackFiles, "LevelUpPumpjack1"), false, "too little quartz");
 });
 
 const wood = (fileName, extra = {}) => knife("live", { fileName, class: qname("Wood"), ...extra });

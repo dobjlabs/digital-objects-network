@@ -40,26 +40,28 @@ that block should be plugin-agnostic.
 
 - **Where:** `REFERENCE_CLASS_ORDER`, applied in `loadReferenceWindow()`
   through `compareReferenceClasses()`.
-- **What:** Pocketknife, Wood, Stone, Iron, Bit, Stick, WoodAxe, StoneAxe,
-  IronAxe, Quarry, MiningDrill, BucketOfWood, BucketOfStone, BucketOfIron.
+- **What:** Pocketknife, Wood, Stone, Iron, Coal, Bit, Stick, Geode,
+  Quartz, Amethyst, Sapphire, Emerald, Ruby, Diamond, WoodAxe, StoneAxe,
+  IronAxe, Quarry, MiningDrill, Pumpjack, BucketOfWood, BucketOfStone, BucketOfIron,
+  BucketOfBits, BucketOfCoal, BucketOfQuartz, BarrelOfOil.
   Classes not listed follow, by name.
 - **Generic behavior:** the order `GET /classes` reports, which is by name.
 - **Why:** the starter tool, the resources and what they make, then the
-  tools, machines and buckets, roughly in the order a player meets them.
+  tools, machines, buckets and barrels, roughly in the order a player meets them.
 
 ### Capital goods head the object list, in bold, with their level
 
 - **Where:** `CAPITAL_GOOD_CLASSES`, applied through `isCapitalGood()` in `showObjects()` (order) and `renderObjects()` (weight), and through `iconBadgeFor()` to the object list's icons and a single object's Details pane icon (level).
-- **What:** objects of the classes a `LevelUp*` action upgrades, Quarry and MiningDrill, are listed right after the welcome guide, with their names in bold, then every other object. Each group is sorted by file name. Their icons carry their `level` field as a number on a badge over the icon's bottom right corner, colored by level like item rarity (`--icon-badge-level-1` to `-6`): 1 green, 2 blue, 3 purple, 4 orange, 5 red, and 6 gold with dark text; levels above `TOP_BADGE_LEVEL` (6) share level 6's gold. Levels 1 to 5 have white text. The badge shows on the object list's icon, and on the class art of the large icon in the object's Details pane.
+- **What:** objects of the classes a `LevelUp*` action upgrades, Quarry, MiningDrill and Pumpjack, are listed right after the welcome guide, with their names in bold, then every other object. Each group is sorted by file name. Their icons carry their `level` field as a number on a badge over the icon's bottom right corner, colored by level like item rarity (`--icon-badge-level-1` to `-6`): 1 green, 2 blue, 3 purple, 4 orange, 5 red, and 6 gold with dark text; levels above `TOP_BADGE_LEVEL` (6) share level 6's gold. Levels 1 to 5 have white text. The badge shows on the object list's icon, and on the class art of the large icon in the object's Details pane.
 - **Generic behavior:** every object sorted by file name, in the regular weight, with plain class icons.
 - **Why:** they are the machines a player builds up and keeps, in an inventory mostly of resources that get spent.
 
-### Buckets show their quantity on their icon
+### Buckets and barrels show their quantity on their icon
 
 - **Where:** `BUCKET_CLASSES`, applied through `iconBadgeFor()` to the object list's icons and a single object's Details pane icon.
-- **What:** a BucketOfWood, BucketOfStone or BucketOfIron icon carries its `n` field on a dark gray badge (`--icon-badge-quantity`), in the same corner as a capital good's level badge, a neutral color no level uses, abbreviated by `abbreviatedQuantity()`: in full below 1000, two significant figures from 1000 up to 10K and from 1M up to 10M ("5.3K", "5.3M"), and no decimals from 10K up to 1M and from 10M ("53K", "53M"). A quantity that rounds up to the next unit takes it (999,600 is "1.0M"). The large icon in the object's Details pane carries it too, as a capital good's carries its level.
+- **What:** a bucket (BucketOfWood, BucketOfStone, BucketOfIron, BucketOfBits, BucketOfCoal, BucketOfQuartz) or BarrelOfOil icon carries its `n` field on a dark gray badge (`--icon-badge-quantity`), in the same corner as a capital good's level badge, a neutral color no level uses, abbreviated by `abbreviatedQuantity()`: in full below 1000, two significant figures from 1000 up to 10K and from 1M up to 10M ("5.3K", "5.3M"), and no decimals from 10K up to 1M and from 10M ("53K", "53M"). A quantity that rounds up to the next unit takes it (999,600 is "1.0M"). The large icon in the object's Details pane carries it too, as a capital good's carries its level.
 - **Generic behavior:** plain class icons.
-- **Why:** a bucket's contents are what it is for, and otherwise show only in its Details pane.
+- **Why:** a bucket's or barrel's contents are what it is for, and otherwise show only in its Details pane.
 
 ### Only bitcraft activity appears in Jobs
 
@@ -135,20 +137,50 @@ the selected objects.
 
 | Actions | Rule | Source in `plugin.rhai` |
 | --- | --- | --- |
-| `UseQuarry1` .. `UseQuarry6` | the selected `Quarry`'s `level` equals the number in the action name | `action.st_equal(quarry.level, N)` |
-| `UseMiningDrill1` .. `UseMiningDrill6` | the selected `MiningDrill`'s `level` equals the number in the action name | `action.st_equal(miningdrill.level, N)` |
-| `BucketOfWoodTake1`, `BucketOfStoneTake1`, `BucketOfIronTake1` | the selected bucket's `n` is at least 1, so an empty bucket offers no take | `action.st_gt_eq(woodbucket.n, 1)` (and the stone and iron buckets) |
-| `LevelUpQuarry1` .. `LevelUpQuarry5` | the selected `Quarry`'s `level` equals the number N in the action name, the wood bucket's `n` is exactly 20 x 2^N and the stone bucket's exactly 10 x 2^N (`LEVEL_UP_BUCKETS`) | `action.st_equal(quarry.level, N)`, `action.st_equal(woodbucket.n, ...)` and the stone bucket |
-| `LevelUpMiningDrill1` .. `LevelUpMiningDrill5` | the selected `MiningDrill`'s `level` equals N, and the wood, stone and iron buckets hold exactly 10, 50 and 5 x 2^N | `action.st_equal(miningdrill.level, N)` and one `st_equal` per bucket |
+| `UseQuarry1` .. `UseQuarry10` | the selected `Quarry`'s `level` equals the number in the action name | `action.st_equal(quarry.level, N)` |
+| `MineIron1` .. `MineIron10` | the selected `MiningDrill`'s `level` equals the number in the action name | `action.st_equal(miningdrill.level, N)` |
+| `MineCoal1` .. `MineCoal10` | the selected `MiningDrill`'s `level` equals the number in the action name | `action.st_equal(miningdrill.level, N)` |
+| `MineGeode1` .. `MineGeode10` | the selected `MiningDrill`'s `level` equals the number in the action name | `action.st_equal(miningdrill.level, N)` |
+| `CrackGeodeQuartz` .. `CrackGeodeDiamond` | the selected `Geode`'s `stable_identifier`, read as a 256-bit number, lies in that gem's band (`GEMS`, `geodeCracksInto()`): at most the geode's field named after the gem (none for Quartz), and at least the field named after the next rarer gem (none for Diamond). Exactly one crack is offered per geode | `action.intro_lt_eq_u256(geode000.stable_identifier, geode000.<gem>)` and `action.intro_lt_eq_u256(geode000.<rarer gem>, geode000.stable_identifier)` |
+| `BucketOf{Wood,Stone,Iron,Bits,Coal,Quartz}Take1` | the selected bucket's `n` is at least 1, so an empty bucket offers no take | `action.st_gt_eq(woodbucket.n, 1)` (and the other buckets) |
+| `LevelUpQuarry1` .. `LevelUpQuarry9` | the selected `Quarry`'s `level` equals the number N in the action name, the wood bucket's `n` is at least 20 x 2^N and the stone bucket's at least 10 x 2^N (`LEVEL_UP_BUCKETS`) | `action.st_equal(quarry.level, N)`, `action.st_gt_eq(woodbucket.n, ...)` and the stone bucket |
+| `LevelUpMiningDrill1` .. `LevelUpMiningDrill9` | the selected `MiningDrill`'s `level` equals N, and the wood, stone and iron buckets hold at least 10, 50 and 5 x 2^N | `action.st_equal(miningdrill.level, N)` and one `st_gt_eq` per bucket |
+| `BuildPumpjack` | the stone bucket's `n` is at least 50 and the iron bucket's at least 100 | `action.st_gt_eq(stonebucket.n, 50)` and the iron bucket |
+| `LevelUpPumpjack1` .. `LevelUpPumpjack9` | the selected `Pumpjack`'s `level` equals N, and the stone, iron and quartz buckets hold at least 50, 100 and 1 x 2^N | `action.st_equal(pumpjack.level, N)` and one `st_gt_eq` per bucket |
 
 - **Generic behavior:** offer every action whose input classes match the
-  selection. A level-1 drill with 5 wood would show all six
-  `UseMiningDrillN` actions.
+  selection. A level-1 drill with 5 wood would show all ten
+  `MineIronN`, all ten `MineCoalN` and all ten `MineGeodeN` actions, and any geode all six
+  `CrackGeode` actions.
 
 ### Known constraints not yet encoded
 
 - `UseWoodAxe`, `UseStoneAxe` and `UseIronAxe` require the axe's
   `durability` to be greater than 0.
+
+## PumpOil asks for a number of steps
+
+- **Where:** `STEP_PROMPTS`, applied through `startMenuAction()` when an
+  action is chosen from the context menu, which opens the steps sheet
+  (`askSteps()`).
+- **What:** choosing `bitcraft::PumpOil` opens a sheet over the main window,
+  like the Import sheet: "How many steps should the pumpjack run?", a text
+  field holding 1, the note "Each step takes about 5 minutes on a typical
+  laptop.", and Cancel and Confirm. Confirm, or Enter in the field, is only
+  available for a whole number from 1 to 8 (`max`). Above 8 a warning shows
+  instead: "More than 8 steps can take longer than the network allows, so the
+  action may time out. Choose 8 or fewer." At about 5 minutes a step, 8 steps
+  stay well inside the roughly one hour a transaction has to land after its
+  state root is fetched, which happens before the steps run. Confirm closes
+  the sheet and starts the run with the count as the action's caller data
+  `n_steps`
+  (`{"n_steps": {"Int": "<count>"}}` in `POST /runs`). Cancel or Escape
+  closes it and starts nothing. While it is open the top bar and panes are
+  inert. Other actions start at once and send no caller data.
+- **Generic behavior:** every action starts as soon as it is chosen, with no
+  caller data, so `PumpOil` would always run its default of 1 step.
+- **Why:** each step adds the pumpjack's level in oil for the same 5 coal,
+  so the player chooses how much time to spend on one run.
 
 ## Cosmetic
 
@@ -219,8 +251,10 @@ their entries know about bitcraft:
 ### Total Bit Value
 
 An object's Total Bit Value is the raw resources spent to make it, each
-counted at the rate its `BitsFrom*` recipe pays: Wood 1, Stone 2, Iron 5.
-A Bit is worth 1. The values are worked out by hand from `../../../examples/bitcraft/plugin.rhai`
+counted at the rate its `BitsFrom*` recipe pays: Wood 1, Stone 2, Iron 5,
+and each gem what its `BitsFrom<Gem>` adds to a bucket of bits. A Bit is
+worth 1. Capital goods (quarries, mining drills and pumpjacks) count at half
+the value of everything spent on them. The values are worked out by hand from `../../../examples/bitcraft/plugin.rhai`
 and hardcoded (`TOTAL_BIT_VALUES`, `BUCKET_CONTENT_BIT_VALUES`,
 `LEVELED_TOTAL_BIT_VALUES` in `inventory-values.json`). Recompute them whenever a
 recipe's inputs or outputs change.
@@ -234,13 +268,20 @@ recipe's inputs or outputs change.
 | WoodAxe | 2 | 1 Wood + 2 Sticks |
 | StoneAxe | 4 | WoodAxe + 1 Stone |
 | IronAxe | 9 | StoneAxe + 1 Iron |
-| BucketOfWood / Stone / Iron | 5 + n x 1 / 2 / 5 | 1 Iron, plus the `n` resources it holds |
-| Quarry, by level 1-6 | 40, 130, 300, 630, 1280, 2570 | 20 Wood + 10 Stone, plus each level-up's buckets |
-| MiningDrill, by level 1-6 | 135, 420, 975, 2070, 4245, 8580 | 10 Wood + 50 Stone + 5 Iron, plus each level-up's buckets |
+| BucketOfWood / Stone / Iron, BucketOfBits | 5 + n x 1 / 2 / 5 / 1 | 1 Iron, plus the `n` resources it holds |
+| BucketOfQuartz | 5 + n x 100 | 1 Iron, plus the `n` quartz it holds |
+| BucketOfCoal | 5 + n x 5 | 1 Iron, plus the `n` coal it holds |
+| BarrelOfOil | 25 + n x 50 | 5 Iron, plus the `n` units of oil it holds |
+| Quarry, by level 1-10 | 20, 60, 140, 300, 620, 1260, 2540, 5100, 10220, 20460 | half of 20 Wood + 10 Stone, plus what each level-up takes from its buckets |
+| MiningDrill, by level 1-10 | 67.5, 202.5, 472.5, 1012.5, 2092.5, 4252.5, 8572.5, 17212.5, 34492.5, 69052.5 | half of 10 Wood + 50 Stone + 5 Iron, plus what each level-up takes from its buckets |
+| Pumpjack, by level 1-10 | 350, 1050, 2450, 5250, 10850, 22050, 44450, 89250, 178850, 358050 | half of 50 Stone + 100 Iron + 1 Quartz, plus what each level-up takes from its buckets |
+| Quartz, Amethyst, Sapphire, Emerald, Ruby, Diamond | 100, 2000, 40000, 800000, 16000000, 320000000 | what `BitsFrom<Gem>` adds to a bucket of bits |
+| Geode | 0 | not valued until cracked |
+| Coal | 5 | set directly; no recipe turns coal into bits |
 
-A level-up spends full buckets, each worth 1 Iron plus its contents:
-`LevelUpQuarryK` adds 10 + 40 x 2^K, and `LevelUpMiningDrillK` adds
-15 + 135 x 2^K.
+A level-up keeps its buckets and takes resources out of them, and the tool
+counts half of what it takes: `LevelUpQuarryK` adds 20 x 2^K,
+`LevelUpMiningDrillK` adds 67.5 x 2^K, and `LevelUpPumpjackK` adds 350 x 2^K.
 
 Wear lowers the value: an axe is worth its value above times the fraction
 of its durability it has left, out of the 100 a new wood axe starts with

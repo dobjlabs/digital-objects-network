@@ -474,7 +474,8 @@
   #startup-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 12px; }
   #startup-actions[hidden] { display: none; }
   #startup-actions button,
-  #import-dialog button {
+  #import-dialog button,
+  #steps-dialog button {
     min-width: 88px;
     padding: 3px 12px;
     border: 1px solid var(--button-border);
@@ -486,19 +487,24 @@
     cursor: default;
   }
   #startup-actions button:active,
-  #import-dialog button:active { background: var(--row-hover); }
+  #import-dialog button:active,
+  #steps-dialog button:active { background: var(--row-hover); }
   #startup-actions #startup-retry,
-  #import-dialog #import-submit {
+  #import-dialog #import-submit,
+  #steps-dialog #steps-confirm {
     border-color: var(--progress-fill);
     background: var(--progress-fill);
     color: white;
   }
   #startup-actions #startup-retry:active,
-  #import-dialog #import-submit:active { filter: brightness(0.9); }
-  #import-dialog button:disabled { opacity: 0.5; }
+  #import-dialog #import-submit:active,
+  #steps-dialog #steps-confirm:active { filter: brightness(0.9); }
+  #import-dialog button:disabled,
+  #steps-dialog button:disabled { opacity: 0.5; }
   /* Covers the main window, so the inventory behind it takes no clicks
      while it is open. */
-  #import-sheet {
+  #import-sheet,
+  #steps-sheet {
     position: fixed;
     inset: 0;
     z-index: 15;
@@ -508,8 +514,10 @@
     padding: 48px 16px 16px;
     background: rgba(0, 0, 0, 0.18);
   }
-  #import-sheet[hidden] { display: none; }
-  #import-dialog {
+  #import-sheet[hidden],
+  #steps-sheet[hidden] { display: none; }
+  #import-dialog,
+  #steps-dialog {
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -553,6 +561,19 @@
   #import-results li.error { color: var(--error); }
   .import-result-status { color: var(--muted); }
   #import-rekey-note { margin: 0; color: var(--muted); font-size: 12px; }
+  #steps-dialog { width: min(100%, 360px); }
+  #steps-title { margin: 0; font-size: 13px; font-weight: 600; }
+  #steps-input {
+    padding: 4px 7px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+  }
+  #steps-note { margin: 0; color: var(--muted); font-size: 12px; }
+  #steps-warning { margin: 0; color: var(--error); font-size: 12px; }
+  #steps-warning[hidden] { display: none; }
   .import-actions {
     display: flex;
     justify-content: flex-end;
@@ -1379,6 +1400,18 @@
       </div>
     </div>
   </div>
+  <div id="steps-sheet" hidden>
+    <div id="steps-dialog" role="dialog" aria-modal="true" aria-labelledby="steps-title" aria-describedby="steps-note">
+      <h1 id="steps-title"></h1>
+      <input type="text" id="steps-input" inputmode="numeric" autocomplete="off" spellcheck="false" aria-labelledby="steps-title">
+      <p id="steps-warning" role="alert" hidden></p>
+      <p id="steps-note"></p>
+      <div class="import-actions">
+        <button type="button" id="steps-cancel">Cancel</button>
+        <button type="button" id="steps-confirm">Confirm</button>
+      </div>
+    </div>
+  </div>
   </div>
   <div id="recipebook-view" class="view" hidden>
     <section id="recipe-pane" class="pane">
@@ -1683,22 +1716,55 @@
       accepts: (inputs, match) => inputFieldEquals(inputs, "Quarry", "level", match[1]),
     },
     {
-      actions: /^UseMiningDrill(\d+)$/,
+      actions: /^MineIron(\d+)$/,
       accepts: (inputs, match) => inputFieldEquals(inputs, "MiningDrill", "level", match[1]),
     },
     {
-      actions: /^(BucketOf(?:Wood|Stone|Iron))Take1$/,
+      actions: /^MineCoal(\d+)$/,
+      accepts: (inputs, match) => inputFieldEquals(inputs, "MiningDrill", "level", match[1]),
+    },
+    {
+      actions: /^MineGeode(\d+)$/,
+      accepts: (inputs, match) => inputFieldEquals(inputs, "MiningDrill", "level", match[1]),
+    },
+    {
+      actions: /^CrackGeode(\w+)$/,
+      accepts: (inputs, match) => geodeCracksInto(inputs, match[1]),
+    },
+    {
+      actions: /^(BucketOf(?:Wood|Stone|Iron|Bits|Coal|Quartz))Take1$/,
       accepts: (inputs, match) => inputFieldAtLeast(inputs, match[1], "n", 1),
     },
     {
-      actions: /^LevelUp(Quarry|MiningDrill)(\d+)$/,
+      actions: /^BuildPumpjack$/,
+      accepts: (inputs) => inputFieldAtLeast(inputs, "BucketOfStone", "n", 50)
+        && inputFieldAtLeast(inputs, "BucketOfIron", "n", 100),
+    },
+    {
+      actions: /^LevelUp(Quarry|MiningDrill|Pumpjack)(\d+)$/,
       accepts: (inputs, match) => inputFieldEquals(inputs, match[1], "level", match[2])
         && Object.entries(LEVEL_UP_BUCKETS[match[1]](Number(match[2]))).every(
-          ([bucket, amount]) => inputFieldEquals(inputs, bucket, "n", String(amount))),
+          ([bucket, amount]) => inputFieldAtLeast(inputs, bucket, "n", amount)),
     },
   ];
 
-  // The exact amount each bucket must hold to level a tool up from `level`.
+  // Actions that ask the player for a number of steps before they run, from
+  // the context menu. The count is sent as the action's caller data `arg`,
+  // and may not exceed `max`; a larger count shows `overMax` instead.
+  const STEP_PROMPTS = {
+    PumpOil: {
+      arg: "n_steps",
+      title: "How many steps should the pumpjack run?",
+      note: "Each step takes about 5 minutes on a typical laptop.",
+      // A transaction must land within about an hour of the state root it
+      // proves against, and the steps run after that root is fetched.
+      max: 8,
+      overMax: "More than 8 steps can take longer than the network allows, so the action may time out. Choose 8 or fewer.",
+    },
+  };
+
+  // How much a level-up from `level` takes out of each bucket. The buckets
+  // must hold at least that much, and are kept.
   const LEVEL_UP_BUCKETS = {
     Quarry: (level) => ({ BucketOfWood: 20 * 2 ** level, BucketOfStone: 10 * 2 ** level }),
     MiningDrill: (level) => ({
@@ -1706,7 +1772,17 @@
       BucketOfStone: 50 * 2 ** level,
       BucketOfIron: 5 * 2 ** level,
     }),
+    Pumpjack: (level) => ({
+      BucketOfStone: 50 * 2 ** level,
+      BucketOfIron: 100 * 2 ** level,
+      BucketOfQuartz: 2 ** level,
+    }),
   };
+
+  // Most common first. A geode records, under each gem's name in lower case
+  // and for every gem but the first, the highest mined value (its
+  // `stable_identifier`) that cracks into that gem or a rarer one.
+  const GEMS = ["Quartz", "Amethyst", "Sapphire", "Emerald", "Ruby", "Diamond"];
 
   // A getting-started guide shown as the first row of the object list: its
   // file name, which is also its URL relative to this page. It is served
@@ -1718,12 +1794,13 @@
 
   // Total Bit Value: what an object is worth in bits, counting each raw
   // resource spent to make it at the rate its BitsFrom* recipe pays (Wood 1,
-  // Stone 2, Iron 5). Worked out by hand from the recipes, per class.
+  // Stone 2, Iron 5, and a gem what it adds to a bucket of bits). Worked out
+  // by hand from the recipes, per class.
   let TOTAL_BIT_VALUES = {};
-  // A bucket is also worth the `n` resources it holds, at these rates.
+  // A bucket or barrel is also worth the `n` resources it holds, at these rates.
   let BUCKET_CONTENT_BIT_VALUES = {};
-  // Quarries and drills by level (index 0 is level 1): building one, plus the
-  // full buckets every level-up spends.
+  // Quarries, drills and pumpjacks by level (index 0 is level 1): half of
+  // building one plus the resources every level-up takes out of its buckets.
   let LEVELED_TOTAL_BIT_VALUES = {};
   // Tools that wear out: the `durability` a new one starts with. Such a
   // tool is worth its Total Bit Value times the fraction of that it has left.
@@ -1734,24 +1811,30 @@
   const SUMMARY_ICON_CLASS = "Bit";
 
   // The order Recipe Info lists the classes in: the starter tool, the
-  // resources and what they make, then the tools, machines and buckets.
+  // resources and what they make, then the tools, machines, buckets and barrels.
   // Classes not listed follow, by name.
   const REFERENCE_CLASS_ORDER = [
-    "Pocketknife", "Wood", "Stone", "Iron", "Bit", "Stick",
-    "WoodAxe", "StoneAxe", "IronAxe", "Quarry", "MiningDrill",
+    "Pocketknife", "Wood", "Stone", "Iron", "Coal", "Bit", "Stick",
+    "Geode", ...GEMS,
+    "WoodAxe", "StoneAxe", "IronAxe", "Quarry", "MiningDrill", "Pumpjack",
     "BucketOfWood", "BucketOfStone", "BucketOfIron",
+    "BucketOfBits", "BucketOfCoal", "BucketOfQuartz", "BarrelOfOil",
   ];
 
   // Capital goods, the classes a level-up upgrades. The object list shows
   // them first, in bold.
-  const CAPITAL_GOOD_CLASSES = ["Quarry", "MiningDrill"];
+  const CAPITAL_GOOD_CLASSES = ["Quarry", "MiningDrill", "Pumpjack"];
 
   function isCapitalGood(className) {
     return className.pluginName === PLUGIN_NAME && CAPITAL_GOOD_CLASSES.includes(className.name);
   }
 
-  // Buckets, whose `n` field is the quantity of a resource they hold.
-  const BUCKET_CLASSES = ["BucketOfWood", "BucketOfStone", "BucketOfIron"];
+  // Buckets and barrels, whose `n` field is the quantity of a resource they
+  // hold.
+  const BUCKET_CLASSES = [
+    "BucketOfWood", "BucketOfStone", "BucketOfIron",
+    "BucketOfBits", "BucketOfCoal", "BucketOfQuartz", "BarrelOfOil",
+  ];
 
   // Capital goods above this level share its badge color.
   const TOP_BADGE_LEVEL = 6;
@@ -1935,6 +2018,25 @@
   function inputFieldAtLeast(inputs, className, fieldName, minimum) {
     const input = inputs.find((object) => object.class.name === className);
     return input !== undefined && Number(fieldValue(input, fieldName)) >= minimum;
+  }
+
+  // A raw field as a number, or null if it is missing or not raw.
+  function rawFieldValue(object, fieldName) {
+    const hex = fieldValue(object, fieldName);
+    return hex !== null && /^[0-9a-f]{64}$/i.test(hex) ? BigInt(`0x${hex}`) : null;
+  }
+
+  function geodeCracksInto(inputs, gem) {
+    const geode = inputs.find((object) => object.class.name === "Geode");
+    const tier = GEMS.indexOf(gem);
+    if (geode === undefined || tier === -1) return false;
+    const mined = rawFieldValue(geode, "stable_identifier");
+    if (mined === null) return false;
+    const threshold = (index) => rawFieldValue(geode, GEMS[index].toLowerCase());
+    const atMostOwn = tier === 0 || (threshold(tier) !== null && mined <= threshold(tier));
+    const atLeastRarer = tier === GEMS.length - 1
+      || (threshold(tier + 1) !== null && threshold(tier + 1) <= mined);
+    return atMostOwn && atLeastRarer;
   }
 
   function passesActionInputRules(action, inputs) {
@@ -2282,7 +2384,7 @@
         labelClass: "action-name",
         icon: actionIcon(action.action, 16),
         isDisabled: () => !inputsAvailable(fileNames),
-        onSelect: () => startRun(action, fileNames),
+        onSelect: () => startMenuAction(action, fileNames),
       });
     }
     openContextMenu(entries, x, y);
@@ -2643,7 +2745,7 @@
     });
   }
 
-  async function startRun(action, fileNames, { showInJobs = true, onUpdate = null } = {}) {
+  async function startRun(action, fileNames, { showInJobs = true, onUpdate = null, args = null } = {}) {
     if (!inputsAvailable(fileNames)) return null;
     const inputFileNames = assignInputSlots(action, fileNames).map((object) => object.fileName);
     let run = newRun(action, inputFileNames);
@@ -2655,7 +2757,7 @@
 
     try {
       const accepted = await postJson("/runs", {
-        input: { action: action.action, inputObjectPaths: inputFileNames },
+        input: { action: action.action, inputObjectPaths: inputFileNames, ...(args ? { args } : {}) },
       });
       run = trackRun({ ...accepted, action: action.action, inputObjectPaths: inputFileNames, progress: [] }, run);
       run.onUpdate?.(run);
@@ -4907,8 +5009,8 @@
   const importRekeyNote = document.getElementById("import-rekey-note");
   const importClose = document.getElementById("import-close");
   const importSubmit = document.getElementById("import-submit");
-  // What the sheet covers, made inert while it is open.
-  const importSheetBackground = [document.getElementById("top-bar"), document.getElementById("objects-view")];
+  // What the import and steps sheets cover, made inert while one is open.
+  const sheetBackground = [document.getElementById("top-bar"), document.getElementById("objects-view")];
   let importing = false;
   let focusBeforeImport = null;
   // Files picked with Choose Files..., waiting for Import.
@@ -4922,14 +5024,14 @@
         showImportResults([]);
       }
       importSheet.hidden = false;
-      for (const element of importSheetBackground) element.inert = true;
+      for (const element of sheetBackground) element.inert = true;
     }
     importChoose.focus();
   }
 
   function closeImportSheet() {
     importSheet.hidden = true;
-    for (const element of importSheetBackground) element.inert = false;
+    for (const element of sheetBackground) element.inert = false;
     focusBeforeImport?.focus();
     focusBeforeImport = null;
   }
@@ -5192,6 +5294,88 @@
   importClose.addEventListener("click", closeImportSheet);
   importSheet.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeImportSheet();
+  });
+
+  const stepsSheet = document.getElementById("steps-sheet");
+  const stepsTitle = document.getElementById("steps-title");
+  const stepsInput = document.getElementById("steps-input");
+  const stepsNote = document.getElementById("steps-note");
+  const stepsWarning = document.getElementById("steps-warning");
+  const stepsCancel = document.getElementById("steps-cancel");
+  const stepsConfirm = document.getElementById("steps-confirm");
+  let focusBeforeSteps = null;
+  // The `STEP_PROMPTS` entry the open sheet asks for.
+  let stepsPrompt = null;
+  // Settles the promise `askSteps` returned, with the count or null.
+  let answerSteps = null;
+
+  // Starts a context-menu action, first asking for its number of steps when
+  // `STEP_PROMPTS` names it. Cancelling starts nothing.
+  async function startMenuAction(action, fileNames) {
+    const prompt = action.action.pluginName === PLUGIN_NAME ? STEP_PROMPTS[action.action.name] : undefined;
+    if (!prompt) return startRun(action, fileNames);
+    const steps = await askSteps(prompt);
+    if (steps === null) return null;
+    return startRun(action, fileNames, { args: { [prompt.arg]: { Int: steps } } });
+  }
+
+  // The entered count as a decimal string, or null unless it is a whole
+  // number of at least 1.
+  function enteredSteps() {
+    const text = stepsInput.value.trim();
+    return /^[1-9][0-9]*$/.test(text) && Number.isSafeInteger(Number(text)) ? text : null;
+  }
+
+  function overMaxSteps(steps) {
+    return steps !== null && Number(steps) > stepsPrompt.max;
+  }
+
+  // The entered count when Confirm may accept it, or null.
+  function acceptedSteps() {
+    const steps = enteredSteps();
+    return overMaxSteps(steps) ? null : steps;
+  }
+
+  function updateStepsControls() {
+    stepsWarning.hidden = !overMaxSteps(enteredSteps());
+    stepsConfirm.disabled = acceptedSteps() === null;
+  }
+
+  function askSteps(prompt) {
+    answerSteps?.(null);
+    stepsPrompt = prompt;
+    stepsTitle.textContent = prompt.title;
+    stepsNote.textContent = prompt.note;
+    stepsWarning.textContent = prompt.overMax;
+    stepsInput.value = "1";
+    updateStepsControls();
+    focusBeforeSteps = document.activeElement;
+    stepsSheet.hidden = false;
+    for (const element of sheetBackground) element.inert = true;
+    stepsInput.focus();
+    stepsInput.select();
+    return new Promise((resolve) => { answerSteps = resolve; });
+  }
+
+  function closeSteps(steps) {
+    stepsSheet.hidden = true;
+    for (const element of sheetBackground) element.inert = false;
+    focusBeforeSteps?.focus();
+    focusBeforeSteps = null;
+    const answer = answerSteps;
+    answerSteps = null;
+    answer?.(steps);
+  }
+
+  stepsInput.addEventListener("input", updateStepsControls);
+  stepsConfirm.addEventListener("click", () => {
+    const steps = acceptedSteps();
+    if (steps !== null) closeSteps(steps);
+  });
+  stepsCancel.addEventListener("click", () => closeSteps(null));
+  stepsSheet.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeSteps(null);
+    if (event.key === "Enter" && event.target === stepsInput) stepsConfirm.click();
   });
 
   function isPlainPress(event) {

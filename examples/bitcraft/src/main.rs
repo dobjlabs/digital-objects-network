@@ -3,16 +3,91 @@
 use std::fs::File;
 use std::io::{self, Write as _};
 
-#[derive(Debug, Clone, Copy, strum_macros::Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum_macros::Display)]
 enum Resource {
     Wood,
     Stone,
     Iron,
+    Coal,
     Stick,
     Bit,
+    Geode,
+    Quartz,
+    Amethyst,
+    Sapphire,
+    Emerald,
+    Ruby,
+    Diamond,
+    // Exists only as the count `n` of a barrel of oil: there are no Oil
+    // objects, and no Oil class.
+    Oil,
 }
 
-static BUCKET_RESOURCES: &[Resource] = &[Resource::Wood, Resource::Stone, Resource::Iron];
+static BUCKET_RESOURCES: &[Resource] = &[
+    Resource::Wood,
+    Resource::Stone,
+    Resource::Iron,
+    Resource::Bit,
+    Resource::Coal,
+    Resource::Quartz,
+];
+
+// The class of the bucket holding `resource`: BucketOf<Resource>, except
+// that bits take the plural, BucketOfBits, and oil is held in a
+// BarrelOfOil. Action names follow the class (CraftBucketOfBits,
+// BucketOfBitsAdd5, ...).
+fn bucket_class(resource: Resource) -> String {
+    match resource {
+        Resource::Bit => format!("BucketOfBits"),
+        Resource::Oil => format!("BarrelOfOil"),
+        _ => format!("BucketOf{resource}"),
+    }
+}
+
+// Most common first. Each gem's band of mined values is GEM_RARITY times
+// narrower than the one before it.
+static GEMS: &[Resource] = &[
+    Resource::Quartz,
+    Resource::Amethyst,
+    Resource::Sapphire,
+    Resource::Emerald,
+    Resource::Ruby,
+    Resource::Diamond,
+];
+const GEM_RARITY: usize = 16;
+
+// The highest level a quarry, mining drill or pumpjack reaches.
+const MAX_LEVEL: usize = 10;
+
+// At drill level 1, mining a geode grinds this many times as long as
+// gathering wood; at level N, 1/N of that.
+const GEM_POW_FACTOR: usize = 1024;
+
+// For each gem rarer than quartz, the highest mined value that still cracks
+// into that gem or a rarer one, as `set` entries named after the gem.
+fn gem_threshold_initializers(pow_target: usize) -> Vec<String> {
+    GEMS.iter()
+        .enumerate()
+        .skip(1)
+        .map(|(tier, gem)| {
+            let threshold = pow_target / GEM_RARITY.pow(tier as u32);
+            let field = format!("{gem}").to_lowercase();
+            format!(r#"["{field}", action.top_limb_u256({threshold})]"#)
+        })
+        .collect()
+}
+
+// Top-limb difficulty target for a proof-of-work weight. A higher weight
+// gives a smaller target, so a longer grind. A zero target would read as "no
+// proof-of-work", so weights past where the curve reaches zero are refused.
+fn pow_target(pow: usize) -> usize {
+    let target = 1.93e13 - 4.76e12 * (pow as f64).ln();
+    assert!(
+        target >= 1.0,
+        "proof-of-work weight {pow} gives no positive target"
+    );
+    target as usize
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum_macros::Display)]
 enum Tool {
@@ -22,6 +97,15 @@ enum Tool {
     IronAxe,
     Quarry,
     MiningDrill,
+    Pumpjack,
+}
+
+impl Tool {
+    // Tools whose actions mine: each carries a `nonce` that the proof-of-work
+    // of its next use is tied to.
+    fn mines(self) -> bool {
+        !matches!(self, Tool::Pumpjack)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -29,16 +113,39 @@ struct Action {
     name: String,
     in_resources: Vec<(usize, Resource)>,
     out_resources: Vec<(usize, Resource)>,
-    in_buckets: Vec<(usize, Resource)>,
+    // Buckets the action mutates, taking this many resources out of each.
+    spend_from_buckets: Vec<(usize, Resource)>,
     mut_bucket: Option<Resource>,
     out_bucket: Option<Resource>,
     in_tool: Option<Tool>,
     out_tool: Option<Tool>,
     mut_tool: Option<Tool>,
-    rekey: bool,
-    pow: usize,
-    vdf: usize,
+    // Zero means the action does no proof-of-work.
+    pow_target: usize,
+    // Reads the caller data `n_steps` (1 if omitted, at least 1), which
+    // per-step amounts multiply.
+    steps: bool,
+    vdf: Vdf,
     tags: Vec<Tag>,
+}
+
+// VDF iterations over the action's last output, or its mutated bucket when
+// it has no output.
+#[derive(Debug, Default)]
+enum Vdf {
+    #[default]
+    None,
+    Iterations(usize),
+    // This many iterations per step; the action must read `n_steps`.
+    PerStep(usize),
+}
+
+// What `AddToBucket` adds.
+#[derive(Debug)]
+enum Amount {
+    Fixed(usize),
+    // `n_steps` times the level of the tool the action mutates.
+    StepsTimesToolLevel,
 }
 
 #[derive(Debug, Default)]
@@ -51,13 +158,32 @@ enum Tag {
     SetLevel,
     IncLevel,
     ReqLevel(usize),
-    AddToBucket(usize),
+    AddToBucket(Amount),
     TakeFromBucket(usize),
     // Emits a no-op statement. pod2 splits a predicate into a chain only once
     // it exceeds the per-predicate statement cap, and an unsplit predicate
     // must fit the wildcard cap on its own; the extra statement forces the
     // split for an action whose wildcards would otherwise overflow.
     PadForSplit,
+    // Records on the output geode, for each gem rarer than quartz, the
+    // highest mined value that still cracks into that gem or a rarer one.
+    // The bands scale with the action's own target, so they are written at
+    // mining time rather than recomputed when the geode is cracked.
+    SetGemThresholds,
+    // Proves that the input geode's mined value lies in the band of the gem
+    // at this index in GEMS.
+    CrackGeode(usize),
+}
+
+// Gives the mutated object `name` a new random key. Every mutated object is
+// rekeyed: its next state is then never one already spent, and whoever holds
+// a copy of its previous state cannot predict the next one.
+fn rekey(o: &mut File, name: &str) -> Result<(), io::Error> {
+    writeln!(
+        o,
+        r#"  var {name}_key = unsafe {{ action.random() }};
+  {name}.update("key", {name}_key);"#
+    )
 }
 
 fn main() -> Result<(), io::Error> {
@@ -77,23 +203,18 @@ fn main() -> Result<(), io::Error> {
 
     // Gather
     //
-    // The pocketknife is mutated rather than consumed, and must be rekeyed:
-    // a nullifier is derived from the object and its key, so a pocketknife
-    // returned unchanged would carry the nullifier its input just spent.
-    //
-    // Rekeying adds a `key` wildcard, bringing the action predicate to 9
-    // wildcards over 5 statements. pod2 caps a predicate at 8 wildcards, and
-    // splits a predicate into a chain of smaller ones (each within the
-    // wildcard cap) only when it exceeds 5 statements. At exactly 5 nothing
-    // is split and the predicate fails to compile, so PadForSplit adds a
-    // no-op sixth statement to trigger the split.
+    // Rekeying the pocketknife adds a key wildcard, bringing the action
+    // predicate to 9 wildcards over 5 statements. pod2 caps a predicate at 8
+    // wildcards, and splits a predicate into a chain of smaller ones (each
+    // within the wildcard cap) only when it exceeds 5 statements. At exactly
+    // 5 nothing is split and the predicate fails to compile, so PadForSplit
+    // adds a no-op sixth statement to trigger the split.
     for (pow, out) in [(10, Wood), (20, Stone), (40, Iron)] {
         actions.push(Action {
             name: format!("Gather{out}"),
             mut_tool: Some(Pocketknife),
-            rekey: true,
             out_resources: vec![(1, out)],
-            pow,
+            pow_target: pow_target(pow),
             tags: vec![PadForSplit],
             ..Default::default()
         });
@@ -102,31 +223,36 @@ fn main() -> Result<(), io::Error> {
     // Craft Buckets
     for resource in BUCKET_RESOURCES {
         actions.push(Action {
-            name: format!("CraftBucketOf{resource}"),
+            name: format!("Craft{}", bucket_class(*resource)),
             in_resources: vec![(1, Iron)],
             out_bucket: Some(*resource),
             ..Default::default()
         });
     }
 
+    actions.push(Action {
+        name: format!("Craft{}", bucket_class(Oil)),
+        in_resources: vec![(5, Iron)],
+        out_bucket: Some(Oil),
+        ..Default::default()
+    });
+
     // Bucket Add & Take
     for resource in BUCKET_RESOURCES {
         for n in [1, 5, 10, 50] {
             actions.push(Action {
-                name: format!("BucketOf{resource}Add{n}"),
+                name: format!("{}Add{n}", bucket_class(*resource)),
                 in_resources: vec![(n, *resource)],
                 mut_bucket: Some(*resource),
-                rekey: true,
-                tags: vec![AddToBucket(n)],
+                tags: vec![AddToBucket(Amount::Fixed(n))],
                 ..Default::default()
             });
         }
 
         actions.push(Action {
-            name: format!("BucketOf{resource}Take1"),
+            name: format!("{}Take1", bucket_class(*resource)),
             out_resources: vec![(1, *resource)],
             mut_bucket: Some(*resource),
-            rekey: true,
             tags: vec![TakeFromBucket(1)],
             ..Default::default()
         });
@@ -170,30 +296,37 @@ fn main() -> Result<(), io::Error> {
             name: format!("Use{axe_type}"),
             mut_tool: Some(axe_type),
             out_resources: vec![(n, Wood)],
-            pow: 10,
+            pow_target: pow_target(10),
             tags: vec![DecDurability],
             ..Default::default()
         });
     }
 
     // Leveled action
-    for lvl in 1..=6 {
+    for lvl in 1..=MAX_LEVEL {
         actions.push(Action {
             name: format!("UseQuarry{lvl}"),
             mut_tool: Some(Quarry),
-            rekey: true,
             out_resources: vec![(lvl + 1, Stone)],
-            pow: 20,
+            pow_target: pow_target(20),
             tags: vec![ReqLevel(lvl)],
             ..Default::default()
         });
         actions.push(Action {
-            name: format!("UseMiningDrill{lvl}"),
+            name: format!("MineIron{lvl}"),
             mut_tool: Some(MiningDrill),
-            rekey: true,
             in_resources: vec![(5, Wood)],
             out_resources: vec![(lvl + 1, Iron)],
-            pow: 40,
+            pow_target: pow_target(40),
+            tags: vec![ReqLevel(lvl)],
+            ..Default::default()
+        });
+        actions.push(Action {
+            name: format!("MineCoal{lvl}"),
+            mut_tool: Some(MiningDrill),
+            in_resources: vec![(5, Wood)],
+            out_resources: vec![(lvl, Coal)],
+            pow_target: pow_target(40),
             tags: vec![ReqLevel(lvl)],
             ..Default::default()
         });
@@ -214,24 +347,83 @@ fn main() -> Result<(), io::Error> {
         tags: vec![SetLevel],
         ..Default::default()
     });
+    // Stone and iron come from buckets: taken loose, the build's 150-odd
+    // inputs overflow the proof's public statements.
+    actions.push(Action {
+        name: format!("BuildPumpjack"),
+        in_resources: vec![(1, Quartz)],
+        spend_from_buckets: vec![(50, Stone), (100, Iron)],
+        out_tool: Some(Pumpjack),
+        tags: vec![SetLevel],
+        ..Default::default()
+    });
     // Factory level-up
-    for lvl in 1..=5 {
+    for lvl in 1..MAX_LEVEL as u32 {
         actions.push(Action {
             name: format!("LevelUpQuarry{lvl}"),
-            in_buckets: vec![(20 * 2usize.pow(lvl), Wood), (10 * 2usize.pow(lvl), Stone)],
+            spend_from_buckets: vec![(20 * 2usize.pow(lvl), Wood), (10 * 2usize.pow(lvl), Stone)],
             mut_tool: Some(Quarry),
             tags: vec![ReqLevel(lvl as usize), IncLevel],
             ..Default::default()
         });
         actions.push(Action {
             name: format!("LevelUpMiningDrill{lvl}"),
-            in_buckets: vec![
+            spend_from_buckets: vec![
                 (10 * 2usize.pow(lvl), Wood),
                 (50 * 2usize.pow(lvl), Stone),
                 (5 * 2usize.pow(lvl), Iron),
             ],
             mut_tool: Some(MiningDrill),
             tags: vec![ReqLevel(lvl as usize), IncLevel],
+            ..Default::default()
+        });
+        actions.push(Action {
+            name: format!("LevelUpPumpjack{lvl}"),
+            spend_from_buckets: vec![
+                (50 * 2usize.pow(lvl), Stone),
+                (100 * 2usize.pow(lvl), Iron),
+                (2usize.pow(lvl), Quartz),
+            ],
+            mut_tool: Some(Pumpjack),
+            tags: vec![ReqLevel(lvl as usize), IncLevel],
+            ..Default::default()
+        });
+    }
+
+    // Oil pumping
+    actions.push(Action {
+        name: format!("PumpOil"),
+        mut_tool: Some(Pumpjack),
+        in_resources: vec![(5, Coal)],
+        mut_bucket: Some(Oil),
+        steps: true,
+        vdf: Vdf::PerStep(50),
+        tags: vec![AddToBucket(Amount::StepsTimesToolLevel)],
+        ..Default::default()
+    });
+
+    // Gem mining
+    //
+    // An action's output classes are fixed, so a single mining action
+    // cannot decide which gem it yields. Mining yields a geode instead, and
+    // cracking turns it into the one gem its mined value allows.
+    for lvl in 1..=MAX_LEVEL {
+        actions.push(Action {
+            name: format!("MineGeode{lvl}"),
+            mut_tool: Some(MiningDrill),
+            in_resources: vec![(5, Wood)],
+            out_resources: vec![(1, Geode)],
+            pow_target: pow_target(10) * lvl / GEM_POW_FACTOR,
+            tags: vec![ReqLevel(lvl), SetGemThresholds],
+            ..Default::default()
+        });
+    }
+    for (tier, gem) in GEMS.iter().enumerate() {
+        actions.push(Action {
+            name: format!("CrackGeode{gem}"),
+            in_resources: vec![(1, Geode)],
+            out_resources: vec![(1, *gem)],
+            tags: vec![CrackGeode(tier)],
             ..Default::default()
         });
     }
@@ -241,23 +433,33 @@ fn main() -> Result<(), io::Error> {
         name: format!("BitsFromWood"),
         in_resources: vec![(1, Wood)],
         out_resources: vec![(1, Bit)],
-        vdf: 2,
+        vdf: Vdf::Iterations(2),
         ..Default::default()
     });
     actions.push(Action {
         name: format!("BitsFromStone"),
         in_resources: vec![(1, Stone)],
         out_resources: vec![(2, Bit)],
-        vdf: 2,
+        vdf: Vdf::Iterations(2),
         ..Default::default()
     });
     actions.push(Action {
         name: format!("BitsFromIron"),
         in_resources: vec![(1, Iron)],
         out_resources: vec![(5, Bit)],
-        vdf: 2,
+        vdf: Vdf::Iterations(2),
         ..Default::default()
     });
+    let gem_bits = [100, 2_000, 40_000, 800_000, 16_000_000, 320_000_000];
+    for (gem, bits) in GEMS.iter().zip(gem_bits) {
+        actions.push(Action {
+            name: format!("BitsFrom{gem}"),
+            in_resources: vec![(1, *gem)],
+            mut_bucket: Some(Bit),
+            tags: vec![AddToBucket(Amount::Fixed(bits))],
+            ..Default::default()
+        });
+    }
 
     let mut last_out_resource = String::new();
     let mut last_in_tool = String::new();
@@ -273,35 +475,31 @@ fn main() -> Result<(), io::Error> {
         if let Some(out_tool) = action.out_tool {
             let name = format!("{out_tool}").to_lowercase();
             writeln!(o, "  var {name} = action.output(\"{out_tool}\");")?;
-            for tag in &action.tags {
-                match tag {
-                    SetDurability => {
-                        writeln!(o, r#"  {name}.set([["durability", 100]]);"#)?;
-                    }
-                    SetLevel => {
-                        writeln!(o, r#"  {name}.set([["level", 1]]);"#)?;
-                    }
+            let mut initializers: Vec<String> = action
+                .tags
+                .iter()
+                .filter_map(|tag| match tag {
+                    SetDurability => Some(format!(r#"["durability", 100]"#)),
+                    SetLevel => Some(format!(r#"["level", 1]"#)),
                     InheritDurability => {
-                        writeln!(
-                            o,
-                            r#"  {name}.set([["durability", {last_in_tool}.durability]]);"#
-                        )?;
+                        Some(format!(r#"["durability", {last_in_tool}.durability]"#))
                     }
-                    _ => {}
-                }
+                    _ => Option::None,
+                })
+                .collect();
+            // The grounding block's hash is unknown until shortly before the
+            // tool exists, so no work toward its first use can start earlier.
+            if out_tool.mines() {
+                initializers.push(format!(r#"["nonce", state_header.block_hash]"#));
+            }
+            if !initializers.is_empty() {
+                writeln!(o, "  {name}.set([{}]);", initializers.join(", "))?;
             }
         }
         if let Some(mut_tool) = action.mut_tool {
             let name = format!("{mut_tool}").to_lowercase();
             writeln!(o, "  var {name} = action.mutate(\"{mut_tool}\");")?;
-
-            if action.rekey {
-                writeln!(
-                    o,
-                    r#"  var key = unsafe {{ action.random() }};
-  {name}.update("key", key);"#
-                )?;
-            }
+            rekey(o, &name)?;
 
             for tag in &action.tags {
                 match tag {
@@ -334,12 +532,18 @@ fn main() -> Result<(), io::Error> {
         }
 
         for (n, res) in &action.in_resources {
+            if *res == Oil {
+                continue;
+            }
             for i in 0..*n {
                 let name = format!("{res}{:03}", i).to_lowercase();
                 writeln!(o, "  var {name} = action.input(\"{res}\");")?;
             }
         }
         for (n, res) in &action.out_resources {
+            if *res == Oil {
+                continue;
+            }
             for i in 0..*n {
                 let name = format!("{res}{:03}", i).to_lowercase();
                 writeln!(o, "  var {name} = action.output(\"{res}\");")?;
@@ -347,43 +551,66 @@ fn main() -> Result<(), io::Error> {
             }
         }
 
-        for (n, res) in &action.in_buckets {
-            let name = format!("{res}bucket").to_lowercase();
+        if action.steps {
             writeln!(
                 o,
-                r#"  var {name} = action.input("BucketOf{res}");
-  action.st_equal({name}.n, {n});"#
+                r#"  var n_steps = unsafe {{ arg("n_steps") ?? 1 }};
+  action.st_gt_eq(n_steps, 1);"#
+            )?;
+        }
+
+        for (n, res) in &action.spend_from_buckets {
+            let name = format!("{res}bucket").to_lowercase();
+            let class = bucket_class(*res);
+            writeln!(o, r#"  var {name} = action.mutate("{class}");"#)?;
+            rekey(o, &name)?;
+            writeln!(
+                o,
+                r#"  action.st_gt_eq({name}.n, {n});
+  var {name}_n = unsafe {{ {name}.n - {n} }};
+  action.st_sum({name}_n, {n}, {name}.n);
+  {name}.update("n", {name}_n);"#
             )?;
         }
 
         if let Some(res) = action.out_bucket {
             let name = format!("{res}bucket").to_lowercase();
+            let class = bucket_class(res);
             writeln!(
                 o,
-                r#"  var {name} = action.output("BucketOf{res}");
+                r#"  var {name} = action.output("{class}");
   {name}.set([["n", 0]]);"#
             )?;
         }
 
         if let Some(res) = action.mut_bucket {
             let name = format!("{res}bucket").to_lowercase();
-            writeln!(o, r#"  var {name} = action.mutate("BucketOf{res}");"#)?;
-
-            if action.rekey {
-                writeln!(
-                    o,
-                    r#"  var key = unsafe {{ action.random() }};
-  {name}.update("key", key);"#
-                )?;
-            }
+            let class = bucket_class(res);
+            writeln!(o, r#"  var {name} = action.mutate("{class}");"#)?;
+            rekey(o, &name)?;
 
             for tag in &action.tags {
                 match tag {
-                    AddToBucket(d) => {
+                    AddToBucket(amount) => {
+                        let added = match amount {
+                            Amount::Fixed(d) => format!("{d}"),
+                            Amount::StepsTimesToolLevel => {
+                                let tool = action
+                                    .mut_tool
+                                    .expect("a per-level amount needs a mutated tool");
+                                let tool = format!("{tool}").to_lowercase();
+                                writeln!(
+                                    o,
+                                    r#"  var added = unsafe {{ n_steps * {tool}.level }};
+  action.st_product(n_steps, {tool}.level, added);"#
+                                )?;
+                                format!("added")
+                            }
+                        };
                         writeln!(
                             o,
-                            r#"  var n = unsafe {{ {name}.n + {d} }};
-  action.st_sum({name}.n, {d}, n);
+                            r#"  var n = unsafe {{ {name}.n + {added} }};
+  action.st_sum({name}.n, {added}, n);
   {name}.update("n", n);"#
                         )?;
                     }
@@ -401,26 +628,81 @@ fn main() -> Result<(), io::Error> {
             }
         }
 
-        if action.pow > 0 {
-            let equation = |x: usize| (1.93e13 - 4.76e12 * ((x as f64).ln())) as usize;
+        for tag in &action.tags {
+            if let CrackGeode(tier) = tag {
+                // The stable identifier is the commitment of the geode as
+                // mined, which is the value its proof-of-work bounded.
+                let geode = format!("{Geode}000").to_lowercase();
+                let mined = format!("{geode}.stable_identifier");
+                if *tier > 0 {
+                    let field = format!("{}", GEMS[*tier]).to_lowercase();
+                    writeln!(o, "  action.intro_lt_eq_u256({mined}, {geode}.{field});")?;
+                }
+                if let Some(rarer) = GEMS.get(tier + 1) {
+                    let field = format!("{rarer}").to_lowercase();
+                    writeln!(o, "  action.intro_lt_eq_u256({geode}.{field}, {mined});")?;
+                }
+            }
+        }
+
+        if action.pow_target > 0 {
+            // The mined output records the tool's nonce before the grind, and
+            // the key the grind finds becomes the tool's next nonce. Each use's
+            // work can only start once the previous use's work is done, and
+            // only with that tool.
+            let tool = action
+                .mut_tool
+                .filter(|tool| tool.mines())
+                .expect("a mining action mutates the tool it mines with");
+            let tool = format!("{tool}").to_lowercase();
+            let mut initializers = vec![format!(r#"["tool_nonce", {tool}.nonce]"#)];
+            if action
+                .tags
+                .iter()
+                .any(|tag| matches!(tag, SetGemThresholds))
+            {
+                initializers.extend(gem_threshold_initializers(action.pow_target));
+            }
             writeln!(
                 o,
-                r#"  let target = action.top_limb_u256({n});
+                r#"  {var}.set([{initializers}]);
+  let target = action.top_limb_u256({n});
   var grind_key = unsafe {{ arg("grind_key") ?? action.pow_obj_grind({var}, target) }};
   {var}.update("key", grind_key);
-  action.intro_lt_eq_u256({var}, target);"#,
-                n = equation(action.pow),
-                var = last_out_resource
+  action.intro_lt_eq_u256({var}, target);
+  {tool}.update("nonce", grind_key);"#,
+                n = action.pow_target,
+                var = last_out_resource,
+                initializers = initializers.join(", "),
             )?;
         }
 
-        if action.vdf > 0 {
-            writeln!(
-                o,
-                r#"  var work = action.intro_vdf({n}, {var});"#,
-                n = action.vdf,
-                var = last_out_resource
-            )?;
+        let vdf_input = || {
+            if action.out_resources.is_empty() {
+                let res = action
+                    .mut_bucket
+                    .expect("a VDF needs an output or a mutated bucket");
+                format!("{res}bucket").to_lowercase()
+            } else {
+                last_out_resource.clone()
+            }
+        };
+        match action.vdf {
+            Vdf::None => {}
+            Vdf::Iterations(n) => {
+                let input = vdf_input();
+                writeln!(o, r#"  var work = action.intro_vdf({n}, {input});"#)?;
+            }
+            Vdf::PerStep(n) => {
+                assert!(action.steps, "a per-step VDF needs n_steps");
+                let input = vdf_input();
+                writeln!(
+                    o,
+                    r#"  var vdf_steps = unsafe {{ n_steps * {n} }};
+  action.st_product(n_steps, {n}, vdf_steps);
+  var work = action.intro_vdf(vdf_steps, {input});"#
+                )?;
+            }
         }
         writeln!(o, "}}\n")?;
     }
@@ -450,6 +732,46 @@ emoji = "🌲"
 description = "-"
 
 [[classes]]
+name = "Coal"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Geode"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Quartz"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Amethyst"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Sapphire"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Emerald"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Ruby"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Diamond"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
 name = "Stick"
 emoji = "🌲"
 description = "-"
@@ -466,6 +788,26 @@ description = "-"
 
 [[classes]]
 name = "BucketOfIron"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "BucketOfBits"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "BucketOfCoal"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "BucketOfQuartz"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "BarrelOfOil"
 emoji = "🌲"
 description = "-"
 
@@ -496,6 +838,11 @@ description = "-"
 
 [[classes]]
 name = "MiningDrill"
+emoji = "🌲"
+description = "-"
+
+[[classes]]
+name = "Pumpjack"
 emoji = "🌲"
 description = "-"
 
