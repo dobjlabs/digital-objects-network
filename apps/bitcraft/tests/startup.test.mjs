@@ -1810,6 +1810,77 @@ test("the context menu offers only the level-up the tool's level and buckets all
   assert.deepEqual(menuFor(), ["Open all", "No available actions"]);
 });
 
+test("PumpOil asks how many steps to run, and sends the count as n_steps", async (context) => {
+  const pumpOil = {
+    action: qname("PumpOil"), predicateSource: "",
+    mutatedObjects: [{ inputIndex: 0, outputIndex: 0 }, { inputIndex: 6, outputIndex: 1 }],
+    totalInputs: ["Pumpjack", "Coal", "Coal", "Coal", "Coal", "Coal", "BarrelOfOil"].map((name) => ({ class: qname(name) })),
+    totalOutputs: ["Pumpjack", "BarrelOfOil"].map((name) => ({ class: qname(name) })),
+  };
+  const item = (fileName, name, fields = {}) => ({
+    fileName, class: qname(name), status: "live",
+    fields: { kvs: Object.entries(fields).map(([key, value]) => [key, { Int: String(value) }]) },
+  });
+  const inputs = [item("pumpjack.dobj", "Pumpjack", { level: 1 }),
+    ...[1, 2, 3, 4, 5].map((index) => item(`coal-${index}.dobj`, "Coal")), item("barrel.dobj", "BarrelOfOil", { n: 0 })];
+  const ui = await page(context, { objects: [knife(), ...inputs], actions: [recipe(), pumpOil] });
+  const { document, dom } = ui;
+  const sheet = document.querySelector("#steps-sheet");
+  const input = document.querySelector("#steps-input");
+  const confirm = document.querySelector("#steps-confirm");
+  const choosePumpOil = () => {
+    const rows = inputs.map((object) => document.querySelector(`.object-row[data-file-name="${object.fileName}"]`));
+    rows[0].dispatchEvent(new dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+    for (const row of rows.slice(1)) {
+      row.dispatchEvent(new dom.window.MouseEvent("mousedown", { button: 0, ctrlKey: true, bubbles: true }));
+    }
+    rows[0].dispatchEvent(new dom.window.MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    [...document.querySelectorAll('.context-menu [role="menuitem"]')]
+      .find((entry) => entry.textContent.includes("PumpOil")).click();
+  };
+  const type = (text) => {
+    input.value = text;
+    input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  };
+  const press = (key) => input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key, bubbles: true }));
+
+  choosePumpOil();
+  assert.equal(sheet.hidden, false);
+  assert.equal(document.querySelector("#steps-title").textContent, "How many steps should the pumpjack run?");
+  assert.equal(document.querySelector("#steps-note").textContent, "Each step takes about 5 minutes on a typical laptop.");
+  assert.equal(input.value, "1");
+  assert.equal(document.activeElement, input);
+  assert.equal(document.querySelector("#top-bar").inert, true, "the sheet keeps the inventory out of reach");
+  assert.equal(ui.backend.posts.length, 0, "nothing runs before the player answers");
+  document.querySelector("#steps-cancel").click();
+  await flush();
+  assert.equal(sheet.hidden, true);
+  assert.equal(document.querySelector("#top-bar").inert, false);
+  assert.equal(ui.backend.posts.length, 0, "Cancel starts nothing");
+
+  choosePumpOil();
+  press("Escape");
+  await flush();
+  assert.equal(sheet.hidden, true);
+  assert.equal(ui.backend.posts.length, 0, "Escape starts nothing");
+
+  choosePumpOil();
+  for (const text of ["", "0", "-2", "1.5", "3 steps", "99999999999999999999"]) {
+    type(text);
+    assert.equal(confirm.disabled, true, `"${text}" is not a number of steps`);
+    press("Enter");
+    assert.equal(sheet.hidden, false, `Enter does not confirm "${text}"`);
+  }
+  type(" 12 ");
+  assert.equal(confirm.disabled, false);
+  press("Enter");
+  await flush();
+  assert.equal(sheet.hidden, true);
+  assert.equal(ui.backend.posts.length, 1);
+  assert.deepEqual(ui.backend.posts[0].args, { n_steps: { Int: "12" } });
+  assert.deepEqual([...ui.backend.posts[0].inputObjectPaths].sort(), inputs.map((object) => object.fileName).sort());
+});
+
 const wood = (fileName, extra = {}) => knife("live", { fileName, class: qname("Wood"), ...extra });
 const transaction = (state = "submitted", extra = {}) => ({
   txFinal: "0xabc", state, owner: "lost-run", action: qname("CraftPocketknife"),

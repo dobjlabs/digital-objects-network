@@ -53,9 +53,9 @@ Lowers the bucket's count by {amount} and gives you {amount}
 
 ## CraftBarrelOfOil
 
-TODO
+Craft an empty barrel for holding oil, from 5 iron.
 
-TODO
+A barrel holds a variable quantity of oil. You can pump oil into the barrel using a pumpjack.
 
 ## CraftStick
 
@@ -105,7 +105,7 @@ Use a level {level} quarry to produce {level + 1} stone.
 
 Produce {level + 1} stone using a quarry. Requires performing a small amount of proof-of-work hash mining, approximately ~30 seconds on a modern CPU.
 
-## UseMiningDrill{level}
+## MineIron{level}
 
 Use a level {level} mining drill to produce {level + 1} iron.
 
@@ -113,52 +113,52 @@ Produce {level + 1} iron using a mining drill. Consumes 5 wood, and requires per
 
 ## MineCoal{level}
 
-TODO
+Use a level {level} mining drill to produce {level} coal.
 
-TODO
+Produce {level} coal using a mining drill. Consumes 5 wood, and requires performing a small amount of proof-of-work hash mining, approximately ~60 seconds on a modern CPU.
 
-## MineGem{level}
+## MineGeode{level}
 
-TODO
+Use a level {level} mining drill to mine a Geode.
 
-TODO
+Produce a geode using a mining drill. Consumes 5 wood, and requires performing a moderate amount of proof-of-work hash mining. Higher level mining drills find geodes faster: at level N, finding a geode takes about 20 / N minutes on average. Once found, a geode can be cracked open to reveal either a quartz, an amethyst, a sapphire, a emerald, a ruby, or a diamond.
 
 ## CrackGeode{gem}
 
-TODO
+Extracts a gem ({gem}) from your Geode.
 
-TODO
+Cracks open this Geode, revealing {gem}.
 
 ## PumpOil
 
-TODO
+Use a pumpjack to pump oil into an oil barrel. Consumes 5 coal.
 
-TODO
+Produce a variable amount of oil using a pumpjack. Requires 5 coal and a barrel for the oil to be pumped into. You can specify the number of steps you'd like to operate the pumpjack for: each step requires performing serial (non-parallelizable) cryptographic work (about 5 minutes per step on a typical laptop), though the 5 coal input cost is fixed. Higher level pumpjacks produce more oil per step.
 
 ## BuildQuarry
 
-Make a level 1 quarry using 20 wood and 10 stone.
+Build a level 1 quarry using 20 wood and 10 stone.
 
 A level 1 quarry mines stone twice as fast as a pocketknife. Quarries have infinite durability, and can be upgraded to produce stone even faster.
 
 ## BuildMiningDrill
 
-Make a level 1 mining drill using 10 wood, 50 stone, and 5 iron.
+Build a level 1 mining drill using 10 wood, 50 stone, and 5 iron.
 
 A level 1 mining drill mines iron twice as fast as a pocketknife. Mining drills have infinite durability, and can be upgraded to produce iron even faster.
 
 ## BuildPumpjack
 
-TODO
+Build a level 1 pumpjack using a bucket of 50 stone, a bucket of 100 iron, and 1 quartz.
 
-TODO
+A pumpjack allows you to produce oil. Pumping oil requires a pumpjack, a barrel for holding the oil, and 5 coal.
 
 ## LevelUpQuarry{level}
 
 Upgrades a level {level} quarry to level {level + 1}.
 
 Only works on a quarry at exactly level {level}. Spends a bucket holding
-exactly {20 * 2 ** level} wood and a bucket holding exactly {10 * 2 **
+at least {20 * 2 ** level} wood and a bucket holding at least {10 * 2 **
 level} stone. A level {level + 1} quarry mines stone {level + 2} times as fast as a pocketknife.
 
 ## LevelUpMiningDrill{level}
@@ -166,14 +166,14 @@ level} stone. A level {level + 1} quarry mines stone {level + 2} times as fast a
 Upgrades a level {level} mining drill to level {level + 1}.
 
 Only works on a mining drill at exactly level {level}. Spends buckets
-holding exactly {10 * 2 ** level} wood, {50 * 2 ** level} stone and {5 * 2
-** level} iron. A level {level + 1} mining drill mines iron {level + 2} times as fast as a pocketknife.
+holding at least {10 * 2 ** level} wood, {50 * 2 ** level} stone, and {5 * 2
+** level} iron. A level {level + 1} mining drill mines iron {level + 2} times as fast as a pocketknife. Higher level mining drills also mine more coal per use, and find geodes faster.
 
 ## LevelUpPumpjack{level}
 
-TODO
+Upgrade a level {level} pumpjack to level {level + 1}.
 
-TODO
+Only works on a pumpjack at exactly level {level}. Spends a bucket holding at least {50 * 2 ** level} stone, a bucket holding at least {100 * 2 ** level} iron, and a bucket holding at least {2 ** level} quartz. Higher level pumpjacks produce more oil per step they are run.
 
 ## BitsFromWood
 
@@ -195,9 +195,9 @@ Converts 1 iron into 5 bits.
 
 ## BitsFrom{gem}
 
-TODO
+Generate bits from a gem.
 
-TODO
+Converts a gem into a bucket of bits. A quartz is converted into 100 bits; amethyst into 2,000 bits; sapphire into 40,000 bits; emerald into 800,000 bits; ruby into 16,000,000 bits; and diamond into 320,000,000 bits.
 
 ## Rekey{class}
 

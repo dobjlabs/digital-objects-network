@@ -138,9 +138,9 @@ the selected objects.
 | Actions | Rule | Source in `plugin.rhai` |
 | --- | --- | --- |
 | `UseQuarry1` .. `UseQuarry10` | the selected `Quarry`'s `level` equals the number in the action name | `action.st_equal(quarry.level, N)` |
-| `UseMiningDrill1` .. `UseMiningDrill10` | the selected `MiningDrill`'s `level` equals the number in the action name | `action.st_equal(miningdrill.level, N)` |
+| `MineIron1` .. `MineIron10` | the selected `MiningDrill`'s `level` equals the number in the action name | `action.st_equal(miningdrill.level, N)` |
 | `MineCoal1` .. `MineCoal10` | the selected `MiningDrill`'s `level` equals the number in the action name | `action.st_equal(miningdrill.level, N)` |
-| `MineGem1` .. `MineGem10` | the selected `MiningDrill`'s `level` equals the number in the action name | `action.st_equal(miningdrill.level, N)` |
+| `MineGeode1` .. `MineGeode10` | the selected `MiningDrill`'s `level` equals the number in the action name | `action.st_equal(miningdrill.level, N)` |
 | `CrackGeodeQuartz` .. `CrackGeodeDiamond` | the selected `Geode`'s `stable_identifier`, read as a 256-bit number, lies in that gem's band (`GEMS`, `geodeCracksInto()`): at most the geode's field named after the gem (none for Quartz), and at least the field named after the next rarer gem (none for Diamond). Exactly one crack is offered per geode | `action.intro_lt_eq_u256(geode000.stable_identifier, geode000.<gem>)` and `action.intro_lt_eq_u256(geode000.<rarer gem>, geode000.stable_identifier)` |
 | `BucketOf{Wood,Stone,Iron,Bits,Coal,Quartz}Take1` | the selected bucket's `n` is at least 1, so an empty bucket offers no take | `action.st_gt_eq(woodbucket.n, 1)` (and the other buckets) |
 | `LevelUpQuarry1` .. `LevelUpQuarry9` | the selected `Quarry`'s `level` equals the number N in the action name, the wood bucket's `n` is at least 20 x 2^N and the stone bucket's at least 10 x 2^N (`LEVEL_UP_BUCKETS`) | `action.st_equal(quarry.level, N)`, `action.st_gt_eq(woodbucket.n, ...)` and the stone bucket |
@@ -150,13 +150,32 @@ the selected objects.
 
 - **Generic behavior:** offer every action whose input classes match the
   selection. A level-1 drill with 5 wood would show all six
-  `UseMiningDrillN`, all six `MineCoalN` and all six `MineGemN` actions, and any geode all six
+  `MineIronN`, all six `MineCoalN` and all six `MineGeodeN` actions, and any geode all six
   `CrackGeode` actions.
 
 ### Known constraints not yet encoded
 
 - `UseWoodAxe`, `UseStoneAxe` and `UseIronAxe` require the axe's
   `durability` to be greater than 0.
+
+## PumpOil asks for a number of steps
+
+- **Where:** `STEP_PROMPTS`, applied through `startMenuAction()` when an
+  action is chosen from the context menu, which opens the steps sheet
+  (`askSteps()`).
+- **What:** choosing `bitcraft::PumpOil` opens a sheet over the main window,
+  like the Import sheet: "How many steps should the pumpjack run?", a text
+  field holding 1, the note "Each step takes about 5 minutes on a typical
+  laptop.", and Cancel and Confirm. Confirm, or Enter in the field, is only
+  available for a whole number of at least 1; it closes the sheet and starts
+  the run with the count as the action's caller data `n_steps`
+  (`{"n_steps": {"Int": "<count>"}}` in `POST /runs`). Cancel or Escape
+  closes it and starts nothing. While it is open the top bar and panes are
+  inert. Other actions start at once and send no caller data.
+- **Generic behavior:** every action starts as soon as it is chosen, with no
+  caller data, so `PumpOil` would always run its default of 1 step.
+- **Why:** each step adds the pumpjack's level in oil for the same 5 coal,
+  so the player chooses how much time to spend on one run.
 
 ## Cosmetic
 

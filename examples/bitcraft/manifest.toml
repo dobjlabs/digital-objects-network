@@ -385,7 +385,7 @@ emoji = "⛏️"
 description = "-"
 
 [[actions]]
-name = "UseMiningDrill1"
+name = "MineIron1"
 emoji = "⛏️"
 description = "-"
 
@@ -400,7 +400,7 @@ emoji = "⛏️"
 description = "-"
 
 [[actions]]
-name = "UseMiningDrill2"
+name = "MineIron2"
 emoji = "⛏️"
 description = "-"
 
@@ -415,7 +415,7 @@ emoji = "⛏️"
 description = "-"
 
 [[actions]]
-name = "UseMiningDrill3"
+name = "MineIron3"
 emoji = "⛏️"
 description = "-"
 
@@ -430,7 +430,7 @@ emoji = "⛏️"
 description = "-"
 
 [[actions]]
-name = "UseMiningDrill4"
+name = "MineIron4"
 emoji = "⛏️"
 description = "-"
 
@@ -445,7 +445,7 @@ emoji = "⛏️"
 description = "-"
 
 [[actions]]
-name = "UseMiningDrill5"
+name = "MineIron5"
 emoji = "⛏️"
 description = "-"
 
@@ -460,7 +460,7 @@ emoji = "⛏️"
 description = "-"
 
 [[actions]]
-name = "UseMiningDrill6"
+name = "MineIron6"
 emoji = "⛏️"
 description = "-"
 
@@ -475,7 +475,7 @@ emoji = "⛏️"
 description = "-"
 
 [[actions]]
-name = "UseMiningDrill7"
+name = "MineIron7"
 emoji = "⛏️"
 description = "-"
 
@@ -490,7 +490,7 @@ emoji = "⛏️"
 description = "-"
 
 [[actions]]
-name = "UseMiningDrill8"
+name = "MineIron8"
 emoji = "⛏️"
 description = "-"
 
@@ -505,7 +505,7 @@ emoji = "⛏️"
 description = "-"
 
 [[actions]]
-name = "UseMiningDrill9"
+name = "MineIron9"
 emoji = "⛏️"
 description = "-"
 
@@ -520,7 +520,7 @@ emoji = "⛏️"
 description = "-"
 
 [[actions]]
-name = "UseMiningDrill10"
+name = "MineIron10"
 emoji = "⛏️"
 description = "-"
 
@@ -685,52 +685,52 @@ emoji = "⛏️"
 description = "-"
 
 [[actions]]
-name = "MineGem1"
+name = "MineGeode1"
 emoji = "⛏️"
 description = "-"
 
 [[actions]]
-name = "MineGem2"
+name = "MineGeode2"
 emoji = "⛏️"
 description = "-"
 
 [[actions]]
-name = "MineGem3"
+name = "MineGeode3"
 emoji = "⛏️"
 description = "-"
 
 [[actions]]
-name = "MineGem4"
+name = "MineGeode4"
 emoji = "⛏️"
 description = "-"
 
 [[actions]]
-name = "MineGem5"
+name = "MineGeode5"
 emoji = "⛏️"
 description = "-"
 
 [[actions]]
-name = "MineGem6"
+name = "MineGeode6"
 emoji = "⛏️"
 description = "-"
 
 [[actions]]
-name = "MineGem7"
+name = "MineGeode7"
 emoji = "⛏️"
 description = "-"
 
 [[actions]]
-name = "MineGem8"
+name = "MineGeode8"
 emoji = "⛏️"
 description = "-"
 
 [[actions]]
-name = "MineGem9"
+name = "MineGeode9"
 emoji = "⛏️"
 description = "-"
 
 [[actions]]
-name = "MineGem10"
+name = "MineGeode10"
 emoji = "⛏️"
 description = "-"
 

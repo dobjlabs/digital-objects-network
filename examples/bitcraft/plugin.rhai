@@ -848,7 +848,7 @@ fn UseQuarry1(action) {
   action.intro_lt_eq_u256(stone001, target);
 }
 
-fn UseMiningDrill1(action) {
+fn MineIron1(action) {
   var miningdrill = action.mutate("MiningDrill");
   var key = unsafe { action.random() };
   miningdrill.update("key", key);
@@ -897,7 +897,7 @@ fn UseQuarry2(action) {
   action.intro_lt_eq_u256(stone002, target);
 }
 
-fn UseMiningDrill2(action) {
+fn MineIron2(action) {
   var miningdrill = action.mutate("MiningDrill");
   var key = unsafe { action.random() };
   miningdrill.update("key", key);
@@ -949,7 +949,7 @@ fn UseQuarry3(action) {
   action.intro_lt_eq_u256(stone003, target);
 }
 
-fn UseMiningDrill3(action) {
+fn MineIron3(action) {
   var miningdrill = action.mutate("MiningDrill");
   var key = unsafe { action.random() };
   miningdrill.update("key", key);
@@ -1004,7 +1004,7 @@ fn UseQuarry4(action) {
   action.intro_lt_eq_u256(stone004, target);
 }
 
-fn UseMiningDrill4(action) {
+fn MineIron4(action) {
   var miningdrill = action.mutate("MiningDrill");
   var key = unsafe { action.random() };
   miningdrill.update("key", key);
@@ -1062,7 +1062,7 @@ fn UseQuarry5(action) {
   action.intro_lt_eq_u256(stone005, target);
 }
 
-fn UseMiningDrill5(action) {
+fn MineIron5(action) {
   var miningdrill = action.mutate("MiningDrill");
   var key = unsafe { action.random() };
   miningdrill.update("key", key);
@@ -1123,7 +1123,7 @@ fn UseQuarry6(action) {
   action.intro_lt_eq_u256(stone006, target);
 }
 
-fn UseMiningDrill6(action) {
+fn MineIron6(action) {
   var miningdrill = action.mutate("MiningDrill");
   var key = unsafe { action.random() };
   miningdrill.update("key", key);
@@ -1187,7 +1187,7 @@ fn UseQuarry7(action) {
   action.intro_lt_eq_u256(stone007, target);
 }
 
-fn UseMiningDrill7(action) {
+fn MineIron7(action) {
   var miningdrill = action.mutate("MiningDrill");
   var key = unsafe { action.random() };
   miningdrill.update("key", key);
@@ -1254,7 +1254,7 @@ fn UseQuarry8(action) {
   action.intro_lt_eq_u256(stone008, target);
 }
 
-fn UseMiningDrill8(action) {
+fn MineIron8(action) {
   var miningdrill = action.mutate("MiningDrill");
   var key = unsafe { action.random() };
   miningdrill.update("key", key);
@@ -1324,7 +1324,7 @@ fn UseQuarry9(action) {
   action.intro_lt_eq_u256(stone009, target);
 }
 
-fn UseMiningDrill9(action) {
+fn MineIron9(action) {
   var miningdrill = action.mutate("MiningDrill");
   var key = unsafe { action.random() };
   miningdrill.update("key", key);
@@ -1397,7 +1397,7 @@ fn UseQuarry10(action) {
   action.intro_lt_eq_u256(stone010, target);
 }
 
-fn UseMiningDrill10(action) {
+fn MineIron10(action) {
   var miningdrill = action.mutate("MiningDrill");
   var key = unsafe { action.random() };
   miningdrill.update("key", key);
@@ -2169,7 +2169,7 @@ fn PumpOil(action) {
   var work = action.intro_vdf(vdf_steps, barrelofoil);
 }
 
-fn MineGem1(action) {
+fn MineGeode1(action) {
   var miningdrill = action.mutate("MiningDrill");
   var key = unsafe { action.random() };
   miningdrill.update("key", key);
@@ -2187,7 +2187,7 @@ fn MineGem1(action) {
   action.intro_lt_eq_u256(geode000, target);
 }
 
-fn MineGem2(action) {
+fn MineGeode2(action) {
   var miningdrill = action.mutate("MiningDrill");
   var key = unsafe { action.random() };
   miningdrill.update("key", key);
@@ -2205,7 +2205,7 @@ fn MineGem2(action) {
   action.intro_lt_eq_u256(geode000, target);
 }
 
-fn MineGem3(action) {
+fn MineGeode3(action) {
   var miningdrill = action.mutate("MiningDrill");
   var key = unsafe { action.random() };
   miningdrill.update("key", key);
@@ -2223,7 +2223,7 @@ fn MineGem3(action) {
   action.intro_lt_eq_u256(geode000, target);
 }
 
-fn MineGem4(action) {
+fn MineGeode4(action) {
   var miningdrill = action.mutate("MiningDrill");
   var key = unsafe { action.random() };
   miningdrill.update("key", key);
@@ -2241,7 +2241,7 @@ fn MineGem4(action) {
   action.intro_lt_eq_u256(geode000, target);
 }
 
-fn MineGem5(action) {
+fn MineGeode5(action) {
   var miningdrill = action.mutate("MiningDrill");
   var key = unsafe { action.random() };
   miningdrill.update("key", key);
@@ -2259,7 +2259,7 @@ fn MineGem5(action) {
   action.intro_lt_eq_u256(geode000, target);
 }
 
-fn MineGem6(action) {
+fn MineGeode6(action) {
   var miningdrill = action.mutate("MiningDrill");
   var key = unsafe { action.random() };
   miningdrill.update("key", key);
@@ -2277,7 +2277,7 @@ fn MineGem6(action) {
   action.intro_lt_eq_u256(geode000, target);
 }
 
-fn MineGem7(action) {
+fn MineGeode7(action) {
   var miningdrill = action.mutate("MiningDrill");
   var key = unsafe { action.random() };
   miningdrill.update("key", key);
@@ -2295,7 +2295,7 @@ fn MineGem7(action) {
   action.intro_lt_eq_u256(geode000, target);
 }
 
-fn MineGem8(action) {
+fn MineGeode8(action) {
   var miningdrill = action.mutate("MiningDrill");
   var key = unsafe { action.random() };
   miningdrill.update("key", key);
@@ -2313,7 +2313,7 @@ fn MineGem8(action) {
   action.intro_lt_eq_u256(geode000, target);
 }
 
-fn MineGem9(action) {
+fn MineGeode9(action) {
   var miningdrill = action.mutate("MiningDrill");
   var key = unsafe { action.random() };
   miningdrill.update("key", key);
@@ -2331,7 +2331,7 @@ fn MineGem9(action) {
   action.intro_lt_eq_u256(geode000, target);
 }
 
-fn MineGem10(action) {
+fn MineGeode10(action) {
   var miningdrill = action.mutate("MiningDrill");
   var key = unsafe { action.random() };
   miningdrill.update("key", key);

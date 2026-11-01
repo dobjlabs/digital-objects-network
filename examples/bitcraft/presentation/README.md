@@ -124,7 +124,7 @@ buckets, barrels, axes, quarries, drills and pumpjacks.
 | Adding to a bucket | green up chevron (^) | `BucketOf{Wood,Stone,Iron,Bits,Coal,Quartz}Add{1,5,10,50}`, and `BitsFrom{Quartz,Amethyst,Sapphire,Emerald,Ruby,Diamond}`, which add a gem's bits to a bucket of bits |
 | Taking from a bucket | red down chevron (v) | `BucketOf{Wood,Stone,Iron,Bits,Coal,Quartz}Take1` |
 | Using an axe to produce wood | none | `UseWoodAxe`, `UseStoneAxe`, `UseIronAxe` |
-| Using a quarry or drill to produce stone, iron, coal or geodes, or a pumpjack to fill a barrel of oil | none | `UseQuarry1`-`10`, `UseMiningDrill1`-`10`, `MineCoal1`-`10`, `MineGem1`-`10`, `PumpOil` |
+| Using a quarry or drill to produce stone, iron, coal or geodes, or a pumpjack to fill a barrel of oil | none | `UseQuarry1`-`10`, `MineIron1`-`10`, `MineCoal1`-`10`, `MineGeode1`-`10`, `PumpOil` |
 | Upgrading a quarry, drill or pumpjack | green up chevron (^) | `LevelUpQuarry1`-`9`, `LevelUpMiningDrill1`-`9`, `LevelUpPumpjack1`-`9` |
 
 Using a tool shows nothing in either corner. Every level of a quarry,

@@ -9,7 +9,7 @@ bitcraft-presentation` after editing. See `../README.md`.
 
 A basic building material.
 
-Requires proof-of-work to produce, as well as a pocketknife or an axe. The cheapest resource--fast to produce, and used as a basic building block to craft various tools and upgrades. Can be converted directly to bits at a rate of 1 bit per wood.
+Requires proof-of-work to produce, as well as a pocketknife or an axe. The cheapest resource--fast to produce, and used as a basic building block to craft various tools and upgrades. Also used as consumable fuel for mining drills. Can be converted directly to bits at a rate of 1 bit per wood.
 
 ## Stone
 
@@ -25,51 +25,51 @@ Requires proof-of-work to produce, as well as a pocketknife or a mining drill. S
 
 ## Coal
 
-TODO
+Used as fuel for higher level production facilities.
 
-TODO
+Requires proof-of-work to produce, as well as a mining drill. Slightly more expensive to produce than wood or stone, and used as a fuel for operating higher level production facilities.
 
 ## Geode
 
-TODO
+Crack this open to reveal a gem.
 
-TODO
+Requires a moderate amount of proof-of-work to produce, as well as a mining drill. Crack it open to obtain a gem.
 
 ## Quartz
 
-TODO
+A common gem.
 
-TODO
+Produced by cracking open a Geode. Used to create or upgrade higher-level production facilities. Can be converted into a bucket of 100 bits.
 
 ## Amethyst
 
-TODO
+An uncommon gem.
 
-TODO
+Produced by cracking open a Geode. Can be converted into a bucket of 2,000 bits.
 
 ## Sapphire
 
-TODO
+A rare gem.
 
-TODO
+Produced by cracking open a Geode. Can be converted into a bucket of 40,000 bits.
 
 ## Emerald
 
-TODO
+An epic gem.
 
-TODO
+Produced by cracking open a Geode. Can be converted into a bucket of 800,000 bits.
 
 ## Ruby
 
-TODO
+A legendary gem.
 
-TODO
+Produced by cracking open a Geode. Can be converted into a bucket of 1,600,000 bits.
 
 ## Diamond
 
-TODO
+A mythic gem.
 
-TODO
+Produced by cracking open a Geode. Can be converted into a bucket of 3,200,000 bits.
 
 ## Stick
 
@@ -97,27 +97,27 @@ Holds any amount of iron. You can add 1, 5, 10, or 50 iron at a time to the buck
 
 ## BucketOfBits
 
-TODO
+Holds a stack of bits.
 
-TODO
+Holds any amount of bits. You can add 1, 5, 10, or 50 bits at a time to the bucket. You can remove bits from the bucket so long as the bucket is not empty.
 
 ## BucketOfCoal
 
-TODO
+Holds a stack of coal.
 
-TODO
+Holds any amount of coal. You can add 1, 5, 10, or 50 coal at a time to the bucket. You can remove coal from the bucket so long as the bucket is not empty.
 
 ## BucketOfQuartz
 
-TODO
+Holds a stack of quartz.
 
-TODO
+Holds any amount of quartz. You can add 1, 5, 10, or 50 quartz at a time to the bucket. You can remove quartz from the bucket so long as the bucket is not empty.
 
 ## BarrelOfOil
 
-TODO
+Holds a variable quantity of oil.
 
-TODO
+Holds any amount of oil. Filled from operating a pumpjack. Used as an ingredient for higher-level materials and consumables.
 
 ## Pocketknife
 
@@ -157,12 +157,12 @@ Requires wood, stone, and iron to build or upgrade: 10 wood, 50 stone, and 5 iro
 
 ## Pumpjack
 
-TODO
+Produces oil.
 
-TODO
+Requires stone, iron, and quartz to build or upgrade: 50 stone, 100 iron, and 1 quartz for a level 1 pumpjack, with upgrade costs doubling at every level. Requires 5 coal and a barrel to begin pumping oil. Can pump for any number of steps; each step takes a moderate amount of non-parallelizable cryptographic work, though the 5 coal cost of starting the pump is fixed. Higher level pumpjacks produce more oil per step.
 
 ## Bit
 
 The currency of Bitcraft.
 
-Can be produced from wood, stone, or iron at a rate of 1 bit per wood, 2 bits per stone, or 5 bits per iron.
+Can be produced from wood, stone, or iron at a rate of 1 bit per wood, 2 bits per stone, or 5 bits per iron. Can also be produced from gems.

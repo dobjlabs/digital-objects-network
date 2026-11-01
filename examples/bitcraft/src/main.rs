@@ -268,7 +268,7 @@ fn main() -> Result<(), io::Error> {
             ..Default::default()
         });
         actions.push(Action {
-            name: format!("UseMiningDrill{lvl}"),
+            name: format!("MineIron{lvl}"),
             mut_tool: Some(MiningDrill),
             rekey: true,
             in_resources: vec![(5, Wood)],
@@ -364,7 +364,7 @@ fn main() -> Result<(), io::Error> {
     // cracking turns it into the one gem its mined value allows.
     for lvl in 1..=MAX_LEVEL {
         actions.push(Action {
-            name: format!("MineGem{lvl}"),
+            name: format!("MineGeode{lvl}"),
             mut_tool: Some(MiningDrill),
             rekey: true,
             in_resources: vec![(5, Wood)],
