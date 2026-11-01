@@ -24,6 +24,7 @@ target
 .env
 /data/
 /.dev/bitcraft-local/
+/.mock_dobj/
 *.log
 # Claude Code local config
 /.claude/

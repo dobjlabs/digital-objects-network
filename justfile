@@ -12,6 +12,8 @@ DOBJ_ROOT := env_var_or_default("DOBJ_HOME", home_directory() / ".dobj")
 # and service resolves the same root.
 LOCAL_DOBJ_ROOT := justfile_directory() / "data/dobj-local"
 LOCAL_BITCRAFT_ROOT := justfile_directory() / ".dev/bitcraft-local"
+# Mock-mode counterpart, passed by `just dev-mock`.
+MOCK_DOBJ_ROOT := justfile_directory() / ".mock_dobj"
 
 # Use --bin for dev commands so dependency features are unified across the
 # workspace. Separate -p selections rebuild shared dependencies with different
@@ -158,6 +160,18 @@ dev-local: ensure-anvil ensure-db-local (ensure-local-settings LOCAL_DOBJ_ROOT) 
     export SYNC_DELAY_MS=50
     export CATCHUP_BATCH_SIZE=64
     mprocs --config mprocs.local.yaml
+
+# Like `just dev-remote`, but with no network at all: dobjd proves with the
+# MockProver and runs an in-memory DON that lands each transaction as soon as
+# it is submitted. The DON does not survive a restart, so every run starts
+# from an empty object store.
+dev-mock: (ensure-plugins MOCK_DOBJ_ROOT) ensure-mcp (ensure-mcp-enabled MOCK_DOBJ_ROOT)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rm -rf "{{MOCK_DOBJ_ROOT}}/objects" "{{MOCK_DOBJ_ROOT}}/transactions"
+    export DOBJ_HOME="{{MOCK_DOBJ_ROOT}}"
+    export DOBJ_MOCK=1
+    mprocs --config mprocs.mock.yaml
 
 # Fail with the install command when anvil is missing. Unlike the optional
 # `claude` CLI in ensure-mcp, `just dev-local` cannot run without it.
@@ -327,7 +341,7 @@ reset:
     # The installed CLI always lives under ~/.dobj/bin, even when DOBJ_HOME
     # points the driver's data elsewhere.
     [ -x ~/.dobj/bin/dobj ] && ~/.dobj/bin/dobj stop || true
-    rm -rf data/ ~/.dobj "{{LOCAL_BITCRAFT_ROOT}}"
+    rm -rf data/ ~/.dobj "{{LOCAL_BITCRAFT_ROOT}}" "{{MOCK_DOBJ_ROOT}}"
     root="${DOBJ_HOME:-}"
     case "$root" in
         ""|/) ;;

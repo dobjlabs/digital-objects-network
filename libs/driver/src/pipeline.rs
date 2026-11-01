@@ -17,6 +17,7 @@ use wire_types::{
 };
 
 use crate::clients::{HASH_BATCH_LIMIT, SynchronizerMembership, SynchronizerTxStatus};
+use crate::cpu_usage::run_at_cpu_usage;
 use crate::creation_proof::CreationProof;
 use crate::driver::Driver;
 use crate::error::DriverError;
@@ -195,13 +196,15 @@ impl Driver {
                 },
             );
         });
-        let spendable_outputs = catalog.execute_action_with_progress(
-            input.action.clone(),
-            grounding_witness,
-            execution_inputs,
-            &args,
-            progress,
-        )?;
+        let spendable_outputs = run_at_cpu_usage(settings.cpu_usage, || {
+            catalog.execute_action_with_progress(
+                input.action.clone(),
+                grounding_witness,
+                execution_inputs,
+                &args,
+                progress,
+            )
+        })?;
         if spendable_outputs.objs.len() != action.total_outputs.len() {
             return Err(anyhow!(
                 "action {} output mismatch: descriptor expects {}, engine returned {}",
@@ -219,10 +222,11 @@ impl Driver {
             output_status: None,
         };
         reporter.on_step(ExecutionPhase::Commit, "Shrinking proof", &shrink_ctx);
-        let payload_bytes = self
-            .deps
-            .payload_builder
-            .build_payload(&grounding_root, &spendable_outputs)?;
+        let payload_bytes = run_at_cpu_usage(settings.cpu_usage, || {
+            self.deps
+                .payload_builder
+                .build_payload(&grounding_root, &spendable_outputs)
+        })?;
 
         let outputs = action
             .total_outputs

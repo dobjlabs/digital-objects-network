@@ -100,9 +100,14 @@ async fn run() -> Result<()> {
     // fatal (the warm panics internally): a circuit that can't build now would
     // fail every action, so refuse to start rather than serve a daemon that
     // cannot prove.
-    tokio::task::spawn_blocking(driver::warm_proving_circuits)
-        .await
-        .map_err(|err| anyhow!("circuit warm-up task panicked: {err}"))?;
+    // Mock proofs use none of these circuits.
+    if !driver.is_mock() {
+        tokio::task::spawn_blocking(driver::warm_proving_circuits)
+            .await
+            .map_err(|err| anyhow!("circuit warm-up task panicked: {err}"))?;
+    }
+    // Warm-up ran at full speed; proving runs at the saved level from here.
+    driver::apply_cpu_usage(driver.load_settings()?.cpu_usage);
 
     // Circuits are warm; serve the pre-bound MCP listener (no-op when
     // disabled). Deferred to here so an MCP action can't land mid-warm-up.

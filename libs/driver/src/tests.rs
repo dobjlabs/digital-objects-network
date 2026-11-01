@@ -211,6 +211,7 @@ fn fixture_holding(
             inner: relayer.clone(),
         }),
         payload_builder: Arc::new(MockPayloadBuilder),
+        mock_proofs: true,
     };
     let paths = temp_paths();
     write_object_file(&paths, &record, file_name).unwrap();
@@ -665,6 +666,7 @@ fn mock_deps() -> (DriverDeps, Arc<Mutex<MockChain>>) {
             inner: Arc::new(Mutex::new(MockRelayerState::default())),
         }),
         payload_builder: Arc::new(MockPayloadBuilder),
+        mock_proofs: true,
     };
     (deps, chain)
 }
@@ -2589,6 +2591,53 @@ fn an_object_seen_spent_on_chain_moves_to_its_generated_name() {
             |object| object.file_name == spent_name && object.status == ObjectStatus::Nullified
         )
     );
+}
+
+fn mock_don_driver() -> Driver {
+    ensure_extra_pod_deserializers_registered();
+    let don = Arc::new(crate::mock_don::MockDon::new());
+    let deps = DriverDeps {
+        catalog: Arc::new(RwLock::new(Arc::new(make_catalog()))),
+        synchronizer: don.clone(),
+        relayer: don,
+        payload_builder: Arc::new(crate::mock_don::MockPayloadBuilder),
+        mock_proofs: true,
+    };
+    Driver::open(temp_paths(), deps).unwrap()
+}
+
+fn execute_and_settle(driver: &Driver, action: &str, inputs: Vec<String>) -> TransactionRecord {
+    let submitted = driver
+        .execute(ExecuteActionInput {
+            action: craft_basics(action),
+            input_objects: inputs,
+            args: Default::default(),
+        })
+        .unwrap();
+    driver.settle().unwrap();
+    driver.get_transaction(&tx_final_of(&submitted)).unwrap()
+}
+
+#[test]
+fn mock_don_lands_chained_actions() {
+    let driver = mock_don_driver();
+    let found = execute_and_settle(&driver, "FindLog", vec![]);
+    assert_eq!(found.state, TransactionState::Landed);
+    let log = found.output_files[0].clone();
+    let read_status = |file_name: &str| {
+        driver
+            .read_object(std::path::Path::new(file_name))
+            .unwrap()
+            .status
+    };
+    assert_eq!(read_status(&log), ObjectStatus::Live);
+
+    let crafted = execute_and_settle(&driver, "CraftWood", vec![log.clone()]);
+    assert_eq!(crafted.state, TransactionState::Landed, "{crafted:?}");
+    assert_eq!(read_status(&log), ObjectStatus::Nullified);
+    for file_name in &crafted.output_files {
+        assert_eq!(read_status(file_name), ObjectStatus::Live);
+    }
 }
 
 /// The creation proof `record` carries, checked against its object; returns

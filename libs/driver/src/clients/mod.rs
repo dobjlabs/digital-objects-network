@@ -7,11 +7,9 @@ mod relayer_client;
 mod synchronizer_client;
 
 pub(crate) use relayer_client::{HttpRelayerClient, RelayerClient};
-#[cfg(test)]
-pub(crate) use synchronizer_client::SynchronizerHead;
 pub(crate) use synchronizer_client::{
-    HASH_BATCH_LIMIT, HttpSynchronizerClient, SynchronizerClient, SynchronizerMembership,
-    SynchronizerTxStatus,
+    HASH_BATCH_LIMIT, HttpSynchronizerClient, SynchronizerClient, SynchronizerHead,
+    SynchronizerMembership, SynchronizerTxStatus,
 };
 
 /// Total timeout for each relayer or synchronizer request.
