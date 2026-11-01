@@ -15,11 +15,11 @@
     "security": {
       "capabilities": [{
         "identifier": "main-page",
-        "description": "Read native inventory value and production rate, and raise the windows the page opened",
+        "description": "Read native inventory value and production rate, raise the windows the page opened, and apply the theme picked in Settings",
         "windows": ["main"],
         "local": false,
         "remote": { "urls": ["http://127.0.0.1:7727/*"] },
-        "permissions": ["allow-inventory-metrics", "allow-raise-window"]
+        "permissions": ["allow-inventory-metrics", "allow-raise-window", "allow-set-appearance"]
       }, {
         "identifier": "discord-sharing",
         "description": "Read and change the Discord sharing preference from Settings",

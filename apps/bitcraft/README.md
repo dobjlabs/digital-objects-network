@@ -166,6 +166,10 @@ Presence follows the daemon's active runs, sends only changed payloads, and limi
 
 The transport uses Discord's documented [RPC over IPC protocol](https://docs.discord.com/developers/topics/rpc), with Unix sockets on macOS/Linux and named pipes on Windows. The tests use a simulated Discord, so a real profile display still needs the application setup above and a native smoke check on each supported OS.
 
+## Theme
+
+The game is light by default, whatever the system's appearance. Players switch to dark with **Theme** under Appearance in the game's Settings. The game page keeps the choice in its own browser storage; the main window passes it to the host through the `set_appearance` command, which stores a copy in `<home>/appearance.json`, separate from daemon settings and `desktop.json`, so it follows `--home` and `BITCRAFT_HOME`. The host builds every window with that theme and background, so a window's frame and its first frame before the page paints match the game, and restyles open windows and the desktop shell's pages when the choice changes.
+
 ## Releases and updates
 
 The repository's `Release` workflow builds Bitcraft installers alongside the standalone Digital Objects artifacts for each `vMAJOR.MINOR.PATCH[-rc.N | -alpha.N | -beta.N]` tag. It calls `Release Bitcraft`, which builds macOS Apple Silicon and Intel DMGs, a Windows x86_64 per-user NSIS installer, and a Linux x86_64 AppImage. Product versions are derived from the tag; packaged runtime manifests are checked against that version, target, and source commit. Manual releases check out the requested tag rather than the workflow's selected branch. All packages upload to the same draft GitHub release, so standalone installers and update checks continue to find their expected artifacts through the repository's latest release.
