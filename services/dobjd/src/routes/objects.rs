@@ -91,7 +91,9 @@ pub async fn import_object(
 ) -> ApiResult<Json<ObjectSummary>> {
     let services = state.services.clone();
     let summary = tokio::task::spawn_blocking(move || {
-        let summary = services.driver.import_object(&req.dobj)?;
+        let summary = services
+            .driver
+            .import_object(&req.dobj, req.file_name.as_deref())?;
         services.events.publish(Event::Object(summary.clone()));
         anyhow::Ok(summary)
     })

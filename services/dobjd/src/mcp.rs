@@ -272,7 +272,7 @@ impl DobjOps for DobjdOps {
         // has filesystem access, and import only ingests (never discloses).
         let contents = std::fs::read_to_string(path)
             .map_err(|err| anyhow::anyhow!("could not read .dobj file at {path}: {err}"))?;
-        let summary = self.driver().import_object(&contents)?;
+        let summary = self.driver().import_object(&contents, None)?;
         self.services
             .events
             .publish(crate::events::Event::Object(summary.clone()));

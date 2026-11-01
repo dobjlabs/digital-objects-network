@@ -19,6 +19,7 @@ members = [
     "devtools/beacon-shim",
     "devtools/tests",
     "examples/bitcraft",
+    "apps/bitcraft/discord-bot",
 ]
 resolver = "2"
 exclude = ["apps/bitcraft/src-tauri"]

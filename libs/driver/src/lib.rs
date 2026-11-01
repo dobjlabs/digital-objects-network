@@ -1,5 +1,6 @@
 mod catalog;
 mod clients;
+mod creation_proof;
 mod driver;
 mod error;
 mod execute;

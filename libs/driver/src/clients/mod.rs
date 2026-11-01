@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use serde::de::DeserializeOwned;
 
 mod relayer_client;
@@ -9,7 +9,7 @@ mod synchronizer_client;
 pub(crate) use relayer_client::{HttpRelayerClient, RelayerClient};
 pub(crate) use synchronizer_client::{
     HttpSynchronizerClient, SynchronizerClient, SynchronizerHead, SynchronizerMembership,
-    SynchronizerTxStatus,
+    SynchronizerTxStatus, HASH_BATCH_LIMIT,
 };
 
 /// Total timeout for each relayer or synchronizer request.
