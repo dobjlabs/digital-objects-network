@@ -2355,21 +2355,3 @@ fn import_refuses_a_creation_proof_the_synchronizer_does_not_back() {
     let err = refused(&driver, &serde_json::to_string(&forged).unwrap());
     assert!(err.contains("not base64"), "{err}");
 }
-
-#[test]
-fn object_files_with_top_level_metadata_still_parse() {
-    let (json, commitment, _) = make_importable_log();
-    let nested: serde_json::Value = serde_json::from_str(&json).unwrap();
-    let mut flat = nested["metadata"].clone();
-    flat["obj"] = nested["obj"].clone();
-    let record: ObjectRecord = serde_json::from_value(flat.clone()).unwrap();
-    assert_eq!(record.metadata.content_hash, commitment);
-    assert_eq!(record.metadata.class, craft_basics("Log"));
-
-    let written = serde_json::to_value(&record).unwrap();
-    assert_eq!(written, nested);
-
-    let (driver, _) = import_driver(HashSet::from([commitment]), HashSet::new(), false);
-    let summary = driver.import_object(&flat.to_string(), None).unwrap();
-    assert_eq!(summary.status, ObjectStatus::Live);
-}

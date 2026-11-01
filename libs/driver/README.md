@@ -128,7 +128,7 @@ The driver depends on traits, not the HTTP implementations directly:
 
 ## Storage Model
 
-An object file is `{ "metadata": { class, contentHash, status, txFinal, txHash?, creationProof? }, "obj": ... }`. Files from before `metadata` existed kept its fields at the top level; they still parse and are rewritten in the nested form the next time the driver writes them.
+An object file is `{ "metadata": { class, contentHash, status, txFinal, txHash?, creationProof? }, "obj": ... }`.
 
 `creationProof` is base64 of a Merkle proof that the object's commitment is in the created array of a state root, together with that root's state header (format in [`src/creation_proof.rs`](src/creation_proof.rs)). Settlement fetches one from the synchronizer for each output it marks `live`, and a sync pass fetches one for any unspent file the synchronizer reports created without one, so a failed fetch is retried. Import checks a proof a file carries: it must verify, and its state root must be the one the synchronizer derived at the proof's block, or the import fails; a block the synchronizer has derived no state at fails too. Import also refuses an object the synchronizer does not report created, unless its proof places it in a created set, so a well-formed file for an object that was never created, or whose transaction has not landed yet, is not imported. A file without a proof gets one on import, so removing a proof the synchronizer does not back lets the object import and be re-proved once the synchronizer reports it created.
 

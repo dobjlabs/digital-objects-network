@@ -25,10 +25,7 @@ impl From<FileStatus> for ObjectStatus {
 }
 
 /// A `.dobj` file: what the driver knows about the object, then the object.
-/// Files written before `metadata` existed kept its fields at the top level,
-/// and still parse.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(try_from = "serde_json::Value")]
 pub struct ObjectRecord {
     pub metadata: ObjectMetadata,
     /// Object payload dictionary
@@ -51,47 +48,6 @@ pub struct ObjectMetadata {
     /// the created set of a state root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub creation_proof: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct NestedObjectRecord {
-    metadata: ObjectMetadata,
-    obj: Dictionary,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct FlatObjectRecord {
-    content_hash: Hash,
-    class: QualifiedName,
-    status: FileStatus,
-    #[serde(default)]
-    tx_hash: Option<String>,
-    obj: Dictionary,
-    tx_final: Hash,
-}
-
-impl TryFrom<serde_json::Value> for ObjectRecord {
-    type Error = serde_json::Error;
-
-    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
-        if value.get("metadata").is_some() {
-            let NestedObjectRecord { metadata, obj } = serde_json::from_value(value)?;
-            return Ok(Self { metadata, obj });
-        }
-        let flat: FlatObjectRecord = serde_json::from_value(value)?;
-        Ok(Self {
-            metadata: ObjectMetadata {
-                class: flat.class,
-                content_hash: flat.content_hash,
-                status: flat.status,
-                tx_final: flat.tx_final,
-                tx_hash: flat.tx_hash,
-                creation_proof: None,
-            },
-            obj: flat.obj,
-        })
-    }
 }
 
 impl ObjectRecord {
