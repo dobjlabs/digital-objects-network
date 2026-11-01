@@ -105,14 +105,14 @@ var amount = unsafe {
 
 Each unsafe block runs once per phase. Its returned value becomes one private witness, regardless of whether it came from an argument, a literal, an existing variable, or a computation. Intermediate calculations create no private wildcards. During Load, arguments are absent and defaults run symbolically; during Execute, the script sees the supplied data. A block with no result creates no witness. Nested unsafe blocks are rejected.
 
-Unsafe blocks cannot emit proof statements, declare object inputs/outputs/mutations, update objects, or invoke sub-actions. These restrictions also apply to helpers called from the block. `random` and `pow_obj_grind` require unsafe. Constrain the resulting witness afterwards:
+Unsafe blocks cannot emit proof statements, declare object inputs/outputs/mutations, update objects, or invoke sub-actions. These restrictions also apply to helpers called from the block. `random` and `pow_obj_grind` require unsafe. `pow_obj_grind(obj, key_name, target)` returns a value for the field `key_name`, which must already be in the object, that brings the object's commitment to at most `target`. Constrain the resulting witness afterwards:
 
 ```rhai
 fn CraftWood(action) {
     var log = action.input("Log");
     var wood = action.output("Wood");
     let target = action.top_limb_u256(9007199254740992);
-    var key = unsafe { arg("key") ?? action.pow_obj_grind(wood, target) };
+    var key = unsafe { arg("key") ?? action.pow_obj_grind(wood, "key", target) };
     wood.update("key", key);
     action.intro_lt_eq_u256(wood, target);
 }
@@ -243,7 +243,7 @@ only be validated during Execute.
 
 ## u256 difficulty targets
 
-`pow_obj_grind(obj, target)` and `intro_lt_eq_u256(x, target)` both compare
+`pow_obj_grind(obj, key_name, target)` and `intro_lt_eq_u256(x, target)` both compare
 full 256-bit `RawValue`s. Integer literals in Rhai promote to a pod2 `Value`
 whose `RawValue` has the integer in the _least_-significant limb — not what
 you want for a "top-limb ≤ N" difficulty target.
@@ -255,7 +255,7 @@ neither declares a wildcard):
 
 ```rhai
 let target = action.top_limb_u256(9007199254740992);
-var key = unsafe { action.pow_obj_grind(wood, target) };
+var key = unsafe { action.pow_obj_grind(wood, "key", target) };
 wood.update("key", key);
 action.intro_lt_eq_u256(wood, target);
 ```

@@ -11,7 +11,7 @@ fn GatherWood(action) {
   var wood000 = action.output("Wood");
   wood000.set([["tool_nonce", pocketknife.nonce]]);
   let target = action.top_limb_u256(8339694957348);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(wood000, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(wood000, "key", target) };
   wood000.update("key", grind_key);
   action.intro_lt_eq_u256(wood000, target);
   pocketknife.update("nonce", grind_key);
@@ -25,7 +25,7 @@ fn GatherStone(action) {
   var stone000 = action.output("Stone");
   stone000.set([["tool_nonce", pocketknife.nonce]]);
   let target = action.top_limb_u256(5040314377883);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone000, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone000, "key", target) };
   stone000.update("key", grind_key);
   action.intro_lt_eq_u256(stone000, target);
   pocketknife.update("nonce", grind_key);
@@ -39,7 +39,7 @@ fn GatherIron(action) {
   var iron000 = action.output("Iron");
   iron000.set([["tool_nonce", pocketknife.nonce]]);
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron000, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron000, "key", target) };
   iron000.update("key", grind_key);
   action.intro_lt_eq_u256(iron000, target);
   pocketknife.update("nonce", grind_key);
@@ -809,7 +809,7 @@ fn UseWoodAxe(action) {
   var wood001 = action.output("Wood");
   wood001.set([["tool_nonce", woodaxe.nonce]]);
   let target = action.top_limb_u256(8339694957348);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(wood001, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(wood001, "key", target) };
   wood001.update("key", grind_key);
   action.intro_lt_eq_u256(wood001, target);
   woodaxe.update("nonce", grind_key);
@@ -828,7 +828,7 @@ fn UseStoneAxe(action) {
   var wood002 = action.output("Wood");
   wood002.set([["tool_nonce", stoneaxe.nonce]]);
   let target = action.top_limb_u256(8339694957348);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(wood002, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(wood002, "key", target) };
   wood002.update("key", grind_key);
   action.intro_lt_eq_u256(wood002, target);
   stoneaxe.update("nonce", grind_key);
@@ -848,7 +848,7 @@ fn UseIronAxe(action) {
   var wood003 = action.output("Wood");
   wood003.set([["tool_nonce", ironaxe.nonce]]);
   let target = action.top_limb_u256(8339694957348);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(wood003, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(wood003, "key", target) };
   wood003.update("key", grind_key);
   action.intro_lt_eq_u256(wood003, target);
   ironaxe.update("nonce", grind_key);
@@ -863,7 +863,7 @@ fn UseQuarry1(action) {
   var stone001 = action.output("Stone");
   stone001.set([["tool_nonce", quarry.nonce]]);
   let target = action.top_limb_u256(5040314377883);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone001, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone001, "key", target) };
   stone001.update("key", grind_key);
   action.intro_lt_eq_u256(stone001, target);
   quarry.update("nonce", grind_key);
@@ -883,7 +883,7 @@ fn MineIron1(action) {
   var iron001 = action.output("Iron");
   iron001.set([["tool_nonce", miningdrill.nonce]]);
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron001, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron001, "key", target) };
   iron001.update("key", grind_key);
   action.intro_lt_eq_u256(iron001, target);
   miningdrill.update("nonce", grind_key);
@@ -902,7 +902,7 @@ fn MineCoal1(action) {
   var coal000 = action.output("Coal");
   coal000.set([["tool_nonce", miningdrill.nonce]]);
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(coal000, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(coal000, "key", target) };
   coal000.update("key", grind_key);
   action.intro_lt_eq_u256(coal000, target);
   miningdrill.update("nonce", grind_key);
@@ -918,7 +918,7 @@ fn UseQuarry2(action) {
   var stone002 = action.output("Stone");
   stone002.set([["tool_nonce", quarry.nonce]]);
   let target = action.top_limb_u256(5040314377883);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone002, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone002, "key", target) };
   stone002.update("key", grind_key);
   action.intro_lt_eq_u256(stone002, target);
   quarry.update("nonce", grind_key);
@@ -939,7 +939,7 @@ fn MineIron2(action) {
   var iron002 = action.output("Iron");
   iron002.set([["tool_nonce", miningdrill.nonce]]);
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron002, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron002, "key", target) };
   iron002.update("key", grind_key);
   action.intro_lt_eq_u256(iron002, target);
   miningdrill.update("nonce", grind_key);
@@ -959,7 +959,7 @@ fn MineCoal2(action) {
   var coal001 = action.output("Coal");
   coal001.set([["tool_nonce", miningdrill.nonce]]);
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(coal001, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(coal001, "key", target) };
   coal001.update("key", grind_key);
   action.intro_lt_eq_u256(coal001, target);
   miningdrill.update("nonce", grind_key);
@@ -976,7 +976,7 @@ fn UseQuarry3(action) {
   var stone003 = action.output("Stone");
   stone003.set([["tool_nonce", quarry.nonce]]);
   let target = action.top_limb_u256(5040314377883);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone003, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone003, "key", target) };
   stone003.update("key", grind_key);
   action.intro_lt_eq_u256(stone003, target);
   quarry.update("nonce", grind_key);
@@ -998,7 +998,7 @@ fn MineIron3(action) {
   var iron003 = action.output("Iron");
   iron003.set([["tool_nonce", miningdrill.nonce]]);
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron003, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron003, "key", target) };
   iron003.update("key", grind_key);
   action.intro_lt_eq_u256(iron003, target);
   miningdrill.update("nonce", grind_key);
@@ -1019,7 +1019,7 @@ fn MineCoal3(action) {
   var coal002 = action.output("Coal");
   coal002.set([["tool_nonce", miningdrill.nonce]]);
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(coal002, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(coal002, "key", target) };
   coal002.update("key", grind_key);
   action.intro_lt_eq_u256(coal002, target);
   miningdrill.update("nonce", grind_key);
@@ -1037,7 +1037,7 @@ fn UseQuarry4(action) {
   var stone004 = action.output("Stone");
   stone004.set([["tool_nonce", quarry.nonce]]);
   let target = action.top_limb_u256(5040314377883);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone004, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone004, "key", target) };
   stone004.update("key", grind_key);
   action.intro_lt_eq_u256(stone004, target);
   quarry.update("nonce", grind_key);
@@ -1060,7 +1060,7 @@ fn MineIron4(action) {
   var iron004 = action.output("Iron");
   iron004.set([["tool_nonce", miningdrill.nonce]]);
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron004, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron004, "key", target) };
   iron004.update("key", grind_key);
   action.intro_lt_eq_u256(iron004, target);
   miningdrill.update("nonce", grind_key);
@@ -1082,7 +1082,7 @@ fn MineCoal4(action) {
   var coal003 = action.output("Coal");
   coal003.set([["tool_nonce", miningdrill.nonce]]);
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(coal003, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(coal003, "key", target) };
   coal003.update("key", grind_key);
   action.intro_lt_eq_u256(coal003, target);
   miningdrill.update("nonce", grind_key);
@@ -1101,7 +1101,7 @@ fn UseQuarry5(action) {
   var stone005 = action.output("Stone");
   stone005.set([["tool_nonce", quarry.nonce]]);
   let target = action.top_limb_u256(5040314377883);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone005, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone005, "key", target) };
   stone005.update("key", grind_key);
   action.intro_lt_eq_u256(stone005, target);
   quarry.update("nonce", grind_key);
@@ -1125,7 +1125,7 @@ fn MineIron5(action) {
   var iron005 = action.output("Iron");
   iron005.set([["tool_nonce", miningdrill.nonce]]);
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron005, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron005, "key", target) };
   iron005.update("key", grind_key);
   action.intro_lt_eq_u256(iron005, target);
   miningdrill.update("nonce", grind_key);
@@ -1148,7 +1148,7 @@ fn MineCoal5(action) {
   var coal004 = action.output("Coal");
   coal004.set([["tool_nonce", miningdrill.nonce]]);
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(coal004, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(coal004, "key", target) };
   coal004.update("key", grind_key);
   action.intro_lt_eq_u256(coal004, target);
   miningdrill.update("nonce", grind_key);
@@ -1168,7 +1168,7 @@ fn UseQuarry6(action) {
   var stone006 = action.output("Stone");
   stone006.set([["tool_nonce", quarry.nonce]]);
   let target = action.top_limb_u256(5040314377883);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone006, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone006, "key", target) };
   stone006.update("key", grind_key);
   action.intro_lt_eq_u256(stone006, target);
   quarry.update("nonce", grind_key);
@@ -1193,7 +1193,7 @@ fn MineIron6(action) {
   var iron006 = action.output("Iron");
   iron006.set([["tool_nonce", miningdrill.nonce]]);
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron006, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron006, "key", target) };
   iron006.update("key", grind_key);
   action.intro_lt_eq_u256(iron006, target);
   miningdrill.update("nonce", grind_key);
@@ -1217,7 +1217,7 @@ fn MineCoal6(action) {
   var coal005 = action.output("Coal");
   coal005.set([["tool_nonce", miningdrill.nonce]]);
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(coal005, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(coal005, "key", target) };
   coal005.update("key", grind_key);
   action.intro_lt_eq_u256(coal005, target);
   miningdrill.update("nonce", grind_key);
@@ -1238,7 +1238,7 @@ fn UseQuarry7(action) {
   var stone007 = action.output("Stone");
   stone007.set([["tool_nonce", quarry.nonce]]);
   let target = action.top_limb_u256(5040314377883);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone007, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone007, "key", target) };
   stone007.update("key", grind_key);
   action.intro_lt_eq_u256(stone007, target);
   quarry.update("nonce", grind_key);
@@ -1264,7 +1264,7 @@ fn MineIron7(action) {
   var iron007 = action.output("Iron");
   iron007.set([["tool_nonce", miningdrill.nonce]]);
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron007, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron007, "key", target) };
   iron007.update("key", grind_key);
   action.intro_lt_eq_u256(iron007, target);
   miningdrill.update("nonce", grind_key);
@@ -1289,7 +1289,7 @@ fn MineCoal7(action) {
   var coal006 = action.output("Coal");
   coal006.set([["tool_nonce", miningdrill.nonce]]);
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(coal006, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(coal006, "key", target) };
   coal006.update("key", grind_key);
   action.intro_lt_eq_u256(coal006, target);
   miningdrill.update("nonce", grind_key);
@@ -1311,7 +1311,7 @@ fn UseQuarry8(action) {
   var stone008 = action.output("Stone");
   stone008.set([["tool_nonce", quarry.nonce]]);
   let target = action.top_limb_u256(5040314377883);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone008, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone008, "key", target) };
   stone008.update("key", grind_key);
   action.intro_lt_eq_u256(stone008, target);
   quarry.update("nonce", grind_key);
@@ -1338,7 +1338,7 @@ fn MineIron8(action) {
   var iron008 = action.output("Iron");
   iron008.set([["tool_nonce", miningdrill.nonce]]);
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron008, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron008, "key", target) };
   iron008.update("key", grind_key);
   action.intro_lt_eq_u256(iron008, target);
   miningdrill.update("nonce", grind_key);
@@ -1364,7 +1364,7 @@ fn MineCoal8(action) {
   var coal007 = action.output("Coal");
   coal007.set([["tool_nonce", miningdrill.nonce]]);
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(coal007, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(coal007, "key", target) };
   coal007.update("key", grind_key);
   action.intro_lt_eq_u256(coal007, target);
   miningdrill.update("nonce", grind_key);
@@ -1387,7 +1387,7 @@ fn UseQuarry9(action) {
   var stone009 = action.output("Stone");
   stone009.set([["tool_nonce", quarry.nonce]]);
   let target = action.top_limb_u256(5040314377883);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone009, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone009, "key", target) };
   stone009.update("key", grind_key);
   action.intro_lt_eq_u256(stone009, target);
   quarry.update("nonce", grind_key);
@@ -1415,7 +1415,7 @@ fn MineIron9(action) {
   var iron009 = action.output("Iron");
   iron009.set([["tool_nonce", miningdrill.nonce]]);
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron009, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron009, "key", target) };
   iron009.update("key", grind_key);
   action.intro_lt_eq_u256(iron009, target);
   miningdrill.update("nonce", grind_key);
@@ -1442,7 +1442,7 @@ fn MineCoal9(action) {
   var coal008 = action.output("Coal");
   coal008.set([["tool_nonce", miningdrill.nonce]]);
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(coal008, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(coal008, "key", target) };
   coal008.update("key", grind_key);
   action.intro_lt_eq_u256(coal008, target);
   miningdrill.update("nonce", grind_key);
@@ -1466,7 +1466,7 @@ fn UseQuarry10(action) {
   var stone010 = action.output("Stone");
   stone010.set([["tool_nonce", quarry.nonce]]);
   let target = action.top_limb_u256(5040314377883);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone010, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(stone010, "key", target) };
   stone010.update("key", grind_key);
   action.intro_lt_eq_u256(stone010, target);
   quarry.update("nonce", grind_key);
@@ -1495,7 +1495,7 @@ fn MineIron10(action) {
   var iron010 = action.output("Iron");
   iron010.set([["tool_nonce", miningdrill.nonce]]);
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron010, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(iron010, "key", target) };
   iron010.update("key", grind_key);
   action.intro_lt_eq_u256(iron010, target);
   miningdrill.update("nonce", grind_key);
@@ -1523,7 +1523,7 @@ fn MineCoal10(action) {
   var coal009 = action.output("Coal");
   coal009.set([["tool_nonce", miningdrill.nonce]]);
   let target = action.top_limb_u256(1740933798417);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(coal009, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(coal009, "key", target) };
   coal009.update("key", grind_key);
   action.intro_lt_eq_u256(coal009, target);
   miningdrill.update("nonce", grind_key);
@@ -2465,7 +2465,7 @@ fn MineGeode1(action) {
   var geode000 = action.output("Geode");
   geode000.set([["tool_nonce", miningdrill.nonce], ["amethyst", action.top_limb_u256(509014584)], ["sapphire", action.top_limb_u256(31813411)], ["emerald", action.top_limb_u256(1988338)], ["ruby", action.top_limb_u256(124271)], ["diamond", action.top_limb_u256(7766)]]);
   let target = action.top_limb_u256(8144233356);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(geode000, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(geode000, "key", target) };
   geode000.update("key", grind_key);
   action.intro_lt_eq_u256(geode000, target);
   miningdrill.update("nonce", grind_key);
@@ -2484,7 +2484,7 @@ fn MineGeode2(action) {
   var geode000 = action.output("Geode");
   geode000.set([["tool_nonce", miningdrill.nonce], ["amethyst", action.top_limb_u256(1018029169)], ["sapphire", action.top_limb_u256(63626823)], ["emerald", action.top_limb_u256(3976676)], ["ruby", action.top_limb_u256(248542)], ["diamond", action.top_limb_u256(15533)]]);
   let target = action.top_limb_u256(16288466713);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(geode000, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(geode000, "key", target) };
   geode000.update("key", grind_key);
   action.intro_lt_eq_u256(geode000, target);
   miningdrill.update("nonce", grind_key);
@@ -2503,7 +2503,7 @@ fn MineGeode3(action) {
   var geode000 = action.output("Geode");
   geode000.set([["tool_nonce", miningdrill.nonce], ["amethyst", action.top_limb_u256(1527043754)], ["sapphire", action.top_limb_u256(95440234)], ["emerald", action.top_limb_u256(5965014)], ["ruby", action.top_limb_u256(372813)], ["diamond", action.top_limb_u256(23300)]]);
   let target = action.top_limb_u256(24432700070);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(geode000, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(geode000, "key", target) };
   geode000.update("key", grind_key);
   action.intro_lt_eq_u256(geode000, target);
   miningdrill.update("nonce", grind_key);
@@ -2522,7 +2522,7 @@ fn MineGeode4(action) {
   var geode000 = action.output("Geode");
   geode000.set([["tool_nonce", miningdrill.nonce], ["amethyst", action.top_limb_u256(2036058339)], ["sapphire", action.top_limb_u256(127253646)], ["emerald", action.top_limb_u256(7953352)], ["ruby", action.top_limb_u256(497084)], ["diamond", action.top_limb_u256(31067)]]);
   let target = action.top_limb_u256(32576933427);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(geode000, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(geode000, "key", target) };
   geode000.update("key", grind_key);
   action.intro_lt_eq_u256(geode000, target);
   miningdrill.update("nonce", grind_key);
@@ -2541,7 +2541,7 @@ fn MineGeode5(action) {
   var geode000 = action.output("Geode");
   geode000.set([["tool_nonce", miningdrill.nonce], ["amethyst", action.top_limb_u256(2545072923)], ["sapphire", action.top_limb_u256(159067057)], ["emerald", action.top_limb_u256(9941691)], ["ruby", action.top_limb_u256(621355)], ["diamond", action.top_limb_u256(38834)]]);
   let target = action.top_limb_u256(40721166783);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(geode000, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(geode000, "key", target) };
   geode000.update("key", grind_key);
   action.intro_lt_eq_u256(geode000, target);
   miningdrill.update("nonce", grind_key);
@@ -2560,7 +2560,7 @@ fn MineGeode6(action) {
   var geode000 = action.output("Geode");
   geode000.set([["tool_nonce", miningdrill.nonce], ["amethyst", action.top_limb_u256(3054087508)], ["sapphire", action.top_limb_u256(190880469)], ["emerald", action.top_limb_u256(11930029)], ["ruby", action.top_limb_u256(745626)], ["diamond", action.top_limb_u256(46601)]]);
   let target = action.top_limb_u256(48865400140);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(geode000, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(geode000, "key", target) };
   geode000.update("key", grind_key);
   action.intro_lt_eq_u256(geode000, target);
   miningdrill.update("nonce", grind_key);
@@ -2579,7 +2579,7 @@ fn MineGeode7(action) {
   var geode000 = action.output("Geode");
   geode000.set([["tool_nonce", miningdrill.nonce], ["amethyst", action.top_limb_u256(3563102093)], ["sapphire", action.top_limb_u256(222693880)], ["emerald", action.top_limb_u256(13918367)], ["ruby", action.top_limb_u256(869897)], ["diamond", action.top_limb_u256(54368)]]);
   let target = action.top_limb_u256(57009633497);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(geode000, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(geode000, "key", target) };
   geode000.update("key", grind_key);
   action.intro_lt_eq_u256(geode000, target);
   miningdrill.update("nonce", grind_key);
@@ -2598,7 +2598,7 @@ fn MineGeode8(action) {
   var geode000 = action.output("Geode");
   geode000.set([["tool_nonce", miningdrill.nonce], ["amethyst", action.top_limb_u256(4072116678)], ["sapphire", action.top_limb_u256(254507292)], ["emerald", action.top_limb_u256(15906705)], ["ruby", action.top_limb_u256(994169)], ["diamond", action.top_limb_u256(62135)]]);
   let target = action.top_limb_u256(65153866854);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(geode000, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(geode000, "key", target) };
   geode000.update("key", grind_key);
   action.intro_lt_eq_u256(geode000, target);
   miningdrill.update("nonce", grind_key);
@@ -2617,7 +2617,7 @@ fn MineGeode9(action) {
   var geode000 = action.output("Geode");
   geode000.set([["tool_nonce", miningdrill.nonce], ["amethyst", action.top_limb_u256(4581131263)], ["sapphire", action.top_limb_u256(286320703)], ["emerald", action.top_limb_u256(17895043)], ["ruby", action.top_limb_u256(1118440)], ["diamond", action.top_limb_u256(69902)]]);
   let target = action.top_limb_u256(73298100211);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(geode000, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(geode000, "key", target) };
   geode000.update("key", grind_key);
   action.intro_lt_eq_u256(geode000, target);
   miningdrill.update("nonce", grind_key);
@@ -2636,7 +2636,7 @@ fn MineGeode10(action) {
   var geode000 = action.output("Geode");
   geode000.set([["tool_nonce", miningdrill.nonce], ["amethyst", action.top_limb_u256(5090145847)], ["sapphire", action.top_limb_u256(318134115)], ["emerald", action.top_limb_u256(19883382)], ["ruby", action.top_limb_u256(1242711)], ["diamond", action.top_limb_u256(77669)]]);
   let target = action.top_limb_u256(81442333567);
-  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(geode000, target) };
+  var grind_key = unsafe { arg("grind_key") ?? action.pow_obj_grind(geode000, "key", target) };
   geode000.update("key", grind_key);
   action.intro_lt_eq_u256(geode000, target);
   miningdrill.update("nonce", grind_key);

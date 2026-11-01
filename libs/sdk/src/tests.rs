@@ -53,7 +53,7 @@ fn test_sdk_1() {
             var log = action.input("Log");
             var wood = action.output("Wood");
             let target = action.top_limb_u256(9007199254740992);
-            var key = unsafe { action.pow_obj_grind(wood, target) };
+            var key = unsafe { action.pow_obj_grind(wood, "key", target) };
             wood.update("key", key);
             action.intro_lt_eq_u256(wood, target);
         }
@@ -301,7 +301,7 @@ fn test_sdk_2() {
             var log = action.input("Log");
             var wood = action.output("Wood");
             let target = action.top_limb_u256(9007199254740992);
-            var key = unsafe { action.pow_obj_grind(wood, target) };
+            var key = unsafe { action.pow_obj_grind(wood, "key", target) };
             wood.update("key", key);
             action.intro_lt_eq_u256(wood, target);
         }
@@ -1371,7 +1371,7 @@ fn test_set_guards() {
         fn SetAfterGrind(action) {
             var ore = action.output("Ore");
             let target = action.top_limb_u256(9007199254740992);
-            var key = unsafe { action.pow_obj_grind(ore, target) };
+            var key = unsafe { action.pow_obj_grind(ore, "key", target) };
             ore.set([["grade", 1]]);
         }
 "#,
@@ -2151,7 +2151,7 @@ fn test_caller_data_and_generators_require_unsafe() {
             "unsafe already set",
         ),
         (
-            "action.pow_obj_grind(ore, action.top_limb_u256(9007199254740992))",
+            r#"action.pow_obj_grind(ore, "key", action.top_limb_u256(9007199254740992))"#,
             "expected unsafe block",
         ),
     ] {
@@ -2319,7 +2319,7 @@ fn execution_progress_separates_mining_building_solving_and_proving() {
         fn Main(action) {
             var wood = action.output("Wood");
             let target = action.top_limb_u256(9007199254740992);
-            var key = unsafe { arg("key") ?? action.pow_obj_grind(wood, target) };
+            var key = unsafe { arg("key") ?? action.pow_obj_grind(wood, "key", target) };
             wood.update("key", key);
             action.intro_lt_eq_u256(wood, target);
         }
@@ -2366,7 +2366,7 @@ fn test_arg_supplied_and_default() {
             var wood = action.output("Wood");
             wood.set([["grade", 3]]);
             let target = action.top_limb_u256(9007199254740992);
-            var key = unsafe { arg("key") ?? action.pow_obj_grind(wood, target) };
+            var key = unsafe { arg("key") ?? action.pow_obj_grind(wood, "key", target) };
             wood.update("key", key);
             action.intro_lt_eq_u256(wood, target);
             var worn = action.output("Worn");
@@ -2403,6 +2403,43 @@ fn test_arg_supplied_and_default() {
             .unwrap();
         assert!(matches!(err, SdkError::Eval(..)), "{err}");
     }
+}
+
+#[test]
+fn test_pow_obj_grind_named_field() {
+    let src = |field: &str| {
+        format!(
+            r#"
+            fn Main(action) {{
+                var wood = action.output("Wood");
+                wood.set([["salt", 5]]);
+                let target = action.top_limb_u256(9007199254740992);
+                var salt = unsafe {{ action.pow_obj_grind(wood, "{field}", target) }};
+                wood.update("salt", salt);
+                action.intro_lt_eq_u256(wood, target);
+            }}
+        "#
+        )
+    };
+    let state = TestState::default();
+    let run = |field: &str| {
+        Sdk::default()
+            .load_module_from_src_actions(&src(field), &["Main"])
+            .unwrap()
+            .executor(true, grounding_witness(&state, &[]))
+            .action("Main", vec![])
+    };
+    let result = run("salt").unwrap();
+    let salt = result
+        .obj(0)
+        .obj
+        .get(&StrKey::from("salt"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(salt, Value::from(5));
+
+    let err = run("pepper").err().unwrap();
+    assert!(err.to_string().contains("no field \"pepper\""), "{err}");
 }
 
 #[test]

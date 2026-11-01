@@ -667,7 +667,7 @@ fn main() -> Result<(), io::Error> {
                 o,
                 r#"  {var}.set([{initializers}]);
   let target = action.top_limb_u256({n});
-  var grind_key = unsafe {{ arg("grind_key") ?? action.pow_obj_grind({var}, target) }};
+  var grind_key = unsafe {{ arg("grind_key") ?? action.pow_obj_grind({var}, "key", target) }};
   {var}.update("key", grind_key);
   action.intro_lt_eq_u256({var}, target);
   {tool}.update("nonce", grind_key);"#,

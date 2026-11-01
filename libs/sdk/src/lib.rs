@@ -1700,7 +1700,12 @@ impl ActionHandle {
         }
         Ok(ArgHandle::new(self.clone(), value))
     }
-    fn pow_obj_grind(self, obj: Dynamic, key_name: String, target: Dynamic) -> RuntimeResult<ArgHandle> {
+    fn pow_obj_grind(
+        self,
+        obj: Dynamic,
+        key_name: String,
+        target: Dynamic,
+    ) -> RuntimeResult<ArgHandle> {
         self.0.borrow().assert_unsafe(true)?;
         // Target is a full u256 (Raw). To build one with a desired top-limb
         // difficulty, scripts use `action.top_limb_u256(n)`.
@@ -1716,14 +1721,16 @@ impl ActionHandle {
             // This is a copy of the object, we don't modify the obj argument.
             let mut obj = obj.borrow().to_dict();
             let target_raw = target.borrow().as_value().raw();
-            // Initialize v to obj's current key so that when the loop body doesn't run (mock mode,
-            // or the initial random already satisfies the constraint), the returned v still
-            // matches what's in obj.
+            // Initialize v to obj's current value at key_name so that when the loop body doesn't
+            // run (mock mode, or the initial random already satisfies the constraint), the
+            // returned v still matches what's in obj.
             let key_name = StrKey::from(key_name.as_str());
             let mut v = obj
                 .get(&key_name)
                 .expect("dict op")
-                .expect("obj has key");
+                .ok_or_else::<Box<EvalAltResult>, _>(|| {
+                    format!("pow_obj_grind: object has no field {:?}", key_name.name()).into()
+                })?;
             if !exe_ctx.mock {
                 let mut i = 0;
                 while u256_gt(&RawValue::from(obj.commitment()), &target_raw) {
