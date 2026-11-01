@@ -91,6 +91,10 @@ impl TestState {
         )
     }
 
+    pub fn contains_created(&self, commitment: Hash) -> bool {
+        self.created_index.contains_key(&commitment)
+    }
+
     /// `(array index, membership proof)` for one object commitment in the
     /// created set.
     pub fn created_membership_proof(&self, commitment: Hash) -> (i64, MerkleProof) {

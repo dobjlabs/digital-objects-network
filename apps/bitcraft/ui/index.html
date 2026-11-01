@@ -4756,9 +4756,7 @@
       } else {
         const status = document.createElement("span");
         status.className = "import-result-status";
-        status.textContent = summary.status === "live"
-          ? " imported, ready to use"
-          : " imported, usable once the network confirms it";
+        status.textContent = " imported, ready to use";
         item.append(classLabel(summary.class), status);
       }
       importResults.append(item);

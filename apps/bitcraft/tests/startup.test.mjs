@@ -154,10 +154,11 @@ async function page(context, options = {}) {
           } catch (error) {
             return respond({ error: `invalid input: could not parse .dobj contents: ${error.message}` }, 400);
           }
-          if (record.class.pluginName !== "bitcraft") {
-            return respond({ error: `unknown class: ${record.class.pluginName}::${record.class.name}` }, 404);
+          const { class: objectClass, contentHash } = record.metadata;
+          if (objectClass.pluginName !== "bitcraft") {
+            return respond({ error: `unknown class: ${objectClass.pluginName}::${objectClass.name}` }, 404);
           }
-          const generatedName = `${record.class.name.toLowerCase()}_${record.contentHash}.dobj`;
+          const generatedName = `${objectClass.name.toLowerCase()}_${contentHash}.dobj`;
           if (backend.objects.some((object) => object.fileName === generatedName)) {
             return respond({ error: `conflict: object already present: ${generatedName}` }, 409);
           }
@@ -165,7 +166,7 @@ async function page(context, options = {}) {
             ? generatedName
             : requestedName.endsWith(".dobj") ? requestedName : `${requestedName}.dobj`;
           const summary = {
-            fileName, class: record.class, status: backend.importStatus ?? "live", fields: { kvs: [] }, sharedKey: true,
+            fileName, class: objectClass, status: "live", fields: { kvs: [] }, sharedKey: true,
           };
           backend.objects.push(copy(summary));
           return respond(summary);
@@ -1496,7 +1497,7 @@ test("the top bar's icons have tooltips", async (context) => {
 });
 
 const dobjContents = (name, contentHash, pluginName = "bitcraft") => JSON.stringify({
-  class: qname(name, pluginName), contentHash, obj: { kind: "d--", kvs: [] }, status: "live",
+  metadata: { class: qname(name, pluginName), contentHash, status: "live" }, obj: { kind: "d--", kvs: [] },
 });
 const importResultTexts = (document) => [...document.querySelectorAll("#import-results li")]
   .map((item) => item.textContent.trim());
@@ -1549,7 +1550,7 @@ test("pasted contents are imported, selected, and come with a rekey reminder", a
 });
 
 test("chosen files wait for Import, are imported in turn, and refusals show dobjd's reason", async (context) => {
-  const ui = await page(context, { objects: [knife(), knife("live", { fileName: "wood_bb22.dobj", class: qname("Wood") })], importStatus: "unknown" });
+  const ui = await page(context, { objects: [knife(), knife("live", { fileName: "wood_bb22.dobj", class: qname("Wood") })] });
   const { document, dom } = ui;
   const submit = document.querySelector("#import-submit");
   const chosen = document.querySelector("#import-chosen");
@@ -1587,14 +1588,14 @@ test("chosen files wait for Import, are imported in turn, and refusals show dobj
   ]);
   assert.deepEqual(ui.backend.importFileNames, ["stone.dobj", "copy-of-wood.dobj", "log.dobj", "notes.txt"]);
   const results = importResultTexts(document);
-  assert.equal(results[0], "bitcraft::Stone imported, usable once the network confirms it");
+  assert.equal(results[0], "bitcraft::Stone imported, ready to use");
   assert.equal(results[1], "copy-of-wood.dobj: conflict: object already present: wood_bb22.dobj");
   assert.equal(results[2], "log.dobj: unknown class: craft-basics::Log");
   assert.match(results[3], /^notes\.txt: invalid input: could not parse \.dobj contents/);
   assert.deepEqual([...document.querySelectorAll("#import-results li.error")].length, 3);
   assert.deepEqual([...document.querySelectorAll(".object-row.selected")].map((row) => row.dataset.fileName),
     ["stone.dobj"], "the chosen file's name is kept");
-  assert.ok(document.querySelector('.object-row[data-file-name="stone.dobj"]').classList.contains("unknown"));
+  assert.ok(!document.querySelector('.object-row[data-file-name="stone.dobj"]').classList.contains("unknown"));
   assert.equal(document.querySelector("#import-sheet").hidden, false, "the sheet stays open to show the results");
 });
 

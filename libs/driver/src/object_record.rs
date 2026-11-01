@@ -5,6 +5,8 @@ use std::{fs, path::Path};
 
 use wire_types::{ObjectStatus, QualifiedName};
 
+use crate::creation_proof::CreationProof;
+
 /// Persisted chain status. Pending status is derived from transaction records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -24,25 +26,34 @@ impl From<FileStatus> for ObjectStatus {
     }
 }
 
+/// A `.dobj` file: what the driver knows about the object, then the object.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectRecord {
+    pub metadata: ObjectMetadata,
+    /// Object payload dictionary
+    pub obj: Dictionary,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ObjectRecord {
-    pub content_hash: Hash,
+pub struct ObjectMetadata {
     /// The class this object belongs to. Plugin-scoped so two plugins with
     /// the same bare class name stay distinguishable.
     pub class: QualifiedName,
+    pub content_hash: Hash,
     pub status: FileStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tx_hash: Option<String>,
-    /// Object payload dictionary
-    pub obj: Dictionary,
     /// Producing transaction's commitment; identifies its local record, if any.
     pub tx_final: Hash,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tx_hash: Option<String>,
+    /// Proof that the object is in the created set of a state root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creation_proof: Option<CreationProof>,
 }
 
 impl ObjectRecord {
     pub(crate) fn is_nullified(&self) -> bool {
-        self.status == FileStatus::Nullified
+        self.metadata.status == FileStatus::Nullified
     }
 
     pub(crate) fn spendable(&self) -> SpendableObject {
