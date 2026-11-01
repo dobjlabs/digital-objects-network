@@ -80,7 +80,7 @@ Objects are filed under a name generated from their class, stable identifier and
 
 A custom name carries over to an object's new version. When an action mutates an object with a custom name, say `knife.dobj`, the transaction writes the new version as `knife-pending.dobj` (`knife-pending 2.dobj` and so on when that is taken), lists it in the record's `pendingNames`, and leaves `knife.dobj` as it is. When the transaction lands, the old version is spent and the new one is renamed `knife.dobj`. If it expires or is deleted, `knife-pending.dobj` is removed with the other outputs and `knife.dobj` is untouched. An object with its generated name, and every output that is not a mutated input, gets a generated name.
 
-A spent object moves to the nullified directory under its generated name, whatever it was called while live, so spent versions of one custom-named object never collide and a spent file never holds a name a live one needs.
+A spent object moves to the nullified directory under its generated name, whatever it was called while live, so spent versions of one custom-named object never collide and a spent file never holds a name a live one needs. A landed transaction's record then lists the input under that name in `inputFiles`.
 
 ### Imported objects keep the name they are given
 

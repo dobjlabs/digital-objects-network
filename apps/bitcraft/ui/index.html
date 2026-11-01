@@ -471,6 +471,19 @@
     pointer-events: none;
   }
   #row-tooltip[hidden] { display: none; }
+  /* dobjd's reason for refusing a new name, under the rename field. */
+  #rename-error {
+    position: fixed;
+    z-index: 30;
+    max-width: 320px;
+    padding: 3px 7px;
+    border-radius: 5px;
+    background: rgba(32, 32, 32, 0.92);
+    color: #fff;
+    font-size: 12px;
+    pointer-events: none;
+  }
+  #rename-error[hidden] { display: none; }
   .toolbar-button[data-tooltip]:hover::after,
   .toolbar-button[data-tooltip]:focus-visible::after {
     content: attr(data-tooltip);
@@ -1287,6 +1300,7 @@
 </template>
 
 <div id="row-tooltip" role="tooltip" hidden></div>
+<div id="rename-error" role="alert" hidden></div>
 <script src="presentation.js"></script>
 <script>
   const DOBJD_URL = new URL(
@@ -1633,6 +1647,7 @@
   const openedWindows = new Map();
   const summaryView = document.getElementById("summary-view");
   const rowTooltip = document.getElementById("row-tooltip");
+  const renameError = document.getElementById("rename-error");
   const ROW_TOOLTIP_DELAY_MS = 250;
   // Pending while the pointer rests on a row, and the pointer's last event.
   let rowTooltipTimer = null;
@@ -3710,6 +3725,9 @@
   const nameMeasureContext = document.createElement("canvas").getContext("2d");
 
   function renderObjects(objects) {
+    // Emptying the list takes the rename field out of the page.
+    const renameFocus = renameFieldFocus();
+    if (renaming !== null) renaming.moving = true;
     objectList.replaceChildren();
     rowsByFileName.clear();
     if (welcomeText !== null) {
@@ -3729,7 +3747,7 @@
         row.style.animation = `row-flash ${ROW_FLASH_MS}ms ease-out -${flashElapsed}ms`;
       }
     }
-    placeRenameField();
+    placeRenameField(renameFocus);
     fitObjectNames();
   }
 
@@ -4529,39 +4547,51 @@
     for (const type of ["mousedown", "dblclick", "contextmenu"]) {
       field.addEventListener(type, (event) => event.stopPropagation());
     }
-    field.addEventListener("input", hideRowTooltip);
+    field.addEventListener("input", hideRenameError);
     placeRenameField();
     field.focus();
     const stem = fileName.endsWith(".dobj") ? fileName.length - ".dobj".length : fileName.length;
     field.setSelectionRange(0, stem);
   }
 
+  // Whether the rename field has focus, and its selection.
+  function renameFieldFocus() {
+    if (renaming === null) return null;
+    const { field } = renaming;
+    return {
+      hadFocus: document.activeElement === field,
+      selectionStart: field.selectionStart,
+      selectionEnd: field.selectionEnd,
+    };
+  }
+
   // Puts the field in its row, which every redraw of the list replaces.
-  function placeRenameField() {
+  // `focus` is the field's from before it left the page.
+  function placeRenameField(focus = renameFieldFocus()) {
     if (renaming === null) return;
     const row = rowsByFileName.get(renaming.fileName);
     if (!row) {
+      renaming.moving = false;
       endRename();
       return;
     }
     const { field } = renaming;
-    const hadFocus = document.activeElement === field;
-    const { selectionStart, selectionEnd } = field;
     renaming.moving = true;
     row.querySelector(".object-name").replaceChildren(field);
     row.classList.add("renaming");
-    if (hadFocus) {
+    if (focus?.hadFocus) {
       field.focus();
-      field.setSelectionRange(selectionStart, selectionEnd);
+      field.setSelectionRange(focus.selectionStart, focus.selectionEnd);
     }
     renaming.moving = false;
+    placeRenameError();
   }
 
   function endRename() {
     if (renaming === null) return;
     const { fileName, field } = renaming;
     renaming = null;
-    hideRowTooltip();
+    hideRenameError();
     field.remove();
     rowsByFileName.get(fileName)?.classList.remove("renaming");
     fitObjectNames();
@@ -4588,20 +4618,32 @@
       return;
     }
     if (renaming?.field === field) endRename();
+    // Saving by clicking another row selects that row, which stays selected.
+    const stillSelected = selectedFileNames.size === 1 && selectedFileNames.has(fileName);
     // Listed now rather than when its events arrive, so it stays selected.
     inventory.accept({ type: "object-removed", fileName });
     inventory.accept({ type: "object", ...summary });
-    selectImported([summary.fileName]);
+    if (stillSelected) selectImported([summary.fileName]);
   }
 
-  // dobjd's reason, under the field, until the name is edited.
+  // dobjd's reason, under the field, until the name is edited. It has an
+  // element of its own, since the row tooltip comes and goes with the pointer.
   function showRenameError(text) {
-    clearTimeout(rowTooltipTimer);
-    rowTooltip.textContent = text;
-    rowTooltip.hidden = false;
+    hideRowTooltip();
+    renameError.textContent = text;
+    renameError.hidden = false;
+    placeRenameError();
+  }
+
+  function placeRenameError() {
+    if (renameError.hidden || renaming === null) return;
     const box = renaming.field.getBoundingClientRect();
-    rowTooltip.style.left = `${box.left}px`;
-    rowTooltip.style.top = `${box.bottom + 4}px`;
+    renameError.style.left = `${box.left}px`;
+    renameError.style.top = `${box.bottom + 4}px`;
+  }
+
+  function hideRenameError() {
+    renameError.hidden = true;
   }
 
   // Each source is `{ label, read, fileName }`, where `read` resolves to a
@@ -4715,6 +4757,7 @@
   // A right-click on empty space clears the selection, so the menu offers
   // the actions that take no inputs.
   objectList.addEventListener("scroll", hideRowTooltip);
+  objectList.addEventListener("scroll", placeRenameError);
   objectList.addEventListener("contextmenu", hideRowTooltip);
   objectList.addEventListener("contextmenu", (event) => {
     if (event.target.closest(".object-row") !== null) {

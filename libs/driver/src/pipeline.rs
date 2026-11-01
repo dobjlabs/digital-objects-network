@@ -84,7 +84,9 @@ impl ProvedTransaction {
 pub struct SettleOutcome {
     pub records: Vec<TransactionRecord>,
     pub objects: Vec<ObjectSummary>,
-    /// Output files of expired transactions, removed by this pass.
+    /// Live file names this pass removed: outputs of expired transactions,
+    /// and files it renamed or moved to the nullified directory under
+    /// another name.
     pub removed_files: Vec<String>,
     pub open_records: usize,
     pub unattempted_records: usize,
@@ -816,6 +818,7 @@ impl Driver {
             return Ok(false);
         }
         let producing_tx_final = record_tx_final(record)?;
+        let mut spent_names = Vec::new();
         for (files, output) in [(&record.input_files, false), (&record.output_files, true)] {
             for file_name in files {
                 let live_path = self.paths.objects_dir.join(file_name);
@@ -843,6 +846,7 @@ impl Driver {
                         let spent_name = nullify_object_file(&self.paths, &stored, file_name)?;
                         if &spent_name != file_name {
                             removed_files.push(file_name.clone());
+                            spent_names.push((file_name.clone(), spent_name.clone()));
                         }
                         changed_files.insert(spent_name);
                     }
@@ -868,7 +872,17 @@ impl Driver {
                 }
             }
         }
-        self.finish_pending_names(record, changed_files, removed_files)
+        // The record names each spent input where it now is.
+        let renamed_inputs = !spent_names.is_empty();
+        for (file_name, spent_name) in spent_names {
+            for input in record.input_files.iter_mut() {
+                if *input == file_name {
+                    *input = spent_name.clone();
+                }
+            }
+        }
+        let finished_names = self.finish_pending_names(record, changed_files, removed_files)?;
+        Ok(renamed_inputs || finished_names)
     }
 
     /// Give each landed output written under a pending name the name of the

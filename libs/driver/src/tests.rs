@@ -2270,6 +2270,7 @@ fn a_mutated_custom_named_object_takes_its_name_back_once_it_lands() {
     );
 
     let landed = fx.driver.get_transaction(&tx_final_of(&record)).unwrap();
+    assert_eq!(landed.input_files, vec![spent_name.clone()]);
     assert_eq!(landed.output_files[0], "my pick.dobj");
     assert_eq!(landed.output_files[1], record.output_files[1]);
     assert!(landed.pending_names.is_empty());

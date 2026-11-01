@@ -50,9 +50,14 @@ impl Services {
     /// Rename an object's file and announce it under its new name.
     pub fn rename_object(&self, file_name: &str, new_name: &str) -> Result<ObjectSummary> {
         let summary = self.driver.rename_object(Path::new(file_name), new_name)?;
-        if summary.file_name != file_name {
+        // A caller may name the object by its path; clients list it by file name.
+        let old_name = Path::new(file_name)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(file_name);
+        if summary.file_name != old_name {
             self.events.publish(Event::ObjectRemoved {
-                file_name: file_name.to_string(),
+                file_name: old_name.to_string(),
             });
         }
         self.events.publish(Event::Object(summary.clone()));

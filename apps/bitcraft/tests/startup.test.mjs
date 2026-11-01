@@ -2161,11 +2161,14 @@ test("a refused rename shows dobjd's reason and keeps editing", async (context) 
   press(ui, field, "Enter");
   await flush();
   assert.equal(document.querySelector(".rename-field"), field, "the name is still being edited");
-  const tooltip = document.querySelector("#row-tooltip");
-  assert.equal(tooltip.hidden, false);
-  assert.equal(tooltip.textContent, "conflict: taken.dobj already exists");
+  const reason = document.querySelector("#rename-error");
+  assert.equal(reason.hidden, false);
+  assert.equal(reason.textContent, "conflict: taken.dobj already exists");
+  document.querySelector('.object-row[data-file-name="pocketknife.dobj"]')
+    .dispatchEvent(new ui.dom.window.MouseEvent("mouseleave"));
+  assert.equal(reason.hidden, false, "the pointer leaving the row keeps the reason");
   field.dispatchEvent(new ui.dom.window.Event("input"));
-  assert.equal(tooltip.hidden, true, "editing the name clears the reason");
+  assert.equal(reason.hidden, true, "editing the name clears the reason");
 });
 
 test("an object being edited keeps its field through a redraw of the list", async (context) => {
@@ -2175,10 +2178,30 @@ test("an object being edited keeps its field through a redraw of the list", asyn
   menuItem(ui, "Rename").click();
   const field = document.querySelector(".rename-field");
   field.value = "half typ";
+  field.setSelectionRange(4, 4);
   await ui.event({ type: "object", ...knife("live", { fileName: "other.dobj", class: qname("Wood") }) });
   assert.equal(document.querySelector('.object-row[data-file-name="pocketknife.dobj"] .rename-field'), field);
   assert.equal(field.value, "half typ");
+  assert.equal(document.activeElement, field, "the field keeps focus");
+  assert.deepEqual([field.selectionStart, field.selectionEnd], [4, 4], "and its caret");
   assert.deepEqual(ui.backend.renames, []);
+});
+
+test("saving a rename by clicking another row keeps that row selected", async (context) => {
+  const wood = knife("live", { fileName: "wood.dobj", class: qname("Wood") });
+  const ui = await page(context, { objects: [knife(), wood] });
+  const { document, dom } = ui;
+  openRowMenu(ui, "pocketknife.dobj");
+  menuItem(ui, "Rename").click();
+  const field = document.querySelector(".rename-field");
+  field.value = "my knife";
+  document.querySelector('.object-row[data-file-name="wood.dobj"]')
+    .dispatchEvent(new dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  field.blur();
+  await flush();
+  assert.deepEqual(ui.backend.renames, [["pocketknife.dobj", "my knife"]]);
+  assert.ok(document.querySelector('.object-row[data-file-name="wood.dobj"]').classList.contains("selected"));
+  assert.ok(!document.querySelector('.object-row[data-file-name="my knife.dobj"]').classList.contains("selected"));
 });
 
 test("an object a run holds cannot be renamed", async (context) => {
