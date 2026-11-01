@@ -82,13 +82,13 @@ fn CraftBucketOfQuartz(action) {
 }
 
 fn CraftBarrelOfOil(action) {
-  var barrelofoil = action.output("BarrelOfOil");
-  barrelofoil.set([["n", 0]]);
   var iron000 = action.input("Iron");
   var iron001 = action.input("Iron");
   var iron002 = action.input("Iron");
   var iron003 = action.input("Iron");
   var iron004 = action.input("Iron");
+  var oilbucket = action.output("BarrelOfOil");
+  oilbucket.set([["n", 0]]);
 }
 
 fn BucketOfWoodAdd1(action) {
@@ -2437,19 +2437,19 @@ fn PumpOil(action) {
   var coal002 = action.input("Coal");
   var coal003 = action.input("Coal");
   var coal004 = action.input("Coal");
-  var barrelofoil = action.mutate("BarrelOfOil");
-  var barrelofoil_key = unsafe { action.random() };
-  barrelofoil.update("key", barrelofoil_key);
   var n_steps = unsafe { arg("n_steps") ?? 1 };
   action.st_gt_eq(n_steps, 1);
-  var pumped = unsafe { n_steps * pumpjack.level };
-  action.st_product(n_steps, pumpjack.level, pumped);
-  var n = unsafe { barrelofoil.n + pumped };
-  action.st_sum(barrelofoil.n, pumped, n);
-  barrelofoil.update("n", n);
+  var oilbucket = action.mutate("BarrelOfOil");
+  var oilbucket_key = unsafe { action.random() };
+  oilbucket.update("key", oilbucket_key);
+  var added = unsafe { n_steps * pumpjack.level };
+  action.st_product(n_steps, pumpjack.level, added);
+  var n = unsafe { oilbucket.n + added };
+  action.st_sum(oilbucket.n, added, n);
+  oilbucket.update("n", n);
   var vdf_steps = unsafe { n_steps * 50 };
   action.st_product(n_steps, 50, vdf_steps);
-  var work = action.intro_vdf(vdf_steps, barrelofoil);
+  var work = action.intro_vdf(vdf_steps, oilbucket);
 }
 
 fn MineGeode1(action) {

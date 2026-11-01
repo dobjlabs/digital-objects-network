@@ -2,7 +2,7 @@
   "format": 1,
   "plugin": "bitcraft",
   "writtenFor": {
-    "moduleHash": "f18c19816575f4f332fec9a4276e858aab0418ed3c9f4867eea61ecb143bd4e1"
+    "moduleHash": "1507bada9cc3b7c19472c8a9e637a862a51b0feda7c62a96fca944d026a2be2a"
   },
   "classes": {
     "Wood": {
@@ -33,32 +33,32 @@
     "Quartz": {
       "icon": "assets/classes/quartz.png",
       "summary": "A common gem.",
-      "description": "Produced by cracking open a Geode. Used to create or upgrade higher-level production facilities. Can be converted into a bucket of 100 bits."
+      "description": "Produced by cracking open a Geode. Used to create or upgrade higher-level production facilities. Can be converted into 100 bits (added to a bucket)."
     },
     "Amethyst": {
       "icon": "assets/classes/amethyst.png",
       "summary": "An uncommon gem.",
-      "description": "Produced by cracking open a Geode. Can be converted into a bucket of 2,000 bits."
+      "description": "Produced by cracking open a Geode. Can be converted into 2,000 bits (added to a bucket)."
     },
     "Sapphire": {
       "icon": "assets/classes/sapphire.png",
       "summary": "A rare gem.",
-      "description": "Produced by cracking open a Geode. Can be converted into a bucket of 40,000 bits."
+      "description": "Produced by cracking open a Geode. Can be converted into 40,000 bits (added to a bucket)."
     },
     "Emerald": {
       "icon": "assets/classes/emerald.png",
       "summary": "An epic gem.",
-      "description": "Produced by cracking open a Geode. Can be converted into a bucket of 800,000 bits."
+      "description": "Produced by cracking open a Geode. Can be converted into 800,000 bits (added to a bucket)."
     },
     "Ruby": {
       "icon": "assets/classes/ruby.png",
       "summary": "A legendary gem.",
-      "description": "Produced by cracking open a Geode. Can be converted into a bucket of 1,600,000 bits."
+      "description": "Produced by cracking open a Geode. Can be converted into 16,000,000 bits (added to a bucket)."
     },
     "Diamond": {
       "icon": "assets/classes/diamond.png",
       "summary": "A mythic gem.",
-      "description": "Produced by cracking open a Geode. Can be converted into a bucket of 3,200,000 bits."
+      "description": "Produced by cracking open a Geode. Can be converted into 320,000,000 bits (added to a bucket)."
     },
     "Stick": {
       "icon": "assets/classes/stick.png",
@@ -784,33 +784,33 @@
     },
     "BitsFromQuartz": {
       "icon": "assets/actions/BitsFromQuartz.svg",
-      "summary": "Generate bits from a gem.",
-      "description": "Converts a gem into a bucket of bits. A quartz is converted into 100 bits; amethyst into 2,000 bits; sapphire into 40,000 bits; emerald into 800,000 bits; ruby into 16,000,000 bits; and diamond into 320,000,000 bits."
+      "summary": "Generate bits from a gem. Requires a bucket of bits to put the bits into.",
+      "description": "Converts a gem into bits, which are put into a bucket. A quartz is converted into 100 bits; amethyst into 2,000 bits; sapphire into 40,000 bits; emerald into 800,000 bits; ruby into 16,000,000 bits; and diamond into 320,000,000 bits."
     },
     "BitsFromAmethyst": {
       "icon": "assets/actions/BitsFromAmethyst.svg",
-      "summary": "Generate bits from a gem.",
-      "description": "Converts a gem into a bucket of bits. A quartz is converted into 100 bits; amethyst into 2,000 bits; sapphire into 40,000 bits; emerald into 800,000 bits; ruby into 16,000,000 bits; and diamond into 320,000,000 bits."
+      "summary": "Generate bits from a gem. Requires a bucket of bits to put the bits into.",
+      "description": "Converts a gem into bits, which are put into a bucket. A quartz is converted into 100 bits; amethyst into 2,000 bits; sapphire into 40,000 bits; emerald into 800,000 bits; ruby into 16,000,000 bits; and diamond into 320,000,000 bits."
     },
     "BitsFromSapphire": {
       "icon": "assets/actions/BitsFromSapphire.svg",
-      "summary": "Generate bits from a gem.",
-      "description": "Converts a gem into a bucket of bits. A quartz is converted into 100 bits; amethyst into 2,000 bits; sapphire into 40,000 bits; emerald into 800,000 bits; ruby into 16,000,000 bits; and diamond into 320,000,000 bits."
+      "summary": "Generate bits from a gem. Requires a bucket of bits to put the bits into.",
+      "description": "Converts a gem into bits, which are put into a bucket. A quartz is converted into 100 bits; amethyst into 2,000 bits; sapphire into 40,000 bits; emerald into 800,000 bits; ruby into 16,000,000 bits; and diamond into 320,000,000 bits."
     },
     "BitsFromEmerald": {
       "icon": "assets/actions/BitsFromEmerald.svg",
-      "summary": "Generate bits from a gem.",
-      "description": "Converts a gem into a bucket of bits. A quartz is converted into 100 bits; amethyst into 2,000 bits; sapphire into 40,000 bits; emerald into 800,000 bits; ruby into 16,000,000 bits; and diamond into 320,000,000 bits."
+      "summary": "Generate bits from a gem. Requires a bucket of bits to put the bits into.",
+      "description": "Converts a gem into bits, which are put into a bucket. A quartz is converted into 100 bits; amethyst into 2,000 bits; sapphire into 40,000 bits; emerald into 800,000 bits; ruby into 16,000,000 bits; and diamond into 320,000,000 bits."
     },
     "BitsFromRuby": {
       "icon": "assets/actions/BitsFromRuby.svg",
-      "summary": "Generate bits from a gem.",
-      "description": "Converts a gem into a bucket of bits. A quartz is converted into 100 bits; amethyst into 2,000 bits; sapphire into 40,000 bits; emerald into 800,000 bits; ruby into 16,000,000 bits; and diamond into 320,000,000 bits."
+      "summary": "Generate bits from a gem. Requires a bucket of bits to put the bits into.",
+      "description": "Converts a gem into bits, which are put into a bucket. A quartz is converted into 100 bits; amethyst into 2,000 bits; sapphire into 40,000 bits; emerald into 800,000 bits; ruby into 16,000,000 bits; and diamond into 320,000,000 bits."
     },
     "BitsFromDiamond": {
       "icon": "assets/actions/BitsFromDiamond.svg",
-      "summary": "Generate bits from a gem.",
-      "description": "Converts a gem into a bucket of bits. A quartz is converted into 100 bits; amethyst into 2,000 bits; sapphire into 40,000 bits; emerald into 800,000 bits; ruby into 16,000,000 bits; and diamond into 320,000,000 bits."
+      "summary": "Generate bits from a gem. Requires a bucket of bits to put the bits into.",
+      "description": "Converts a gem into bits, which are put into a bucket. A quartz is converted into 100 bits; amethyst into 2,000 bits; sapphire into 40,000 bits; emerald into 800,000 bits; ruby into 16,000,000 bits; and diamond into 320,000,000 bits."
     },
     "RekeyWood": {
       "icon": "assets/actions/RekeyWood.svg",
