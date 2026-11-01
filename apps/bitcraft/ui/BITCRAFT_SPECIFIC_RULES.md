@@ -229,7 +229,8 @@ their entries know about bitcraft:
 An object's Total Bit Value is the raw resources spent to make it, each
 counted at the rate its `BitsFrom*` recipe pays: Wood 1, Stone 2, Iron 5,
 and each gem what its `BitsFrom<Gem>` adds to a bucket of bits. A Bit is
-worth 1. The values are worked out by hand from `../../../examples/bitcraft/plugin.rhai`
+worth 1. Capital goods (quarries, mining drills and pumpjacks) count at half
+the value of everything spent on them. The values are worked out by hand from `../../../examples/bitcraft/plugin.rhai`
 and hardcoded (`TOTAL_BIT_VALUES`, `BUCKET_CONTENT_BIT_VALUES`,
 `LEVELED_TOTAL_BIT_VALUES` in `inventory-values.json`). Recompute them whenever a
 recipe's inputs or outputs change.
@@ -247,16 +248,16 @@ recipe's inputs or outputs change.
 | BucketOfQuartz | 5 + n x 100 | 1 Iron, plus the `n` quartz it holds |
 | BucketOfCoal | 5 + n x 5 | 1 Iron, plus the `n` coal it holds |
 | BarrelOfOil | 25 + n x 50 | 5 Iron, plus the `n` units of oil it holds |
-| Quarry, by level 1-10 | 40, 120, 280, 600, 1240, 2520, 5080, 10200, 20440, 40920 | 20 Wood + 10 Stone, plus what each level-up takes from its buckets |
-| MiningDrill, by level 1-10 | 135, 405, 945, 2025, 4185, 8505, 17145, 34425, 68985, 138105 | 10 Wood + 50 Stone + 5 Iron, plus what each level-up takes from its buckets |
-| Pumpjack, by level 1-10 | 700, 2100, 4900, 10500, 21700, 44100, 88900, 178500, 357700, 716100 | 50 Stone + 100 Iron + 1 Quartz, plus what each level-up takes from its buckets |
+| Quarry, by level 1-10 | 20, 60, 140, 300, 620, 1260, 2540, 5100, 10220, 20460 | half of 20 Wood + 10 Stone, plus what each level-up takes from its buckets |
+| MiningDrill, by level 1-10 | 67.5, 202.5, 472.5, 1012.5, 2092.5, 4252.5, 8572.5, 17212.5, 34492.5, 69052.5 | half of 10 Wood + 50 Stone + 5 Iron, plus what each level-up takes from its buckets |
+| Pumpjack, by level 1-10 | 350, 1050, 2450, 5250, 10850, 22050, 44450, 89250, 178850, 358050 | half of 50 Stone + 100 Iron + 1 Quartz, plus what each level-up takes from its buckets |
 | Quartz, Amethyst, Sapphire, Emerald, Ruby, Diamond | 100, 2000, 40000, 800000, 16000000, 320000000 | what `BitsFrom<Gem>` adds to a bucket of bits |
 | Geode | 0 | not valued until cracked |
 | Coal | 5 | set directly; no recipe turns coal into bits |
 
-A level-up keeps its buckets and takes resources out of them:
-`LevelUpQuarryK` adds 40 x 2^K, `LevelUpMiningDrillK` adds 135 x 2^K, and
-`LevelUpPumpjackK` adds 700 x 2^K.
+A level-up keeps its buckets and takes resources out of them, and the tool
+counts half of what it takes: `LevelUpQuarryK` adds 20 x 2^K,
+`LevelUpMiningDrillK` adds 67.5 x 2^K, and `LevelUpPumpjackK` adds 350 x 2^K.
 
 Wear lowers the value: an axe is worth its value above times the fraction
 of its durability it has left, out of the 100 a new wood axe starts with
