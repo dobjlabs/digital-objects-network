@@ -39,37 +39,37 @@ Requires a moderate amount of proof-of-work to produce, as well as a mining dril
 
 A common gem.
 
-Produced by cracking open a Geode. Used to create or upgrade higher-level production facilities. Can be converted into a bucket of 100 bits.
+Produced by cracking open a Geode. Used to create or upgrade higher-level production facilities. Can be converted into 100 bits (added to a bucket).
 
 ## Amethyst
 
 An uncommon gem.
 
-Produced by cracking open a Geode. Can be converted into a bucket of 2,000 bits.
+Produced by cracking open a Geode. Can be converted into 2,000 bits (added to a bucket).
 
 ## Sapphire
 
 A rare gem.
 
-Produced by cracking open a Geode. Can be converted into a bucket of 40,000 bits.
+Produced by cracking open a Geode. Can be converted into 40,000 bits (added to a bucket).
 
 ## Emerald
 
 An epic gem.
 
-Produced by cracking open a Geode. Can be converted into a bucket of 800,000 bits.
+Produced by cracking open a Geode. Can be converted into 800,000 bits (added to a bucket).
 
 ## Ruby
 
 A legendary gem.
 
-Produced by cracking open a Geode. Can be converted into a bucket of 1,600,000 bits.
+Produced by cracking open a Geode. Can be converted into 1,600,000 bits (added to a bucket).
 
 ## Diamond
 
 A mythic gem.
 
-Produced by cracking open a Geode. Can be converted into a bucket of 3,200,000 bits.
+Produced by cracking open a Geode. Can be converted into 3,200,000 bits (added to a bucket).
 
 ## Stick
 

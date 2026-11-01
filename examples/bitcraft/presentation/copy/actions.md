@@ -195,9 +195,9 @@ Converts 1 iron into 5 bits.
 
 ## BitsFrom{gem}
 
-Generate bits from a gem.
+Generate bits from a gem. Requires a bucket of bits to put the bits into.
 
-Converts a gem into a bucket of bits. A quartz is converted into 100 bits; amethyst into 2,000 bits; sapphire into 40,000 bits; emerald into 800,000 bits; ruby into 16,000,000 bits; and diamond into 320,000,000 bits.
+Converts a gem into bits, which are put into a bucket. A quartz is converted into 100 bits; amethyst into 2,000 bits; sapphire into 40,000 bits; emerald into 800,000 bits; ruby into 16,000,000 bits; and diamond into 320,000,000 bits.
 
 ## Rekey{class}
 
