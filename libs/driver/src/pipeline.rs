@@ -21,7 +21,9 @@ use crate::error::DriverError;
 use crate::execute::{decode_action_args, resolve_inputs, validate_execute_request};
 use crate::holds::Holds;
 use crate::object_record::{FileStatus, ObjectMetadata, ObjectRecord};
-use crate::object_store::{load_object_files, matches_query, object_file_name, write_object_file};
+use crate::object_store::{
+    ObjectFileEntry, load_object_files, matches_query, object_file_name, write_object_file,
+};
 use crate::transactions::{
     load_records, locked_inputs, read_record, record_tx_final, remove_transaction, write_payload,
     write_record,
@@ -499,10 +501,15 @@ impl Driver {
         if queried_transactions.is_empty() && !all_objects {
             return Ok((SettleOutcome::default(), Vec::new()));
         }
-        let membership = if all_objects {
+        let scanned = if all_objects {
+            Some(load_object_files(&self.paths)?)
+        } else {
+            None
+        };
+        let membership = if let Some(scanned) = &scanned {
             let mut commitments = HashSet::new();
             let mut nullifiers = HashSet::new();
-            for entry in load_object_files(&self.paths)? {
+            for entry in scanned {
                 commitments.insert(entry.record.obj.commitment());
                 if let Ok(nullifier) = object_nullifier_hash(&entry.record.obj) {
                     nullifiers.insert(nullifier);
@@ -545,6 +552,7 @@ impl Driver {
             &settings.synchronizer_api_url,
             &records,
             &statuses,
+            scanned.as_deref(),
             membership.as_ref(),
         );
 
@@ -792,13 +800,15 @@ impl Driver {
 
     /// Creation proofs for the object files about to be live without one:
     /// outputs of transactions `statuses` reports applied and, given
-    /// `membership`, unspent files it reports created. A failed fetch leaves
-    /// them to a later pass.
+    /// `membership`, unspent files it reports created. `scanned` is every
+    /// object file when the caller has already read them; otherwise only the
+    /// landed outputs are read. A failed fetch leaves them to a later pass.
     fn fetch_missing_creation_proofs(
         &self,
         sync_api_url: &str,
         records: &[TransactionRecord],
         statuses: &HashMap<String, Option<SynchronizerTxStatus>>,
+        scanned: Option<&[ObjectFileEntry]>,
         membership: Option<&SynchronizerMembership>,
     ) -> HashMap<Hash, CreationProof> {
         let landed_outputs = records
@@ -820,33 +830,56 @@ impl Driver {
         if landed_outputs.is_empty() && membership.is_none() {
             return HashMap::new();
         }
-        let result = load_object_files(&self.paths).and_then(|entries| {
-            let commitments = entries
-                .iter()
-                .filter(|entry| {
-                    let metadata = &entry.record.metadata;
-                    metadata.creation_proof.is_none() && metadata.status != FileStatus::Nullified
-                })
-                .filter(|entry| {
-                    landed_outputs.get(entry.file_name.as_str())
-                        == Some(&entry.record.metadata.tx_final)
-                        || membership.is_some_and(|membership| {
-                            membership
-                                .created_objects
-                                .contains(&entry.record.obj.commitment())
-                        })
-                })
-                .map(|entry| entry.record.obj.commitment())
-                .collect::<Vec<_>>();
-            if commitments.is_empty() {
-                return Ok(HashMap::new());
+        let landed_entries;
+        let entries = match scanned {
+            Some(scanned) => scanned,
+            None => {
+                landed_entries = self.read_object_files(landed_outputs.keys().copied());
+                &landed_entries
             }
-            self.fetch_creation_proofs(sync_api_url, &commitments)
-        });
-        result.unwrap_or_else(|err| {
-            log::warn!("could not fetch creation proofs: {err:#}");
-            HashMap::new()
-        })
+        };
+        let commitments = entries
+            .iter()
+            .filter(|entry| {
+                let metadata = &entry.record.metadata;
+                metadata.creation_proof.is_none() && metadata.status != FileStatus::Nullified
+            })
+            .filter(|entry| {
+                landed_outputs.get(entry.file_name.as_str())
+                    == Some(&entry.record.metadata.tx_final)
+                    || membership.is_some_and(|membership| {
+                        membership
+                            .created_objects
+                            .contains(&entry.record.obj.commitment())
+                    })
+            })
+            .map(|entry| entry.record.obj.commitment())
+            .collect::<Vec<_>>();
+        if commitments.is_empty() {
+            return HashMap::new();
+        }
+        self.fetch_creation_proofs(sync_api_url, &commitments)
+            .unwrap_or_else(|err| {
+                log::warn!("could not fetch creation proofs: {err:#}");
+                HashMap::new()
+            })
+    }
+
+    /// The live object files named by `file_names` that exist and parse.
+    fn read_object_files<'a>(
+        &self,
+        file_names: impl Iterator<Item = &'a str>,
+    ) -> Vec<ObjectFileEntry> {
+        file_names
+            .filter_map(|file_name| {
+                let path = self.paths.objects_dir.join(file_name);
+                let record = crate::object_record::parse_object_record_file(&path).ok()?;
+                Some(ObjectFileEntry {
+                    file_name: file_name.to_string(),
+                    record,
+                })
+            })
+            .collect()
     }
 
     fn persist_settled_objects(
