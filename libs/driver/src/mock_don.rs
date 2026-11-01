@@ -7,14 +7,17 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
 use payload::encode_hash_hex;
+use plonky2::field::types::PrimeField64;
 use pod2::middleware::{
-    F, Hash, Value,
+    Hash, Value,
     containers::{Array, Set},
+    hash_values,
 };
 use sdk::SpendableObjects;
 use serde::{Deserialize, Serialize};
 use txlib::{GroundingWitness, StateHeader, grounding_aged_out};
 use wire_types::relayer::{JobStatus, JobStatusResponse, SubmitProofResponse};
+use wire_types::synchronizer::StateHeadResponse;
 
 use crate::clients::{
     RelayerClient, SynchronizerClient, SynchronizerHead, SynchronizerMembership,
@@ -77,13 +80,24 @@ struct MockDonState {
     state_history: Array,
     /// Block number of every state root, the head's included.
     root_blocks: HashMap<Hash, i64>,
+    /// The state derived at every block, keyed by block number.
+    derived_states: HashMap<i64, StateHeadResponse>,
     tx_statuses: HashMap<Hash, SynchronizerTxStatus>,
     jobs: HashMap<String, MockJob>,
     job_ids_by_tx_final: HashMap<Hash, String>,
 }
 
 fn block_hash(block_number: i64) -> Hash {
-    Hash([F(0), F(0), F(0), F(block_number as u64)])
+    hash_values(&[Value::from(block_number)])
+}
+
+/// The bytes that `pod2utils::b256_to_hash` reads back as `hash`.
+fn hash_bytes(hash: Hash) -> [u8; 32] {
+    let mut bytes = [0u8; 32];
+    for (chunk, field) in bytes.as_chunks_mut::<8>().0.iter_mut().zip(hash.0) {
+        *chunk = field.to_canonical_u64().to_le_bytes();
+    }
+    bytes
 }
 
 fn now_secs() -> i64 {
@@ -107,7 +121,7 @@ impl MockDonState {
             state_history.commitment(),
         );
         let root_blocks = HashMap::from([(head.hash(), head.block_number)]);
-        Self {
+        let mut state = Self {
             head,
             created,
             created_index: HashMap::new(),
@@ -115,10 +129,29 @@ impl MockDonState {
             nullifier_hashes: HashSet::new(),
             state_history,
             root_blocks,
+            derived_states: HashMap::new(),
             tx_statuses: HashMap::new(),
             jobs: HashMap::new(),
             job_ids_by_tx_final: HashMap::new(),
-        }
+        };
+        state.record_head();
+        state
+    }
+
+    fn record_head(&mut self) {
+        let block_number = self.head.block_number;
+        self.derived_states.insert(
+            block_number,
+            StateHeadResponse {
+                slot: block_number as u32,
+                state_root: self.head.hash(),
+                block_number,
+                block_hash: hash_bytes(self.head.block_hash).into(),
+                created_count: self.created_index.len(),
+                nullifier_count: self.nullifier_hashes.len(),
+                state_root_count: self.root_blocks.len(),
+            },
+        );
     }
 
     /// Why the synchronizer would reject `payload` in the next block, if it would.
@@ -178,6 +211,7 @@ impl MockDonState {
             self.state_history.commitment(),
         );
         self.root_blocks.insert(self.head.hash(), block_number);
+        self.record_head();
         Ok(())
     }
 
@@ -317,6 +351,14 @@ impl SynchronizerClient for MockDon {
             block_number: state.head.block_number,
         })
     }
+
+    fn fetch_state_at(
+        &self,
+        _sync_api_url: &str,
+        block_number: i64,
+    ) -> Result<Option<StateHeadResponse>> {
+        Ok(self.state().derived_states.get(&block_number).cloned())
+    }
 }
 
 impl RelayerClient for MockDon {
@@ -352,6 +394,8 @@ impl RelayerClient for MockDon {
 
 #[cfg(test)]
 mod tests {
+    use pod2::middleware::F;
+    use pod2utils::b256_to_hash;
     use txlib::MAX_STATE_ROOT_AGE_BLOCKS;
 
     use super::*;
@@ -411,6 +455,26 @@ mod tests {
         );
 
         assert!(don.fetch_grounding_witness("", &[test_hash(2)]).is_err());
+
+        let genesis_state = don
+            .fetch_state_at("", genesis.block_number)
+            .unwrap()
+            .unwrap();
+        assert_eq!(genesis_state.state_root, genesis.state_root);
+        assert_eq!(genesis_state.created_count, 0);
+        let head_state = don.fetch_state_at("", head.block_number).unwrap().unwrap();
+        assert_eq!(head_state.state_root, head.state_root);
+        assert_eq!(head_state.created_count, 1);
+        assert_eq!(head_state.state_root_count, 2);
+        assert_eq!(
+            b256_to_hash(head_state.block_hash),
+            witness.state_header.block_hash
+        );
+        assert!(
+            don.fetch_state_at("", head.block_number + 1)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
