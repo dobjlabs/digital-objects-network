@@ -26,7 +26,7 @@ use crate::object_store::{
 use crate::pexe_catalog::PexeCatalog;
 use crate::pipeline::RecordIndex;
 use crate::settings::{default_settings, read_settings, write_settings};
-use crate::transactions::load_records;
+use crate::transactions::{load_records, locked_inputs};
 use crate::types::{ActionQuery, DriverPaths, ObjectQuery};
 use wire_types::{
     ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverSettings,
@@ -331,13 +331,14 @@ impl Driver {
                     DriverError::Conflict(format!("{file_name} is held by {owner}")).into(),
                 );
             }
-            for open in load_records(&self.paths)?.iter().filter(|r| r.is_open()) {
-                if open.input_files.contains(&file_name) {
-                    return Err(DriverError::Conflict(format!(
-                        "{file_name} is spent by a transaction awaiting the chain"
-                    ))
-                    .into());
-                }
+            let records = load_records(&self.paths)?;
+            if locked_inputs(&records).contains(&file_name) {
+                return Err(DriverError::Conflict(format!(
+                    "{file_name} is spent by a transaction awaiting the chain"
+                ))
+                .into());
+            }
+            for open in records.iter().filter(|r| r.is_open()) {
                 if open.output_files.contains(&file_name) {
                     return Err(DriverError::Conflict(format!(
                         "{file_name} is created by a transaction awaiting the chain"
@@ -460,7 +461,7 @@ impl Driver {
             .get_action(action)
             .ok_or_else(|| anyhow!("unknown action: {action}"))?;
         let entries = load_object_files(&self.paths)?;
-        let locked = crate::transactions::locked_inputs(&load_records(&self.paths)?);
+        let locked = locked_inputs(&load_records(&self.paths)?);
         let held = self.holds.labels();
         let live_objects = entries
             .iter()

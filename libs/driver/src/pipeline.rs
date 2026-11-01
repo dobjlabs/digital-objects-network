@@ -643,10 +643,12 @@ impl Driver {
             .count();
 
         let mut changed_files = HashSet::new();
+        let locked = locked_inputs(&records);
         for record in outcome.records.iter_mut() {
             if record.state.is_terminal() {
                 match self.persist_settled_objects(
                     record,
+                    &locked,
                     &mut changed_files,
                     &mut outcome.removed_files,
                 ) {
@@ -716,6 +718,7 @@ impl Driver {
     pub fn prune_transactions(&self, current_time_ms: u64) -> Result<PrunedTransactions> {
         let _store = self.store_lock.lock().expect("store lock poisoned");
         let records = load_records(&self.paths)?;
+        let locked = locked_inputs(&records);
         let mut outcome = PrunedTransactions::default();
         let mut changed_files = HashSet::new();
         let terminal_ids = records
@@ -738,6 +741,7 @@ impl Driver {
                 let persisted = self
                     .persist_settled_objects(
                         &mut record,
+                        &locked,
                         &mut changed_files,
                         &mut outcome.removed_files,
                     )
@@ -799,11 +803,13 @@ impl Driver {
         Ok(outcome)
     }
 
-    /// Bring a terminal record's object files in line with it. Returns
-    /// whether `record` itself changed, which the caller persists.
+    /// Bring a terminal record's object files in line with it, `locked`
+    /// being the inputs of open transactions. Returns whether `record`
+    /// itself changed, which the caller persists.
     fn persist_settled_objects(
         &self,
         record: &mut TransactionRecord,
+        locked: &HashSet<String>,
         changed_files: &mut HashSet<String>,
         removed_files: &mut Vec<String>,
     ) -> Result<bool> {
@@ -881,7 +887,8 @@ impl Driver {
                 }
             }
         }
-        let finished_names = self.finish_pending_names(record, changed_files, removed_files)?;
+        let finished_names =
+            self.finish_pending_names(record, locked, changed_files, removed_files)?;
         Ok(renamed_inputs || finished_names)
     }
 
@@ -892,6 +899,7 @@ impl Driver {
     fn finish_pending_names(
         &self,
         record: &mut TransactionRecord,
+        locked: &HashSet<String>,
         changed_files: &mut HashSet<String>,
         removed_files: &mut Vec<String>,
     ) -> Result<bool> {
@@ -900,7 +908,6 @@ impl Driver {
         }
         let producing_tx_final = record_tx_final(record)?;
         let held = self.holds.labels();
-        let locked = locked_inputs(&load_records(&self.paths)?);
         let mut finished = Vec::new();
         for pending in &record.pending_names {
             let path = self.paths.objects_dir.join(&pending.file_name);
