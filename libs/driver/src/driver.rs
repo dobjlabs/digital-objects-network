@@ -353,11 +353,18 @@ impl Driver {
                 .into());
             }
             // On a case-insensitive filesystem a change of case finds the
-            // file itself under the new name.
+            // file itself under the new name, but only in the live folder.
             let taken = if target.eq_ignore_ascii_case(&file_name) {
-                fs::read_dir(&self.paths.objects_dir)?
+                let live_has_target = fs::read_dir(&self.paths.objects_dir)?
                     .filter_map(|entry| entry.ok())
-                    .any(|entry| entry.file_name().to_str() == Some(target.as_str()))
+                    .any(|entry| entry.file_name().to_str() == Some(target.as_str()));
+                live_has_target
+                    || [
+                        &self.paths.nullified_objects_dir,
+                        &self.paths.discarded_objects_dir,
+                    ]
+                    .iter()
+                    .any(|dir| dir.join(&target).exists())
             } else {
                 store_has_file(&self.paths, &target)
             };

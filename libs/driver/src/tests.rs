@@ -2410,6 +2410,11 @@ fn renaming_an_object_checks_the_name_and_what_holds_the_object() {
         rename("Best Pick.dobj", "Best Pick.dobj").unwrap(),
         "Best Pick.dobj"
     );
+    std::fs::create_dir_all(&fx.paths.nullified_objects_dir).unwrap();
+    std::fs::write(fx.paths.nullified_objects_dir.join("BEST PICK.dobj"), "{}").unwrap();
+    let err = rename("Best Pick.dobj", "BEST PICK").unwrap_err();
+    assert!(err.contains("already exists"), "{err}");
+    std::fs::remove_file(fx.paths.nullified_objects_dir.join("BEST PICK.dobj")).unwrap();
 
     for refused in ["../pick.dobj", ".pick", "", "pick?.dobj", "NUL"] {
         let err = rename("Best Pick.dobj", refused).unwrap_err();
