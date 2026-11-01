@@ -178,7 +178,12 @@ async function page(context, options = {}) {
             const patch = JSON.parse(init.body);
             backend.settingsWrites.push(patch);
             if (backend.settingsWriteError) return respond({}, 503);
+            const applied = backend.settings?.cpuUsageApplied;
+            const levels = ["light", "medium", "full"];
+            const raiseRefused = backend.cpuUsageRaiseRefused
+              && levels.indexOf(patch.cpuUsage) > levels.indexOf(applied);
             backend.settings = { ...backend.settings, ...patch };
+            if (patch.cpuUsage && !raiseRefused) backend.settings.cpuUsageApplied = patch.cpuUsage;
           }
           return respond(backend.settings ?? {});
         }
@@ -1524,7 +1529,7 @@ test("Settings hides Discord sharing without a host, and when the host cannot be
 test("the Settings window saves the CPU for jobs chosen with its radio buttons", async (context) => {
   const ui = await page(context, {
     url: "http://127.0.0.1:7727/bitcraft/?page=settings",
-    settings: { synchronizerApiUrl: "http://127.0.0.1:3000", relayerApiUrl: "http://127.0.0.1:3200", mcpEnabled: false, cpuUsage: "light" },
+    settings: { synchronizerApiUrl: "http://127.0.0.1:3000", relayerApiUrl: "http://127.0.0.1:3200", mcpEnabled: false, cpuUsage: "light", cpuUsageApplied: "light" },
   });
   const radio = (level) => ui.document.querySelector(`#settings-view input[name="cpu-usage"][value="${level}"]`);
   const checked = () => ui.document.querySelector('#settings-view input[name="cpu-usage"]:checked')?.value;
@@ -1558,6 +1563,37 @@ test("the Settings window saves the CPU for jobs chosen with its radio buttons",
   await choose("medium");
   assert.equal(checked(), "medium");
   assert.equal(ui.document.querySelector("#settings-error"), null);
+  assert.equal(ui.document.querySelector("#settings-cpu-usage-restart").hidden, true);
+});
+
+test("the Settings window asks the player to quit while jobs run below the chosen CPU", async (context) => {
+  const url = "http://127.0.0.1:7727/bitcraft/?page=settings";
+  const addresses = { synchronizerApiUrl: "http://127.0.0.1:3000", relayerApiUrl: "http://127.0.0.1:3200", mcpEnabled: false };
+  const ui = await page(context, {
+    url,
+    settings: { ...addresses, cpuUsage: "medium", cpuUsageApplied: "medium" },
+    cpuUsageRaiseRefused: true,
+  });
+  const restart = (window) => window.document.querySelector("#settings-cpu-usage-restart");
+  const choose = async (window, level) => {
+    window.document.querySelector(`#settings-view input[name="cpu-usage"][value="${level}"]`).click();
+    await flush();
+  };
+  assert.equal(restart(ui).hidden, true);
+
+  await choose(ui, "full");
+  assert.equal(restart(ui).hidden, false);
+  assert.equal(restart(ui).textContent, "Quit Bitcraft and open it again to use Full. Until then, jobs run at Medium.");
+
+  const reopened = await page(context, { url, settings: { ...ui.backend.settings }, cpuUsageRaiseRefused: true });
+  assert.equal(reopened.document.querySelector("#settings-performance").open, true, "the note shows without opening the section");
+  assert.equal(restart(reopened).hidden, false);
+  await choose(reopened, "medium");
+  assert.equal(restart(reopened).hidden, true, "choosing the level jobs run at needs no restart");
+
+  const restarted = await page(context, { url, settings: { ...addresses, cpuUsage: "full", cpuUsageApplied: "full" } });
+  assert.equal(restarted.document.querySelector("#settings-performance").open, false);
+  assert.equal(restart(restarted).hidden, true);
 });
 
 test("the top bar and the window title show the Inventory Value of live objects", async (context) => {

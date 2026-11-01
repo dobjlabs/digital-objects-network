@@ -234,6 +234,10 @@
     color: var(--text);
   }
   .cpu-usage-option input { margin: 0; }
+  #settings-cpu-usage-restart {
+    grid-column: 1 / -1;
+    margin: 0;
+  }
   /* The game's identity and links, set apart from the settings above like
      a Mac About window. */
   .settings-about {
@@ -1393,6 +1397,7 @@
           <label class="cpu-usage-option"><input type="radio" name="cpu-usage" value="medium" disabled>Medium</label>
           <label class="cpu-usage-option"><input type="radio" name="cpu-usage" value="full" disabled>Full</label>
         </div>
+        <p id="settings-cpu-usage-restart" role="status" hidden></p>
       </div>
     </details>
     <div class="settings-about">
@@ -3114,7 +3119,7 @@
       const settings = await fetchJson("/settings");
       document.getElementById("settings-synchronizer").value = settings.synchronizerApiUrl ?? "";
       document.getElementById("settings-relayer").value = settings.relayerApiUrl ?? "";
-      watchCpuUsage(settings.cpuUsage);
+      watchCpuUsage(settings);
     } catch (error) {
       showSettingsError(`Could not read settings: ${error.message}`);
     }
@@ -3168,23 +3173,34 @@
     document.getElementById("settings-sharing").hidden = false;
   }
 
+  // A level dobjd could not apply yet (`cpuUsageApplied` below `cpuUsage`)
+  // waits for dobjd to restart. Closing this window leaves dobjd running, so
+  // the note asks the player to quit.
   function watchCpuUsage(initial) {
     const options = [...document.querySelectorAll('#settings-view input[name="cpu-usage"]')];
+    const restart = document.getElementById("settings-cpu-usage-restart");
+    const rank = (level) => options.findIndex((option) => option.value === level);
+    const name = (level) => options[rank(level)].closest("label").textContent.trim();
     let saved = initial;
-    const show = (level) => {
-      for (const option of options) option.checked = option.value === level;
+    const show = ({ cpuUsage, cpuUsageApplied }) => {
+      for (const option of options) option.checked = option.value === cpuUsage;
+      restart.hidden = !(rank(cpuUsageApplied) < rank(cpuUsage));
+      if (!restart.hidden) {
+        restart.textContent = `Quit Bitcraft and open it again to use ${name(cpuUsage)}. `
+          + `Until then, jobs run at ${name(cpuUsageApplied)}.`;
+      }
     };
     const enable = (enabled) => {
       for (const option of options) option.disabled = !enabled;
     };
     show(saved);
+    if (!restart.hidden) document.getElementById("settings-performance").open = true;
     enable(true);
     for (const option of options) {
       option.addEventListener("change", async () => {
         enable(false);
         try {
-          const settings = await sendJson("PUT", "/settings", { cpuUsage: option.value });
-          saved = settings.cpuUsage;
+          saved = await sendJson("PUT", "/settings", { cpuUsage: option.value });
           show(saved);
           document.getElementById("settings-error")?.remove();
         } catch (error) {
@@ -5097,7 +5113,7 @@
     document.getElementById("inventory-value").addEventListener("click",
       () => openPageWindow(SUMMARY_PAGE, SUMMARY_WINDOW_NAME, SUMMARY_WINDOW_FEATURES));
     document.getElementById("settings-button").addEventListener("click",
-      () => openPageWindow(SETTINGS_PAGE, SETTINGS_WINDOW_NAME, "popup,width=480,height=482"));
+      () => openPageWindow(SETTINGS_PAGE, SETTINGS_WINDOW_NAME, "popup,width=480,height=528"));
     document.getElementById("bitcraft-version").textContent = BITCRAFT_VERSION;
     refreshServiceStatus();
     setInterval(refreshServiceStatus, SERVICE_STATUS_INTERVAL_MS);

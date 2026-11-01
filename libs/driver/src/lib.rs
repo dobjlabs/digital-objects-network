@@ -21,7 +21,7 @@ mod warm;
 mod tests;
 
 pub use crate::catalog::ActionCatalog as DriverActionCatalog;
-pub use crate::cpu_usage::{apply_cpu_usage, set_current_thread_cpu_usage};
+pub use crate::cpu_usage::{applied_cpu_usage, apply_cpu_usage};
 pub use crate::driver::{Driver, DriverDeps, PayloadBuilder};
 pub use crate::error::DriverError;
 pub use crate::mock_don::DOBJ_MOCK_ENV;

@@ -607,8 +607,10 @@ pub struct RunActionProgress {
 // ===========================================================================
 
 /// How hard proving may work the machine. The mechanism, and how much each
-/// level saves, differ by platform.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// level saves, differ by platform. Levels order from Light to Full.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum CpuUsage {
@@ -668,6 +670,18 @@ pub struct DriverSettings {
     /// How much CPU proving may use (default medium).
     #[serde(default)]
     pub cpu_usage: CpuUsage,
+}
+
+/// The answer to `GET` and `PUT /settings`: the saved settings, plus the CPU
+/// usage proving runs at. That stays below the saved `cpuUsage` when the
+/// platform refused to raise priority again, until dobjd restarts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DriverSettingsReport {
+    #[serde(flatten)]
+    pub settings: DriverSettings,
+    pub cpu_usage_applied: CpuUsage,
 }
 
 /// Partial update for [`DriverSettings`], accepted by `PUT /settings`. Absent
@@ -814,6 +828,31 @@ mod tests {
         assert_eq!("LIGHT".parse::<CpuUsage>(), Ok(CpuUsage::Light));
         assert_eq!("Full".parse::<CpuUsage>(), Ok(CpuUsage::Full));
         assert!("fast".parse::<CpuUsage>().is_err());
+    }
+
+    #[test]
+    fn cpu_usage_orders_from_light_to_full() {
+        assert!(CpuUsage::Light < CpuUsage::Medium);
+        assert!(CpuUsage::Medium < CpuUsage::Full);
+    }
+
+    #[test]
+    fn settings_report_is_the_settings_plus_the_applied_cpu_usage() {
+        let settings: DriverSettings = serde_json::from_str(
+            r#"{"synchronizerApiUrl":"s","relayerApiUrl":"r","cpuUsage":"full"}"#,
+        )
+        .unwrap();
+        let report = DriverSettingsReport {
+            settings: settings.clone(),
+            cpu_usage_applied: CpuUsage::Light,
+        };
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["cpuUsage"], "full");
+        assert_eq!(json["cpuUsageApplied"], "light");
+        assert_eq!(
+            serde_json::from_value::<DriverSettings>(json).unwrap(),
+            settings
+        );
     }
 
     #[test]

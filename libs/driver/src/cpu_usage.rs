@@ -2,13 +2,32 @@
 //! work: a QoS class on macOS, a thread priority plus EcoQoS on Windows, and
 //! a nice value on Linux. Thread counts stay as they are.
 
+use std::sync::Mutex;
+
 use anyhow::{Result, anyhow};
 use wire_types::CpuUsage;
 
+/// The level every thread of Rayon's global pool last took. Pool threads
+/// start unclassed, which is Full.
+static POOL_CPU_USAGE: Mutex<CpuUsage> = Mutex::new(CpuUsage::Full);
+
 /// Re-classes the threads of Rayon's global pool, where proofs do their
-/// parallel work.
+/// parallel work, and returns once each thread has taken `level` or been
+/// refused it.
 pub fn apply_cpu_usage(level: CpuUsage) {
-    rayon::spawn_broadcast(move |_| set_current_thread_cpu_usage(level));
+    // Held across the broadcast, so concurrent calls record their levels in
+    // the order the pool threads took them.
+    let mut applied = POOL_CPU_USAGE.lock().unwrap();
+    let took_level = rayon::broadcast(|_| set_current_thread_cpu_usage(level));
+    if took_level.into_iter().all(|took| took) {
+        *applied = level;
+    }
+}
+
+/// The level proving's parallel work runs at. After a raise the platform
+/// refused, it stays below the saved level until dobjd restarts.
+pub fn applied_cpu_usage() -> CpuUsage {
+    *POOL_CPU_USAGE.lock().unwrap()
 }
 
 /// Runs `work` on a fresh thread classed for `level`, or on this thread at
@@ -36,7 +55,7 @@ pub(crate) fn run_at_cpu_usage<T: Send>(
 }
 
 #[cfg(target_os = "macos")]
-pub fn set_current_thread_cpu_usage(level: CpuUsage) {
+fn set_current_thread_cpu_usage(level: CpuUsage) -> bool {
     use libc::qos_class_t::{QOS_CLASS_BACKGROUND, QOS_CLASS_DEFAULT, QOS_CLASS_UTILITY};
 
     let class = match level {
@@ -49,10 +68,11 @@ pub fn set_current_thread_cpu_usage(level: CpuUsage) {
     if result != 0 {
         log::warn!("could not set the QoS class of a proving thread: error {result}");
     }
+    result == 0
 }
 
 #[cfg(target_os = "linux")]
-pub fn set_current_thread_cpu_usage(level: CpuUsage) {
+fn set_current_thread_cpu_usage(level: CpuUsage) -> bool {
     use std::sync::OnceLock;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -74,11 +94,11 @@ pub fn set_current_thread_cpu_usage(level: CpuUsage) {
     };
     let target = level_nice.max(starting);
     if target == current {
-        return;
+        return true;
     }
     // SAFETY: as above.
     if unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, target) } == 0 {
-        return;
+        return true;
     }
     let error = std::io::Error::last_os_error();
     if target < current {
@@ -88,10 +108,11 @@ pub fn set_current_thread_cpu_usage(level: CpuUsage) {
     } else {
         log::warn!("could not lower the priority of a proving thread: {error}");
     }
+    false
 }
 
 #[cfg(windows)]
-pub fn set_current_thread_cpu_usage(level: CpuUsage) {
+fn set_current_thread_cpu_usage(level: CpuUsage) -> bool {
     use windows_sys::Win32::System::Threading::{
         GetCurrentThread, SetThreadInformation, SetThreadPriority,
         THREAD_POWER_THROTTLING_CURRENT_VERSION, THREAD_POWER_THROTTLING_EXECUTION_SPEED,
@@ -116,6 +137,7 @@ pub fn set_current_thread_cpu_usage(level: CpuUsage) {
         ControlMask: eco_qos,
         StateMask: eco_qos,
     };
+    let mut took_level = true;
     // SAFETY: the pseudo-handle names the calling thread, and the buffer and
     // its size describe `throttling`.
     unsafe {
@@ -125,6 +147,7 @@ pub fn set_current_thread_cpu_usage(level: CpuUsage) {
                 "could not set the priority of a proving thread: {}",
                 std::io::Error::last_os_error()
             );
+            took_level = false;
         }
         let set = SetThreadInformation(
             thread,
@@ -137,12 +160,16 @@ pub fn set_current_thread_cpu_usage(level: CpuUsage) {
                 "could not set EcoQoS on a proving thread: {}",
                 std::io::Error::last_os_error()
             );
+            took_level = false;
         }
     }
+    took_level
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
-pub fn set_current_thread_cpu_usage(_level: CpuUsage) {}
+fn set_current_thread_cpu_usage(_level: CpuUsage) -> bool {
+    true
+}
 
 #[cfg(test)]
 mod tests {
@@ -171,5 +198,27 @@ mod tests {
             run_at_cpu_usage(CpuUsage::Light, nice).unwrap(),
             19.max(own)
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_applied_level_is_the_one_pool_threads_run_at() {
+        let own = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+        let pool_nice = || pool.broadcast(|_| unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) });
+        pool.install(|| apply_cpu_usage(CpuUsage::Light));
+        assert_eq!(applied_cpu_usage(), CpuUsage::Light);
+        assert_eq!(pool_nice(), vec![19.max(own); 2]);
+        // Unprivileged, Linux refuses the raise and the pool stays at Light.
+        pool.install(|| apply_cpu_usage(CpuUsage::Full));
+        let expected_nice = match applied_cpu_usage() {
+            CpuUsage::Full => own,
+            CpuUsage::Light => 19.max(own),
+            CpuUsage::Medium => panic!("the pool never took Medium"),
+        };
+        assert_eq!(pool_nice(), vec![expected_nice; 2]);
     }
 }
