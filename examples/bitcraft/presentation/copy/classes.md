@@ -63,13 +63,13 @@ Produced by cracking open a Geode. Can be converted into 800,000 bits (added to 
 
 A legendary gem.
 
-Produced by cracking open a Geode. Can be converted into 1,600,000 bits (added to a bucket).
+Produced by cracking open a Geode. Can be converted into 16,000,000 bits (added to a bucket).
 
 ## Diamond
 
 A mythic gem.
 
-Produced by cracking open a Geode. Can be converted into 3,200,000 bits (added to a bucket).
+Produced by cracking open a Geode. Can be converted into 320,000,000 bits (added to a bucket).
 
 ## Stick
 
