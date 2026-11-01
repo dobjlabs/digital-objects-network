@@ -22,13 +22,14 @@ use crate::holds::HoldTable;
 use crate::mock_don::{MockDon, MockPayloadBuilder, mock_mode_from_env};
 use crate::object_record::{FileStatus, ObjectRecord, parse_object_record_file};
 use crate::object_store::{
-    ObjectFileEntry, ensure_store_dirs, imported_file_name, key_fingerprint, load_imported_keys,
-    load_object_files, matches_query, object_file_name, record_imported_key, write_object_file,
+    ObjectFileEntry, custom_file_name, ensure_store_dirs, imported_file_name, key_fingerprint,
+    load_imported_keys, load_object_files, matches_query, object_file_name, record_imported_key,
+    rename_live_object_file, store_has_file, write_object_file,
 };
 use crate::pexe_catalog::PexeCatalog;
 use crate::pipeline::RecordIndex;
 use crate::settings::{default_settings, read_settings, write_settings};
-use crate::transactions::load_records;
+use crate::transactions::{load_records, locked_inputs};
 use crate::types::{ActionQuery, DriverPaths, ObjectQuery};
 use wire_types::{
     ActionSummary, CheckActionCandidate, CheckActionReport, ClassSummary, DriverSettings,
@@ -345,6 +346,77 @@ impl Driver {
         Ok(summary)
     }
 
+    /// Renames a live object's file to `new_name`, with `.dobj` added when
+    /// missing, and returns its summary under the new name. Refuses a name
+    /// that is unsafe or that another file has, an object that is not live,
+    /// and an object a proof holds or an open transaction spends or has yet
+    /// to create.
+    pub fn rename_object(&self, path: &Path, new_name: &str) -> Result<ObjectSummary> {
+        let file_name = extract_basename(path)?;
+        let _store = self.store_lock.lock().expect("store lock poisoned");
+        let source = self.paths.objects_dir.join(&file_name);
+        if !source.try_exists()? {
+            return Err(DriverError::ObjectFileNotFound(file_name).into());
+        }
+        let record = parse_object_record_file(&source)?;
+        let generated = object_file_name(&record.metadata.class, &record.obj)?;
+        let target = custom_file_name(new_name, &generated)
+            .map_err(|err| DriverError::InvalidInput(format!("{err:#}")))?;
+        if target != file_name {
+            if let Some(owner) = self.holds.labels().get(&file_name) {
+                return Err(
+                    DriverError::Conflict(format!("{file_name} is held by {owner}")).into(),
+                );
+            }
+            let records = load_records(&self.paths)?;
+            if locked_inputs(&records).contains(&file_name) {
+                return Err(DriverError::Conflict(format!(
+                    "{file_name} is spent by a transaction awaiting the chain"
+                ))
+                .into());
+            }
+            for open in records.iter().filter(|r| r.is_open()) {
+                if open.output_files.contains(&file_name) {
+                    return Err(DriverError::Conflict(format!(
+                        "{file_name} is created by a transaction awaiting the chain"
+                    ))
+                    .into());
+                }
+            }
+            if record.metadata.status != FileStatus::Live {
+                return Err(DriverError::Conflict(format!(
+                    "{file_name} is not live (status: {:?})",
+                    record.metadata.status
+                ))
+                .into());
+            }
+            // On a case-insensitive filesystem a change of case finds the
+            // file itself under the new name, but only in the live folder.
+            let taken = if target.eq_ignore_ascii_case(&file_name) {
+                let live_has_target = fs::read_dir(&self.paths.objects_dir)?
+                    .filter_map(|entry| entry.ok())
+                    .any(|entry| entry.file_name().to_str() == Some(target.as_str()));
+                live_has_target
+                    || [
+                        &self.paths.nullified_objects_dir,
+                        &self.paths.discarded_objects_dir,
+                    ]
+                    .iter()
+                    .any(|dir| dir.join(&target).exists())
+            } else {
+                store_has_file(&self.paths, &target)
+            };
+            if taken {
+                return Err(DriverError::Conflict(format!("{target} already exists")).into());
+            }
+            rename_live_object_file(&self.paths, &file_name, &target)?;
+        }
+        self.summary_of(ObjectFileEntry {
+            file_name: target,
+            record,
+        })
+    }
+
     /// Look up a basename in the live dir, falling back to the nullified
     /// dir. Either path is returned even if the file doesn't exist on
     /// disk — the caller is expected to follow up with an existence check
@@ -429,7 +501,7 @@ impl Driver {
             .get_action(action)
             .ok_or_else(|| anyhow!("unknown action: {action}"))?;
         let entries = load_object_files(&self.paths)?;
-        let locked = crate::transactions::locked_inputs(&load_records(&self.paths)?);
+        let locked = locked_inputs(&load_records(&self.paths)?);
         let held = self.holds.labels();
         let live_objects = entries
             .iter()
@@ -696,13 +768,7 @@ impl Driver {
         let file_name = match requested {
             None => generated.to_string(),
             Some(requested) => imported_file_name(requested, generated, |name| {
-                [
-                    &self.paths.objects_dir,
-                    &self.paths.nullified_objects_dir,
-                    &self.paths.discarded_objects_dir,
-                ]
-                .iter()
-                .any(|dir| dir.join(name).exists())
+                store_has_file(&self.paths, name)
             })
             .map_err(|err| DriverError::InvalidInput(format!("{err:#}")))?,
         };

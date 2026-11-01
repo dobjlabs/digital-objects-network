@@ -43,6 +43,7 @@ pub fn router(app_state: AppState, access: WebAccess) -> Router {
             "/objects/{file_name}/discard_unsafe",
             post(objects::discard_object_unsafe),
         )
+        .route("/objects/{file_name}/rename", post(objects::rename_object))
         .route("/classes", get(classes::list_classes))
         .route("/classes/{name}", get(classes::inspect_class))
         .route(
@@ -122,10 +123,8 @@ mod tests {
         (status, serde_json::from_slice(&bytes).unwrap())
     }
 
-    #[tokio::test]
-    async fn resource_routes_accept_work_and_expose_its_lifecycle() {
-        let home = tempfile::tempdir().unwrap();
-        let paths = DriverPaths::from_dobj_root(home.path());
+    fn test_app(home: &std::path::Path) -> Router {
+        let paths = DriverPaths::from_dobj_root(home);
         let driver =
             Arc::new(Driver::open(paths.clone(), DriverDeps::load(&paths).unwrap()).unwrap());
         let events = EventHub::new();
@@ -141,7 +140,28 @@ mod tests {
             "127.0.0.1:7718".to_string(),
             7717,
         ));
-        let app = router(AppState::new(services, mcp), WebAccess::new(7717));
+        router(AppState::new(services, mcp), WebAccess::new(7717))
+    }
+
+    #[tokio::test]
+    async fn renaming_a_missing_object_is_not_found() {
+        let home = tempfile::tempdir().unwrap();
+        let app = test_app(home.path());
+        let (status, body) = request(
+            &app,
+            "POST",
+            "/objects/no%20such.dobj/rename",
+            json!({"fileName": "new name"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body["error"].as_str().unwrap().contains("no such.dobj"));
+    }
+
+    #[tokio::test]
+    async fn resource_routes_accept_work_and_expose_its_lifecycle() {
+        let home = tempfile::tempdir().unwrap();
+        let app = test_app(home.path());
         for path in ["/runs", "/proof-jobs", "/transactions"] {
             assert_eq!(
                 request(&app, "GET", path, Value::Null).await,
