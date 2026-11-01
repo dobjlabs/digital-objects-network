@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use wire_types::CpuUsage;
 
 mod client;
 mod commands;
@@ -93,6 +94,13 @@ enum Cmd {
         /// to dobjd, which files the object under a canonical name.
         path: PathBuf,
     },
+    /// Rename one of your objects' files. `.dobj` is added when missing.
+    Rename {
+        /// The object's current file name, as `dobj objects` lists it.
+        file_name: String,
+        /// The new file name.
+        new_name: String,
+    },
     /// Install a plugin (`.pexe`) from a local path or URL, then hot-reload
     /// the daemon's action catalog so it's usable right away.
     Install {
@@ -100,7 +108,7 @@ enum Cmd {
         source: String,
     },
     /// Read or write daemon settings (synchronizer / relayer URLs, MCP
-    /// toggle).
+    /// toggle, CPU usage).
     #[command(subcommand)]
     Settings(SettingsCmd),
     /// Execute an action. Streams progress to stderr; result on stdout.
@@ -237,6 +245,9 @@ enum SettingsCmd {
         /// Takes effect immediately.
         #[arg(long, value_name = "ON|OFF", value_parser = clap::builder::BoolishValueParser::new())]
         mcp: Option<bool>,
+        /// How much CPU proving may use.
+        #[arg(long, value_name = "LIGHT|MEDIUM|FULL")]
+        cpu_usage: Option<CpuUsage>,
     },
 }
 
@@ -275,13 +286,18 @@ async fn main() -> Result<()> {
         Cmd::StateRoot => commands::state_root(&client).await,
         Cmd::ObjectsDir => commands::objects_dir(&client).await,
         Cmd::Import { path } => commands::import(&client, path, cli.json).await,
+        Cmd::Rename {
+            file_name,
+            new_name,
+        } => commands::rename(&client, file_name, new_name, cli.json).await,
         Cmd::Install { source } => commands::install(&client, source, cli.json).await,
         Cmd::Settings(SettingsCmd::Get) => commands::settings_get(&client, cli.json).await,
         Cmd::Settings(SettingsCmd::Set {
             synchronizer,
             relayer,
             mcp,
-        }) => commands::settings_set(&client, synchronizer, relayer, mcp).await,
+            cpu_usage,
+        }) => commands::settings_set(&client, synchronizer, relayer, mcp, cpu_usage).await,
         Cmd::Run {
             qualified_id,
             inputs,

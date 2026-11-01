@@ -210,6 +210,34 @@
     gap: 8px;
     color: inherit;
   }
+  .settings-advanced { margin-top: 18px; }
+  .settings-advanced > summary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    list-style: none;
+    cursor: default;
+  }
+  .settings-advanced > summary::-webkit-details-marker { display: none; }
+  .settings-advanced[open] .settings-disclosure { transform: rotate(90deg); }
+  .settings-advanced > .settings-fields { margin-top: 8px; }
+  #settings-cpu-usage-label { color: var(--muted); }
+  .cpu-usage-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+  }
+  .settings-fields .cpu-usage-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--text);
+  }
+  .cpu-usage-option input { margin: 0; }
+  #settings-cpu-usage-restart {
+    grid-column: 1 / -1;
+    margin: 0;
+  }
   /* The game's identity and links, set apart from the settings above like
      a Mac About window. */
   .settings-about {
@@ -251,7 +279,7 @@
     cursor: pointer;
   }
   .settings-about-links a:active { background: var(--row-hover); }
-  .settings-fields input {
+  .settings-fields input[type="text"] {
     min-width: 0;
     padding: 4px 7px;
     border: 1px solid var(--border);
@@ -616,6 +644,19 @@
     pointer-events: none;
   }
   #row-tooltip[hidden] { display: none; }
+  /* dobjd's reason for refusing a new name, under the rename field. */
+  #rename-error {
+    position: fixed;
+    z-index: 30;
+    max-width: 320px;
+    padding: 3px 7px;
+    border-radius: 5px;
+    background: rgba(32, 32, 32, 0.92);
+    color: #fff;
+    font-size: 12px;
+    pointer-events: none;
+  }
+  #rename-error[hidden] { display: none; }
   .toolbar-button[data-tooltip]:hover::after,
   .toolbar-button[data-tooltip]:focus-visible::after {
     content: attr(data-tooltip);
@@ -997,6 +1038,18 @@
   }
   .shared-key-notice p { margin: 4px 0 0; }
   .object-row.welcome .object-name { font-weight: 600; }
+  .rename-field {
+    box-sizing: border-box;
+    width: 100%;
+    margin: 0;
+    padding: 0 3px;
+    border: 1px solid var(--progress-fill);
+    border-radius: 3px;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    font-weight: normal;
+  }
   .object-row.capital-good .object-name { font-weight: 700; }
   .message {
     padding: 8px 10px;
@@ -1393,6 +1446,18 @@
       <h1 class="settings-title">Sharing</h1>
       <label class="settings-checkbox"><input id="settings-discord-sharing" type="checkbox"> Share my Bitcraft scores on Discord</label>
     </div>
+    <details id="settings-performance" class="settings-advanced">
+      <summary class="settings-title">Performance (Advanced)<svg class="settings-disclosure" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 1 8.5 5l-6 4z" fill="currentColor"/></svg></summary>
+      <div class="settings-fields">
+        <span id="settings-cpu-usage-label">CPU for jobs</span>
+        <div class="cpu-usage-options" role="radiogroup" aria-labelledby="settings-cpu-usage-label">
+          <label class="cpu-usage-option"><input type="radio" name="cpu-usage" value="light" disabled>Light</label>
+          <label class="cpu-usage-option"><input type="radio" name="cpu-usage" value="medium" disabled>Medium</label>
+          <label class="cpu-usage-option"><input type="radio" name="cpu-usage" value="full" disabled>Full</label>
+        </div>
+        <p id="settings-cpu-usage-restart" role="status" hidden></p>
+      </div>
+    </details>
     <div class="settings-about">
       <div class="settings-about-name">Bitcraft</div>
       <div class="settings-about-version">Version <span id="settings-version"></span></div>
@@ -1459,6 +1524,7 @@
 </template>
 
 <div id="row-tooltip" role="tooltip" hidden></div>
+<div id="rename-error" role="alert" hidden></div>
 <script src="presentation.js"></script>
 <script>
   const DOBJD_URL = new URL(
@@ -1869,6 +1935,7 @@
   const summaryView = document.getElementById("summary-view");
   const leaderboardView = document.getElementById("leaderboard-view");
   const rowTooltip = document.getElementById("row-tooltip");
+  const renameError = document.getElementById("rename-error");
   const ROW_TOOLTIP_DELAY_MS = 250;
   // Pending while the pointer rests on a row, and the pointer's last event.
   let rowTooltipTimer = null;
@@ -2290,6 +2357,13 @@
           }
         },
       });
+      if (fileNames.length === 1 && fileNames[0] !== WELCOME_FILE) {
+        entries.push({
+          label: "Rename",
+          isDisabled: () => !canRename(fileNames[0]),
+          onSelect: () => startRename(fileNames[0]),
+        });
+      }
     }
     // A file that is not an object is no action's input.
     if (fileNames.includes(WELCOME_FILE)) {
@@ -3161,7 +3235,8 @@
 
   // The Settings window offers the theme, shows the connection addresses from
   // dobjd's settings, which cannot be edited yet, so the fields are read-only,
-  // and the game's version, website and Discord server.
+  // how much CPU jobs may use (dobjd's `cpuUsage`), saved as soon as it is
+  // changed, and the game's version, website and Discord server.
   async function loadSettingsWindow() {
     document.body.classList.add("secondary-window");
     document.title = "Bitcraft Settings";
@@ -3180,11 +3255,9 @@
       const settings = await fetchJson("/settings");
       document.getElementById("settings-synchronizer").value = settings.synchronizerApiUrl ?? "";
       document.getElementById("settings-relayer").value = settings.relayerApiUrl ?? "";
+      watchCpuUsage(settings);
     } catch (error) {
-      const message = document.createElement("p");
-      message.className = "message error";
-      message.textContent = `Could not read settings: ${error.message}`;
-      view.append(message);
+      showSettingsError(`Could not read settings: ${error.message}`);
     }
   }
 
@@ -3234,6 +3307,57 @@
       }
     });
     document.getElementById("settings-sharing").hidden = false;
+  }
+
+  // A level dobjd could not apply yet (`cpuUsageApplied` below `cpuUsage`)
+  // waits for dobjd to restart. Closing this window leaves dobjd running, so
+  // the note asks the player to quit.
+  function watchCpuUsage(initial) {
+    const options = [...document.querySelectorAll('#settings-view input[name="cpu-usage"]')];
+    const restart = document.getElementById("settings-cpu-usage-restart");
+    const rank = (level) => options.findIndex((option) => option.value === level);
+    const name = (level) => options[rank(level)].closest("label").textContent.trim();
+    let saved = initial;
+    const show = ({ cpuUsage, cpuUsageApplied }) => {
+      for (const option of options) option.checked = option.value === cpuUsage;
+      restart.hidden = !(rank(cpuUsageApplied) < rank(cpuUsage));
+      if (!restart.hidden) {
+        restart.textContent = `Quit Bitcraft and open it again to use ${name(cpuUsage)}. `
+          + `Until then, jobs run at ${name(cpuUsageApplied)}.`;
+      }
+    };
+    const enable = (enabled) => {
+      for (const option of options) option.disabled = !enabled;
+    };
+    show(saved);
+    if (!restart.hidden) document.getElementById("settings-performance").open = true;
+    enable(true);
+    for (const option of options) {
+      option.addEventListener("change", async () => {
+        enable(false);
+        try {
+          saved = await sendJson("PUT", "/settings", { cpuUsage: option.value });
+          show(saved);
+          document.getElementById("settings-error")?.remove();
+        } catch (error) {
+          show(saved);
+          showSettingsError(`Could not save the CPU setting: ${error.message}`);
+        } finally {
+          enable(true);
+        }
+      });
+    }
+  }
+
+  function showSettingsError(text) {
+    let message = document.getElementById("settings-error");
+    if (!message) {
+      message = document.createElement("p");
+      message.id = "settings-error";
+      message.className = "message error";
+      document.getElementById("settings-view").append(message);
+    }
+    message.textContent = text;
   }
 
   // The window is titled with the file's name, which the desktop app shows
@@ -4083,8 +4207,12 @@
   }
 
   function postJson(path, body) {
+    return sendJson("POST", path, body);
+  }
+
+  function sendJson(method, path, body) {
     return fetchJson(path, {
-      method: "POST",
+      method,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
@@ -4115,6 +4243,9 @@
 
   function renderObjects(objects) {
     const shownRows = rowsInView();
+    // Emptying the list takes the rename field out of the page.
+    const renameFocus = renameFieldFocus();
+    if (renaming !== null) renaming.moving = true;
     objectList.replaceChildren();
     rowsByFileName.clear();
     if (welcomeText !== null) {
@@ -4134,6 +4265,7 @@
         row.style.animation = `row-flash ${ROW_FLASH_MS}ms ease-out -${flashElapsed}ms`;
       }
     }
+    placeRenameField(renameFocus);
     fitObjectNames();
     keepRowsInView(shownRows);
   }
@@ -4383,6 +4515,7 @@
   // Writes each row's file name, cut in the middle to fit its row.
   function fitObjectNames() {
     for (const [fileName, row] of rowsByFileName) {
+      if (renaming?.fileName === fileName) continue;
       const name = row.querySelector(".object-name");
       nameMeasureContext.font = getComputedStyle(name).font;
       name.textContent = fitFileName(fileName, name.clientWidth);
@@ -4911,22 +5044,161 @@
   }
 
   // Unlike `fetchJson`, an error carries dobjd's message, which says why the
-  // object was refused.
-  async function importObject(dobj, fileName) {
+  // request was refused.
+  async function postForReason(path, body) {
     let response;
     try {
-      response = await fetch(`${DOBJD_URL}/objects/import`, {
+      response = await fetch(DOBJD_URL + path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dobj, fileName }),
+        body: JSON.stringify(body),
       });
     } catch (error) {
       error.noResponse = true;
       throw error;
     }
-    const body = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(body?.error ?? `/objects/import: HTTP ${response.status}`);
-    return body;
+    const result = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(result?.error ?? `${path}: HTTP ${response.status}`);
+    return result;
+  }
+
+  function importObject(dobj, fileName) {
+    return postForReason("/objects/import", { dobj, fileName });
+  }
+
+  // The row whose name is being edited: its file name and the text field.
+  let renaming = null;
+
+  // dobjd renames only objects no action holds or is creating.
+  function canRename(fileName) {
+    return objectsByFileName.get(fileName)?.class !== undefined && inputsAvailable([fileName]);
+  }
+
+  // As in Finder, the name is edited in place, with all of it but the
+  // extension selected.
+  function startRename(fileName) {
+    if (renaming !== null || !canRename(fileName)) return;
+    const field = document.createElement("input");
+    field.type = "text";
+    field.className = "rename-field";
+    field.value = fileName;
+    field.spellcheck = false;
+    field.setAttribute("aria-label", "New file name");
+    renaming = { fileName, field, saving: false, moving: false };
+    field.addEventListener("keydown", (event) => {
+      event.stopPropagation();
+      if (event.key === "Enter") {
+        event.preventDefault();
+        commitRename();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        endRename();
+      }
+    });
+    field.addEventListener("blur", () => {
+      if (!renaming?.moving) commitRename();
+    });
+    // The row's own handlers would change the selection.
+    for (const type of ["mousedown", "dblclick", "contextmenu"]) {
+      field.addEventListener(type, (event) => event.stopPropagation());
+    }
+    field.addEventListener("input", hideRenameError);
+    placeRenameField();
+    field.focus();
+    const stem = fileName.endsWith(".dobj") ? fileName.length - ".dobj".length : fileName.length;
+    field.setSelectionRange(0, stem);
+  }
+
+  // Whether the rename field has focus, and its selection.
+  function renameFieldFocus() {
+    if (renaming === null) return null;
+    const { field } = renaming;
+    return {
+      hadFocus: document.activeElement === field,
+      selectionStart: field.selectionStart,
+      selectionEnd: field.selectionEnd,
+    };
+  }
+
+  // Puts the field in its row, which every redraw of the list replaces.
+  // `focus` is the field's from before it left the page.
+  function placeRenameField(focus = renameFieldFocus()) {
+    if (renaming === null) return;
+    const row = rowsByFileName.get(renaming.fileName);
+    if (!row) {
+      renaming.moving = false;
+      endRename();
+      return;
+    }
+    const { field } = renaming;
+    renaming.moving = true;
+    row.querySelector(".object-name").replaceChildren(field);
+    row.classList.add("renaming");
+    if (focus?.hadFocus) {
+      field.focus();
+      field.setSelectionRange(focus.selectionStart, focus.selectionEnd);
+    }
+    renaming.moving = false;
+    placeRenameError();
+  }
+
+  function endRename() {
+    if (renaming === null) return;
+    const { fileName, field } = renaming;
+    renaming = null;
+    hideRenameError();
+    field.remove();
+    rowsByFileName.get(fileName)?.classList.remove("renaming");
+    fitObjectNames();
+  }
+
+  async function commitRename() {
+    if (renaming === null || renaming.saving) return;
+    const { fileName, field } = renaming;
+    const newName = field.value.trim();
+    if (newName === "" || newName === fileName) {
+      endRename();
+      return;
+    }
+    renaming.saving = true;
+    let summary;
+    try {
+      summary = await postForReason(
+        `/objects/${encodeURIComponent(fileName)}/rename`, { fileName: newName });
+    } catch (error) {
+      if (renaming?.field !== field) return;
+      renaming.saving = false;
+      field.focus();
+      showRenameError(startupErrorText(error));
+      return;
+    }
+    if (renaming?.field === field) endRename();
+    // Saving by clicking another row selects that row, which stays selected.
+    const stillSelected = selectedFileNames.size === 1 && selectedFileNames.has(fileName);
+    // Listed now rather than when its events arrive, so it stays selected.
+    inventory.accept({ type: "object-removed", fileName });
+    inventory.accept({ type: "object", ...summary });
+    if (stillSelected) selectImported([summary.fileName]);
+  }
+
+  // dobjd's reason, under the field, until the name is edited. It has an
+  // element of its own, since the row tooltip comes and goes with the pointer.
+  function showRenameError(text) {
+    hideRowTooltip();
+    renameError.textContent = text;
+    renameError.hidden = false;
+    placeRenameError();
+  }
+
+  function placeRenameError() {
+    if (renameError.hidden || renaming === null) return;
+    const box = renaming.field.getBoundingClientRect();
+    renameError.style.left = `${box.left}px`;
+    renameError.style.top = `${box.bottom + 4}px`;
+  }
+
+  function hideRenameError() {
+    renameError.hidden = true;
   }
 
   // Each source is `{ label, read, fileName }`, where `read` resolves to a
@@ -5120,6 +5392,7 @@
   // A right-click on empty space clears the selection, so the menu offers
   // the actions that take no inputs.
   objectList.addEventListener("scroll", hideRowTooltip);
+  objectList.addEventListener("scroll", placeRenameError);
   objectList.addEventListener("contextmenu", hideRowTooltip);
   objectList.addEventListener("contextmenu", (event) => {
     if (event.target.closest(".object-row") !== null) {
@@ -5150,6 +5423,17 @@
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       closeContextMenu();
+    }
+    // As in Finder, Return renames the selected file.
+    const typing = event.target instanceof HTMLElement
+      && (event.target.closest("input, textarea, button, select") || event.target.isContentEditable);
+    if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey
+        && !typing && openMenu === null && importSheet.hidden && selectedFileNames.size === 1) {
+      const [fileName] = selectedFileNames;
+      if (canRename(fileName)) {
+        event.preventDefault();
+        startRename(fileName);
+      }
     }
   });
   window.addEventListener("blur", closeContextMenu);
@@ -5203,7 +5487,7 @@
     document.getElementById("inventory-value").addEventListener("click",
       () => openPageWindow(SUMMARY_PAGE, SUMMARY_WINDOW_NAME, SUMMARY_WINDOW_FEATURES));
     document.getElementById("settings-button").addEventListener("click",
-      () => openPageWindow(SETTINGS_PAGE, SETTINGS_WINDOW_NAME, "popup,width=480,height=422"));
+      () => openPageWindow(SETTINGS_PAGE, SETTINGS_WINDOW_NAME, "popup,width=480,height=528"));
     document.getElementById("bitcraft-version").textContent = BITCRAFT_VERSION;
     refreshServiceStatus();
     setInterval(refreshServiceStatus, SERVICE_STATUS_INTERVAL_MS);

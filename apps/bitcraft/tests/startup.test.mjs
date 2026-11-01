@@ -28,7 +28,7 @@ const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(setImm
 
 async function page(context, options = {}) {
   const backend = {
-    objects: [], transactions: [], proofJobs: new Map(), submissions: [], actions: [recipe()], states: new Map(), posts: [], discards: [], imports: [], importFileNames: [],
+    objects: [], transactions: [], proofJobs: new Map(), submissions: [], actions: [recipe()], states: new Map(), posts: [], discards: [], imports: [], importFileNames: [], renames: [], settingsWrites: [],
     inventoryError: false, listError: false, runError: false, postError: false, syncError: false,
     inventoryReads: 0, runReads: 0, leaderboardReads: 0, runGate: null, ...options,
   };
@@ -134,6 +134,19 @@ async function page(context, options = {}) {
           return respond(records);
         }
         if (parsed.pathname === "/state-root") return respond("0x00", backend.syncError ? 500 : 200);
+        // Mirrors dobjd: adds `.dobj` when missing, or refuses with
+        // `renameError`.
+        const rename = parsed.pathname.match(/^\/objects\/([^/]+)\/rename$/);
+        if (rename && init.method === "POST") {
+          const fileName = decodeURIComponent(rename[1]);
+          const { fileName: requested } = JSON.parse(init.body);
+          backend.renames.push([fileName, requested]);
+          if (backend.renameError) return respond({ error: backend.renameError }, 409);
+          const object = backend.objects.find((candidate) => candidate.fileName === fileName);
+          if (!object) return respond({ error: `object file not found: ${fileName}` }, 404);
+          object.fileName = requested.endsWith(".dobj") ? requested : `${requested}.dobj`;
+          return respond(copy(object));
+        }
         const discard = parsed.pathname.match(/^\/objects\/([^/]+)\/discard_unsafe$/);
         if (discard && init.method === "POST") {
           const fileName = decodeURIComponent(discard[1]);
@@ -173,7 +186,20 @@ async function page(context, options = {}) {
           backend.objects.push(copy(summary));
           return respond(summary);
         }
-        if (parsed.pathname === "/settings") return respond(backend.settings ?? {});
+        if (parsed.pathname === "/settings") {
+          if (init.method === "PUT") {
+            const patch = JSON.parse(init.body);
+            backend.settingsWrites.push(patch);
+            if (backend.settingsWriteError) return respond({}, 503);
+            const applied = backend.settings?.cpuUsageApplied;
+            const levels = ["light", "medium", "full"];
+            const raiseRefused = backend.cpuUsageRaiseRefused
+              && levels.indexOf(patch.cpuUsage) > levels.indexOf(applied);
+            backend.settings = { ...backend.settings, ...patch };
+            if (patch.cpuUsage && !raiseRefused) backend.settings.cpuUsageApplied = patch.cpuUsage;
+          }
+          return respond(backend.settings ?? {});
+        }
         const raw = parsed.pathname.match(/^\/objects\/([^/]+)\/raw$/);
         if (raw) {
           const object = backend.objects.find((candidate) => candidate.fileName === decodeURIComponent(raw[1]));
@@ -1513,6 +1539,76 @@ test("Settings hides Discord sharing without a host, and when the host cannot be
   assert.equal(failing.document.querySelector("#settings-sharing").hidden, true);
 });
 
+test("the Settings window saves the CPU for jobs chosen with its radio buttons", async (context) => {
+  const ui = await page(context, {
+    url: "http://127.0.0.1:7727/bitcraft/?page=settings",
+    settings: { synchronizerApiUrl: "http://127.0.0.1:3000", relayerApiUrl: "http://127.0.0.1:3200", mcpEnabled: false, cpuUsage: "light", cpuUsageApplied: "light" },
+  });
+  const radio = (level) => ui.document.querySelector(`#settings-view input[name="cpu-usage"][value="${level}"]`);
+  const checked = () => ui.document.querySelector('#settings-view input[name="cpu-usage"]:checked')?.value;
+  const choose = async (level) => {
+    radio(level).click();
+    await flush();
+  };
+  const performance = ui.document.querySelector("#settings-performance");
+  assert.equal(performance.open, false, "the options start collapsed");
+  assert.equal(performance.querySelector("summary").textContent, "Performance (Advanced)");
+  assert.equal(ui.document.querySelector("#settings-sharing").nextElementSibling, performance);
+  assert.equal(checked(), "light");
+  assert.equal(radio("full").disabled, false);
+  assert.equal(ui.document.querySelector("#settings-cpu-usage-label").textContent, "CPU for jobs");
+  for (const [level, label] of [["light", "Light"], ["medium", "Medium"], ["full", "Full"]]) {
+    assert.equal(radio(level).closest("label").textContent.trim(), label);
+  }
+
+  await choose("full");
+  assert.deepEqual(ui.backend.settingsWrites, [{ cpuUsage: "full" }]);
+  assert.equal(checked(), "full");
+  assert.equal(ui.document.querySelector("#settings-error"), null);
+
+  ui.backend.settingsWriteError = true;
+  await choose("medium");
+  assert.equal(checked(), "full", "a failed save selects the saved level again");
+  assert.match(ui.document.querySelector("#settings-error").textContent, /Could not save the CPU setting/);
+  assert.equal(radio("medium").disabled, false);
+
+  ui.backend.settingsWriteError = false;
+  await choose("medium");
+  assert.equal(checked(), "medium");
+  assert.equal(ui.document.querySelector("#settings-error"), null);
+  assert.equal(ui.document.querySelector("#settings-cpu-usage-restart").hidden, true);
+});
+
+test("the Settings window asks the player to quit while jobs run below the chosen CPU", async (context) => {
+  const url = "http://127.0.0.1:7727/bitcraft/?page=settings";
+  const addresses = { synchronizerApiUrl: "http://127.0.0.1:3000", relayerApiUrl: "http://127.0.0.1:3200", mcpEnabled: false };
+  const ui = await page(context, {
+    url,
+    settings: { ...addresses, cpuUsage: "medium", cpuUsageApplied: "medium" },
+    cpuUsageRaiseRefused: true,
+  });
+  const restart = (window) => window.document.querySelector("#settings-cpu-usage-restart");
+  const choose = async (window, level) => {
+    window.document.querySelector(`#settings-view input[name="cpu-usage"][value="${level}"]`).click();
+    await flush();
+  };
+  assert.equal(restart(ui).hidden, true);
+
+  await choose(ui, "full");
+  assert.equal(restart(ui).hidden, false);
+  assert.equal(restart(ui).textContent, "Quit Bitcraft and open it again to use Full. Until then, jobs run at Medium.");
+
+  const reopened = await page(context, { url, settings: { ...ui.backend.settings }, cpuUsageRaiseRefused: true });
+  assert.equal(reopened.document.querySelector("#settings-performance").open, true, "the note shows without opening the section");
+  assert.equal(restart(reopened).hidden, false);
+  await choose(reopened, "medium");
+  assert.equal(restart(reopened).hidden, true, "choosing the level jobs run at needs no restart");
+
+  const restarted = await page(context, { url, settings: { ...addresses, cpuUsage: "full", cpuUsageApplied: "full" } });
+  assert.equal(restarted.document.querySelector("#settings-performance").open, false);
+  assert.equal(restart(restarted).hidden, true);
+});
+
 test("the top bar and the window title show the Inventory Value of live objects", async (context) => {
   const wood = (fileName, status = "live") => ({ fileName, class: qname("Wood"), status, fields: { kvs: [] } });
   const ui = await page(context, { objects: [knife(), wood("wood-1.dobj"), wood("wood-2.dobj"), wood("wood-3.dobj", "pending")] });
@@ -2496,6 +2592,124 @@ test("pruning a completed transaction preserves its successful job", async (cont
   assert.equal(ui.backend.transactions.length, 0);
   assert.match(ui.jobs()[0].textContent, /succeeded/);
   assert.equal(ui.jobs()[0].classList.contains("failed"), false);
+});
+
+const openRowMenu = (ui, fileName) => {
+  const row = ui.document.querySelector(`.object-row[data-file-name="${fileName}"]`);
+  row.dispatchEvent(new ui.dom.window.MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+};
+const menuItem = (ui, label) => [...ui.document.querySelectorAll(".context-menu .menu-item")]
+  .find((item) => item.querySelector(".menu-item-label").textContent === label);
+const press = (ui, target, key) => target.dispatchEvent(
+  new ui.dom.window.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+
+test("Rename edits an object's name in its row and keeps it selected", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  const { document } = ui;
+  openRowMenu(ui, "pocketknife.dobj");
+  const labels = [...document.querySelectorAll(".context-menu .menu-item-label")].map((label) => label.textContent);
+  assert.deepEqual(labels.slice(0, 2), ["Open", "Rename"]);
+  menuItem(ui, "Rename").click();
+  const field = document.querySelector('.object-row[data-file-name="pocketknife.dobj"] .rename-field');
+  assert.ok(field, "the name is edited in its row");
+  assert.equal(document.activeElement, field);
+  assert.equal(field.value, "pocketknife.dobj");
+  assert.deepEqual([field.selectionStart, field.selectionEnd], [0, "pocketknife".length], "all but the extension is selected");
+
+  field.value = "my knife";
+  press(ui, field, "Enter");
+  await flush();
+  assert.deepEqual(ui.backend.renames, [["pocketknife.dobj", "my knife"]]);
+  assert.equal(document.querySelector(".rename-field"), null);
+  assert.equal(document.querySelector('.object-row[data-file-name="pocketknife.dobj"]'), null);
+  const renamed = document.querySelector('.object-row[data-file-name="my knife.dobj"]');
+  assert.ok(renamed.classList.contains("selected"), "the renamed object stays selected");
+});
+
+test("Return renames the selected object, and Escape or an unchanged name leaves it", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  const { document, dom } = ui;
+  document.querySelector('.object-row[data-file-name="pocketknife.dobj"]')
+    .dispatchEvent(new dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  press(ui, document.body, "Enter");
+  const field = document.querySelector(".rename-field");
+  assert.ok(field);
+  field.value = "other";
+  press(ui, field, "Escape");
+  assert.equal(document.querySelector(".rename-field"), null);
+  assert.ok(document.querySelector('.object-row[data-file-name="pocketknife.dobj"]'));
+
+  press(ui, document.body, "Enter");
+  press(ui, document.querySelector(".rename-field"), "Enter");
+  await flush();
+  assert.deepEqual(ui.backend.renames, [], "an unchanged name sends nothing");
+  assert.equal(document.querySelector(".rename-field"), null);
+});
+
+test("a refused rename shows dobjd's reason and keeps editing", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  const { document } = ui;
+  ui.backend.renameError = "conflict: taken.dobj already exists";
+  openRowMenu(ui, "pocketknife.dobj");
+  menuItem(ui, "Rename").click();
+  const field = document.querySelector(".rename-field");
+  field.value = "taken";
+  press(ui, field, "Enter");
+  await flush();
+  assert.equal(document.querySelector(".rename-field"), field, "the name is still being edited");
+  const reason = document.querySelector("#rename-error");
+  assert.equal(reason.hidden, false);
+  assert.equal(reason.textContent, "conflict: taken.dobj already exists");
+  document.querySelector('.object-row[data-file-name="pocketknife.dobj"]')
+    .dispatchEvent(new ui.dom.window.MouseEvent("mouseleave"));
+  assert.equal(reason.hidden, false, "the pointer leaving the row keeps the reason");
+  field.dispatchEvent(new ui.dom.window.Event("input"));
+  assert.equal(reason.hidden, true, "editing the name clears the reason");
+});
+
+test("an object being edited keeps its field through a redraw of the list", async (context) => {
+  const ui = await page(context, { objects: [knife()] });
+  const { document } = ui;
+  openRowMenu(ui, "pocketknife.dobj");
+  menuItem(ui, "Rename").click();
+  const field = document.querySelector(".rename-field");
+  field.value = "half typ";
+  field.setSelectionRange(4, 4);
+  await ui.event({ type: "object", ...knife("live", { fileName: "other.dobj", class: qname("Wood") }) });
+  assert.equal(document.querySelector('.object-row[data-file-name="pocketknife.dobj"] .rename-field'), field);
+  assert.equal(field.value, "half typ");
+  assert.equal(document.activeElement, field, "the field keeps focus");
+  assert.deepEqual([field.selectionStart, field.selectionEnd], [4, 4], "and its caret");
+  assert.deepEqual(ui.backend.renames, []);
+});
+
+test("saving a rename by clicking another row keeps that row selected", async (context) => {
+  const wood = knife("live", { fileName: "wood.dobj", class: qname("Wood") });
+  const ui = await page(context, { objects: [knife(), wood] });
+  const { document, dom } = ui;
+  openRowMenu(ui, "pocketknife.dobj");
+  menuItem(ui, "Rename").click();
+  const field = document.querySelector(".rename-field");
+  field.value = "my knife";
+  document.querySelector('.object-row[data-file-name="wood.dobj"]')
+    .dispatchEvent(new dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  field.blur();
+  await flush();
+  assert.deepEqual(ui.backend.renames, [["pocketknife.dobj", "my knife"]]);
+  assert.ok(document.querySelector('.object-row[data-file-name="wood.dobj"]').classList.contains("selected"));
+  assert.ok(!document.querySelector('.object-row[data-file-name="my knife.dobj"]').classList.contains("selected"));
+});
+
+test("an object a run holds cannot be renamed", async (context) => {
+  const ui = await page(context, { objects: [knife("live", { heldByRunId: "run-1" })] });
+  const { document, dom } = ui;
+  openRowMenu(ui, "pocketknife.dobj");
+  assert.equal(menuItem(ui, "Rename").classList.contains("disabled"), true);
+  document.dispatchEvent(new dom.window.MouseEvent("mousedown", { bubbles: true }));
+  document.querySelector('.object-row[data-file-name="pocketknife.dobj"]')
+    .dispatchEvent(new dom.window.MouseEvent("mousedown", { button: 0, bubbles: true }));
+  press(ui, document.body, "Enter");
+  assert.equal(document.querySelector(".rename-field"), null);
 });
 
 test("redraws keep the rows in view where they were", async (context) => {

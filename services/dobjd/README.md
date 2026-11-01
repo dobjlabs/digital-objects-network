@@ -50,6 +50,7 @@ All routes return JSON unless noted; errors come back as
 | `GET`  | `/objects/{file_name}`          | `read_object(&Path)` (basename in `~/.dobj/objects/`)        |
 | `GET`  | `/objects/{file_name}/raw`      | `read_object_raw(&Path)` (file contents verbatim)            |
 | `POST` | `/objects/{file_name}/discard_unsafe` | `discard_object_unsafe(&Path)` (see below; no state guarantees) |
+| `POST` | `/objects/{file_name}/rename` | `rename_object(&Path, &str)` (body: `{ "fileName": "<name>" }`; see below) |
 | `GET`  | `/classes`                      | `list_classes`                                               |
 | `GET`  | `/classes/{name}`               | `get_class`                                                  |
 | `GET`  | `/settings`                     | `load_settings`                                              |
@@ -81,9 +82,17 @@ A file's `metadata.creationProof`, when present, proves the object's commitment 
 
 `POST /objects/import` refuses (`400`) an object the synchronizer does not report created, whether or not the file carries a `creationProof`, so a well-formed file for an object that was never created is not imported, and neither is an output whose transaction has not landed yet. Import never files an object as `unknown`: an imported object is always `live`. Every check asks the synchronizer, so the import fails when it cannot be reached.
 
+### Custom file names
+
+Objects are filed under a name generated from their class, stable identifier and commitment, unless a player chose one. `POST /objects/{file_name}/rename` gives a live object's file a new name, with `.dobj` added when missing, and returns its summary under that name, announcing `object-removed` for the old name and `object` for the new one. It refuses (`400`) the same unsafe names import refuses (below), and refuses (`409`) a name another live, spent or discarded file has, an object that is not live (one awaiting confirmation, including an output an open transaction has yet to create), and an object a proof holds or an open transaction spends.
+
+A custom name carries over to an object's new version. When an action mutates an object with a custom name, say `knife.dobj`, the transaction writes the new version as `knife-pending.dobj` (`knife-pending 2.dobj` and so on when that is taken), lists it in the record's `pendingNames`, and leaves `knife.dobj` as it is. When the transaction lands, the old version is spent and the new one is renamed `knife.dobj`. If it expires or is deleted, `knife-pending.dobj` is removed with the other outputs and `knife.dobj` is untouched. An object with its generated name, and every output that is not a mutated input, gets a generated name.
+
+A spent object moves to the nullified directory under its generated name, whatever it was called while live, so spent versions of one custom-named object never collide and a spent file never holds a name a live one needs. A landed transaction's record then lists the input under that name in `inputFiles`.
+
 ### Imported objects keep the name they are given
 
-`POST /objects/import` files the object under `fileName` when the request has one, typically the name of the file the object came in, and otherwise under a name derived from its commitment, as action outputs are named. A given name gets `.dobj` added when it lacks it, and `name 2.dobj`, `name 3.dobj` and so on when another file, live, spent or discarded, already has it. It is refused (`400`) when it is empty, starts with `.`, contains a path separator, control character or a character Windows forbids, is a Windows device name, is longer than 200 bytes, or has the form of a derived name without being this object's. The name lasts until an action spends the object: its outputs get derived names.
+`POST /objects/import` files the object under `fileName` when the request has one, typically the name of the file the object came in, and otherwise under a name derived from its commitment, as action outputs are named. A given name gets `.dobj` added when it lacks it, and `name 2.dobj`, `name 3.dobj` and so on when another file, live, spent or discarded, already has it. It is refused (`400`) when it is empty, starts with `.`, contains a path separator, control character or a character Windows forbids, is a Windows device name, is longer than 200 bytes, or has the form of a derived name without being this object's. Like any custom name, it carries over to the object's new version when an action mutates it (see above).
 
 ### Imported objects share their key
 
@@ -209,7 +218,8 @@ Read on every `load_settings()` call from `~/.dobj/settings.json`:
 {
   "synchronizerApiUrl": "https://terminus.digiobjects.net:4000",
   "relayerApiUrl": "https://terminus.digiobjects.net:4200",
-  "mcpEnabled": false
+  "mcpEnabled": false,
+  "cpuUsage": "medium"
 }
 ```
 
@@ -224,6 +234,8 @@ HTTP path, enabling fails (and nothing is persisted) if the adjacent
 port is already taken. The MCP tool instead persists first and
 reconciles in the background, so a self-disabling agent's final
 response can flush before the server stops.
+
+`cpuUsage` (`light`, `medium` or `full`, default `medium`) sets how hard proving may work the machine: `full` proves as fast as it can and may slow other applications or spin up fans; `medium` gives way to other applications and runs cooler, at a moderate cost in speed; `light` gives way further and, where the platform allows, runs near silently and several times slower. A level sets the class of the threads doing proving work, never their number: a QoS class on macOS, a thread priority plus EcoQoS on Windows, and a nice value on Linux (see [`libs/driver/src/cpu_usage.rs`](../../libs/driver/src/cpu_usage.rs)). On Apple silicon the QoS class also moves the work to efficiency cores and lower clocks, and EcoQoS does the same on Windows; on Linux the levels only lower priority, so they keep other applications responsive but do not make the machine cooler. The startup circuit warm-up runs at `full`. A change applies straight away to the threads doing parallel work, while a proof already running keeps its own thread at the level it started with; on Linux, raising priority again needs a dobjd restart. `GET` and `PUT /settings` answer with the settings plus `cpuUsageApplied`, the level the parallel work runs at, which stays below `cpuUsage` until that restart. A save returns once every thread doing parallel work has taken the level or been refused it, which during a proof can take a few seconds.
 
 Both `PUT /settings` and the MCP `write_settings` tool take a partial
 body and merge it onto the current settings: any field you omit keeps

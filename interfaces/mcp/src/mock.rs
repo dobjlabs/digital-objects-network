@@ -303,6 +303,7 @@ impl DobjOps for MockDobjOps {
             submit_attempted_at_ms: None,
             submitted_at_ms: None,
             settled_at_ms: None,
+            pending_names: Vec::new(),
         })
     }
 
@@ -344,6 +345,19 @@ impl DobjOps for MockDobjOps {
         })
     }
 
+    fn rename_object(&self, file_name: &str, new_name: &str) -> anyhow::Result<ObjectSummary> {
+        if new_name.trim().is_empty() {
+            bail!("file name is empty");
+        }
+        let mut summary = self.import_object_file(file_name)?;
+        summary.file_name = if new_name.ends_with(".dobj") {
+            new_name.to_string()
+        } else {
+            format!("{new_name}.dobj")
+        };
+        Ok(summary)
+    }
+
     fn import_object_file(&self, path: &str) -> anyhow::Result<ObjectSummary> {
         if path.trim().is_empty() {
             bail!("empty .dobj path");
@@ -372,6 +386,7 @@ impl DobjOps for MockDobjOps {
             synchronizer_api_url: "http://127.0.0.1:3000".to_string(),
             relayer_api_url: "http://127.0.0.1:3200".to_string(),
             mcp_enabled: true,
+            cpu_usage: Default::default(),
         })
     }
 

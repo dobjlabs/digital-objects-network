@@ -2363,6 +2363,7 @@ dependencies = [
  "dirs",
  "env_logger",
  "hex",
+ "libc",
  "log",
  "lt-eq-u256-pod",
  "payload",
@@ -2371,6 +2372,7 @@ dependencies = [
  "pod2",
  "pod2utils",
  "rand 0.9.2",
+ "rayon",
  "reqwest",
  "sdk",
  "serde",
@@ -2380,6 +2382,7 @@ dependencies = [
  "toml",
  "txlib",
  "vdfpod",
+ "windows-sys 0.61.2",
  "wire-types",
 ]
 

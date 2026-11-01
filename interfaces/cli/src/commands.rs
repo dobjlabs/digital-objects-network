@@ -10,8 +10,9 @@ use crate::client::{DobjdClient, SLOW_REQUEST_TIMEOUT};
 use wire_types::transactions::TransactionRecord;
 use wire_types::{
     ActionArgValues, ActionInput, ActionSummary, CheckActionReport, ClassRef, ClassSummary,
-    DriverSettings, ImportObjectRequest, ObjectSummary, ObjectsDirInfo, ProofJobState,
-    QualifiedName, RunAccepted, StartRunRequest, SubmitTransactionsRequest,
+    CpuUsage, DriverSettingsPatch, DriverSettingsReport, ImportObjectRequest, ObjectSummary,
+    ObjectsDirInfo, ProofJobState, QualifiedName, RenameObjectRequest, RunAccepted,
+    StartRunRequest, SubmitTransactionsRequest,
 };
 
 fn parse_qualified(id: &str) -> Result<QualifiedName> {
@@ -123,6 +124,29 @@ pub async fn objects_dir(client: &DobjdClient) -> Result<()> {
     Ok(())
 }
 
+pub async fn rename(
+    client: &DobjdClient,
+    file_name: String,
+    new_name: String,
+    json: bool,
+) -> Result<()> {
+    let path = format!("/objects/{}/rename", urlencoding::encode(&file_name));
+    let obj: ObjectSummary = client
+        .post_json(
+            &path,
+            &RenameObjectRequest {
+                file_name: new_name,
+            },
+        )
+        .await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+        return Ok(());
+    }
+    println!("renamed {file_name} to {}", obj.file_name);
+    Ok(())
+}
+
 pub async fn import(client: &DobjdClient, path: PathBuf, json: bool) -> Result<()> {
     let dobj =
         std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
@@ -155,21 +179,30 @@ pub async fn import(client: &DobjdClient, path: PathBuf, json: bool) -> Result<(
     Ok(())
 }
 
-fn print_settings(settings: &DriverSettings) {
+fn print_settings(report: &DriverSettingsReport) {
+    let settings = &report.settings;
     println!("synchronizer = {}", settings.synchronizer_api_url);
     println!("relayer      = {}", settings.relayer_api_url);
     println!(
         "mcp          = {}",
         if settings.mcp_enabled { "on" } else { "off" }
     );
+    if report.cpu_usage_applied < settings.cpu_usage {
+        println!(
+            "cpu usage    = {} ({} until dobjd restarts)",
+            settings.cpu_usage, report.cpu_usage_applied
+        );
+    } else {
+        println!("cpu usage    = {}", settings.cpu_usage);
+    }
 }
 
 pub async fn settings_get(client: &DobjdClient, json: bool) -> Result<()> {
-    let settings: DriverSettings = client.get_json("/settings").await?;
+    let report: DriverSettingsReport = client.get_json("/settings").await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&settings)?);
+        println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        print_settings(&settings);
+        print_settings(&report);
     }
     Ok(())
 }
@@ -179,18 +212,15 @@ pub async fn settings_set(
     synchronizer: Option<String>,
     relayer: Option<String>,
     mcp: Option<bool>,
+    cpu_usage: Option<CpuUsage>,
 ) -> Result<()> {
-    let mut current: DriverSettings = client.get_json("/settings").await?;
-    if let Some(s) = synchronizer {
-        current.synchronizer_api_url = s;
-    }
-    if let Some(r) = relayer {
-        current.relayer_api_url = r;
-    }
-    if let Some(m) = mcp {
-        current.mcp_enabled = m;
-    }
-    let saved: DriverSettings = client.put_json("/settings", &current).await?;
+    let patch = DriverSettingsPatch {
+        synchronizer_api_url: synchronizer,
+        relayer_api_url: relayer,
+        mcp_enabled: mcp,
+        cpu_usage,
+    };
+    let saved: DriverSettingsReport = client.put_json("/settings", &patch).await?;
     print_settings(&saved);
     Ok(())
 }
