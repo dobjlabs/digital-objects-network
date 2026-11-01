@@ -19,7 +19,6 @@ mod warm;
 mod tests;
 
 pub use crate::catalog::ActionCatalog as DriverActionCatalog;
-pub use crate::cpu_usage::{apply_cpu_usage, set_current_thread_cpu_usage};
 pub use crate::driver::{Driver, DriverDeps, PayloadBuilder};
 pub use crate::error::DriverError;
 pub use crate::object_record::{FileStatus, ObjectRecord, parse_object_record_file};
