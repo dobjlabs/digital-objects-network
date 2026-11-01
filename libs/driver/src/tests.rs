@@ -1,13 +1,13 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use payload::test_state::TestState;
 use payload::{decode_hash_hex, encode_hash_hex};
 use pod2::middleware::Hash;
 use sdk::SpendableObjects;
 use tempfile::tempdir;
-use txlib::{GroundingWitness, StateHeader, MAX_STATE_ROOT_AGE_BLOCKS};
+use txlib::{GroundingWitness, MAX_STATE_ROOT_AGE_BLOCKS, StateHeader};
 use wire_types::relayer::{JobStatus, JobStatusResponse, SubmitProofResponse};
 use wire_types::transactions::{TransactionRecord, TransactionState};
 
@@ -18,12 +18,12 @@ use crate::clients::{
 };
 use crate::driver::{Driver, DriverDeps, PayloadBuilder};
 use crate::object_record::{
-    ensure_extra_pod_deserializers_registered, FileStatus, ObjectMetadata, ObjectRecord,
+    FileStatus, ObjectMetadata, ObjectRecord, ensure_extra_pod_deserializers_registered,
 };
 use crate::object_store::{
     ensure_store_dirs, load_object_files, object_file_name, write_object_file,
 };
-use crate::pexe_catalog::{test_plugin_bytes, PexeCatalog};
+use crate::pexe_catalog::{PexeCatalog, test_plugin_bytes};
 use crate::{ActionQuery, DriverPaths, ExecuteActionInput, NoopExecutionReporter, ObjectQuery};
 use wire_types::{ObjectStatus, QualifiedName};
 
@@ -613,9 +613,11 @@ fn test_list_actions_filters_by_input_class() {
         !filtered.is_empty(),
         "expected at least one Wood-consuming action"
     );
-    assert!(filtered
-        .iter()
-        .all(|action| action.total_inputs.iter().any(|r| r.class == wood)));
+    assert!(
+        filtered
+            .iter()
+            .all(|action| action.total_inputs.iter().any(|r| r.class == wood))
+    );
 }
 
 #[test]
@@ -722,9 +724,11 @@ fn execute_records_and_submits_and_settle_lands() {
         let report = fx.driver.check_action(&action).unwrap();
         assert_eq!(report.feasible, action_name == "RekeyLog");
         if action_name == "RekeyLog" {
-            assert!(result
-                .output_files
-                .contains(&report.available_inputs[0].file_name));
+            assert!(
+                result
+                    .output_files
+                    .contains(&report.available_inputs[0].file_name)
+            );
         }
         let outcome = fx.driver.settle().unwrap();
         assert!(outcome.records.is_empty() && outcome.objects.is_empty());
@@ -1319,11 +1323,13 @@ fn sync_objects_follows_the_chain_forward_only() {
     chain.lock().unwrap().nullifiers.insert(nullifier);
     let synced = driver.sync_objects(None).unwrap().objects;
     assert_eq!(synced[0].status, ObjectStatus::Nullified);
-    assert!(driver
-        .paths()
-        .nullified_objects_dir
-        .join(&file_name)
-        .exists());
+    assert!(
+        driver
+            .paths()
+            .nullified_objects_dir
+            .join(&file_name)
+            .exists()
+    );
 
     chain.lock().unwrap().nullifiers.clear();
     let synced = driver.sync_objects(None).unwrap().objects;
@@ -1333,11 +1339,13 @@ fn sync_objects_follows_the_chain_forward_only() {
         exclude_nullified: true,
         ..ObjectQuery::default()
     };
-    assert!(driver
-        .sync_objects(Some(&query))
-        .unwrap()
-        .objects
-        .is_empty());
+    assert!(
+        driver
+            .sync_objects(Some(&query))
+            .unwrap()
+            .objects
+            .is_empty()
+    );
 }
 
 #[test]
@@ -1402,11 +1410,13 @@ fn test_discard_object_unsafe_moves_file_out_of_store() {
             Some(crate::error::DriverError::ObjectFileNotFound(_))
         ));
     }
-    assert!(driver
-        .paths()
-        .nullified_objects_dir
-        .join("spent.dobj")
-        .exists());
+    assert!(
+        driver
+            .paths()
+            .nullified_objects_dir
+            .join("spent.dobj")
+            .exists()
+    );
 }
 
 #[test]
@@ -1456,11 +1466,13 @@ fn install_plugin_writes_and_hot_reloads() {
     // Live without a restart...
     assert!(!driver.list_actions(None).unwrap().is_empty());
     // ...and the archive landed in the actions dir.
-    assert!(driver
-        .paths()
-        .actions_dir
-        .join("craft-basics.pexe")
-        .exists());
+    assert!(
+        driver
+            .paths()
+            .actions_dir
+            .join("craft-basics.pexe")
+            .exists()
+    );
 }
 
 #[test]
@@ -1755,11 +1767,12 @@ fn pruning_never_removes_open_transactions_or_their_reservations() {
             .unwrap();
         assert!(outcome.tx_finals.is_empty());
         assert!(crate::transactions::read_payload(&fx.paths, &tx_final_of(&record)).is_ok());
-        assert!(fx
-            .driver
-            .get_transaction(&tx_final_of(&record))
-            .unwrap()
-            .is_open());
+        assert!(
+            fx.driver
+                .get_transaction(&tx_final_of(&record))
+                .unwrap()
+                .is_open()
+        );
         assert_eq!(
             fx.summary(&fx.input_file).held_by_run_id.as_deref(),
             Some("run")
@@ -1774,12 +1787,13 @@ fn expired_transactions_are_pruned_after_outputs_are_removed() {
     fx.advance_head_to(record.grounding_block + MAX_STATE_ROOT_AGE_BLOCKS + 1);
     let expired = fx.driver.settle().unwrap().records.remove(0);
     let cleanup_at = expired.settled_at_ms.unwrap() + crate::TRANSACTION_RETENTION_MS;
-    assert!(fx
-        .driver
-        .prune_transactions(cleanup_at - 1)
-        .unwrap()
-        .tx_finals
-        .is_empty());
+    assert!(
+        fx.driver
+            .prune_transactions(cleanup_at - 1)
+            .unwrap()
+            .tx_finals
+            .is_empty()
+    );
     assert_eq!(
         fx.driver.prune_transactions(cleanup_at).unwrap().tx_finals,
         vec![expired.tx_final]
@@ -1884,11 +1898,13 @@ fn reconciliation_cache_rechecks_changed_records_and_after_restart() {
     let restarted = Driver::open(fx.paths.clone(), fx.driver.deps.clone()).unwrap();
     let recovered = restarted.prune_transactions(settled_at + 2).unwrap();
     assert!(recovered.tx_finals.is_empty());
-    assert!(recovered
-        .objects
-        .iter()
-        .any(|object| object.file_name == *file
-            && object.tx_hash.as_deref() == Some("late-creation")));
+    assert!(
+        recovered
+            .objects
+            .iter()
+            .any(|object| object.file_name == *file
+                && object.tx_hash.as_deref() == Some("late-creation"))
+    );
     assert_eq!(fx.stored(file).metadata.status, FileStatus::Live);
     assert_eq!(
         fx.stored(file).metadata.tx_hash.as_deref(),
