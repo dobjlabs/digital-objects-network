@@ -1,18 +1,26 @@
+use anyhow::anyhow;
 use axum::{Json, extract::State};
-use wire_types::{DriverSettings, DriverSettingsPatch};
+use wire_types::{DriverSettings, DriverSettingsPatch, DriverSettingsReport};
 
 use crate::error::ApiResult;
 use crate::state::AppState;
 
-pub async fn get_settings(State(state): State<AppState>) -> ApiResult<Json<DriverSettings>> {
+fn report(settings: DriverSettings) -> DriverSettingsReport {
+    DriverSettingsReport {
+        settings,
+        cpu_usage_applied: driver::applied_cpu_usage(),
+    }
+}
+
+pub async fn get_settings(State(state): State<AppState>) -> ApiResult<Json<DriverSettingsReport>> {
     let settings = state.services.driver.load_settings()?;
-    Ok(Json(settings))
+    Ok(Json(report(settings)))
 }
 
 pub async fn put_settings(
     State(state): State<AppState>,
     Json(patch): Json<DriverSettingsPatch>,
-) -> ApiResult<Json<DriverSettings>> {
+) -> ApiResult<Json<DriverSettingsReport>> {
     // Merge onto the current settings so an absent field keeps its value
     // rather than reverting to a type default -- in particular, a body that
     // omits `mcpEnabled` must not stop a running MCP server.
@@ -25,6 +33,9 @@ pub async fn put_settings(
     // no rollback; save failures are rare and otherwise fatal, so we accept
     // it rather than add a compensating stop/restart.
     state.mcp.apply(merged.mcp_enabled).await?;
-    let saved = state.services.driver.save_settings(&merged)?;
-    Ok(Json(saved))
+    let driver = state.services.driver.clone();
+    let saved = tokio::task::spawn_blocking(move || driver.save_settings(&merged))
+        .await
+        .map_err(|err| anyhow!("save_settings task panicked: {err}"))??;
+    Ok(Json(report(saved)))
 }

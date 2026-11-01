@@ -17,6 +17,7 @@ pub fn default_settings() -> DriverSettings {
             .unwrap_or(DEFAULT_RELAYER_API_URL)
             .to_string(),
         mcp_enabled: false,
+        cpu_usage: Default::default(),
     }
 }
 

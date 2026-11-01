@@ -44,7 +44,8 @@
   color: var(--text-dim);
 }
 
-.settings-field input {
+.settings-field input,
+.settings-field select {
   width: 100%;
   border: 1px solid var(--border);
   background: #1f1f1f;
@@ -54,7 +55,8 @@
   padding: 8px 10px;
 }
 
-.settings-field input:focus {
+.settings-field input:focus,
+.settings-field select:focus {
   outline: none;
   border-color: var(--accent);
 }
