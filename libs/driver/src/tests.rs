@@ -2301,9 +2301,7 @@ fn importable_log_with_creation_proof() -> (String, Hash) {
 fn import_keeps_a_valid_creation_proof() {
     let (json, commitment) = importable_log_with_creation_proof();
     let sent: ObjectRecord = serde_json::from_str(&json).unwrap();
-    // The receiver's synchronizer has not reported the object created.
-    let (driver, chain) = import_driver(HashSet::from([commitment]), HashSet::new(), false);
-    chain.lock().unwrap().created.clear();
+    let (driver, _) = import_driver(HashSet::from([commitment]), HashSet::new(), false);
     let summary = driver.import_object(&json, None).unwrap();
     assert_eq!(summary.status, ObjectStatus::Live);
     let stored = crate::object_record::parse_object_record_file(

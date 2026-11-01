@@ -475,7 +475,7 @@ impl Driver {
     ///   proof's block; a block the synchronizer has derived no state at
     ///   fails the import;
     /// - the object must be on chain: in the created set the synchronizer
-    ///   reports, or placed in one by its creation proof;
+    ///   reports, whether or not the file carries a proof;
     /// - the object's nullifier must not already be spent on-chain.
     ///
     /// Every check against the chain needs the synchronizer, so an
@@ -538,17 +538,13 @@ impl Driver {
         // 4. A creation proof the file carries must place the object in the
         //    created set of a state root the synchronizer derived.
         let settings = self.load_settings()?;
-        let proven_created = match &record.metadata.creation_proof {
-            Some(encoded) => {
-                self.check_creation_proof(&settings.synchronizer_api_url, encoded, commitment)?;
-                true
-            }
-            None => false,
-        };
+        if let Some(encoded) = &record.metadata.creation_proof {
+            self.check_creation_proof(&settings.synchronizer_api_url, encoded, commitment)?;
+        }
 
         // 5. The object must be on chain: created according to the
-        //    synchronizer, or placed in a created set by the proof above. A
-        //    nullifier already on-chain means the object has been spent.
+        //    synchronizer. A nullifier already on-chain means the object has
+        //    been spent.
         let nullifier = object_nullifier_hash(&record.obj).map_err(|err| {
             DriverError::InvalidInput(format!(
                 "could not derive nullifier from imported object: {err}"
@@ -575,7 +571,7 @@ impl Driver {
             ))
             .into());
         }
-        if !proven_created && !membership.created_objects.contains(&commitment) {
+        if !membership.created_objects.contains(&commitment) {
             return Err(DriverError::InvalidInput(format!(
                 "imported object contentHash {} is not registered in the network broadcast history",
                 encode_hash_hex(&commitment)

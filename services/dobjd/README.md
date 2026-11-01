@@ -79,7 +79,7 @@ A file's `metadata.creationProof`, when present, proves the object's commitment 
 
 ### Imported objects must be on chain
 
-`POST /objects/import` refuses (`400`) an object the synchronizer does not report created, unless the file's `creationProof` places it in a created set, so a well-formed file for an object that was never created is not imported, and neither is an output whose transaction has not landed yet. Import never files an object as `unknown`: an imported object is always `live`. Every check asks the synchronizer, so the import fails when it cannot be reached.
+`POST /objects/import` refuses (`400`) an object the synchronizer does not report created, whether or not the file carries a `creationProof`, so a well-formed file for an object that was never created is not imported, and neither is an output whose transaction has not landed yet. Import never files an object as `unknown`: an imported object is always `live`. Every check asks the synchronizer, so the import fails when it cannot be reached.
 
 ### Imported objects keep the name they are given
 
