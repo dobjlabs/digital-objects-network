@@ -12,6 +12,8 @@ import tempfile
 import time
 import urllib.request
 
+from release import STAMPED_TOOLS, TOOLS
+
 
 def wait_for(predicate, label, timeout=15):
     deadline = time.monotonic() + timeout
@@ -63,20 +65,19 @@ def main():
         for field, expected in [("version", args.version), ("target", args.target), ("sourceCommit", args.commit)]:
             if expected is not None:
                 assert release.get(field) == expected, f"Packaged {field}: {release.get(field)!r} != {expected!r}"
-        tools = {"bitcraft-dobjd", "bitcraft-dobj", "bitcraft-dobj-inner",
-                 "bitcraft-dobj-mcp-proxy", "bitcraft-dobj-mcp-proxy-inner", "bitcraft-pexe"}
-        assert set(release["binaries"]) == tools
+        assert set(release["binaries"]) == TOOLS
         assert hashlib.sha256((resources / "bitcraft.pexe").read_bytes()).hexdigest() == release["pluginSha256"]
+        assert hashlib.sha256((resources / "bitcraft.pow_hints.json").read_bytes()).hexdigest() == release["powHintsSha256"]
         assert os.access(binaries / "bitcraft-desktop", os.X_OK)
         environment = {**os.environ, "APPDIR": str(appdir), "WEBKIT_DISABLE_COMPOSITING_MODE": "1"}
-        for tool in sorted(tools):
+        for tool in sorted(TOOLS):
             executable = binaries / tool
             assert os.access(executable, os.X_OK), tool
             version = run_tool([str(executable), "--version"], directory, environment).strip()
             assert version, tool
-            if args.version and tool in {"bitcraft-dobjd", "bitcraft-dobj", "bitcraft-dobj-inner", "bitcraft-pexe"}:
+            if args.version and tool in STAMPED_TOOLS:
                 assert f"v{args.version}" in version, f"{tool} reports the wrong release: {version}"
-        print("PASS: packaged plugin matches its manifest and all six bundled tools execute", flush=True)
+        print(f"PASS: packaged plugin matches its manifest and all {len(TOOLS)} bundled tools execute", flush=True)
 
         assert port_closed(), "Bitcraft port 7727 is already in use"
         assert (resources / "skills/bitcraft-play/SKILL.md").is_file(), "Packaged player skill is missing"
@@ -104,6 +105,7 @@ def main():
             connection = wait_for(ready, "packaged host starts its bundled daemon", timeout=330)
             assert Path(connection["stateRoot"]) == home
             assert (home / "actions/bitcraft.pexe").read_bytes() == (resources / "bitcraft.pexe").read_bytes()
+            assert (home / "actions/bitcraft.pow_hints.json").read_bytes() == (resources / "bitcraft.pow_hints.json").read_bytes()
             assert json.loads((home / "settings.json").read_text()) == settings
             base = connection["httpUrl"] + "/bitcraft/"
             html = get(base).decode()

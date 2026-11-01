@@ -1737,7 +1737,9 @@ impl ActionHandle {
                 .ok_or_else::<Box<EvalAltResult>, _>(|| {
                     format!("pow_obj_grind: object has no field {:?}", key_name.name()).into()
                 })?;
-            if !exe_ctx.mock {
+            if let Some(search) = &exe_ctx.pow_search {
+                v = Value::from(search(&obj, &key_name, target_raw));
+            } else if !exe_ctx.mock {
                 let mut i = 0;
                 while u256_gt(&RawValue::from(obj.commitment()), &target_raw) {
                     v = exe_ctx.rand_value();
@@ -3098,6 +3100,10 @@ pub enum ExecutionStage {
 /// Called at stage boundaries, including when building resumes after mining.
 pub type ExecutionProgress = Arc<dyn Fn(ExecutionStage) + Send + Sync>;
 
+/// Returns a value for the field of the object that brings the object's
+/// commitment to at most the target.
+pub type PowSearch = Arc<dyn Fn(&Dictionary, &StrKey, RawValue) -> RawValue + Send + Sync>;
+
 /// Holds the state used to execute an action.
 pub struct Executor {
     mock: bool,
@@ -3108,6 +3114,7 @@ pub struct Executor {
     pod_modules: Vec<Arc<Module>>,
     module: Rc<SdkModule>,
     progress: Option<ExecutionProgress>,
+    pow_search: Option<PowSearch>,
 }
 
 /// This context is available via ActionContext at Execution time.  It keeps the state of the
@@ -3131,6 +3138,7 @@ struct ExeContext {
     // same vec so the top-level call sees them in order.
     outputs: Vec<Dictionary>,
     progress: Option<ExecutionProgress>,
+    pow_search: Option<PowSearch>,
 }
 
 impl ExeContext {
@@ -3176,6 +3184,13 @@ impl Executor {
         self
     }
 
+    /// Makes `pow_obj_grind` search with `search` instead of its own
+    /// single-threaded search, in mock mode too, where its own does not run.
+    pub fn with_pow_search(mut self, search: PowSearch) -> Self {
+        self.pow_search = Some(search);
+        self
+    }
+
     fn report_stage(&self, stage: ExecutionStage) {
         if let Some(progress) = &self.progress {
             progress(stage);
@@ -3206,6 +3221,7 @@ impl Executor {
             pod_modules: modules,
             module,
             progress: None,
+            pow_search: None,
         }
     }
     fn new_builder(&self) -> MultiPodBuilder {
@@ -3290,6 +3306,7 @@ impl Executor {
                     module: self.module.clone(),
                     outputs: Vec::new(),
                     progress: self.progress.clone(),
+                    pow_search: self.pow_search.clone(),
                 }));
                 let action_handle = ActionHandle::new(action.to_string(), Some(exe_rc.clone()));
                 action_handle.0.borrow_mut().supplied_args = args.clone();

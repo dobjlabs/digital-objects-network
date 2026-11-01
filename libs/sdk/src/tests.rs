@@ -2443,6 +2443,52 @@ fn test_pow_obj_grind_named_field() {
 }
 
 #[test]
+fn a_supplied_pow_search_replaces_the_built_in_one() {
+    let module = Sdk::default()
+        .load_module_from_src_actions(
+            r#"
+        fn Main(action) {
+            var wood = action.output("Wood");
+            wood.set([["salt", 5]]);
+            let target = action.top_limb_u256(9007199254740992);
+            var salt = unsafe { action.pow_obj_grind(wood, "salt", target) };
+            wood.update("salt", salt);
+            action.intro_lt_eq_u256(wood, target);
+        }
+    "#,
+            &["Main"],
+        )
+        .unwrap();
+    let found = RawValue([F(7), F(8), F(9), F(0)]);
+    let searches = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = searches.clone();
+    let result = module
+        .executor(true, grounding_witness(&TestState::default(), &[]))
+        .with_pow_search(Arc::new(move |object, field, target| {
+            let salt = object.get(&StrKey::from("salt")).unwrap();
+            recorded
+                .lock()
+                .unwrap()
+                .push((salt, field.name().to_string(), target));
+            found
+        }))
+        .action("Main", vec![])
+        .unwrap();
+    assert_eq!(
+        *searches.lock().unwrap(),
+        [(
+            Some(Value::from(5)),
+            "salt".to_string(),
+            RawValue([F(0), F(0), F(0), F(9007199254740992)])
+        )]
+    );
+    assert_eq!(
+        result.obj(0).obj.get(&StrKey::from("salt")).unwrap(),
+        Some(Value::from(found))
+    );
+}
+
+#[test]
 fn test_args_are_local_to_the_selected_action() {
     let src = r#"
         fn Stamp(action) {

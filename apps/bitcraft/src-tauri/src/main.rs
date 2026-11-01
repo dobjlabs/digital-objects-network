@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use tauri::{
     Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent,
@@ -20,6 +20,7 @@ use tokio::sync::watch;
 mod agents;
 mod appearance;
 mod discord;
+mod grind;
 mod metrics;
 mod onboarding;
 mod runtime;
@@ -41,6 +42,8 @@ struct Desktop {
     home: PathBuf,
     appearance: Mutex<appearance::Appearance>,
     discord: discord::Presence,
+    /// Notified to stop every proof-of-work search running at the time.
+    grind_cancel: tokio::sync::Notify,
     inventory_metrics: watch::Sender<Option<metrics::InventoryMetrics>>,
     metrics_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     runtime: Mutex<Option<Arc<runtime::Runtime>>>,
@@ -55,6 +58,7 @@ impl Desktop {
         Self {
             discord: discord::Presence::new(&home),
             appearance: Mutex::new(appearance::load(&home)),
+            grind_cancel: tokio::sync::Notify::new(),
             home,
             inventory_metrics: watch::Sender::new(None),
             metrics_task: Mutex::new(None),
@@ -245,33 +249,38 @@ fn allow_navigation(url: &tauri::Url, dev_url: Option<&tauri::Url>) -> bool {
     is_daemon_url(url) || is_local_app_url(url, dev_url)
 }
 
-fn runtime_paths(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf)> {
-    let (resources, binary) = if cfg!(debug_assertions) {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        (
-            root.join("runtime"),
-            root.join("binaries").join(format!(
-                "bitcraft-dobjd-{}{}",
+fn runtime_resources(app: &tauri::AppHandle) -> Result<PathBuf> {
+    Ok(if cfg!(debug_assertions) {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runtime")
+    } else {
+        app.path().resource_dir()?.join("runtime")
+    })
+}
+
+/// A tool staged by preparation: beside the host once installed, and under
+/// `binaries/` with its target suffix during development.
+fn bundled_binary(name: &str) -> Result<PathBuf> {
+    Ok(if cfg!(debug_assertions) {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("binaries")
+            .join(format!(
+                "{name}-{}{}",
                 env!("BITCRAFT_TARGET"),
                 std::env::consts::EXE_SUFFIX
-            )),
-        )
+            ))
     } else {
-        (
-            app.path().resource_dir()?.join("runtime"),
-            std::env::current_exe()?
-                .parent()
-                .unwrap()
-                .join(format!("bitcraft-dobjd{}", std::env::consts::EXE_SUFFIX)),
-        )
-    };
-    Ok((resources, binary))
+        std::env::current_exe()?
+            .parent()
+            .context("Cannot locate Bitcraft's installed tools")?
+            .join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
+    })
 }
 
 fn launch_runtime(app: &tauri::AppHandle, home: PathBuf) -> Result<Arc<runtime::Runtime>> {
-    let (resources, binary) = runtime_paths(app)?;
     Ok(Arc::new(runtime::Runtime::launch(
-        &home, &resources, &binary,
+        &home,
+        &runtime_resources(app)?,
+        &bundled_binary("bitcraft-dobjd")?,
     )?))
 }
 
@@ -339,7 +348,8 @@ fn main() -> Result<()> {
             discord_sharing,
             set_discord_sharing,
             raise_window,
-            appearance::set_appearance
+            appearance::set_appearance,
+            grind::grind_pow
         ])
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
             if !args.iter().any(|arg| arg == "--background") {
@@ -414,6 +424,10 @@ fn main() -> Result<()> {
                     }
                 })
                 .on_page_load(|window, event| {
+                    // Searches belong to the page that requested them.
+                    if window.label() == "main" && matches!(event.event(), tauri::webview::PageLoadEvent::Started) {
+                        window.state::<Desktop>().grind_cancel.notify_waiters();
+                    }
                     if matches!(event.event(), tauri::webview::PageLoadEvent::Finished) && window.url().is_ok_and(|url| is_local_app_url(&url, shell_dev_url(window.app_handle()).as_ref())) {
                         let message = window.state::<Desktop>().message.lock().unwrap().clone();
                         report(window.app_handle(), &message);

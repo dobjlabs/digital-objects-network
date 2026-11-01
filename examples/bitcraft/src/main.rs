@@ -178,17 +178,57 @@ enum Tag {
 // Gives the mutated object `name` a new random key. Every mutated object is
 // rekeyed: its next state is then never one already spent, and whoever holds
 // a copy of its previous state cannot predict the next one.
-fn rekey(o: &mut File, name: &str) -> Result<(), io::Error> {
+fn rekey(o: &mut File, name: &str, key_arg: Option<&str>) -> Result<(), io::Error> {
+    let key = match key_arg {
+        Some(key_arg) => format!(r#"arg("{key_arg}") ?? action.random()"#),
+        None => "action.random()".to_string(),
+    };
     writeln!(
         o,
-        r#"  var {name}_key = unsafe {{ action.random() }};
+        r#"  var {name}_key = unsafe {{ {key} }};
   {name}.update("key", {name}_key);"#
     )
+}
+
+const PLUGIN_NAME: &str = "bitcraft";
+
+// The argument a proof-of-work action reads in place of searching for its
+// tool's nonce.
+const GRIND_NONCE_ARG: &str = "grind_nonce";
+
+// The argument a proof-of-work action reads in place of a random new key for
+// its tool.
+fn tool_key_arg(tool: Tool) -> String {
+    format!("{tool}_key").to_lowercase()
+}
+
+fn mining_tool(action: &Action) -> Tool {
+    action
+        .mut_tool
+        .filter(|tool| tool.mines())
+        .expect("a mining action mutates the tool it mines with")
+}
+
+// Writes the proof-of-work hints, keyed by qualified action name.
+fn write_pow_hints(o: &mut File, actions: &[Action]) -> Result<(), io::Error> {
+    let entries: Vec<String> = actions
+        .iter()
+        .filter(|action| action.pow_target > 0)
+        .map(|action| {
+            format!(
+                r#"  "{PLUGIN_NAME}::{name}": {{ "arg": "{GRIND_NONCE_ARG}", "random_args": ["{key_arg}"] }}"#,
+                name = action.name,
+                key_arg = tool_key_arg(mining_tool(action)),
+            )
+        })
+        .collect();
+    writeln!(o, "{{\n{}\n}}", entries.join(",\n"))
 }
 
 fn main() -> Result<(), io::Error> {
     let mut rhai_output = File::create("plugin.rhai")?;
     let mut manifest_output = File::create("manifest.toml")?;
+    let mut pow_hints_output = File::create("pow_hints.json")?;
 
     use Resource::*;
     use Tag::*;
@@ -499,7 +539,8 @@ fn main() -> Result<(), io::Error> {
         if let Some(mut_tool) = action.mut_tool {
             let name = format!("{mut_tool}").to_lowercase();
             writeln!(o, "  var {name} = action.mutate(\"{mut_tool}\");")?;
-            rekey(o, &name)?;
+            let key_arg = (action.pow_target > 0).then(|| tool_key_arg(mut_tool));
+            rekey(o, &name, key_arg.as_deref())?;
 
             for tag in &action.tags {
                 match tag {
@@ -563,7 +604,7 @@ fn main() -> Result<(), io::Error> {
             let name = format!("{res}bucket").to_lowercase();
             let class = bucket_class(*res);
             writeln!(o, r#"  var {name} = action.mutate("{class}");"#)?;
-            rekey(o, &name)?;
+            rekey(o, &name, Option::None)?;
             writeln!(
                 o,
                 r#"  action.st_gt_eq({name}.n, {n});
@@ -587,7 +628,7 @@ fn main() -> Result<(), io::Error> {
             let name = format!("{res}bucket").to_lowercase();
             let class = bucket_class(res);
             writeln!(o, r#"  var {name} = action.mutate("{class}");"#)?;
-            rekey(o, &name)?;
+            rekey(o, &name, Option::None)?;
 
             for tag in &action.tags {
                 match tag {
@@ -647,15 +688,11 @@ fn main() -> Result<(), io::Error> {
             // The grind runs over the tool's nonce, after every other update
             // to the tool, so the work is tied to that tool's state and each
             // use's work can only start once the previous use is mined.
-            let tool = action
-                .mut_tool
-                .filter(|tool| tool.mines())
-                .expect("a mining action mutates the tool it mines with");
-            let tool = format!("{tool}").to_lowercase();
+            let tool = format!("{}", mining_tool(action)).to_lowercase();
             writeln!(
                 o,
                 r#"  let target = action.top_limb_u256({n});
-  var grind_nonce = unsafe {{ arg("grind_nonce") ?? action.pow_obj_grind({tool}, "nonce", target) }};
+  var grind_nonce = unsafe {{ arg("{GRIND_NONCE_ARG}") ?? action.pow_obj_grind({tool}, "nonce", target) }};
   {tool}.update("nonce", grind_nonce);
   action.intro_lt_eq_u256({tool}, target);"#,
                 n = action.pow_target,
@@ -711,7 +748,7 @@ fn main() -> Result<(), io::Error> {
     writeln!(
         o,
         r#"[plugin]
-name = "bitcraft"
+name = "{PLUGIN_NAME}"
 version = "0.1.0"
 # Rewritten by `cargo run -p pexe -- build game`.
 module_hash = "8fddf7843a56a85bb8db6b55b3df3737ae67eeff37724f130cc02387bb1048a2"
@@ -865,5 +902,5 @@ description = "-"
         )?;
     }
 
-    Ok(())
+    write_pow_hints(&mut pow_hints_output, &actions)
 }

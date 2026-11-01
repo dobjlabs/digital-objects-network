@@ -34,6 +34,8 @@ whose key were the tool's nonce could be rekeyed by whoever later holds the
 tool. A new tool that mines needs `Tool::mines` to return true, so it carries
 a `nonce`.
 
+A caller can supply the tool's new key and nonce as the arguments `<tool>_key` and `grind_nonce`, so that a search run before the action can hash the tool the action will build; `pow_hints.json`, generated with the plugin, names both for each proof-of-work action (see the "Proof-of-work search" section of `apps/bitcraft/README.md`).
+
 A geode records the drill's new commitment as `mined`, written with
 `commitment(...)` so the geode holds no copy of the drill's entries, and
 cracking compares `mined` against the geode's gem thresholds, so the gem comes

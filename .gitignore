@@ -34,3 +34,4 @@ target
 /apps/bitcraft/src-tauri/gen/schemas/
 /apps/bitcraft/scripts/__pycache__
 /apps/bitcraft/ui/presentation/
+/apps/bitcraft/ui/pow_hints.json

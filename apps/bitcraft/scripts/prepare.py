@@ -20,12 +20,28 @@ def run(*command, cwd=REPO):
     subprocess.run(command, cwd=cwd, check=True)
 
 
+# (package, binary, bundled name) of each tool built in the root workspace.
+# The -inner tools run behind the desktop workspace's launchers.
+RUNTIME_TOOLS = [
+    ("dobjd", "dobjd", "bitcraft-dobjd"),
+    ("cli", "dobj", "bitcraft-dobj-inner"),
+    ("dobj-mcp", "dobj-mcp-proxy", "bitcraft-dobj-mcp-proxy-inner"),
+    ("pexe", "pexe", "bitcraft-pexe"),
+    ("bitcraft-grind", "bitcraft-grind", "bitcraft-grind"),
+]
+
+
 def build_runtime(target, dev=False):
-    selection = [] if dev else [
-        "--target", target, "-p", "dobjd", "-p", "cli", "-p", "dobj-mcp", "-p", "pexe"]
+    packages = [arg for package, _, _ in RUNTIME_TOOLS for arg in ("-p", package)]
+    binaries = [arg for _, binary, _ in RUNTIME_TOOLS for arg in ("--bin", binary)]
+    selection = [] if dev else ["--target", target, *packages]
     run("cargo", "build", "--release", "--locked", *selection,
-        "--features", "dobjd/bundled-bitcraft-ui,dobj-mcp/proxy",
-        "--bin", "dobjd", "--bin", "dobj", "--bin", "dobj-mcp-proxy", "--bin", "pexe")
+        "--features", "dobjd/bundled-bitcraft-ui,dobj-mcp/proxy", *binaries)
+
+
+def copy_if_changed(source, destination):
+    if not destination.is_file() or destination.read_bytes() != source.read_bytes():
+        shutil.copy2(source, destination)
 
 
 def bitcraft_ui_marker():
@@ -84,8 +100,11 @@ def main():
     if args.dev and target != host:
         parser.error("--dev requires the native host target; omit it for cross-compilation")
     suffix = ".exe" if "windows" in target else ""
-    # The daemon embeds the UI folder, so its presentation packs go in first.
+    # The daemon embeds the UI folder, so its presentation packs and
+    # proof-of-work hints go in first.
     run(sys.executable, str(APP / "scripts" / "sync_presentation.py"))
+    pow_hints = REPO / "examples" / "bitcraft" / "pow_hints.json"
+    copy_if_changed(pow_hints, APP / "ui" / "pow_hints.json")
     build_runtime(target, dev=args.dev)
     metadata = json.loads(subprocess.check_output(
         ["cargo", "metadata", "--format-version", "1", "--no-deps"], cwd=REPO, text=True))
@@ -104,16 +123,12 @@ def main():
 
     binaries = TAURI / "binaries"
     binaries.mkdir(exist_ok=True)
-    tools = ["dobjd", "dobj", "dobj-mcp-proxy", "pexe"]
     hashes = {}
-    for tool in tools:
+    for _, tool, packaged_name in RUNTIME_TOOLS:
         source = built / f"{tool}{suffix}"
-        packaged_name = f"bitcraft-{tool}"
-        if tool in ["dobj", "dobj-mcp-proxy"]:
-            packaged_name += "-inner"
         destination = binaries / f"{packaged_name}-{target}{suffix}"
         shutil.copy2(source, destination)
-        if tool in ["dobj", "dobj-mcp-proxy"] and target == host:
+        if packaged_name.endswith("-inner") and target == host:
             # Development prompts use the staged launcher before bundle renaming.
             shutil.copy2(source, binaries / f"{packaged_name}{suffix}")
         hashes[packaged_name] = hashlib.sha256(destination.read_bytes()).hexdigest()
@@ -131,12 +146,15 @@ def main():
     resources = TAURI / "runtime"
     shutil.copytree(APP / "skills", resources / "skills", dirs_exist_ok=True)
     plugin_hash = hashlib.sha256((resources / "bitcraft.pexe").read_bytes()).hexdigest()
+    shutil.copy2(pow_hints, resources / "bitcraft.pow_hints.json")
+    pow_hints_hash = hashlib.sha256(pow_hints.read_bytes()).hexdigest()
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
     (resources / "release.json").write_text(json.dumps({
         "version": args.version,
         "target": target,
         "sourceCommit": commit,
         "pluginSha256": plugin_hash,
+        "powHintsSha256": pow_hints_hash,
         "binaries": hashes,
     }, indent=2) + "\n")
     (resources / "settings.json").write_text(json.dumps({

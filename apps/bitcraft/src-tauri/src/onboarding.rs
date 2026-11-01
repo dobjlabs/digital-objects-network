@@ -1,39 +1,36 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Serialize;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 /// The player prompt, edited as Markdown in `apps/bitcraft/AGENT_PROMPT.md`
-/// and built into the app. `{skill}`, `{cli}` and `{home}` in it stand for
-/// the installed player skill, the installed CLI and the game's home
-/// directory.
+/// and built into the app. `{skill}`, `{cli}`, `{grinder}` and `{home}` in
+/// it stand for the installed player skill, the installed CLI, the installed
+/// proof-of-work grinder and the game's home directory.
 const PROMPT_TEMPLATE: &str = include_str!("../../AGENT_PROMPT.md");
 
-pub fn prompt(skill: &Path, cli: &Path, home: &Path) -> String {
+/// What the player prompt points an agent to in the installed app.
+pub struct AgentTools {
+    pub skill: PathBuf,
+    pub cli: PathBuf,
+    pub grinder: PathBuf,
+}
+
+pub fn prompt(tools: &AgentTools, home: &Path) -> String {
     PROMPT_TEMPLATE
-        .replace("{skill}", &skill.display().to_string())
-        .replace("{cli}", &cli.display().to_string())
+        .replace("{skill}", &tools.skill.display().to_string())
+        .replace("{cli}", &tools.cli.display().to_string())
+        .replace("{grinder}", &tools.grinder.display().to_string())
         .replace("{home}", &home.display().to_string())
 }
 
-pub fn paths(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf)> {
-    let (resources, _) = crate::runtime_paths(app)?;
-    let cli = if cfg!(debug_assertions) {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("binaries")
-            .join(format!(
-                "bitcraft-dobj-{}{}",
-                env!("BITCRAFT_TARGET"),
-                std::env::consts::EXE_SUFFIX
-            ))
-    } else {
-        std::env::current_exe()?
-            .parent()
-            .context("Cannot locate Bitcraft's installed CLI")?
-            .join(format!("bitcraft-dobj{}", std::env::consts::EXE_SUFFIX))
-    };
-    Ok((resources.join("skills/bitcraft-play/SKILL.md"), cli))
+pub fn agent_tools(app: &tauri::AppHandle) -> Result<AgentTools> {
+    Ok(AgentTools {
+        skill: crate::runtime_resources(app)?.join("skills/bitcraft-play/SKILL.md"),
+        cli: crate::bundled_binary("bitcraft-dobj")?,
+        grinder: crate::bundled_binary("bitcraft-grind")?,
+    })
 }
 
 #[derive(Serialize)]
@@ -44,10 +41,10 @@ struct Guide<'a> {
 }
 
 pub fn show(app: &tauri::AppHandle, error: Option<&str>) -> Result<()> {
-    let (skill, cli) = paths(app)?;
+    let tools = agent_tools(app)?;
     let state = app.state::<crate::Desktop>();
     let guide = Guide {
-        prompt: prompt(&skill, &cli, &state.home),
+        prompt: prompt(&tools, &state.home),
         error,
     };
     let context = serde_json::to_string(&guide)?;
@@ -83,26 +80,29 @@ mod tests {
 
     #[test]
     fn the_prompt_fills_in_every_placeholder_from_the_template() {
-        for placeholder in ["{skill}", "{cli}", "{home}"] {
+        let placeholders = ["{skill}", "{cli}", "{grinder}", "{home}"];
+        for placeholder in placeholders {
             assert!(
                 PROMPT_TEMPLATE.contains(placeholder),
                 "{placeholder} is unused"
             );
         }
-        let prompt = prompt(
-            Path::new("/skills/SKILL.md"),
-            Path::new("/bin/bitcraft-dobj"),
-            Path::new("/home/player/.bitcraft"),
-        );
+        let tools = AgentTools {
+            skill: "/skills/SKILL.md".into(),
+            cli: "/bin/bitcraft-dobj".into(),
+            grinder: "/bin/bitcraft-grind".into(),
+        };
+        let prompt = prompt(&tools, Path::new("/home/player/.bitcraft"));
         for path in [
             "/skills/SKILL.md",
             "/bin/bitcraft-dobj",
+            "/bin/bitcraft-grind",
             "/home/player/.bitcraft",
         ] {
             assert!(prompt.contains(path), "{path} is missing");
         }
-        assert!(
-            !prompt.contains("{skill}") && !prompt.contains("{cli}") && !prompt.contains("{home}")
-        );
+        for placeholder in placeholders {
+            assert!(!prompt.contains(placeholder), "{placeholder} remains");
+        }
     }
 }

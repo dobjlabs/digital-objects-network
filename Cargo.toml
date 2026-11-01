@@ -20,6 +20,7 @@ members = [
     "devtools/tests",
     "examples/bitcraft",
     "apps/bitcraft/discord-bot",
+    "apps/bitcraft/grinder",
 ]
 resolver = "2"
 exclude = ["apps/bitcraft/src-tauri"]

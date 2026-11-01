@@ -136,6 +136,9 @@ class PreparationTests(unittest.TestCase):
         policy.write_bytes((prepare.REPO / "services" / "dobjd" / policy.name).read_bytes())
         (app / "skills" / "bitcraft-play").mkdir(parents=True)
         (app / "skills" / "bitcraft-play" / "SKILL.md").write_text("Play Bitcraft")
+        hints = b'{"bitcraft::GatherWood": {}}\n'
+        (root / "examples" / "bitcraft").mkdir(parents=True)
+        (root / "examples" / "bitcraft" / "pow_hints.json").write_bytes(hints)
         tauri.mkdir()
         commands = []
 
@@ -158,7 +161,7 @@ class PreparationTests(unittest.TestCase):
                 directory /= "release" if "--release" in command else "debug"
                 directory.mkdir(parents=True, exist_ok=True)
                 names = ["bitcraft-dobj", "bitcraft-dobj-mcp-proxy"] if launcher else [
-                    "dobjd", "dobj", "dobj-mcp-proxy", "pexe"]
+                    binary for _, binary, _ in prepare.RUNTIME_TOOLS]
                 for name in names:
                     (directory / name).write_bytes(
                         str(directory / name).encode() + page + prepare.bitcraft_ui_marker())
@@ -191,6 +194,10 @@ class PreparationTests(unittest.TestCase):
             self.assertIn(str(expected).encode(), staged.read_bytes())
         self.assertEqual((tauri / "runtime" / "skills" / "bitcraft-play" / "SKILL.md").read_text(),
                          "Play Bitcraft")
+        self.assertIn("bitcraft-grind", release["binaries"])
+        self.assertEqual((tauri / "runtime" / "bitcraft.pow_hints.json").read_bytes(), hints)
+        self.assertEqual(release["powHintsSha256"], hashlib.sha256(hints).hexdigest())
+        self.assertEqual((app / "ui" / "pow_hints.json").read_bytes(), hints)
         return commands, tauri
 
     def test_dev_reuses_workspace_native_artifacts_and_stages_launchers(self):

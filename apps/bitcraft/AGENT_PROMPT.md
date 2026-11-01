@@ -6,6 +6,9 @@ Before your first reply, read the player skill at:
 The installed CLI executable is:
 {cli}
 
+The installed proof-of-work grinder is:
+{grinder}
+
 Work in my Bitcraft home directory:
 {home}
 

@@ -105,7 +105,7 @@ var amount = unsafe {
 
 Each unsafe block runs once per phase. Its returned value becomes one private witness, regardless of whether it came from an argument, a literal, an existing variable, or a computation. Intermediate calculations create no private wildcards. During Load, arguments are absent and defaults run symbolically; during Execute, the script sees the supplied data. A block with no result creates no witness. Nested unsafe blocks are rejected.
 
-Unsafe blocks cannot emit proof statements, declare object inputs/outputs/mutations, update objects, or invoke sub-actions. These restrictions also apply to helpers called from the block. `random` and `pow_obj_grind` require unsafe. `pow_obj_grind(obj, key_name, target)` returns a value for the field `key_name`, which must already be in the object, that brings the object's commitment to at most `target`. Constrain the resulting witness afterwards:
+Unsafe blocks cannot emit proof statements, declare object inputs/outputs/mutations, update objects, or invoke sub-actions. These restrictions also apply to helpers called from the block. `random` and `pow_obj_grind` require unsafe. `pow_obj_grind(obj, key_name, target)` returns a value for the field `key_name`, which must already be in the object, that brings the object's commitment to at most `target`. A host can search in its place, in mock mode too, by giving the executor a search with `Executor::with_pow_search`. Constrain the resulting witness afterwards:
 
 ```rhai
 fn CraftWood(action) {

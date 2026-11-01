@@ -69,6 +69,13 @@ that block should be plugin-agnostic.
 - **Generic behavior:** show actions for every plugin, including work started by the CLI, MCP or another window. A run, proof job and transaction linked by IDs describe one action and share one row; independent actions stay separate. Retained completed work also appears when recovering missed events.
 - **Why:** same scope as the object list.
 
+## Proof-of-work searches run in the desktop host
+
+- **Where:** `powHints`, loaded by `loadPowHints()` from `pow_hints.json`, and `needsPowSearch()`, applied by `findPowArgs()` when `startRun()` starts an action.
+- **What:** in the desktop app, an action listed in `pow_hints.json` (generated with the plugin; see the desktop README's "Proof-of-work search") is started only once the host's `grind_pow` command has run its search, and the arguments the search found go to dobjd with the action. The command is given the action's input objects, since the grinder runs the action on them. Until then the job shows the status "mining", and its log opens with the search. A failed search fails the job without starting the action.
+- **Generic behavior:** start every action at once and leave any proof-of-work search to dobjd, during the run.
+- **Why:** the bundled grinder searches on several threads, where dobjd searches on one, and dobjd does not report which actions take arguments that let them skip their search.
+
 ## Startup pocketknife
 
 - **Where:** `ensureStartupPocketknife()`, called by `load()` after retained activity has been restored successfully.

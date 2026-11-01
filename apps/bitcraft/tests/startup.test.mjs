@@ -104,6 +104,9 @@ async function page(context, options = {}) {
           return respond(file);
         }
         if (parsed.pathname === "/bitcraft/inventory-values.json") return respond(inventoryValues);
+        if (parsed.pathname === "/bitcraft/pow_hints.json") {
+          return backend.powHints ? respond(backend.powHints) : respond({}, 404);
+        }
         if (parsed.pathname === "/objects/dir") return respond({ path: "/Users/player/.bitcraft/objects" });
         if (parsed.pathname === "/objects/unspent") {
           backend.inventoryReads++;
@@ -500,6 +503,78 @@ test("manual pocketknife jobs remain visible", async (context) => {
   assert.equal(ui.jobs().length, 1);
   assert.match(ui.jobs()[0].textContent, /CraftPocketknife/);
   assert.equal(ui.document.querySelector("#execute-pane").hidden, false);
+});
+
+const FOUND_ARGS = {
+  grind_nonce: { Untyped: "000000000000000000000000000000000000000000000000000000000000beef" },
+  pocketknife_key: { Untyped: "00000000000000000000000000000000000000000000000000000000000000aa" },
+};
+
+const GATHER_WOOD = {
+  ...recipe("GatherWood"),
+  mutatedObjects: [{ inputIndex: 0, outputIndex: 0 }],
+  totalInputs: [{ class: qname("Pocketknife") }],
+  totalOutputs: [{ class: qname("Pocketknife") }, { class: qname("Wood") }],
+};
+
+async function powPage(context, invoke) {
+  const ui = await page(context, {
+    desktop: true,
+    objects: [knife()],
+    actions: [recipe(), GATHER_WOOD],
+    powHints: {
+      "bitcraft::GatherWood": { arg: "grind_nonce", random_args: ["pocketknife_key"] },
+    },
+    invoke,
+  });
+  ui.start = async (action, fileNames = []) => {
+    ui.dom.window.startRun(action, fileNames);
+    await flush();
+  };
+  return ui;
+}
+
+test("the desktop host finds a hinted action's proof-of-work arguments before dobjd runs it", async (context) => {
+  let finishSearch;
+  const grinds = [];
+  const ui = await powPage(context, (command, args) => {
+    if (command !== "grind_pow") return null;
+    grinds.push(JSON.parse(JSON.stringify(args)));
+    return new Promise((resolve) => { finishSearch = resolve; });
+  });
+  await ui.start(GATHER_WOOD, ["pocketknife.dobj"]);
+  assert.deepEqual(grinds, [{ action: "bitcraft::GatherWood", inputObjectPaths: ["pocketknife.dobj"] }],
+    "the search is given the inputs the action runs on");
+  assert.equal(ui.backend.posts.length, 0, "dobjd is not asked to run the action while its search runs");
+  assert.match(ui.jobs()[0].textContent, /GatherWood.*mining/);
+
+  finishSearch(FOUND_ARGS);
+  await flush();
+  assert.deepEqual(ui.backend.posts, [
+    { action: qname("GatherWood"), inputObjectPaths: ["pocketknife.dobj"], args: FOUND_ARGS },
+  ]);
+  ui.jobs()[0].dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { bubbles: true, button: 0 }));
+  await ui.publish("run-1", "generateProof");
+  const log = ui.document.querySelector("#details-body .run-log").textContent;
+  assert.match(log, /mine.*done.*Found proof of work/s);
+  assert.match(ui.jobs()[0].textContent, /generateProof/);
+
+  await ui.start(recipe());
+  assert.equal(grinds.length, 1, "an action without a hint needs no search");
+  assert.deepEqual(ui.backend.posts[1], { action: qname("CraftPocketknife"), inputObjectPaths: [] });
+});
+
+test("a failed proof-of-work search fails the job without starting the action", async (context) => {
+  const ui = await powPage(context, (command) => {
+    if (command === "grind_pow") throw "Cannot run GatherWood: action GatherWood requires an input of class Pocketknife";
+    return null;
+  });
+  await ui.start(GATHER_WOOD, ["pocketknife.dobj"]);
+  assert.equal(ui.backend.posts.length, 0);
+  assert.match(ui.jobs()[0].textContent, /failed/);
+  ui.jobs()[0].dispatchEvent(new ui.dom.window.MouseEvent("mousedown", { bubbles: true, button: 0 }));
+  await flush();
+  assert.match(ui.document.querySelector("#details-body").textContent, /Mining failed: Cannot run GatherWood: action GatherWood requires an input of class Pocketknife/);
 });
 
 test("a restored manual crafting job is not mistaken for an automatic one", async (context) => {

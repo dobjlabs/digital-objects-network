@@ -1551,6 +1551,49 @@
     return action?.pluginName === PLUGIN_NAME;
   }
 
+  // Actions whose proof-of-work search the desktop host runs before the
+  // action starts, from the hints generated with the plugin. Without them,
+  // dobjd searches during the run.
+  let powHints = {};
+
+  async function loadPowHints() {
+    if (!window.bitcraftDesktop) return;
+    try {
+      const response = await fetch(new URL("pow_hints.json", document.baseURI).href);
+      powHints = response.ok ? await response.json() : {};
+    } catch (error) {
+      console.warn("Could not load proof-of-work hints:", error);
+      powHints = {};
+    }
+  }
+
+  function needsPowSearch(action) {
+    return Object.hasOwn(powHints, qualifiedClassName(action));
+  }
+
+  // Has the desktop host run the run's proof-of-work search, shown as the
+  // job's first log entry, and returns the action arguments it found.
+  // Returns null when dobjd is to search during the run instead.
+  async function findPowArgs(run) {
+    if (!needsPowSearch(run.action.action)) return null;
+    run.miningEvent = {
+      atMs: Date.now(), phase: "mine", status: "running", message: "Searching for proof of work",
+    };
+    updateActivityState(run);
+    showSelection();
+    run.onUpdate?.(run);
+    try {
+      const args = await window.__TAURI__.core.invoke("grind_pow", {
+        action: qualifiedClassName(run.action.action), inputObjectPaths: run.inputFileNames,
+      });
+      Object.assign(run.miningEvent, { status: "done", message: "Found proof of work" });
+      return args;
+    } catch (error) {
+      Object.assign(run.miningEvent, { status: "failed", message: String(error) });
+      throw new Error(`Mining failed: ${error}`);
+    }
+  }
+
   function rememberStartupRun(runId) {
     try {
       sessionStorage.setItem(STARTUP_RUN_STORAGE_KEY, runId);
@@ -2510,6 +2553,7 @@
       runSnapshot: null,
       proofJob: null,
       proofProgress: [],
+      miningEvent: null,
       transaction: null,
       transactionDeleted: false,
       mergedInto: null,
@@ -2558,6 +2602,7 @@
       run.runSnapshot ??= other.runSnapshot;
       run.proofJob ??= other.proofJob;
       run.proofProgress.push(...other.proofProgress);
+      run.miningEvent ??= other.miningEvent;
       run.transaction ??= other.transaction;
       run.transactionDeleted ||= other.transactionDeleted;
       run.showInJobs &&= other.showInJobs;
@@ -2623,6 +2668,11 @@
       state.status = "failed";
       state.error = "Transaction was deleted before submission";
       state.finishedAtMs ??= run.clientEndedAt ?? Date.now();
+    }
+    if (run.miningEvent) {
+      if (!run.runSnapshot && !proof && !record) state.status = "mining";
+      state.progress = [run.miningEvent, ...state.progress];
+      state.createdAtMs = run.miningEvent.atMs;
     }
     run.state = state;
     run.clientEndedAt = ["succeeded", "failed"].includes(state.status)
@@ -2756,8 +2806,9 @@
     run.onUpdate?.(run);
 
     try {
+      const runArgs = { ...args, ...await findPowArgs(run) };
       const accepted = await postJson("/runs", {
-        input: { action: action.action, inputObjectPaths: inputFileNames, ...(args ? { args } : {}) },
+        input: { action: action.action, inputObjectPaths: inputFileNames, ...(Object.keys(runArgs).length > 0 && { args: runArgs }) },
       });
       run = trackRun({ ...accepted, action: action.action, inputObjectPaths: inputFileNames, progress: [] }, run);
       run.onUpdate?.(run);
@@ -4609,7 +4660,7 @@
     showStartup("Loading inventory...");
     showMessage("Loading...", false);
     try {
-      await loadInventoryValues();
+      await Promise.all([loadInventoryValues(), loadPowHints()]);
       inventory ??= watchInventory(showObjects, {
         onError: startupInventoryError,
         onReconnect: restoreRuns,

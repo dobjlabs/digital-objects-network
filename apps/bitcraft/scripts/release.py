@@ -14,7 +14,8 @@ import tempfile
 
 APP = Path(__file__).resolve().parents[1]
 TOOLS = {"bitcraft-dobjd", "bitcraft-dobj", "bitcraft-dobj-inner",
-         "bitcraft-dobj-mcp-proxy", "bitcraft-dobj-mcp-proxy-inner", "bitcraft-pexe"}
+         "bitcraft-dobj-mcp-proxy", "bitcraft-dobj-mcp-proxy-inner", "bitcraft-pexe",
+         "bitcraft-grind"}
 STAMPED_TOOLS = {"bitcraft-dobjd", "bitcraft-dobj", "bitcraft-dobj-inner", "bitcraft-pexe"}
 
 
@@ -27,6 +28,8 @@ def verify_payload(binaries, resources, args):
         raise ValueError("Packaged release manifest does not list the complete Bitcraft tool set")
     if hashlib.sha256((resources / "bitcraft.pexe").read_bytes()).hexdigest() != release["pluginSha256"]:
         raise ValueError("Packaged Bitcraft plugin does not match its release manifest")
+    if hashlib.sha256((resources / "bitcraft.pow_hints.json").read_bytes()).hexdigest() != release["powHintsSha256"]:
+        raise ValueError("Packaged proof-of-work hints do not match their release manifest")
     json.loads((resources / "settings.json").read_text())
     skill = resources / "skills/bitcraft-play/SKILL.md"
     if not skill.is_file() or "name: bitcraft-play" not in skill.read_text():

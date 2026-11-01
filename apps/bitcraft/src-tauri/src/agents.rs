@@ -3,6 +3,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use tauri::Url;
 
+use crate::onboarding::AgentTools;
+
 mod platform;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,8 +39,8 @@ impl Agent {
         }
     }
 
-    fn link(self, skill: &Path, cli: &Path, home: &Path) -> Url {
-        let prompt = crate::onboarding::prompt(skill, cli, home);
+    fn link(self, tools: &AgentTools, home: &Path) -> Url {
+        let prompt = crate::onboarding::prompt(tools, home);
         let (address, directory_key, prompt_key) = match self {
             Self::Claude => ("claude://code/new", "folder", "q"),
             Self::Codex => ("codex://new", "path", "prompt"),
@@ -66,8 +68,8 @@ impl Agent {
 fn launch(app: &tauri::AppHandle, agent: Agent) -> Result<()> {
     use tauri::Manager;
 
-    let (skill, cli) = crate::onboarding::paths(app)?;
-    let url = agent.link(&skill, &cli, &app.state::<crate::Desktop>().home);
+    let tools = crate::onboarding::agent_tools(app)?;
+    let url = agent.link(&tools, &app.state::<crate::Desktop>().home);
     agent.open(&url, platform::launch)
 }
 
@@ -116,13 +118,16 @@ mod tests {
     #[test]
     fn links_preserve_the_selected_directory_and_prompt() {
         let home = Path::new("/data/Alice's game & notes/#1");
-        let skill = Path::new("/Custom Apps/Game/skills/SKILL.md");
-        let cli = Path::new("/Custom Apps/Game/bin/cli");
+        let tools = AgentTools {
+            skill: "/Custom Apps/Game/skills/SKILL.md".into(),
+            cli: "/Custom Apps/Game/bin/cli".into(),
+            grinder: "/Custom Apps/Game/bin/grinder".into(),
+        };
         for (agent, scheme, host, path, directory_key, prompt_key) in [
             (Agent::Claude, "claude", "code", "/new", "folder", "q"),
             (Agent::Codex, "codex", "new", "", "path", "prompt"),
         ] {
-            let url = agent.link(skill, cli, home);
+            let url = agent.link(&tools, home);
             assert_eq!(url.scheme(), scheme);
             assert_eq!(url.host_str(), Some(host));
             assert_eq!(url.path(), path);
@@ -130,8 +135,9 @@ mod tests {
             assert_eq!(pairs.len(), 2);
             assert_eq!(pairs[directory_key], home.to_string_lossy());
             let prompt = &pairs[prompt_key];
-            assert!(prompt.contains(skill.to_str().unwrap()));
-            assert!(prompt.contains(cli.to_str().unwrap()));
+            for tool in [&tools.skill, &tools.cli, &tools.grinder] {
+                assert!(prompt.contains(tool.to_str().unwrap()));
+            }
             assert!(prompt.contains(home.to_str().unwrap()));
             assert!(!prompt.contains("--home"));
             assert!(url.fragment().is_none());

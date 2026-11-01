@@ -19,7 +19,11 @@ pub use bitcraft_launchers::DEFAULT_HTTP_PORT as HTTP_PORT;
 #[serde(rename_all = "camelCase")]
 pub struct Release {
     pub plugin_sha256: String,
+    pub pow_hints_sha256: String,
 }
+
+/// Installed beside the plugin.
+const POW_HINTS_FILE: &str = "bitcraft.pow_hints.json";
 
 pub struct Runtime {
     child: Mutex<Option<Child>>,
@@ -28,14 +32,21 @@ pub struct Runtime {
     connection_path: PathBuf,
 }
 
-pub fn plugin_hash(bytes: &[u8]) -> String {
+#[cfg(windows)]
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+pub fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
 fn initialize(state: &Path, resources: &Path, release: &Release) -> Result<()> {
     let plugin = fs::read(resources.join("bitcraft.pexe"))?;
-    if plugin_hash(&plugin) != release.plugin_sha256 {
+    if sha256_hex(&plugin) != release.plugin_sha256 {
         bail!("The bundled Bitcraft plugin does not match the release manifest");
+    }
+    let pow_hints = fs::read(resources.join(POW_HINTS_FILE))?;
+    if sha256_hex(&pow_hints) != release.pow_hints_sha256 {
+        bail!("The bundled proof-of-work hints do not match the release manifest");
     }
     let actions = state.join("actions");
     fs::create_dir_all(&actions)?;
@@ -50,11 +61,15 @@ fn initialize(state: &Path, resources: &Path, release: &Release) -> Result<()> {
             let archive = actions.join("archive");
             fs::create_dir_all(&archive)?;
             write_atomic(
-                &archive.join(format!("bitcraft-{}.pexe", plugin_hash(&previous))),
+                &archive.join(format!("bitcraft-{}.pexe", sha256_hex(&previous))),
                 &previous,
             )?;
         }
         write_atomic(&installed_plugin, &plugin)?;
+    }
+    let installed_pow_hints = actions.join(POW_HINTS_FILE);
+    if fs::read(&installed_pow_hints).ok().as_deref() != Some(pow_hints.as_slice()) {
+        write_atomic(&installed_pow_hints, &pow_hints)?;
     }
     let settings = state.join("settings.json");
     if !settings.exists() {
@@ -151,7 +166,7 @@ impl Runtime {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000);
+            command.creation_flags(CREATE_NO_WINDOW);
         }
         let child = command
             .spawn()
@@ -258,9 +273,11 @@ mod tests {
         let state = temp.path().join("state");
         fs::create_dir(&resources).unwrap();
         fs::write(resources.join("bitcraft.pexe"), b"plugin").unwrap();
+        fs::write(resources.join(POW_HINTS_FILE), b"hints").unwrap();
         fs::write(resources.join("settings.json"), b"initial settings").unwrap();
         let mut release = Release {
-            plugin_sha256: plugin_hash(b"plugin"),
+            plugin_sha256: sha256_hex(b"plugin"),
+            pow_hints_sha256: sha256_hex(b"hints"),
         };
         initialize(&state, &resources, &release).unwrap();
         fs::create_dir(state.join("objects")).unwrap();
@@ -269,7 +286,9 @@ mod tests {
         fs::write(state.join("actions/other.pexe"), b"other plugin").unwrap();
         fs::write(resources.join("settings.json"), b"new defaults").unwrap();
         fs::write(resources.join("bitcraft.pexe"), b"new plugin").unwrap();
-        release.plugin_sha256 = plugin_hash(b"new plugin");
+        release.plugin_sha256 = sha256_hex(b"new plugin");
+        fs::write(resources.join(POW_HINTS_FILE), b"new hints").unwrap();
+        release.pow_hints_sha256 = sha256_hex(b"new hints");
         initialize(&state, &resources, &release).unwrap();
         initialize(&state, &resources, &release).unwrap();
         assert_eq!(
@@ -285,12 +304,16 @@ mod tests {
             b"new plugin"
         );
         assert_eq!(
+            fs::read(state.join("actions").join(POW_HINTS_FILE)).unwrap(),
+            b"new hints"
+        );
+        assert_eq!(
             fs::read(state.join("actions/other.pexe")).unwrap(),
             b"other plugin"
         );
         let archive = state.join("actions/archive");
         assert_eq!(
-            fs::read(archive.join(format!("bitcraft-{}.pexe", plugin_hash(b"plugin")))).unwrap(),
+            fs::read(archive.join(format!("bitcraft-{}.pexe", sha256_hex(b"plugin")))).unwrap(),
             b"plugin"
         );
         assert_eq!(fs::read_dir(&archive).unwrap().count(), 1);
@@ -303,14 +326,23 @@ mod tests {
         let state = temp.path().join("state");
         fs::create_dir(&resources).unwrap();
         fs::write(resources.join("bitcraft.pexe"), b"plugin").unwrap();
+        fs::write(resources.join(POW_HINTS_FILE), b"hints").unwrap();
         fs::write(resources.join("settings.json"), b"initial settings").unwrap();
         let release = Release {
-            plugin_sha256: plugin_hash(b"plugin"),
+            plugin_sha256: sha256_hex(b"plugin"),
+            pow_hints_sha256: sha256_hex(b"hints"),
         };
         initialize(&state, &resources, &release).unwrap();
         fs::write(state.join("settings.json"), b"custom settings").unwrap();
+        fs::write(resources.join(POW_HINTS_FILE), b"tampered hints").unwrap();
+        assert!(initialize(&state, &resources, &release).is_err());
+        fs::write(resources.join(POW_HINTS_FILE), b"hints").unwrap();
         fs::write(resources.join("bitcraft.pexe"), b"tampered plugin").unwrap();
         assert!(initialize(&state, &resources, &release).is_err());
+        assert_eq!(
+            fs::read(state.join("actions").join(POW_HINTS_FILE)).unwrap(),
+            b"hints"
+        );
         assert_eq!(
             fs::read(state.join("actions/bitcraft.pexe")).unwrap(),
             b"plugin"

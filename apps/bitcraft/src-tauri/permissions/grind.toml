@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-grind-pow"
+description = "Allow running an action's proof-of-work search with the bundled grinder."
+commands.allow = ["grind_pow"]

@@ -15,11 +15,11 @@
     "security": {
       "capabilities": [{
         "identifier": "main-page",
-        "description": "Read native inventory value and production rate, raise the windows the page opened, and apply the theme picked in Settings",
+        "description": "Read native inventory value and production rate, raise the windows the page opened, apply the theme picked in Settings, and run actions' proof-of-work searches",
         "windows": ["main"],
         "local": false,
         "remote": { "urls": ["http://127.0.0.1:7727/*"] },
-        "permissions": ["allow-inventory-metrics", "allow-raise-window", "allow-set-appearance"]
+        "permissions": ["allow-inventory-metrics", "allow-raise-window", "allow-set-appearance", "allow-grind-pow"]
       }, {
         "identifier": "discord-sharing",
         "description": "Read and change the Discord sharing preference from Settings",

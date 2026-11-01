@@ -1,0 +1,23 @@
+[package]
+name = "bitcraft-grind"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
+pexe = { path = "../../../libs/pexe" }
+plonky2 = { workspace = true }
+pod2 = { workspace = true }
+pod2utils = { path = "../../../libs/pod2utils" }
+rand = { workspace = true }
+sdk = { path = "../../../libs/sdk" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+wire-types = { workspace = true }
+
+[dev-dependencies]
+lt-eq-u256-pod = { path = "../../../libs/intro-pods/lt-eq-u256-pod" }
