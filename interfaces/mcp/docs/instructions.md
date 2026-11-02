@@ -37,7 +37,7 @@ object could have reached its current state. Use `list_classes` and
 
 **State root.** A state root is a hash of all published
 transactions and nullifiers at a given Ethereum block. Actions must be
-grounded in a recent state root (within ~300 blocks / ~1 hour). The
+grounded in a recent state root (at most 50400 blocks old, about a week). The
 `get_state_root` tool returns the current state root.
 
 ## Tools

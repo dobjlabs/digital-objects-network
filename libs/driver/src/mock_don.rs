@@ -518,7 +518,8 @@ mod tests {
     fn test_aged_out_root_is_rejected() {
         let don = MockDon::new();
         let genesis_root = don.fetch_head("").unwrap().state_root;
-        for seed in 0..MAX_STATE_ROOT_AGE_BLOCKS as u64 {
+        let blocks = MAX_STATE_ROOT_AGE_BLOCKS as u64;
+        for seed in 0..blocks {
             let root = don.fetch_head("").unwrap().state_root;
             don.submit_proof(
                 "",
@@ -530,7 +531,7 @@ mod tests {
         let late = don
             .submit_proof(
                 "",
-                &payload_bytes(genesis_root, 9999, &[test_hash(9999)], &[]),
+                &payload_bytes(genesis_root, blocks, &[test_hash(blocks)], &[]),
                 None,
             )
             .unwrap();
