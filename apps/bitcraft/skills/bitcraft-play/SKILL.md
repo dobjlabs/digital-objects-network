@@ -20,6 +20,6 @@ Use the CLI executable supplied in the player's prompt, working in their Bitcraf
 - Run states include `elapsedMs` and `stageTimings` for mining, building, solving, proving, shrinking, and network waits. These measure elapsed time; do not interpret them as a percentage or estimate time remaining.
 - If following a run is interrupted, inspect `runs list --active --json` or `runs show RUN_ID --json`, and reattach with `runs wait RUN_ID --json`. Reattaching does not submit another action. Runs are kept in memory for about ten minutes after completion and are lost on daemon restart.
 - Losing the CLI connection does not cancel the action. Inspect existing runs and inventory before deciding whether another submission is needed.
-- Omit `grind_key` for ordinary gathering: the daemon searches for a valid proof-of-work key. A supplied key must satisfy the same constraints and does not remove the need for ZK proving and network confirmation.
+- Omit `grind_nonce` for ordinary gathering: the daemon searches for a valid proof-of-work nonce for the tool. A supplied nonce must satisfy the same constraints and does not remove the need for ZK proving and network confirmation.
 
 Refresh inventory after completion and use the new filenames for subsequent actions, including updated versions of tools. Report the result and any unresolved connection or game-state uncertainty to the player.

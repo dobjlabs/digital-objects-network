@@ -24,12 +24,17 @@ The presentation pack and the Bitcraft UI have their own rules; see
 
 ## Mining is tied to the tool
 
-Every proof-of-work action grinds an output that records the mutated tool's
-`nonce` (as `tool_nonce`), and the key the grind finds becomes the tool's next
-`nonce`. A tool's first `nonce` is the grounding block's hash. So work toward
-a tool's next use can only start once its previous use is mined, and a key
-mined for one tool state does not prove for any other: resources cannot be
-premined. The nonce is deliberately not the tool's `key`: the player chooses
-keys (including through the built-in `Rekey<Class>`), and the key is the
-tool's secret, which mined outputs would otherwise reveal. A new tool that
-mines needs `Tool::mines` to return true, so it carries a `nonce`.
+Every proof-of-work action grinds the mutated tool's `nonce`, after every
+other update to the tool, so the tool's new commitment is what the
+proof-of-work bounds. A tool's first `nonce` is the grounding block's hash. So
+work toward a tool's next use can only start once its previous use is mined,
+and a nonce mined for one tool state does not prove for any other: resources
+cannot be premined. Mined outputs carry nothing from the grind: a resource
+whose key were the tool's nonce could be rekeyed by whoever later holds the
+tool. A new tool that mines needs `Tool::mines` to return true, so it carries
+a `nonce`.
+
+A geode records the drill's new commitment as `mined`, written with
+`commitment(...)` so the geode holds no copy of the drill's entries, and
+cracking compares `mined` against the geode's gem thresholds, so the gem comes
+from the mining work itself.

@@ -2022,7 +2022,7 @@ test("the context menu offers a geode only the crack its mined value allows", as
   const raw = (topLimb, low = 0n) => ({ Untyped: ((topLimb << 192n) + low).toString(16).padStart(64, "0") });
   const geode = (fileName, topLimb, low = 1n) => ({
     fileName, class: qname("Geode"), status: "live",
-    fields: { kvs: [["stable_identifier", raw(topLimb, low)],
+    fields: { kvs: [["mined", raw(topLimb, low)],
       ...Object.entries(thresholds).map(([gem, limb]) => [gem, raw(limb)])] },
   });
   const geodes = {

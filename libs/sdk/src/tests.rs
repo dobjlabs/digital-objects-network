@@ -53,7 +53,7 @@ fn test_sdk_1() {
             var log = action.input("Log");
             var wood = action.output("Wood");
             let target = action.top_limb_u256(9007199254740992);
-            var key = unsafe { action.pow_obj_grind(wood, target) };
+            var key = unsafe { action.pow_obj_grind(wood, "key", target) };
             wood.update("key", key);
             action.intro_lt_eq_u256(wood, target);
         }
@@ -301,7 +301,7 @@ fn test_sdk_2() {
             var log = action.input("Log");
             var wood = action.output("Wood");
             let target = action.top_limb_u256(9007199254740992);
-            var key = unsafe { action.pow_obj_grind(wood, target) };
+            var key = unsafe { action.pow_obj_grind(wood, "key", target) };
             wood.update("key", key);
             action.intro_lt_eq_u256(wood, target);
         }
@@ -1371,7 +1371,7 @@ fn test_set_guards() {
         fn SetAfterGrind(action) {
             var ore = action.output("Ore");
             let target = action.top_limb_u256(9007199254740992);
-            var key = unsafe { action.pow_obj_grind(ore, target) };
+            var key = unsafe { action.pow_obj_grind(ore, "key", target) };
             ore.set([["grade", 1]]);
         }
 "#,
@@ -2151,7 +2151,7 @@ fn test_caller_data_and_generators_require_unsafe() {
             "unsafe already set",
         ),
         (
-            "action.pow_obj_grind(ore, action.top_limb_u256(9007199254740992))",
+            r#"action.pow_obj_grind(ore, "key", action.top_limb_u256(9007199254740992))"#,
             "expected unsafe block",
         ),
     ] {
@@ -2319,7 +2319,7 @@ fn execution_progress_separates_mining_building_solving_and_proving() {
         fn Main(action) {
             var wood = action.output("Wood");
             let target = action.top_limb_u256(9007199254740992);
-            var key = unsafe { arg("key") ?? action.pow_obj_grind(wood, target) };
+            var key = unsafe { arg("key") ?? action.pow_obj_grind(wood, "key", target) };
             wood.update("key", key);
             action.intro_lt_eq_u256(wood, target);
         }
@@ -2366,7 +2366,7 @@ fn test_arg_supplied_and_default() {
             var wood = action.output("Wood");
             wood.set([["grade", 3]]);
             let target = action.top_limb_u256(9007199254740992);
-            var key = unsafe { arg("key") ?? action.pow_obj_grind(wood, target) };
+            var key = unsafe { arg("key") ?? action.pow_obj_grind(wood, "key", target) };
             wood.update("key", key);
             action.intro_lt_eq_u256(wood, target);
             var worn = action.output("Worn");
@@ -2403,6 +2403,43 @@ fn test_arg_supplied_and_default() {
             .unwrap();
         assert!(matches!(err, SdkError::Eval(..)), "{err}");
     }
+}
+
+#[test]
+fn test_pow_obj_grind_named_field() {
+    let src = |field: &str| {
+        format!(
+            r#"
+            fn Main(action) {{
+                var wood = action.output("Wood");
+                wood.set([["salt", 5]]);
+                let target = action.top_limb_u256(9007199254740992);
+                var salt = unsafe {{ action.pow_obj_grind(wood, "{field}", target) }};
+                wood.update("salt", salt);
+                action.intro_lt_eq_u256(wood, target);
+            }}
+        "#
+        )
+    };
+    let state = TestState::default();
+    let run = |field: &str| {
+        Sdk::default()
+            .load_module_from_src_actions(&src(field), &["Main"])
+            .unwrap()
+            .executor(true, grounding_witness(&state, &[]))
+            .action("Main", vec![])
+    };
+    let result = run("salt").unwrap();
+    let salt = result
+        .obj(0)
+        .obj
+        .get(&StrKey::from("salt"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(salt, Value::from(5));
+
+    let err = run("pepper").err().unwrap();
+    assert!(err.to_string().contains("no field \"pepper\""), "{err}");
 }
 
 #[test]
@@ -2799,4 +2836,81 @@ fn test_stable_identifier() {
             .unwrap()
             .is_untyped()
     );
+}
+
+#[test]
+fn test_object_values_in_fields() {
+    let src = r#"
+        fn Main(action) {
+            var drill = action.output("Drill");
+            drill.set([["nonce", 5]]);
+            var geode = action.output("Geode");
+            geode.set([["mined", commitment(drill)]]);
+            action.intro_lt_eq_u256(drill, geode.mined);
+            var shard = action.output("Shard");
+            shard.set([["mined", 0]]);
+            shard.update("mined", commitment(drill));
+            var replica = action.output("Replica");
+            replica.set([["copy", drill]]);
+            action.st_equal(replica.copy, drill);
+            var mirror = action.output("Mirror");
+            mirror.set([["copy", 0]]);
+            mirror.update("copy", drill);
+        }
+    "#;
+    let module = Sdk::default()
+        .load_module_from_src_actions(src, &["Main"])
+        .unwrap();
+    let state = TestState::default();
+    let result = module
+        .executor(true, grounding_witness(&state, &[]))
+        .action("Main", vec![])
+        .unwrap();
+    let field = |index: usize, key: &str| {
+        result
+            .obj(index)
+            .obj
+            .get(&StrKey::from(key))
+            .unwrap()
+            .unwrap()
+    };
+    // The drill as written is its pre-identity form, whose commitment is
+    // its stable identifier.
+    let drill = field(0, "stable_identifier");
+    for index in [1, 2] {
+        let mined = field(index, "mined");
+        assert_eq!(mined, drill);
+        assert!(mined.as_dictionary().is_none(), "{mined}");
+    }
+    for index in [3, 4] {
+        let copy = field(index, "copy");
+        assert_eq!(copy, drill);
+        let nonce = copy
+            .as_dictionary()
+            .unwrap()
+            .get(&StrKey::from("nonce"))
+            .unwrap();
+        assert_eq!(nonce, Some(Value::from(5)));
+    }
+}
+
+#[test]
+fn test_commitment_requires_an_object() {
+    for (body, expected) in [
+        (
+            "var x = action.output(\"X\"); x.set([[\"a\", commitment(x.a)]]);",
+            "is not an object",
+        ),
+        (
+            "var x = action.output(\"X\"); x.set([[\"a\", commitment(x).a]]);",
+            "has no fields",
+        ),
+    ] {
+        let src = format!("fn Main(action) {{ {body} }}");
+        let err = match Sdk::default().load_module_from_src_actions(&src, &["Main"]) {
+            Ok(_) => panic!("expected {body} to be rejected"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains(expected), "{err}");
+    }
 }

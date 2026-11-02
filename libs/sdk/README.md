@@ -105,14 +105,14 @@ var amount = unsafe {
 
 Each unsafe block runs once per phase. Its returned value becomes one private witness, regardless of whether it came from an argument, a literal, an existing variable, or a computation. Intermediate calculations create no private wildcards. During Load, arguments are absent and defaults run symbolically; during Execute, the script sees the supplied data. A block with no result creates no witness. Nested unsafe blocks are rejected.
 
-Unsafe blocks cannot emit proof statements, declare object inputs/outputs/mutations, update objects, or invoke sub-actions. These restrictions also apply to helpers called from the block. `random` and `pow_obj_grind` require unsafe. Constrain the resulting witness afterwards:
+Unsafe blocks cannot emit proof statements, declare object inputs/outputs/mutations, update objects, or invoke sub-actions. These restrictions also apply to helpers called from the block. `random` and `pow_obj_grind` require unsafe. `pow_obj_grind(obj, key_name, target)` returns a value for the field `key_name`, which must already be in the object, that brings the object's commitment to at most `target`. Constrain the resulting witness afterwards:
 
 ```rhai
 fn CraftWood(action) {
     var log = action.input("Log");
     var wood = action.output("Wood");
     let target = action.top_limb_u256(9007199254740992);
-    var key = unsafe { arg("key") ?? action.pow_obj_grind(wood, target) };
+    var key = unsafe { arg("key") ?? action.pow_obj_grind(wood, "key", target) };
     wood.update("key", key);
     action.intro_lt_eq_u256(wood, target);
 }
@@ -235,6 +235,27 @@ verification.
 Sparse arrays are rendered with the indexed Podlang literal syntax added in
 [pod2 #541](https://github.com/0xPARC/pod2/pull/541).
 
+## Objects as values
+
+An object passed where a value goes stands for its commitment in the rendered
+Podlang, as it does in Podlang itself: `geode.set([["mined", drill]])` renders
+as `DictContains(initials.geode, "mined", io.out_drill)`. What the field
+stores is a different matter, and the script chooses it:
+
+- `geode.set([["mined", commitment(drill)]])` stores the commitment, a raw
+  value, so the field reveals none of the drill's entries, its key included.
+- `geode.set([["copy", drill]])` stores a copy of the drill, every entry
+  included, for whoever holds the geode to read.
+
+Both render and prove the same, since pod2 compares values by their raw form.
+`commitment(obj)`, like the object itself, is the object as it stands at that
+point in the script, which for an output is its form before it gets its
+`stable_identifier`. It only takes a whole object, and has no fields to read.
+
+Within one container pod2 keeps a single stored form per raw value, so an
+object holding both a commitment and a copy of the same state reads both
+fields back in whichever form was written last.
+
 ## Type checking
 
 Rhai is dynamically typed, so some validation occurs at runtime. The loader
@@ -243,7 +264,7 @@ only be validated during Execute.
 
 ## u256 difficulty targets
 
-`pow_obj_grind(obj, target)` and `intro_lt_eq_u256(x, target)` both compare
+`pow_obj_grind(obj, key_name, target)` and `intro_lt_eq_u256(x, target)` both compare
 full 256-bit `RawValue`s. Integer literals in Rhai promote to a pod2 `Value`
 whose `RawValue` has the integer in the _least_-significant limb — not what
 you want for a "top-limb ≤ N" difficulty target.
@@ -255,7 +276,7 @@ neither declares a wildcard):
 
 ```rhai
 let target = action.top_limb_u256(9007199254740992);
-var key = unsafe { action.pow_obj_grind(wood, target) };
+var key = unsafe { action.pow_obj_grind(wood, "key", target) };
 wood.update("key", key);
 action.intro_lt_eq_u256(wood, target);
 ```

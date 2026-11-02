@@ -666,6 +666,13 @@ impl ActionContext {
         state.ts += 1;
         Ok(())
     }
+    /// How the action declared the object bound to `var`, if `var` is one.
+    fn object_io(&self, var: &str) -> Option<ObjectIO> {
+        self.insts.iter().find_map(|inst| match inst {
+            Inst::Object { io, obj, .. } if obj.borrow().var_name() == var => Some(*io),
+            _ => None,
+        })
+    }
     fn mark_dict_read(&mut self, var: &str) {
         if let Some(state) = self.var_state.get_mut(var) {
             state.dict_read = true;
@@ -711,11 +718,7 @@ impl ActionContext {
         if var == "?" {
             return Err("set: bind the object with `var` first".into());
         }
-        let io = self.insts.iter().find_map(|inst| match inst {
-            Inst::Object { io, obj, .. } if obj.borrow().var_name() == var => Some(*io),
-            _ => None,
-        });
-        match io {
+        match self.object_io(var) {
             Some(ObjectIO::Output) => {}
             Some(_) => {
                 return Err(format!(
@@ -1481,8 +1484,9 @@ impl ActionHandle {
                         let ts = *current_ts.get(obj).unwrap_or(&0);
                         let dict_arg = anchor_or_literal(obj, &dict, ts);
                         let op_args = op_args.as_ref().expect("Set op_args captured at Rhai");
-                        for ((key, _), arg) in kvs.iter().zip(op_args) {
-                            let arg = arg.clone();
+                        for ((key, value), snap) in kvs.iter().zip(op_args) {
+                            let arg = arg_anchor(value, snap, &current_ts)
+                                .unwrap_or_else(|| snap.clone());
                             let st = exe_ctx
                                 .bld
                                 .builder
@@ -1498,14 +1502,16 @@ impl ActionHandle {
                     Inst::Update {
                         obj,
                         key,
+                        value,
                         op_arg,
                         old_dict,
                         new_dict,
-                        ..
                     } => {
                         let old_dict = old_dict.clone().expect("Update old_dict captured at Rhai");
                         let new_dict = new_dict.clone().expect("Update new_dict captured at Rhai");
-                        let arg = op_arg.clone().expect("Update op_arg captured at Rhai");
+                        let snap = op_arg.as_ref().expect("Update op_arg captured at Rhai");
+                        let arg =
+                            arg_anchor(value, snap, &current_ts).unwrap_or_else(|| snap.clone());
                         let ts_before = *current_ts.get(obj).unwrap_or(&0);
                         let ts_after = ts_before + 1;
                         let new_dict_arg = anchor_or_literal(obj, &new_dict, ts_after);
@@ -1700,7 +1706,12 @@ impl ActionHandle {
         }
         Ok(ArgHandle::new(self.clone(), value))
     }
-    fn pow_obj_grind(self, obj: Dynamic, target: Dynamic) -> RuntimeResult<ArgHandle> {
+    fn pow_obj_grind(
+        self,
+        obj: Dynamic,
+        key_name: String,
+        target: Dynamic,
+    ) -> RuntimeResult<ArgHandle> {
         self.0.borrow().assert_unsafe(true)?;
         // Target is a full u256 (Raw). To build one with a desired top-limb
         // difficulty, scripts use `action.top_limb_u256(n)`.
@@ -1708,7 +1719,7 @@ impl ActionHandle {
         if let VarOrValue::Var(var) = &*obj.borrow() {
             self.0.borrow_mut().mark_dict_read(&var.name);
         }
-        let key = temporary(Type::Raw);
+        let value = temporary(Type::Raw);
         if let Some(exe_ctx) = self.0.borrow().exe_ref() {
             if let Some(progress) = &exe_ctx.progress {
                 progress(ExecutionStage::Mining);
@@ -1716,18 +1727,21 @@ impl ActionHandle {
             // This is a copy of the object, we don't modify the obj argument.
             let mut obj = obj.borrow().to_dict();
             let target_raw = target.borrow().as_value().raw();
-            // Initialize k to obj's current key so that when the loop body doesn't run (mock mode,
-            // or the initial random already satisfies the constraint), the returned k still
-            // matches what's in obj.
-            let mut k = obj
-                .get(&StrKey::from("key"))
+            // Initialize v to obj's current value at key_name so that when the loop body doesn't
+            // run (mock mode, or the initial random already satisfies the constraint), the
+            // returned v still matches what's in obj.
+            let key_name = StrKey::from(key_name.as_str());
+            let mut v = obj
+                .get(&key_name)
                 .expect("dict op")
-                .expect("obj has key");
+                .ok_or_else::<Box<EvalAltResult>, _>(|| {
+                    format!("pow_obj_grind: object has no field {:?}", key_name.name()).into()
+                })?;
             if !exe_ctx.mock {
                 let mut i = 0;
                 while u256_gt(&RawValue::from(obj.commitment()), &target_raw) {
-                    k = exe_ctx.rand_value();
-                    obj.update(&StrKey::from("key"), &k).unwrap();
+                    v = exe_ctx.rand_value();
+                    obj.update(&key_name, &v).unwrap();
                     i += 1;
                     // After 256 iterations, make a deep copy of the dictionary as a form of
                     // garbage collection for old merkle tree nodes.
@@ -1744,12 +1758,12 @@ impl ActionHandle {
                     }
                 }
             }
-            key.borrow_mut().set_value(k);
+            value.borrow_mut().set_value(v);
             if let Some(progress) = &exe_ctx.progress {
                 progress(ExecutionStage::Building);
             }
         }
-        Ok(ArgHandle::new(self.clone(), key))
+        Ok(ArgHandle::new(self.clone(), value))
     }
     /// Returns the dictionary entry at `key` and emits `DictContains`.
     fn dict_get(self, dict: Dynamic, key: Dynamic) -> RuntimeResult<ArgHandle> {
@@ -1999,7 +2013,7 @@ impl ArgHandle {
         if ctx.exe_ctx.is_some() {
             let mut arg = self.arg.borrow_mut();
             for (key, value) in &kvs {
-                let value = value.borrow().as_value().clone();
+                let value = value.borrow().as_value();
                 arg.mut_dict(|obj| {
                     obj.insert(&StrKey::from(key), &value).expect("TODO");
                 });
@@ -2022,9 +2036,11 @@ impl ArgHandle {
     }
     fn update(self, key: String, value: Dynamic) -> RuntimeResult<()> {
         type_check_args([(&self, Type::Dict)])?;
-        let mut arg = self.arg.borrow_mut();
-        if let VarOrValue::Var(var) = &*arg {
-            let var_name = var.name.clone();
+        let var_name = match &*self.arg.borrow() {
+            VarOrValue::Var(var) => var.name.clone(),
+            VarOrValue::Value(_) => return Ok(()),
+        };
+        {
             let value = try_ref_from_dynamic(value)?;
             let mut ctx = self.ctx.0.borrow_mut();
             ctx.assert_unsafe(false)?;
@@ -2032,8 +2048,8 @@ impl ArgHandle {
             let mut old_dict: Option<Dictionary> = None;
             let mut new_dict: Option<Dictionary> = None;
             if ctx.exe_ctx.is_some() {
-                let v = value.borrow().as_value().clone();
-                let (obj0, obj) = arg.mut_dict(|obj| {
+                let v = value.borrow().as_value();
+                let (obj0, obj) = self.arg.borrow_mut().mut_dict(|obj| {
                     let obj0 = obj.clone();
                     obj.update(&StrKey::from(&key), &v).expect("TODO");
                     (obj0, obj.clone())
@@ -2053,6 +2069,23 @@ impl ArgHandle {
         }
         Ok(())
     }
+    /// The commitment of the object's state at this point in the script.
+    /// It stands for the object in a statement, as the whole object does,
+    /// but written into a field it reveals none of the object's entries.
+    fn commitment(self) -> RuntimeResult<ArgHandle> {
+        let mut arg = self.arg.borrow().clone();
+        let VarOrValue::Var(var) = &mut arg else {
+            return Err("commitment: expected an object".into());
+        };
+        if var.key.is_some() || self.ctx.0.borrow().object_io(&var.name).is_none() {
+            return Err(format!("commitment: {} is not an object", var.name).into());
+        }
+        var.typ = Type::Raw;
+        if let Some(value) = &mut var.value {
+            *value = Value::from(value.raw());
+        }
+        Ok(ArgHandle::new(self.ctx, Rc::new(RefCell::new(arg))))
+    }
     fn entry(&mut self, index: String) -> RuntimeResult<ArgHandle> {
         let mut arg = self.arg.borrow().clone();
         // Resolve literal access immediately; there is no variable on which to
@@ -2062,6 +2095,9 @@ impl ArgHandle {
             return Ok(ArgHandle::literal(self.ctx.clone(), entry));
         }
         let var = arg.as_mut_var();
+        if var.typ == Type::Raw {
+            return Err(format!("{} has no fields", var.name).into());
+        }
         // Validate known record fields during Load and runtime values during
         // Execute before retaining the field reference.
         if let Type::Array(record) = &var.typ
@@ -3486,6 +3522,7 @@ fn new_engine() -> Engine {
         .register_type_with_name::<ArgHandle>("ArgContext")
         .register_fn("set", ArgHandle::set)
         .register_fn("get", ArgHandle::get)
+        .register_fn("commitment", ArgHandle::commitment)
         .register_fn("update", ArgHandle::update)
         .register_fn(
             "var_assign",

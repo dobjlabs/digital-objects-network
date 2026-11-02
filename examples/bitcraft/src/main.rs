@@ -630,10 +630,8 @@ fn main() -> Result<(), io::Error> {
 
         for tag in &action.tags {
             if let CrackGeode(tier) = tag {
-                // The stable identifier is the commitment of the geode as
-                // mined, which is the value its proof-of-work bounded.
                 let geode = format!("{Geode}000").to_lowercase();
-                let mined = format!("{geode}.stable_identifier");
+                let mined = format!("{geode}.mined");
                 if *tier > 0 {
                     let field = format!("{}", GEMS[*tier]).to_lowercase();
                     writeln!(o, "  action.intro_lt_eq_u256({mined}, {geode}.{field});")?;
@@ -646,35 +644,37 @@ fn main() -> Result<(), io::Error> {
         }
 
         if action.pow_target > 0 {
-            // The mined output records the tool's nonce before the grind, and
-            // the key the grind finds becomes the tool's next nonce. Each use's
-            // work can only start once the previous use's work is done, and
-            // only with that tool.
+            // The grind runs over the tool's nonce, after every other update
+            // to the tool, so the work is tied to that tool's state and each
+            // use's work can only start once the previous use is mined.
             let tool = action
                 .mut_tool
                 .filter(|tool| tool.mines())
                 .expect("a mining action mutates the tool it mines with");
             let tool = format!("{tool}").to_lowercase();
-            let mut initializers = vec![format!(r#"["tool_nonce", {tool}.nonce]"#)];
+            writeln!(
+                o,
+                r#"  let target = action.top_limb_u256({n});
+  var grind_nonce = unsafe {{ arg("grind_nonce") ?? action.pow_obj_grind({tool}, "nonce", target) }};
+  {tool}.update("nonce", grind_nonce);
+  action.intro_lt_eq_u256({tool}, target);"#,
+                n = action.pow_target,
+            )?;
             if action
                 .tags
                 .iter()
                 .any(|tag| matches!(tag, SetGemThresholds))
             {
+                // The geode records the tool's commitment, the value the
+                // proof-of-work bounded, which decides the gem it cracks into.
+                let mut initializers = vec![format!(r#"["mined", commitment({tool})]"#)];
                 initializers.extend(gem_threshold_initializers(action.pow_target));
+                writeln!(
+                    o,
+                    "  {last_out_resource}.set([{}]);",
+                    initializers.join(", ")
+                )?;
             }
-            writeln!(
-                o,
-                r#"  {var}.set([{initializers}]);
-  let target = action.top_limb_u256({n});
-  var grind_key = unsafe {{ arg("grind_key") ?? action.pow_obj_grind({var}, target) }};
-  {var}.update("key", grind_key);
-  action.intro_lt_eq_u256({var}, target);
-  {tool}.update("nonce", grind_key);"#,
-                n = action.pow_target,
-                var = last_out_resource,
-                initializers = initializers.join(", "),
-            )?;
         }
 
         let vdf_input = || {
