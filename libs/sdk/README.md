@@ -235,6 +235,27 @@ verification.
 Sparse arrays are rendered with the indexed Podlang literal syntax added in
 [pod2 #541](https://github.com/0xPARC/pod2/pull/541).
 
+## Objects as values
+
+An object passed where a value goes stands for its commitment in the rendered
+Podlang, as it does in Podlang itself: `geode.set([["mined", drill]])` renders
+as `DictContains(initials.geode, "mined", io.out_drill)`. What the field
+stores is a different matter, and the script chooses it:
+
+- `geode.set([["mined", commitment(drill)]])` stores the commitment, a raw
+  value, so the field reveals none of the drill's entries, its key included.
+- `geode.set([["copy", drill]])` stores a copy of the drill, every entry
+  included, for whoever holds the geode to read.
+
+Both render and prove the same, since pod2 compares values by their raw form.
+`commitment(obj)`, like the object itself, is the object as it stands at that
+point in the script, which for an output is its form before it gets its
+`stable_identifier`. It only takes a whole object, and has no fields to read.
+
+Within one container pod2 keeps a single stored form per raw value, so an
+object holding both a commitment and a copy of the same state reads both
+fields back in whichever form was written last.
+
 ## Type checking
 
 Rhai is dynamically typed, so some validation occurs at runtime. The loader

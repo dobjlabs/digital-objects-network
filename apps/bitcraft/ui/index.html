@@ -1780,8 +1780,8 @@
   };
 
   // Most common first. A geode records, under each gem's name in lower case
-  // and for every gem but the first, the highest mined value (its
-  // `stable_identifier`) that cracks into that gem or a rarer one.
+  // and for every gem but the first, the highest mined value (its `mined`
+  // field) that cracks into that gem or a rarer one.
   const GEMS = ["Quartz", "Amethyst", "Sapphire", "Emerald", "Ruby", "Diamond"];
 
   // A getting-started guide shown as the first row of the object list: its
@@ -2030,7 +2030,7 @@
     const geode = inputs.find((object) => object.class.name === "Geode");
     const tier = GEMS.indexOf(gem);
     if (geode === undefined || tier === -1) return false;
-    const mined = rawFieldValue(geode, "stable_identifier");
+    const mined = rawFieldValue(geode, "mined");
     if (mined === null) return false;
     const threshold = (index) => rawFieldValue(geode, GEMS[index].toLowerCase());
     const atMostOwn = tier === 0 || (threshold(tier) !== null && mined <= threshold(tier));

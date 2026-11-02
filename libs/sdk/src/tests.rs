@@ -2837,3 +2837,80 @@ fn test_stable_identifier() {
             .is_untyped()
     );
 }
+
+#[test]
+fn test_object_values_in_fields() {
+    let src = r#"
+        fn Main(action) {
+            var drill = action.output("Drill");
+            drill.set([["nonce", 5]]);
+            var geode = action.output("Geode");
+            geode.set([["mined", commitment(drill)]]);
+            action.intro_lt_eq_u256(drill, geode.mined);
+            var shard = action.output("Shard");
+            shard.set([["mined", 0]]);
+            shard.update("mined", commitment(drill));
+            var replica = action.output("Replica");
+            replica.set([["copy", drill]]);
+            action.st_equal(replica.copy, drill);
+            var mirror = action.output("Mirror");
+            mirror.set([["copy", 0]]);
+            mirror.update("copy", drill);
+        }
+    "#;
+    let module = Sdk::default()
+        .load_module_from_src_actions(src, &["Main"])
+        .unwrap();
+    let state = TestState::default();
+    let result = module
+        .executor(true, grounding_witness(&state, &[]))
+        .action("Main", vec![])
+        .unwrap();
+    let field = |index: usize, key: &str| {
+        result
+            .obj(index)
+            .obj
+            .get(&StrKey::from(key))
+            .unwrap()
+            .unwrap()
+    };
+    // The drill as written is its pre-identity form, whose commitment is
+    // its stable identifier.
+    let drill = field(0, "stable_identifier");
+    for index in [1, 2] {
+        let mined = field(index, "mined");
+        assert_eq!(mined, drill);
+        assert!(mined.as_dictionary().is_none(), "{mined}");
+    }
+    for index in [3, 4] {
+        let copy = field(index, "copy");
+        assert_eq!(copy, drill);
+        let nonce = copy
+            .as_dictionary()
+            .unwrap()
+            .get(&StrKey::from("nonce"))
+            .unwrap();
+        assert_eq!(nonce, Some(Value::from(5)));
+    }
+}
+
+#[test]
+fn test_commitment_requires_an_object() {
+    for (body, expected) in [
+        (
+            "var x = action.output(\"X\"); x.set([[\"a\", commitment(x.a)]]);",
+            "is not an object",
+        ),
+        (
+            "var x = action.output(\"X\"); x.set([[\"a\", commitment(x).a]]);",
+            "has no fields",
+        ),
+    ] {
+        let src = format!("fn Main(action) {{ {body} }}");
+        let err = match Sdk::default().load_module_from_src_actions(&src, &["Main"]) {
+            Ok(_) => panic!("expected {body} to be rejected"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains(expected), "{err}");
+    }
+}
