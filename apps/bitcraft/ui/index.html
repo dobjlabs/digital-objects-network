@@ -572,8 +572,6 @@
     font: inherit;
   }
   #steps-note { margin: 0; color: var(--muted); font-size: 12px; }
-  #steps-warning { margin: 0; color: var(--error); font-size: 12px; }
-  #steps-warning[hidden] { display: none; }
   .import-actions {
     display: flex;
     justify-content: flex-end;
@@ -1404,7 +1402,6 @@
     <div id="steps-dialog" role="dialog" aria-modal="true" aria-labelledby="steps-title" aria-describedby="steps-note">
       <h1 id="steps-title"></h1>
       <input type="text" id="steps-input" inputmode="numeric" autocomplete="off" spellcheck="false" aria-labelledby="steps-title">
-      <p id="steps-warning" role="alert" hidden></p>
       <p id="steps-note"></p>
       <div class="import-actions">
         <button type="button" id="steps-cancel">Cancel</button>
@@ -1749,17 +1746,12 @@
   ];
 
   // Actions that ask the player for a number of steps before they run, from
-  // the context menu. The count is sent as the action's caller data `arg`,
-  // and may not exceed `max`; a larger count shows `overMax` instead.
+  // the context menu. The count is sent as the action's caller data `arg`.
   const STEP_PROMPTS = {
     PumpOil: {
       arg: "n_steps",
       title: "How many steps should the pumpjack run?",
       note: "Each step takes about 5 minutes on a typical laptop.",
-      // A transaction must land within the grounding age limit of the state
-      // root it proves against, and the steps run after that root is fetched.
-      max: 8,
-      overMax: "More than 8 steps can take longer than the network allows, so the action may time out. Choose 8 or fewer.",
     },
   };
 
@@ -5300,12 +5292,9 @@
   const stepsTitle = document.getElementById("steps-title");
   const stepsInput = document.getElementById("steps-input");
   const stepsNote = document.getElementById("steps-note");
-  const stepsWarning = document.getElementById("steps-warning");
   const stepsCancel = document.getElementById("steps-cancel");
   const stepsConfirm = document.getElementById("steps-confirm");
   let focusBeforeSteps = null;
-  // The `STEP_PROMPTS` entry the open sheet asks for.
-  let stepsPrompt = null;
   // Settles the promise `askSteps` returned, with the count or null.
   let answerSteps = null;
 
@@ -5326,29 +5315,12 @@
     return /^[1-9][0-9]*$/.test(text) && Number.isSafeInteger(Number(text)) ? text : null;
   }
 
-  function overMaxSteps(steps) {
-    return steps !== null && Number(steps) > stepsPrompt.max;
-  }
-
-  // The entered count when Confirm may accept it, or null.
-  function acceptedSteps() {
-    const steps = enteredSteps();
-    return overMaxSteps(steps) ? null : steps;
-  }
-
-  function updateStepsControls() {
-    stepsWarning.hidden = !overMaxSteps(enteredSteps());
-    stepsConfirm.disabled = acceptedSteps() === null;
-  }
-
   function askSteps(prompt) {
     answerSteps?.(null);
-    stepsPrompt = prompt;
     stepsTitle.textContent = prompt.title;
     stepsNote.textContent = prompt.note;
-    stepsWarning.textContent = prompt.overMax;
     stepsInput.value = "1";
-    updateStepsControls();
+    stepsConfirm.disabled = false;
     focusBeforeSteps = document.activeElement;
     stepsSheet.hidden = false;
     for (const element of sheetBackground) element.inert = true;
@@ -5367,9 +5339,11 @@
     answer?.(steps);
   }
 
-  stepsInput.addEventListener("input", updateStepsControls);
+  stepsInput.addEventListener("input", () => {
+    stepsConfirm.disabled = enteredSteps() === null;
+  });
   stepsConfirm.addEventListener("click", () => {
-    const steps = acceptedSteps();
+    const steps = enteredSteps();
     if (steps !== null) closeSteps(steps);
   });
   stepsCancel.addEventListener("click", () => closeSteps(null));
