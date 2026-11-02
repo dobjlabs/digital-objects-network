@@ -4,7 +4,10 @@ use std::{
     net::TcpListener,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::Mutex,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -30,6 +33,8 @@ pub struct Runtime {
     pub state_root: PathBuf,
     connection: Connection,
     connection_path: PathBuf,
+    /// Set once the daemon is ready and reports that it runs in mock mode.
+    mock: AtomicBool,
 }
 
 #[cfg(windows)]
@@ -176,7 +181,12 @@ impl Runtime {
             state_root,
             connection,
             connection_path: connection_path(home),
+            mock: AtomicBool::new(false),
         })
+    }
+
+    pub fn is_mock(&self) -> bool {
+        self.mock.load(Ordering::Relaxed)
     }
 
     pub async fn wait_until_ready(&self) -> Result<()> {
@@ -213,6 +223,8 @@ impl Runtime {
                     if child.try_wait()?.is_some() {
                         bail!("The daemon exited during startup");
                     }
+                    self.mock
+                        .store(health["mock"].as_bool() == Some(true), Ordering::Relaxed);
                     self.connection.publish(&self.connection_path)?;
                     return Ok(());
                 }

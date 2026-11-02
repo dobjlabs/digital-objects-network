@@ -76,6 +76,16 @@ pub async fn grind_pow(
     action: String,
     input_object_paths: Vec<String>,
 ) -> Result<Map<String, Value>, String> {
+    let mock = desktop
+        .runtime
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|runtime| runtime.is_mock());
+    if mock {
+        // A mock daemon's own search takes no time.
+        return Ok(Map::new());
+    }
     let grinder = crate::bundled_binary("bitcraft-grind").map_err(|error| format!("{error:#}"))?;
     search(
         &grinder,

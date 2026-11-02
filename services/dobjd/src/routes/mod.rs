@@ -124,9 +124,15 @@ mod tests {
     }
 
     fn test_app(home: &std::path::Path) -> Router {
+        test_app_with_deps(home, DriverDeps::load)
+    }
+
+    fn test_app_with_deps(
+        home: &std::path::Path,
+        load_deps: fn(&DriverPaths) -> anyhow::Result<DriverDeps>,
+    ) -> Router {
         let paths = DriverPaths::from_dobj_root(home);
-        let driver =
-            Arc::new(Driver::open(paths.clone(), DriverDeps::load(&paths).unwrap()).unwrap());
+        let driver = Arc::new(Driver::open(paths.clone(), load_deps(&paths).unwrap()).unwrap());
         let events = EventHub::new();
         let services = Services {
             settler: Arc::new(Settler::new(driver.clone(), events.clone())),
@@ -141,6 +147,20 @@ mod tests {
             7717,
         ));
         router(AppState::new(services, mcp), WebAccess::new(7717))
+    }
+
+    #[tokio::test]
+    async fn health_reports_mock_mode() {
+        for (load_deps, mock) in [
+            (DriverDeps::load as fn(&DriverPaths) -> _, false),
+            (DriverDeps::load_mock, true),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let app = test_app_with_deps(home.path(), load_deps);
+            let (status, health) = request(&app, "GET", "/healthz", Value::Null).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(health["mock"], mock);
+        }
     }
 
     #[tokio::test]

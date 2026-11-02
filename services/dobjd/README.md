@@ -191,6 +191,8 @@ ignored. The DON starts empty on every launch, so objects left in the store
 from an earlier run can no longer be spent; use a separate `DOBJ_HOME`.
 `just dev-mock` sets both and clears the mock store first.
 
+In mock mode, `/healthz` reports `"mock": true`, so clients can skip work that mock mode makes pointless, such as searching for proof of work before an action.
+
 Released binaries are signed + notarized on macOS. The bundle is just
 the four executables (`dobjd`, `dobj`, `dobj-mcp-proxy`, `pexe`).
 Windows binaries are not codesigned yet — first run shows a SmartScreen warning.

@@ -11,10 +11,14 @@
 //! flag plus the version/target stamp so clients can tell which build is
 //! serving.
 //! An optional instance_id echoes DOBJ_INSTANCE_ID for process supervisors.
+//! `mock` tells clients whether the daemon runs in mock mode, where a
+//! proof-of-work search costs nothing and need not be run in advance.
 
-use axum::Json;
+use axum::{Json, extract::State};
 use serde::Serialize;
 use wire_types::HealthResponse;
+
+use crate::state::AppState;
 
 #[derive(Serialize)]
 pub struct DaemonHealth {
@@ -22,11 +26,13 @@ pub struct DaemonHealth {
     health: HealthResponse,
     #[serde(skip_serializing_if = "Option::is_none")]
     instance_id: Option<String>,
+    mock: bool,
 }
 
-pub async fn healthz() -> Json<DaemonHealth> {
+pub async fn healthz(State(state): State<AppState>) -> Json<DaemonHealth> {
     Json(DaemonHealth {
         health: HealthResponse::stamped(crate::RELEASE_TAG, crate::TARGET_TRIPLE),
         instance_id: std::env::var("DOBJ_INSTANCE_ID").ok(),
+        mock: state.services.driver.is_mock(),
     })
 }
