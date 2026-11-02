@@ -170,8 +170,9 @@ the selected objects.
   available for a whole number from 1 to 8 (`max`). Above 8 a warning shows
   instead: "More than 8 steps can take longer than the network allows, so the
   action may time out. Choose 8 or fewer." At about 5 minutes a step, 8 steps
-  stay well inside the roughly one hour a transaction has to land after its
-  state root is fetched, which happens before the steps run. Confirm closes
+  stay well inside the time a transaction has to land after its state root is
+  fetched (txlib's `MAX_STATE_ROOT_AGE_BLOCKS`), which happens before the steps
+  run. Confirm closes
   the sheet and starts the run with the count as the action's caller data
   `n_steps`
   (`{"n_steps": {"Int": "<count>"}}` in `POST /runs`). Cancel or Escape

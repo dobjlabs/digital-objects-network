@@ -2338,6 +2338,7 @@ dependencies = [
  "tracing",
  "tracing-log 0.1.4",
  "tracing-subscriber",
+ "txlib",
  "uuid",
  "wire-types",
 ]

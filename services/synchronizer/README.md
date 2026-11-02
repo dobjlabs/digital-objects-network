@@ -111,7 +111,7 @@ For each decoded blob payload, the synchronizer:
 
 - skips blobs that do not decode into a valid `TxFinalized` proof
 - rejects payloads whose `state_root_hash` is not in recent state root history
-- rejects payloads whose grounding state root is older than `MAX_STATE_ROOT_AGE_BLOCKS` (currently 300)
+- rejects payloads whose grounding state root is older than `MAX_STATE_ROOT_AGE_BLOCKS` (currently 50400, about a week)
 - rejects creation collisions: a created-object commitment that repeats within
   the payload, repeats within the slot, or already exists in committed state
   (prefetched from the created index and cross-checked against the created

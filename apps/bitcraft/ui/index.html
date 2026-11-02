@@ -1756,8 +1756,8 @@
       arg: "n_steps",
       title: "How many steps should the pumpjack run?",
       note: "Each step takes about 5 minutes on a typical laptop.",
-      // A transaction must land within about an hour of the state root it
-      // proves against, and the steps run after that root is fetched.
+      // A transaction must land within the grounding age limit of the state
+      // root it proves against, and the steps run after that root is fetched.
       max: 8,
       overMax: "More than 8 steps can take longer than the network allows, so the action may time out. Choose 8 or fewer.",
     },

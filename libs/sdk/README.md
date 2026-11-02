@@ -306,7 +306,7 @@ fn Tick(action) {
 
 Timing caveat: the header describes the _grounding_ state root, not the block
 that will include the transaction. The synchronizer accepts grounding roots up
-to `MAX_STATE_ROOT_AGE_BLOCKS` (300 blocks, roughly an hour) old, so a prover
+to `MAX_STATE_ROOT_AGE_BLOCKS` blocks old, so a prover
 may legitimately ground against the oldest accepted root: `block_timestamp`
 can trail wall-clock time by up to that window, and the transaction lands on
 chain later still. Treat time locks written against it as coarse-grained.

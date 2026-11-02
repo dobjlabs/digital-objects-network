@@ -711,10 +711,12 @@ mod tests {
             relayer::{JobStatus, SubmitProofResponse},
             synchronizer::StateHeadResponse,
         };
+        // The record is grounded at block 1.
+        let aged_out_head = 2 + txlib::MAX_STATE_ROOT_AGE_BLOCKS;
         for (failed_heads, head_block, reject_proof, expected_heads, expected_posts) in [
             (2, 1, false, 3, 1),
             (usize::MAX, 1, false, 3, 0),
-            (0, 1000, false, 1, 0),
+            (0, aged_out_head, false, 1, 0),
             (0, 1, true, 1, 1),
         ] {
             let heads = Arc::new(AtomicUsize::new(0));
