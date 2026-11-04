@@ -12,6 +12,28 @@ The Digital Objects Network is a very general platform that many valuable applic
 
 As a first application, we propose to build a **Digital Objects World**: an MMO sandbox game where players create various kinds of Digital Objects, explore interactions between Objects and between each other, and ultimately construct emergent structures like communities, economies, collective objectives and collective meaning, etc. of their own design based around the capabilities of Digital Objects.
 
+## Our stack
+
+The following tables show the different concepts that are required to realize the Digital Object Networks (from higher to lower level) next to how they are implemented today.
+
+### Digital Objects Network stack
+
+| Concept                          | Implementation                        |
+| -------------------------------- | ------------------------------------- |
+| global state derivation          | permissionlesly operable synchronizer |
+| global bulletin board            | Ethereum blobspace                    |
+| Class-Action SDK                 | pexe/Rhai SDK                         |
+| Class-Action protocol            | podlang txlib                         |
+| private statement proving system | pod2                                  |
+
+### Pod2 stack
+
+| Concept                    | Implementation          |
+| -------------------------- | ----------------------- |
+| predicate language         | podlang                 |
+| statement derivation kernel | MainPod plonky2 circuit |
+| zk proving system          | plonky2                 |
+
 ## Core Digital Objects Network Concepts
 
 ### Digital Objects
