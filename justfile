@@ -104,9 +104,16 @@ bitcraft-bundle: bitcraft-prepare
 bitcraft-discord-bot:
     cargo run --bin bitcraft-discord-bot --release
 
-# Run the documentation site (Vocs dev server) with hot reload
+# Serve the documentation book (mdBook) with live reload on http://localhost:3000
 docs:
-    cd docs && pnpm install && pnpm dev
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v mdbook >/dev/null 2>&1; then
+        echo "mdbook not found; install it with:" >&2
+        echo "    cargo install mdbook --version 0.4.40 --locked" >&2
+        exit 1
+    fi
+    mdbook serve docs --open
 
 # Run the headless HTTP server that exposes the driver API to every client
 # (browser UI, MCP, dobj CLI).

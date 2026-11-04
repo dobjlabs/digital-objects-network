@@ -1,14 +1,8 @@
----
-title: Architecture
-showAskAi: false
-description: The components of the Digital Objects Network - driver, relayer, synchronizer, archiver - and the client configurations users assemble from them.
----
-
 # Architecture
 
-This document outlines the overall architecture of the network and how
-operationally you can realize the guarantees outlined in the
-[network overview](/network).
+This chapter outlines the overall architecture of the network and how
+operationally you can realize the guarantees outlined in
+[Concepts](./concepts.md).
 
 ## Digital Object (DO)
 
@@ -21,22 +15,35 @@ A **Digital Object** (DO) is a file with four parts:
 
 **Lifecycle.** An object is _created_, _transitioned_ any number of times, and eventually _consumed_. Each transition consumes the object's current commitment and publishes its successor in the same step, so the object stays **live** throughout, represented at any moment by a single current commitment.
 
-## Network Architecture
+## Components
 
 Five components together make the network work.
 
-```mermaid
-flowchart TB
-    Files[("Digital Object files")] <--> Driver["Driver"]
-    Driver -- "submit update" --> Relayer["Relayer"]
-    Relayer -- "publish blob" --> Blobs[("Ethereum blobs")]
-    Blobs -- "read recent blobs" --> Sync["Synchronizer"]
-    Blobs -- "persist blobs" --> Archiver["Archiver"]
-    Archiver -- "serve historical blobs" --> Sync
-    Sync -- "canonical state" --> Driver
+```text
++----------------------+
+| Digital Object files |
++----------------------+
+            ^
+            | read and write
+            v
+      +-----------+     submit update     +-----------+
+      |   Driver  | --------------------> |  Relayer  |
+      +-----------+                       +-----------+
+            ^                                   |
+            | canonical state                   | publish blob
+            |                                   v
+    +--------------+ read recent blobs +----------------+
+    | Synchronizer | <---------------- | Ethereum blobs |
+    +--------------+                   +----------------+
+            ^                                   |
+            | serve historical blobs            | persist blobs
+            |                                   v
+            |                             +-----------+
+            +---------------------------- |  Archiver |
+                                          +-----------+
 ```
 
-### Ethereum Blobs
+### Ethereum blobs
 
 The network uses Ethereum blobs as its public broadcast channel. Blobs are append-only, publicly readable payloads attached to Ethereum consensus blocks: anyone may post one, anyone reading the chain receives them in canonical order, and once a blob has been included in a finalized block its place in history cannot be rewritten.
 
