@@ -80,7 +80,7 @@ docker run -d --name archiver -p 3001:3001 \
   -e RPC_URL=https://your-execution-rpc \
   -e BEACON_URL=https://your-beacon-api \
   -e FILTER_ADDRESS=0x... \
-  -e INIT_START_SLOT=10413441 \
+  -e INIT_START_SLOT=YOUR_START_SLOT \
   -v don_blobs:/var/lib/don \
   ghcr.io/dobjlabs/digital-objects-network/archiver:latest
 ```

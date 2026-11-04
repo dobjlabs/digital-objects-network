@@ -11,13 +11,11 @@ The network's chain-side services can be run by anyone: an **archiver** and a
 data yourself, and a **relayer** lets you submit transactions with your own
 wallet.
 
-To follow the public testnet, every service must use the same blob address and
-start slot as the network (see [Network status](/#network-status)):
-
-| Parameter    | Value                                                                                   |
-| ------------ | --------------------------------------------------------------------------------------- |
-| Blob address | `0x4343434343434343434343434343434343434343`                                            |
-| Start slot   | `11491968` — this changes over time, as the testnet is reset periodically during testing |
+To follow the public testnet, every service must use the network's blob
+address and the synchronizer must use its start slot; the archiver can start at
+or before it. Both are listed under [Network status](/#network-status). The
+start slot changes over time, as the testnet is reset periodically during
+testing.
 
 ## Running from source
 
@@ -51,7 +49,7 @@ Configure it in `services/archiver/.env`:
 | `RPC_URL`         | yes      | Ethereum execution-layer RPC endpoint                                                                                               |
 | `BEACON_URL`      | yes      | Beacon API endpoint that serves blob sidecars                                                                                       |
 | `FILTER_ADDRESS`  | yes      | Blob address; only blobs sent to it are archived                                                                                    |
-| `INIT_START_SLOT` | yes      | Slot to start archiving from on first run; afterwards it resumes from its stored progress. Use the network's start slot             |
+| `INIT_START_SLOT` | yes      | Slot to start archiving from on first run; afterwards it resumes from its stored progress. At or before the network's start slot    |
 | `BLOBS_PATH`      | yes      | Directory where the blobs are stored (no database). Grows by ~128 KB per archived blob                                              |
 | `HTTP_BIND`       | no       | Address the HTTP API listens on (default `127.0.0.1:3001`)                                                                          |
 
@@ -140,9 +138,9 @@ The variables to fill in `deploy/.env`:
 | `TO_ADDRESS`        | yes      | Blob address, shared by all three services (the archiver receives it as its `FILTER_ADDRESS`)                                              |
 | `RPC_URL`           | yes      | Ethereum execution-layer RPC endpoint, used by all three services                                                                           |
 | `BEACON_URL`        | yes      | Beacon API endpoint that serves blob sidecars, used by the synchronizer and the archiver                                                    |
-| `INIT_START_SLOT`   | yes      | Start slot for the synchronizer and the archiver. Use the network's start slot                                                              |
+| `INIT_START_SLOT`   | yes      | Start slot for the synchronizer and the archiver. Use the network's start slot                                                             |
 | `PRIVATE_KEY`       | relayer  | Relayer wallet key; only needed when running the relayer                                                                                    |
-| `POSTGRES_PASSWORD` | yes      | Password for the bundled Postgres                                                                                                           |
+| `POSTGRES_PASSWORD` | no       | Password for the bundled Postgres (default `postgres`); change it when the host is exposed                                                  |
 | `IMAGE_TAG`         | no       | Image tag to run (default `latest`); pin a release for reproducible deployments                                                             |
 | `STATE_LOG_DB_URL`  | no       | Use an external Postgres for the synchronizer instead of the bundled one                                                                    |
 | `DB_URL`            | no       | Use an external Postgres for the relayer instead of the bundled one                                                                         |
