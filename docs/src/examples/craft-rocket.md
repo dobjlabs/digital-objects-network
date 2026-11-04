@@ -1,10 +1,4 @@
----
-title: craft-rocket
-showAskAi: false
-description: A full factory tech tree - 53 classes and 84 actions across five tiers, machines and stations as level gates, ending in a provable rocket.
----
-
-# craft-rocket 🚀
+# craft-rocket
 
 A factory-builder tech tree in the spirit of automation games: mine and farm
 raw resources, refine them through five tiers of processing, unlock machines
@@ -70,7 +64,7 @@ with a catalyst.
 
 ## Install
 
-Install the [driver](/install) first, then add this plugin — `dobj install`
+Install the [driver](../install.md) first, then add this plugin. `dobj install`
 hot-reloads the catalog, so no restart is needed:
 
 ```bash

@@ -1,10 +1,4 @@
----
-title: Deployment
-showAskAi: false
-description: Run your own archiver, synchronizer, and relayer, from source with just or with Docker Compose.
----
-
-# Deployment
+# Running the services
 
 The network's chain-side services can be run by anyone: an **archiver** and a
 **synchronizer** are enough to verify the network's state from Ethereum chain
@@ -13,7 +7,8 @@ wallet.
 
 To follow the public testnet, every service must use the network's blob
 address and the synchronizer must use its start slot; the archiver can start at
-or before it. Both are listed under [Network status](/#network-status). The
+or before it. Both are listed under
+[Network parameters](./testnet.md#network-parameters). The
 start slot changes over time, as the testnet is reset periodically during
 testing.
 

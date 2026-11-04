@@ -1,10 +1,4 @@
----
-title: craft-basics
-showAskAi: false
-description: The starter survival-crafting application - find logs, refine wood, craft picks, mine stone. Six classes, nine actions, added with one dobj install.
----
-
-# craft-basics ⛏️
+# craft-basics
 
 A miniature survival-game loop: discover raw material with verifiable work, refine it,
 assemble tools, and spend tool durability to mine harder material. Every item
@@ -58,7 +52,7 @@ MineStoneWithStonePick   ⛏️ wear -1      → 🪨 Stone
 
 ## Install
 
-Install the [driver](/install) first, then add this plugin — `dobj install`
+Install the [driver](../install.md) first, then add this plugin. `dobj install`
 hot-reloads the catalog, so no restart is needed:
 
 ```bash

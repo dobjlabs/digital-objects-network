@@ -23,44 +23,30 @@ jobs:
     defaults:
       run:
         working-directory: docs
+    env:
+      MDBOOK_VERSION: 0.4.40
     steps:
       - uses: actions/checkout@v6
 
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 10
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: docs/pnpm-lock.yaml
-
-      - run: pnpm install --frozen-lockfile
+      - name: Install mdBook
+        run: |
+          mkdir -p "$RUNNER_TEMP/mdbook"
+          curl -fsSL "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP/mdbook"
+          echo "$RUNNER_TEMP/mdbook" >> "$GITHUB_PATH"
 
       - uses: actions/configure-pages@v6
         id: pages
 
-      # base_path is "/<repo>" on <owner>.github.io and "" on a custom
-      # domain, so the same workflow works for both.
-      - run: pnpm build
+      # Pages links are relative, so only the 404 page needs the site's base:
+      # base_path is "/<repo>" on <owner>.github.io and "" on a custom domain.
+      - run: mdbook build
         env:
-          BASE_PATH: ${{ steps.pages.outputs.base_path }}
+          MDBOOK_OUTPUT__HTML__SITE_URL: ${{ steps.pages.outputs.base_path }}/
 
-      # GitHub Pages 301-redirects clean URLs (/foo -> /foo/) for directory-style
-      # output, and vocs emits clean (no-trailing-slash) links, so every cross-page
-      # nav hits that redirect. Write a flat <route>.html beside each
-      # <route>/index.html so /foo serves directly with no redirect.
-      - run: |
-          find dist/public -mindepth 2 -name index.html ! -path '*.d/*' | while read -r f; do
-            cp "$f" "${f%/index.html}.html"
-          done
-
-      # Vocs v2 full-static build emits the deployable site under dist/public
-      # (dist/ also holds server/preview bundles that static hosting ignores).
       - uses: actions/upload-pages-artifact@v5
         with:
-          path: docs/dist/public
+          path: docs/book
 
   deploy:
     needs: build

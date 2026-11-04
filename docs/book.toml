@@ -1,0 +1,10 @@
+[book]
+language = "en"
+multilingual = false
+src = "src"
+title = "Digital Objects Network"
+
+[output.html]
+default-theme = "light"
+git-repository-url = "https://github.com/dobjlabs/digital-objects-network"
+edit-url-template = "https://github.com/dobjlabs/digital-objects-network/edit/main/docs/{path}"
