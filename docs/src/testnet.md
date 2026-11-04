@@ -23,8 +23,8 @@ configuration.
 
 | Service      | Endpoint                                                                         | Role                                                                                              |
 | ------------ | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Synchronizer | [`terminus.digiobjects.net:4000`](https://terminus.digiobjects.net:4000/healthz) | Rebuilds canonical network state from Ethereum blobs; answers live / consumed queries             |
-| Relayer      | [`terminus.digiobjects.net:4200`](https://terminus.digiobjects.net:4200/healthz) | Submits proof payloads to Ethereum as EIP-4844 blob transactions                                  |
+| Synchronizer | [`synchronizer.digiobjects.net`](https://synchronizer.digiobjects.net/healthz)   | Rebuilds canonical network state from Ethereum blobs; answers live / consumed queries             |
+| Relayer      | [`relayer.digiobjects.net`](https://relayer.digiobjects.net/healthz)             | Submits proof payloads to Ethereum as EIP-4844 blob transactions                                  |
 | Archiver     | [`terminus.digiobjects.net:4001`](https://terminus.digiobjects.net:4001/healthz) | Stores historical blobs durably so synchronizers can bootstrap beyond Ethereum's retention window |
 
 ## Choosing services
@@ -35,8 +35,8 @@ restart:
 
 ```bash
 dobj settings set \
-  --synchronizer https://terminus.digiobjects.net:4000 \
-  --relayer https://terminus.digiobjects.net:4200
+  --synchronizer https://synchronizer.digiobjects.net \
+  --relayer https://relayer.digiobjects.net
 ```
 
 `dobj settings get` prints the current values. The driver only talks to a
