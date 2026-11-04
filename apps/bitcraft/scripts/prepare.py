@@ -140,8 +140,8 @@ def main():
         "binaries": hashes,
     }, indent=2) + "\n")
     (resources / "settings.json").write_text(json.dumps({
-        "synchronizerApiUrl": "https://terminus.digiobjects.net:4000",
-        "relayerApiUrl": "https://terminus.digiobjects.net:4200",
+        "synchronizerApiUrl": "https://synchronizer.digiobjects.net",
+        "relayerApiUrl": "https://relayer.digiobjects.net",
         "mcpEnabled": False,
     }, indent=2) + "\n")
     config = {

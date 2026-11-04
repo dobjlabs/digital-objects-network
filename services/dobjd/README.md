@@ -216,8 +216,8 @@ Read on every `load_settings()` call from `~/.dobj/settings.json`:
 
 ```json
 {
-  "synchronizerApiUrl": "https://terminus.digiobjects.net:4000",
-  "relayerApiUrl": "https://terminus.digiobjects.net:4200",
+  "synchronizerApiUrl": "https://synchronizer.digiobjects.net",
+  "relayerApiUrl": "https://relayer.digiobjects.net",
   "mcpEnabled": false,
   "cpuUsage": "medium"
 }
