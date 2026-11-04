@@ -4,11 +4,11 @@ on:
   pull_request:
     branches: [main]
     types: [ready_for_review, opened, synchronize, reopened, converted_to_draft]
-    # UI-only PRs are tested by gui.yml; pushes to main still run this.
-    paths-ignore:
-      - "interfaces/gui/**"
-      - "apps/bitcraft/ui/**"
-      - "apps/bitcraft/tests/**"
+    # The checks read only the Quint sources. Pushes to main run it regardless.
+    paths:
+      - "devtools/models/**"
+      - "libs/driver/model/**"
+      - ".github/workflows/models.yml"
   push:
     branches: [main]
   workflow_dispatch:
