@@ -5,7 +5,7 @@ fn CraftPocketknife(action) {
 
 fn GatherWood(action) {
   var pocketknife = action.mutate("Pocketknife");
-  var pocketknife_key = unsafe { action.random() };
+  var pocketknife_key = unsafe { arg("pocketknife_key") ?? action.random() };
   pocketknife.update("key", pocketknife_key);
   action.st_equal(1, 1);
   var wood000 = action.output("Wood");
@@ -17,7 +17,7 @@ fn GatherWood(action) {
 
 fn GatherStone(action) {
   var pocketknife = action.mutate("Pocketknife");
-  var pocketknife_key = unsafe { action.random() };
+  var pocketknife_key = unsafe { arg("pocketknife_key") ?? action.random() };
   pocketknife.update("key", pocketknife_key);
   action.st_equal(1, 1);
   var stone000 = action.output("Stone");
@@ -29,7 +29,7 @@ fn GatherStone(action) {
 
 fn GatherIron(action) {
   var pocketknife = action.mutate("Pocketknife");
-  var pocketknife_key = unsafe { action.random() };
+  var pocketknife_key = unsafe { arg("pocketknife_key") ?? action.random() };
   pocketknife.update("key", pocketknife_key);
   action.st_equal(1, 1);
   var iron000 = action.output("Iron");
@@ -793,7 +793,7 @@ fn CraftIronAxe(action) {
 
 fn UseWoodAxe(action) {
   var woodaxe = action.mutate("WoodAxe");
-  var woodaxe_key = unsafe { action.random() };
+  var woodaxe_key = unsafe { arg("woodaxe_key") ?? action.random() };
   woodaxe.update("key", woodaxe_key);
   action.st_gt(woodaxe.durability, 0);
   var durability = unsafe { woodaxe.durability - 1 };
@@ -809,7 +809,7 @@ fn UseWoodAxe(action) {
 
 fn UseStoneAxe(action) {
   var stoneaxe = action.mutate("StoneAxe");
-  var stoneaxe_key = unsafe { action.random() };
+  var stoneaxe_key = unsafe { arg("stoneaxe_key") ?? action.random() };
   stoneaxe.update("key", stoneaxe_key);
   action.st_gt(stoneaxe.durability, 0);
   var durability = unsafe { stoneaxe.durability - 1 };
@@ -826,7 +826,7 @@ fn UseStoneAxe(action) {
 
 fn UseIronAxe(action) {
   var ironaxe = action.mutate("IronAxe");
-  var ironaxe_key = unsafe { action.random() };
+  var ironaxe_key = unsafe { arg("ironaxe_key") ?? action.random() };
   ironaxe.update("key", ironaxe_key);
   action.st_gt(ironaxe.durability, 0);
   var durability = unsafe { ironaxe.durability - 1 };
@@ -844,7 +844,7 @@ fn UseIronAxe(action) {
 
 fn UseQuarry1(action) {
   var quarry = action.mutate("Quarry");
-  var quarry_key = unsafe { action.random() };
+  var quarry_key = unsafe { arg("quarry_key") ?? action.random() };
   quarry.update("key", quarry_key);
   action.st_equal(quarry.level, 1);
   var stone000 = action.output("Stone");
@@ -857,7 +857,7 @@ fn UseQuarry1(action) {
 
 fn MineIron1(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 1);
   var wood000 = action.input("Wood");
@@ -875,7 +875,7 @@ fn MineIron1(action) {
 
 fn MineCoal1(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 1);
   var wood000 = action.input("Wood");
@@ -892,7 +892,7 @@ fn MineCoal1(action) {
 
 fn UseQuarry2(action) {
   var quarry = action.mutate("Quarry");
-  var quarry_key = unsafe { action.random() };
+  var quarry_key = unsafe { arg("quarry_key") ?? action.random() };
   quarry.update("key", quarry_key);
   action.st_equal(quarry.level, 2);
   var stone000 = action.output("Stone");
@@ -906,7 +906,7 @@ fn UseQuarry2(action) {
 
 fn MineIron2(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 2);
   var wood000 = action.input("Wood");
@@ -925,7 +925,7 @@ fn MineIron2(action) {
 
 fn MineCoal2(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 2);
   var wood000 = action.input("Wood");
@@ -943,7 +943,7 @@ fn MineCoal2(action) {
 
 fn UseQuarry3(action) {
   var quarry = action.mutate("Quarry");
-  var quarry_key = unsafe { action.random() };
+  var quarry_key = unsafe { arg("quarry_key") ?? action.random() };
   quarry.update("key", quarry_key);
   action.st_equal(quarry.level, 3);
   var stone000 = action.output("Stone");
@@ -958,7 +958,7 @@ fn UseQuarry3(action) {
 
 fn MineIron3(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 3);
   var wood000 = action.input("Wood");
@@ -978,7 +978,7 @@ fn MineIron3(action) {
 
 fn MineCoal3(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 3);
   var wood000 = action.input("Wood");
@@ -997,7 +997,7 @@ fn MineCoal3(action) {
 
 fn UseQuarry4(action) {
   var quarry = action.mutate("Quarry");
-  var quarry_key = unsafe { action.random() };
+  var quarry_key = unsafe { arg("quarry_key") ?? action.random() };
   quarry.update("key", quarry_key);
   action.st_equal(quarry.level, 4);
   var stone000 = action.output("Stone");
@@ -1013,7 +1013,7 @@ fn UseQuarry4(action) {
 
 fn MineIron4(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 4);
   var wood000 = action.input("Wood");
@@ -1034,7 +1034,7 @@ fn MineIron4(action) {
 
 fn MineCoal4(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 4);
   var wood000 = action.input("Wood");
@@ -1054,7 +1054,7 @@ fn MineCoal4(action) {
 
 fn UseQuarry5(action) {
   var quarry = action.mutate("Quarry");
-  var quarry_key = unsafe { action.random() };
+  var quarry_key = unsafe { arg("quarry_key") ?? action.random() };
   quarry.update("key", quarry_key);
   action.st_equal(quarry.level, 5);
   var stone000 = action.output("Stone");
@@ -1071,7 +1071,7 @@ fn UseQuarry5(action) {
 
 fn MineIron5(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 5);
   var wood000 = action.input("Wood");
@@ -1093,7 +1093,7 @@ fn MineIron5(action) {
 
 fn MineCoal5(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 5);
   var wood000 = action.input("Wood");
@@ -1114,7 +1114,7 @@ fn MineCoal5(action) {
 
 fn UseQuarry6(action) {
   var quarry = action.mutate("Quarry");
-  var quarry_key = unsafe { action.random() };
+  var quarry_key = unsafe { arg("quarry_key") ?? action.random() };
   quarry.update("key", quarry_key);
   action.st_equal(quarry.level, 6);
   var stone000 = action.output("Stone");
@@ -1132,7 +1132,7 @@ fn UseQuarry6(action) {
 
 fn MineIron6(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 6);
   var wood000 = action.input("Wood");
@@ -1155,7 +1155,7 @@ fn MineIron6(action) {
 
 fn MineCoal6(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 6);
   var wood000 = action.input("Wood");
@@ -1177,7 +1177,7 @@ fn MineCoal6(action) {
 
 fn UseQuarry7(action) {
   var quarry = action.mutate("Quarry");
-  var quarry_key = unsafe { action.random() };
+  var quarry_key = unsafe { arg("quarry_key") ?? action.random() };
   quarry.update("key", quarry_key);
   action.st_equal(quarry.level, 7);
   var stone000 = action.output("Stone");
@@ -1196,7 +1196,7 @@ fn UseQuarry7(action) {
 
 fn MineIron7(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 7);
   var wood000 = action.input("Wood");
@@ -1220,7 +1220,7 @@ fn MineIron7(action) {
 
 fn MineCoal7(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 7);
   var wood000 = action.input("Wood");
@@ -1243,7 +1243,7 @@ fn MineCoal7(action) {
 
 fn UseQuarry8(action) {
   var quarry = action.mutate("Quarry");
-  var quarry_key = unsafe { action.random() };
+  var quarry_key = unsafe { arg("quarry_key") ?? action.random() };
   quarry.update("key", quarry_key);
   action.st_equal(quarry.level, 8);
   var stone000 = action.output("Stone");
@@ -1263,7 +1263,7 @@ fn UseQuarry8(action) {
 
 fn MineIron8(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 8);
   var wood000 = action.input("Wood");
@@ -1288,7 +1288,7 @@ fn MineIron8(action) {
 
 fn MineCoal8(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 8);
   var wood000 = action.input("Wood");
@@ -1312,7 +1312,7 @@ fn MineCoal8(action) {
 
 fn UseQuarry9(action) {
   var quarry = action.mutate("Quarry");
-  var quarry_key = unsafe { action.random() };
+  var quarry_key = unsafe { arg("quarry_key") ?? action.random() };
   quarry.update("key", quarry_key);
   action.st_equal(quarry.level, 9);
   var stone000 = action.output("Stone");
@@ -1333,7 +1333,7 @@ fn UseQuarry9(action) {
 
 fn MineIron9(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 9);
   var wood000 = action.input("Wood");
@@ -1359,7 +1359,7 @@ fn MineIron9(action) {
 
 fn MineCoal9(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 9);
   var wood000 = action.input("Wood");
@@ -1384,7 +1384,7 @@ fn MineCoal9(action) {
 
 fn UseQuarry10(action) {
   var quarry = action.mutate("Quarry");
-  var quarry_key = unsafe { action.random() };
+  var quarry_key = unsafe { arg("quarry_key") ?? action.random() };
   quarry.update("key", quarry_key);
   action.st_equal(quarry.level, 10);
   var stone000 = action.output("Stone");
@@ -1406,7 +1406,7 @@ fn UseQuarry10(action) {
 
 fn MineIron10(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 10);
   var wood000 = action.input("Wood");
@@ -1433,7 +1433,7 @@ fn MineIron10(action) {
 
 fn MineCoal10(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 10);
   var wood000 = action.input("Wood");
@@ -2382,7 +2382,7 @@ fn PumpOil(action) {
 
 fn MineGeode1(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 1);
   var wood000 = action.input("Wood");
@@ -2400,7 +2400,7 @@ fn MineGeode1(action) {
 
 fn MineGeode2(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 2);
   var wood000 = action.input("Wood");
@@ -2418,7 +2418,7 @@ fn MineGeode2(action) {
 
 fn MineGeode3(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 3);
   var wood000 = action.input("Wood");
@@ -2436,7 +2436,7 @@ fn MineGeode3(action) {
 
 fn MineGeode4(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 4);
   var wood000 = action.input("Wood");
@@ -2454,7 +2454,7 @@ fn MineGeode4(action) {
 
 fn MineGeode5(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 5);
   var wood000 = action.input("Wood");
@@ -2472,7 +2472,7 @@ fn MineGeode5(action) {
 
 fn MineGeode6(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 6);
   var wood000 = action.input("Wood");
@@ -2490,7 +2490,7 @@ fn MineGeode6(action) {
 
 fn MineGeode7(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 7);
   var wood000 = action.input("Wood");
@@ -2508,7 +2508,7 @@ fn MineGeode7(action) {
 
 fn MineGeode8(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 8);
   var wood000 = action.input("Wood");
@@ -2526,7 +2526,7 @@ fn MineGeode8(action) {
 
 fn MineGeode9(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 9);
   var wood000 = action.input("Wood");
@@ -2544,7 +2544,7 @@ fn MineGeode9(action) {
 
 fn MineGeode10(action) {
   var miningdrill = action.mutate("MiningDrill");
-  var miningdrill_key = unsafe { action.random() };
+  var miningdrill_key = unsafe { arg("miningdrill_key") ?? action.random() };
   miningdrill.update("key", miningdrill_key);
   action.st_equal(miningdrill.level, 10);
   var wood000 = action.input("Wood");
