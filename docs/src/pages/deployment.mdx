@@ -1,0 +1,153 @@
+---
+title: Deployment
+showAskAi: false
+description: Run your own archiver, synchronizer, and relayer, from source with just or with Docker Compose.
+---
+
+# Deployment
+
+The network's chain-side services can be run by anyone: an **archiver** and a
+**synchronizer** are enough to verify the network's state from Ethereum chain
+data yourself, and a **relayer** lets you submit transactions with your own
+wallet.
+
+To follow the public testnet, every service must use the network's blob
+address and the synchronizer must use its start slot; the archiver can start at
+or before it. Both are listed under [Network status](/#network-status). The
+start slot changes over time, as the testnet is reset periodically during
+testing.
+
+## Running from source
+
+Each service is run from a clone of the repository with a `just` recipe. The
+recipe builds the service in release mode and reads its configuration from
+`services/<service>/.env`; copy the service's `.env.example` there to start:
+
+```bash
+cp services/archiver/.env.example services/archiver/.env
+```
+
+The synchronizer and the relayer store their state in Postgres. Running
+`just ensure-db` creates the `synchronizer` and `relayer` databases on a local
+Postgres at `localhost:5432` (user `postgres`).
+
+### Archiver
+
+The archiver follows beacon blocks, stores the blobs sent to the blob address
+on its filesystem, and serves them over a beacon-compatible HTTP API, so that
+the synchronizer can read blobs older than the beacon's ~18-day retention
+window.
+
+```bash
+just archiver
+```
+
+Configure it in `services/archiver/.env`:
+
+| Variable          | Required | Description                                                                                                                         |
+| ----------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `RPC_URL`         | yes      | Ethereum execution-layer RPC endpoint                                                                                               |
+| `BEACON_URL`      | yes      | Beacon API endpoint that serves blob sidecars                                                                                       |
+| `FILTER_ADDRESS`  | yes      | Blob address; only blobs sent to it are archived                                                                                    |
+| `INIT_START_SLOT` | yes      | Slot to start archiving from on first run; afterwards it resumes from its stored progress. At or before the network's start slot    |
+| `BLOBS_PATH`      | yes      | Directory where the blobs are stored (no database). Grows by ~128 KB per archived blob                                              |
+| `HTTP_BIND`       | no       | Address the HTTP API listens on (default `127.0.0.1:3001`)                                                                          |
+
+### Synchronizer
+
+The synchronizer reads the network's blobs from Ethereum, verifies their
+proofs, derives the network state (created objects, nullifiers, state roots),
+and serves it over HTTP to drivers, which use it to build and check their
+transactions.
+
+```bash
+just sync
+```
+
+Configure it in `services/synchronizer/.env`:
+
+| Variable             | Required | Description                                                                                                                                                                                                 |
+| -------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RPC_URL`            | yes      | Ethereum execution-layer RPC endpoint                                                                                                                                                                       |
+| `BEACON_URL`         | yes      | Beacon API endpoint that serves blob sidecars                                                                                                                                                               |
+| `TO_ADDRESS`         | yes      | Blob address the network's transactions are sent to                                                                                                                                                         |
+| `INIT_START_SLOT`    | yes      | Genesis slot, where the state derivation starts on first run. Must be finalized and have an execution block. Use the network's start slot; it must not change once the database has synced                   |
+| `ARCHIVER_URL`       | no       | Archiver to read blobs from, e.g. `http://localhost:3001`. Unset, blobs are read from `BEACON_URL`, which only serves recent ones                                                                             |
+| `STATE_LOG_DB_URL`   | no       | Postgres database holding the state log (default `postgres://postgres@localhost:5432/synchronizer`)                                                                                                         |
+| `CONTAINER_DB_PATH`  | no       | RocksDB directory for the Merkle trees (default `data/synchronizer-db`). A rebuildable cache: Postgres holds the authoritative state                                                                       |
+| `HTTP_BIND`          | no       | Address the HTTP API listens on (default `127.0.0.1:3000`)                                                                                                                                                  |
+| `RPC_RETRIES`        | no       | How many times to ask again for a block or blobs a lagging node does not serve yet (default `6`)                                                                                                            |
+| `RPC_RETRY_MS`       | no       | Delay in ms between those requests (default `1000`)                                                                                                                                                         |
+| `SYNC_DELAY_MS`      | no       | Delay in ms between slots once at chain head (default `173`, derived from a 15 req/s RPC rate limit)                                                                                                        |
+| `CATCHUP_BATCH_SIZE` | no       | Slots fetched concurrently while catching up (default `7`, derived from a 15 req/s RPC rate limit)                                                                                                          |
+
+Once running, `curl localhost:3000/sync-progress` reports the last processed
+slot.
+
+### Relayer
+
+The relayer accepts transaction proofs from drivers over HTTP and posts them to
+Ethereum as EIP-4844 blob transactions, signed and paid for by its own wallet.
+
+```bash
+just relayer
+```
+
+Configure it in `services/relayer/.env`:
+
+| Variable                  | Required | Description                                                                                                       |
+| ------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
+| `RPC_URL`                 | yes      | Ethereum execution-layer RPC endpoint                                                                             |
+| `TO_ADDRESS`              | yes      | Blob address the transactions are sent to                                                                         |
+| `PRIVATE_KEY`             | yes      | Private key of the wallet that signs and pays for the blob transactions. Keep it funded                           |
+| `DB_URL`                  | no       | Postgres database holding the relay job queue (default `postgres://postgres@localhost:5432/relayer`)              |
+| `HTTP_BIND`               | no       | Address the HTTP API listens on (default `127.0.0.1:3200`)                                                        |
+| `MAX_ATTEMPTS`            | no       | Submission attempts per proof before giving up (default `8`)                                                      |
+| `RETRY_INITIAL_SECS`      | no       | Initial retry backoff in seconds (default `4`)                                                                    |
+| `RETRY_MAX_SECS`          | no       | Maximum retry backoff in seconds (default `300`)                                                                  |
+| `RECEIPT_POLL_SECS`       | no       | Interval between receipt polls in seconds (default `6`)                                                           |
+| `RECEIPT_TIMEOUT_SECS`    | no       | Timeout for a submitted transaction's receipt (default: none)                                                     |
+| `WORKER_IDLE_SLEEP_MS`    | no       | Worker sleep when the queue is empty (default `1000`)                                                             |
+| `MAX_FEE_PER_BLOB_GAS`    | no       | Override for the blob gas fee cap                                                                                 |
+| `FEE_BUMP_AFTER_SECS`     | no       | Seconds before replacing a stuck transaction with a higher fee (default: fee bumping disabled)                    |
+| `FEE_BUMP_MULTIPLIER_PCT` | no       | Fee increase per bump, in percent (default and minimum `100`, i.e. 2x)                                            |
+| `FEE_BUMP_MAX`            | no       | Maximum replacements per proof (default `5`)                                                                      |
+
+## Running with Docker Compose
+
+`deploy/compose.yaml` runs all three services from their published container
+images, together with a bundled Postgres. All services read their
+configuration from a single `deploy/.env`:
+
+```bash
+cp deploy/.env.example deploy/.env   # fill in the variables below
+docker compose -f deploy/compose.yaml up -d
+```
+
+To only verify the network state, without a relayer or a wallet, start just the
+synchronizer (its archiver comes along):
+
+```bash
+docker compose -f deploy/compose.yaml up -d synchronizer postgres
+```
+
+The variables to fill in `deploy/.env`:
+
+| Variable            | Required | Description                                                                                                                                 |
+| ------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TO_ADDRESS`        | yes      | Blob address, shared by all three services (the archiver receives it as its `FILTER_ADDRESS`)                                              |
+| `RPC_URL`           | yes      | Ethereum execution-layer RPC endpoint, used by all three services                                                                           |
+| `BEACON_URL`        | yes      | Beacon API endpoint that serves blob sidecars, used by the synchronizer and the archiver                                                    |
+| `INIT_START_SLOT`   | yes      | Start slot for the synchronizer and the archiver. Use the network's start slot                                                             |
+| `PRIVATE_KEY`       | relayer  | Relayer wallet key; only needed when running the relayer                                                                                    |
+| `POSTGRES_PASSWORD` | no       | Password for the bundled Postgres (default `postgres`); change it when the host is exposed                                                  |
+| `IMAGE_TAG`         | no       | Image tag to run (default `latest`); pin a release for reproducible deployments                                                             |
+| `STATE_LOG_DB_URL`  | no       | Use an external Postgres for the synchronizer instead of the bundled one                                                                    |
+| `DB_URL`            | no       | Use an external Postgres for the relayer instead of the bundled one                                                                         |
+| `ARCHIVER_URL`      | no       | Point the synchronizer at an external archiver instead of the bundled one                                                                   |
+| `RUST_LOG`          | no       | Log filter (default `info`)                                                                                                                 |
+
+The services listen on `3000` (synchronizer), `3001` (archiver) and `3200`
+(relayer). The bind addresses, the RocksDB and blob store paths, and the
+database URLs are set by the compose file, with Docker volumes for their data.
+See `deploy/README.md` for hardware requirements and production notes.
