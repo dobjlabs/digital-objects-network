@@ -48,6 +48,10 @@ export default defineConfig({
       items: [{ text: "Install the driver", link: "/install" }],
     },
     {
+      text: "Deployment",
+      items: [{ text: "Run the services", link: "/deployment" }],
+    },
+    {
       text: "Applications",
       items: [
         { text: "Plugins and how to install", link: "/applications" },
