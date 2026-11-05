@@ -217,7 +217,7 @@ opened
 from the top bar, and the status bar along the bottom of the page. Three of
 their entries know about bitcraft:
 
-- **Bitcraft version** (status bar): `BITCRAFT_VERSION` ("Alpha 1.0"), a
+- **Bitcraft version** (status bar): `BITCRAFT_VERSION` ("Alpha 1.1"), a
   fixed string in the page; dobjd and the plugin manifest report no game
   version.
 - **BIT/sec** (top bar and window title): how much the Total Inventory

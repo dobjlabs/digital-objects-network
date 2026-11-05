@@ -1782,7 +1782,7 @@
   const WELCOME_FILE = "BITCRAFT_WELCOME.md";
 
   // Shown in the status bar at the bottom of the page.
-  const BITCRAFT_VERSION = "Alpha 1.0";
+  const BITCRAFT_VERSION = "Alpha 1.1";
 
   // Total Bit Value: what an object is worth in bits, counting each raw
   // resource spent to make it at the rate its BitsFrom* recipe pays (Wood 1,
@@ -2051,13 +2051,7 @@
     if (typeof bytes !== "number") {
       return NOT_AVAILABLE;
     }
-    if (bytes < 1024) {
-      return `${bytes} B`;
-    }
-    if (bytes < 1024 * 1024) {
-      return `${(bytes / 1024).toFixed(1)} KB`;
-    }
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${bytes} B`;
   }
 
   function appendFieldRow(table, label, value) {
