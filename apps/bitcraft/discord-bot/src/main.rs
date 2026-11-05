@@ -358,8 +358,8 @@ async fn save_leaderboard(store: &Store, state: &Mutex<State>) {
     }
 }
 
-/// Publishes and posts the leaderboard at every multiple of `interval` since
-/// the Unix epoch, so restarts neither add publications nor move them.
+/// Publishes the leaderboard at every multiple of `interval` since the Unix
+/// epoch, so restarts neither add publications nor move them.
 async fn publish_loop(
     store: Store,
     http: Arc<Client>,
@@ -370,16 +370,38 @@ async fn publish_loop(
 ) {
     let period = interval.as_secs();
     let mut next = next_publication(period, unix_now());
+    // The public file read at startup stands in for the last post, so a restart does not repeat it.
+    let mut last_post = messages::standings(&state.lock().unwrap().published);
     loop {
         let wait = Duration::from_secs(next.saturating_sub(unix_now()));
         tokio::select! {
             _ = tokio::time::sleep(wait) => {}
             _ = stopped.changed() => return,
         }
-        if let Some(top) = publish_top(&store, &state).await {
-            post(&http, channel_id, &top).await;
-        }
+        publish(&store, &http, channel_id, &state, &mut last_post).await;
         next = next_publication(period, next.max(unix_now()));
+    }
+}
+
+/// Publishes the top scores, and posts them unless the post would read the same as `last_post`.
+/// A failed post leaves `last_post` as it was, so the next publication tries again.
+async fn publish(
+    store: &Store,
+    http: &Client,
+    channel_id: Id<ChannelMarker>,
+    state: &Mutex<State>,
+    last_post: &mut Vec<String>,
+) {
+    let Some(top) = publish_top(store, state).await else {
+        return;
+    };
+    let standings = messages::standings(&top);
+    if standings == *last_post {
+        info!("The standings have not changed since the last post");
+        return;
+    }
+    if post(http, channel_id, &standings).await {
+        *last_post = standings;
     }
 }
 
@@ -421,19 +443,21 @@ async fn publish_top(store: &Store, state: &Mutex<State>) -> Option<Leaderboard>
     }
 }
 
-async fn post(http: &Client, channel_id: Id<ChannelMarker>, top: &Leaderboard) {
+/// Returns whether every message was posted.
+async fn post(http: &Client, channel_id: Id<ChannelMarker>, messages: &[String]) -> bool {
     let no_pings = AllowedMentions::default();
-    for message in messages::standings(top) {
+    for message in messages {
         if let Err(error) = http
             .create_message(channel_id)
-            .content(&message)
+            .content(message)
             .allowed_mentions(Some(&no_pings))
             .await
         {
             warn!(?error, "Could not post the leaderboard");
-            return;
+            return false;
         }
     }
+    true
 }
 
 fn now() -> OffsetDateTime {
@@ -552,6 +576,89 @@ mod tests {
         let store = Store::new(&s3, "public".into(), "leaderboard.json".into()).unwrap();
         assert!(publish_top(&store, &state).await.is_none());
         assert_eq!(state.lock().unwrap().published, previous);
+    }
+
+    /// A Discord channel that keeps the content of each message posted to it.
+    #[derive(Default)]
+    struct Channel {
+        messages: Vec<String>,
+        fail: bool,
+    }
+
+    async fn mock_discord() -> (Client, Arc<Mutex<Channel>>) {
+        use axum::{Router, body::Bytes, extract::State, http::StatusCode, routing};
+        async fn create_message(
+            State(channel): State<Arc<Mutex<Channel>>>,
+            body: Bytes,
+        ) -> StatusCode {
+            let mut channel = channel.lock().unwrap();
+            if channel.fail {
+                return StatusCode::INTERNAL_SERVER_ERROR;
+            }
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            channel
+                .messages
+                .push(body["content"].as_str().unwrap().to_owned());
+            StatusCode::OK
+        }
+        let channel = Arc::<Mutex<Channel>>::default();
+        let app = Router::new()
+            .route(
+                "/api/v10/channels/{channel_id}/messages",
+                routing::post(create_message),
+            )
+            .with_state(channel.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let http = Client::builder()
+            .proxy(address, true)
+            .ratelimiter(None)
+            .build();
+        (http, channel)
+    }
+
+    #[tokio::test]
+    async fn only_changed_standings_are_posted() {
+        const PUBLISHED: &str = "public/leaderboard.json";
+        let (s3, service) = store::mock::start().await;
+        let store = Store::new(&s3, "public".into(), "leaderboard.json".into()).unwrap();
+        let (http, channel) = mock_discord().await;
+        let state = Mutex::new(State {
+            leaderboard: players(2),
+            ..State::default()
+        });
+        let mut last_post = Vec::new();
+        let tick = async |last_post: &mut Vec<String>| {
+            publish(&store, &http, Id::new(1), &state, last_post).await;
+        };
+        let posted = || channel.lock().unwrap().messages.len();
+
+        tick(&mut last_post).await;
+        assert_eq!(posted(), 1);
+        tick(&mut last_post).await;
+        assert_eq!(posted(), 1, "unchanged standings are not posted again");
+        assert!(state.lock().unwrap().leaderboard.rename(Id::new(1), "Ada"));
+        tick(&mut last_post).await;
+        assert_eq!(posted(), 1, "posts show mentions, not names");
+        assert_eq!(writes(&service, PUBLISHED), 3, "every publication uploads");
+
+        assert!(
+            state
+                .lock()
+                .unwrap()
+                .leaderboard
+                .record(Id::new(1), 10.0, now())
+        );
+        channel.lock().unwrap().fail = true;
+        tick(&mut last_post).await;
+        assert_eq!(posted(), 1);
+        channel.lock().unwrap().fail = false;
+        tick(&mut last_post).await;
+        assert_eq!(posted(), 2, "a failed post is tried again");
+        assert!(channel.lock().unwrap().messages[1].contains("1. <@1> - 10.00 BIT"));
+        tick(&mut last_post).await;
+        assert_eq!(posted(), 2);
     }
 
     #[test]

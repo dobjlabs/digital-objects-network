@@ -1,13 +1,13 @@
 # Bitcraft Discord bot
 
-Keeps each player's highest known Total Inventory Value, read from the Discord presence that the Bitcraft desktop shares (see [Discord Rich Presence](../README.md#discord-rich-presence)). On a fixed schedule it publishes the top 50 as JSON to a Cloudflare R2 bucket, where clients fetch it, and posts them to a Discord channel. Players can check their place on it with `/rank`.
+Keeps each player's highest known Total Inventory Value, read from the Discord presence that the Bitcraft desktop shares (see [Discord Rich Presence](../README.md#discord-rich-presence)). On a fixed schedule it publishes the top 50 as JSON to a Cloudflare R2 bucket, where clients fetch it, and posts them to a Discord channel when they have changed. Players can check their place on it with `/rank`.
 
 ## How it works
 
 - **Consent.** The desktop shares presence only while the player has **Share my Bitcraft scores on Discord** turned on in Settings. That setting is the player's consent to appear on the public leaderboard.
 - **Who counts.** The bot follows one Discord server. It sees the presence of members who are online (not invisible) and whose Discord privacy settings share their activity. Only activities shared as the Bitcraft application count. A player's score only goes up: the bot keeps the highest value seen, not the current one.
 - **Store.** Every player's score lives in a private bucket. The bot saves changes to it at most once a minute and on shutdown. On startup it reads the store back: a missing object starts empty, and any other failure stops startup, so an outage cannot replace the scores with nothing. Online players' scores come back from their presence after a restart, so a crash loses at most a minute of other changes, such as a peak a player has since spent below. Run one instance per store. To reset the leaderboard, for example after a change to how inventory is valued, stop the bot and delete the private object.
-- **Leaderboard.** Every `PUBLISH_INTERVAL_SECS` (3 hours by default) the bot takes the top 50 from the store, publishes them to a public bucket and posts them to the leaderboard channel. Publications fall on multiples of the interval in UTC, such as 00:00, 03:00 and 06:00 for 3 hours, so restarts neither add publications nor move them. Nothing else publishes, so the public file, the posts and `/rank` all show the scores as of the last publication. If the upload fails, that publication is skipped: nothing is posted and `/rank` keeps the previous one.
+- **Leaderboard.** Every `PUBLISH_INTERVAL_SECS` (3 hours by default) the bot takes the top 50 from the store, publishes them to a public bucket and, if the standings differ from the last post, posts them to the leaderboard channel. Publications fall on multiples of the interval in UTC, such as 00:00, 03:00 and 06:00 for 3 hours, so restarts neither add publications nor move them. Nothing else publishes, so the public file, the latest post and `/rank` all show the scores as of the last publication. If the upload fails, that publication is skipped: nothing is posted and `/rank` keeps the previous one.
 - **Trust.** Scores are not verified. Anyone can share a presence as the Bitcraft application, since its ID is public, so a score can be forged.
 
 ## Published format
@@ -40,7 +40,7 @@ The Bitcraft app's Leaderboard window reads the public file from `LEADERBOARD_UR
 
 ## Leaderboard posts
 
-Each publication is also posted to the leaderboard channel: a "Bitcraft leaderboard" heading, then one line per player with their place, a mention and their score. Fifty lines exceed Discord's 2,000-character limit for a message, so a post may be split across two messages between lines. Mentions show players' current server names and notify nobody. Nothing is posted while nobody has a score.
+A publication is also posted to the leaderboard channel unless the post would read the same as the last one: a "Bitcraft leaderboard" heading, then one line per player with their place, a mention and their score. Fifty lines exceed Discord's 2,000-character limit for a message, so a post may be split across two messages between lines. Mentions show players' current server names and notify nobody, so a change of name alone is not posted. If a post fails, the next publication posts again. After a restart the public file stands in for the last post. Nothing is posted while nobody has a score.
 
 ## Commands
 
