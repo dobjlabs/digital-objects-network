@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::client::DobjdClient;
 use crate::daemon;
 
-const RELEASES_REPO: &str = "dobjlabs/digital-objects-network";
+const RELEASES_REPO: &str = "0xPARC/digital-objects-network";
 
 /// Release tag this binary was stamped with ("dev" outside a release build).
 const CURRENT_TAG: &str = env!("DOBJ_RELEASE_TAG");
@@ -774,7 +774,7 @@ mod tests {
 
     #[test]
     fn extracts_tag_from_redirect_location() {
-        let loc = "https://github.com/dobjlabs/digital-objects-network/releases/tag/v0.1.0-rc.33";
+        let loc = "https://github.com/0xPARC/digital-objects-network/releases/tag/v0.1.0-rc.33";
         assert_eq!(parse_tag_from_location(loc).unwrap(), "v0.1.0-rc.33");
     }
 

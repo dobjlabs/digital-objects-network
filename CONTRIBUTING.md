@@ -16,7 +16,7 @@ start with [INSTALL.md](INSTALL.md) instead.
 ## Clone and run
 
 ```bash
-git clone https://github.com/dobjlabs/digital-objects-network
+git clone https://github.com/0xPARC/digital-objects-network
 cd digital-objects-network
 
 # install GUI deps

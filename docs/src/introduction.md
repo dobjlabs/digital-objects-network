@@ -65,4 +65,4 @@ POD2 is itself layered:
   plugins, and the example applications in the repository.
 
 The source for the network and these docs is at
-[github.com/dobjlabs/digital-objects-network](https://github.com/dobjlabs/digital-objects-network).
+[github.com/0xPARC/digital-objects-network](https://github.com/0xPARC/digital-objects-network).

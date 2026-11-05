@@ -12,7 +12,7 @@ zip of two files:
   and what its zero-knowledge proof must show.
 
 The example applications live in the repo under
-[`examples/`](https://github.com/dobjlabs/digital-objects-network/tree/main/examples):
+[`examples/`](https://github.com/0xPARC/digital-objects-network/tree/main/examples):
 
 | Example                         | What it is                                                     | Classes | Actions |
 | ------------------------------- | -------------------------------------------------------------- | ------- | ------- |
@@ -42,11 +42,11 @@ hot-reloads the running daemon's catalog, so no restart is needed:
 
 ### From source
 
-The [`pexe`](https://github.com/dobjlabs/digital-objects-network/tree/main/libs/pexe)
+The [`pexe`](https://github.com/0xPARC/digital-objects-network/tree/main/libs/pexe)
 CLI builds plugin sources into archives and can install them in one step:
 
 ```bash
-git clone https://github.com/dobjlabs/digital-objects-network
+git clone https://github.com/0xPARC/digital-objects-network
 cd digital-objects-network
 
 just install-plugins   # build + install every plugin under examples/

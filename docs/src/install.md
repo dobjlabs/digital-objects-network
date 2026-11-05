@@ -29,13 +29,13 @@ PATH hint. To pin a version, set `DOBJ_VERSION` (bash) / `$env:DOBJ_VERSION`
 On macOS or Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/0xPARC/digital-objects-network/main/install.sh | sh
 ```
 
 On Windows (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/0xPARC/digital-objects-network/main/install.ps1 | iex
 ```
 
 > **Windows:** the binaries aren't codesigned yet, so SmartScreen may show
@@ -80,15 +80,15 @@ restart. Two example plugins ship with each release:
 Install either, or both. On macOS or Linux:
 
 ```bash
-~/.dobj/bin/dobj install https://github.com/dobjlabs/digital-objects-network/releases/latest/download/craft-basics.pexe
-~/.dobj/bin/dobj install https://github.com/dobjlabs/digital-objects-network/releases/latest/download/craft-rocket.pexe
+~/.dobj/bin/dobj install https://github.com/0xPARC/digital-objects-network/releases/latest/download/craft-basics.pexe
+~/.dobj/bin/dobj install https://github.com/0xPARC/digital-objects-network/releases/latest/download/craft-rocket.pexe
 ```
 
 On Windows:
 
 ```powershell
-& "$env:USERPROFILE\.dobj\bin\dobj.exe" install https://github.com/dobjlabs/digital-objects-network/releases/latest/download/craft-basics.pexe
-& "$env:USERPROFILE\.dobj\bin\dobj.exe" install https://github.com/dobjlabs/digital-objects-network/releases/latest/download/craft-rocket.pexe
+& "$env:USERPROFILE\.dobj\bin\dobj.exe" install https://github.com/0xPARC/digital-objects-network/releases/latest/download/craft-basics.pexe
+& "$env:USERPROFILE\.dobj\bin\dobj.exe" install https://github.com/0xPARC/digital-objects-network/releases/latest/download/craft-rocket.pexe
 ```
 
 After installing a plugin, reload the browser tab opened by `dobj ui` to load
@@ -124,7 +124,7 @@ Every client talks to the same daemon:
 MCP is off by default. Before connecting an agent, enable it with
 `dobj settings set --mcp on` (use the full binary path if it is not on your
 PATH yet). See
-[INSTALL.md](https://github.com/dobjlabs/digital-objects-network/blob/main/INSTALL.md#connect-an-agent-mcp)
+[INSTALL.md](https://github.com/0xPARC/digital-objects-network/blob/main/INSTALL.md#connect-an-agent-mcp)
 for agent-specific setup.
 
 After connecting MCP and starting a fresh agent session, you can optionally
@@ -147,9 +147,9 @@ All MCP tools remain available without starting the command interface.
 An MCP-aware agent (Claude Code, Cursor, ...) can perform the steps above. Give
 it this prompt:
 
-> Read https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/INSTALL.md, install and start the Digital Objects driver, install the craft-rocket plugin, and configure MCP for this agent if supported.
+> Read https://raw.githubusercontent.com/0xPARC/digital-objects-network/main/INSTALL.md, install and start the Digital Objects driver, install the craft-rocket plugin, and configure MCP for this agent if supported.
 
-[INSTALL.md](https://github.com/dobjlabs/digital-objects-network/blob/main/INSTALL.md)
+[INSTALL.md](https://github.com/0xPARC/digital-objects-network/blob/main/INSTALL.md)
 walks the agent through each step, including plugin install and MCP
 connection.
 
@@ -157,7 +157,7 @@ connection.
 
 To fetch the archives yourself, detect your platform's target triple, then
 download the three tarballs from the
-[releases page](https://github.com/dobjlabs/digital-objects-network/releases)
+[releases page](https://github.com/0xPARC/digital-objects-network/releases)
 (the `dobjd` tarball bundles `dobj-mcp-proxy`).
 
 On macOS or Linux:
@@ -170,7 +170,7 @@ case "$(uname -s)-$(uname -m)" in
   *) echo "unsupported platform: $(uname -sm)"; exit 1 ;;
 esac
 
-RELEASE=https://github.com/dobjlabs/digital-objects-network/releases/latest/download
+RELEASE=https://github.com/0xPARC/digital-objects-network/releases/latest/download
 mkdir -p ~/.dobj/bin
 curl -fsSL "$RELEASE/dobjd-$TARGET.tar.gz" | tar -xz -C ~/.dobj/bin
 curl -fsSL "$RELEASE/dobj-$TARGET.tar.gz"  | tar -xz -C ~/.dobj/bin
@@ -182,7 +182,7 @@ On Windows (PowerShell):
 
 ```powershell
 $TARGET  = "x86_64-pc-windows-msvc"     # the only Windows target built
-$RELEASE = "https://github.com/dobjlabs/digital-objects-network/releases/latest/download"
+$RELEASE = "https://github.com/0xPARC/digital-objects-network/releases/latest/download"
 $DOBJ    = "$env:USERPROFILE\.dobj"
 New-Item -ItemType Directory -Force -Path "$DOBJ\bin" | Out-Null
 foreach ($name in @("dobjd", "dobj", "pexe")) {

@@ -68,7 +68,7 @@ Install the [driver](../install.md) first, then add this plugin. `dobj install`
 hot-reloads the catalog, so no restart is needed:
 
 ```bash
-~/.dobj/bin/dobj install https://github.com/dobjlabs/digital-objects-network/releases/latest/download/craft-rocket.pexe
+~/.dobj/bin/dobj install https://github.com/0xPARC/digital-objects-network/releases/latest/download/craft-rocket.pexe
 ```
 
 Or build it from a checkout of the repo, then install the archive:
@@ -79,4 +79,4 @@ cargo run -p pexe --release -- build examples/craft-rocket   # -> target/pexe/cr
 ```
 
 Source:
-[`examples/craft-rocket/`](https://github.com/dobjlabs/digital-objects-network/tree/main/examples/craft-rocket)
+[`examples/craft-rocket/`](https://github.com/0xPARC/digital-objects-network/tree/main/examples/craft-rocket)

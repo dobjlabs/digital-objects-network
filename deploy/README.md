@@ -2,9 +2,9 @@
 
 All three services ship as published container images:
 
-- `ghcr.io/dobjlabs/digital-objects-network/synchronizer`
-- `ghcr.io/dobjlabs/digital-objects-network/relayer`
-- `ghcr.io/dobjlabs/digital-objects-network/archiver`
+- `ghcr.io/0xparc/digital-objects-network/synchronizer`
+- `ghcr.io/0xparc/digital-objects-network/relayer`
+- `ghcr.io/0xparc/digital-objects-network/archiver`
 
 Run the full stack, or just a **synchronizer** (with its **archiver**) to
 independently verify the network's canonical state from Ethereum chain data
@@ -69,7 +69,7 @@ docker run -d --name synchronizer -p 3000:3000 \
   -e TO_ADDRESS=0x... \
   -e STATE_LOG_DB_URL=postgres://user:pass@host:5432/synchronizer \
   -v don_data:/var/lib/don \
-  ghcr.io/dobjlabs/digital-objects-network/synchronizer:latest
+  ghcr.io/0xparc/digital-objects-network/synchronizer:latest
 ```
 
 To run an archiver standalone, give it the same target address (as
@@ -82,7 +82,7 @@ docker run -d --name archiver -p 3001:3001 \
   -e FILTER_ADDRESS=0x... \
   -e INIT_START_SLOT=YOUR_START_SLOT \
   -v don_blobs:/var/lib/don \
-  ghcr.io/dobjlabs/digital-objects-network/archiver:latest
+  ghcr.io/0xparc/digital-objects-network/archiver:latest
 ```
 
 ## Configuration
@@ -131,8 +131,8 @@ The compose pulls published images. To build from source instead, tag them with
 the names the compose expects and point `IMAGE_TAG` at your tag:
 
 ```bash
-docker build --target synchronizer -t ghcr.io/dobjlabs/digital-objects-network/synchronizer:dev .
-docker build --target relayer      -t ghcr.io/dobjlabs/digital-objects-network/relayer:dev .
-docker build --target archiver     -t ghcr.io/dobjlabs/digital-objects-network/archiver:dev .
+docker build --target synchronizer -t ghcr.io/0xparc/digital-objects-network/synchronizer:dev .
+docker build --target relayer      -t ghcr.io/0xparc/digital-objects-network/relayer:dev .
+docker build --target archiver     -t ghcr.io/0xparc/digital-objects-network/archiver:dev .
 # then set IMAGE_TAG=dev in deploy/.env
 ```

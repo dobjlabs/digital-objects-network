@@ -18,26 +18,26 @@ factory tech tree.
 Installing via an agent? Paste this to Claude Code, Cursor, or any
 MCP-aware agent instead of following this page by hand:
 
-> Read https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/INSTALL.md, install and start the Digital Objects driver, install the craft-rocket plugin, and configure MCP for this agent if supported.
+> Read https://raw.githubusercontent.com/0xPARC/digital-objects-network/main/INSTALL.md, install and start the Digital Objects driver, install the craft-rocket plugin, and configure MCP for this agent if supported.
 
 ## Install
 
 **macOS / Linux:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/0xPARC/digital-objects-network/main/install.sh | sh
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/0xPARC/digital-objects-network/main/install.ps1 | iex
 ```
 
 The installer detects your platform, downloads the latest published release,
 and installs into `~/.dobj/bin`. It never prompts; it prints what to do next.
 To pin a version, set `DOBJ_VERSION` (bash) / `$env:DOBJ_VERSION` (PowerShell)
-to a tag from the [Releases page](https://github.com/dobjlabs/digital-objects-network/releases)
+to a tag from the [Releases page](https://github.com/0xPARC/digital-objects-network/releases)
 first. To upgrade an existing install, run `dobj update` (or re-run the
 installer, which also pulls the latest release).
 
@@ -83,10 +83,10 @@ Install either example, or run both commands to load both.
 
 ```bash
 # Starter demo:
-~/.dobj/bin/dobj install https://github.com/dobjlabs/digital-objects-network/releases/latest/download/craft-basics.pexe
+~/.dobj/bin/dobj install https://github.com/0xPARC/digital-objects-network/releases/latest/download/craft-basics.pexe
 
 # Larger factory demo:
-~/.dobj/bin/dobj install https://github.com/dobjlabs/digital-objects-network/releases/latest/download/craft-rocket.pexe
+~/.dobj/bin/dobj install https://github.com/0xPARC/digital-objects-network/releases/latest/download/craft-rocket.pexe
 
 ~/.dobj/bin/dobj actions
 ```
@@ -95,10 +95,10 @@ Install either example, or run both commands to load both.
 
 ```powershell
 # Starter demo:
-& "$env:USERPROFILE\.dobj\bin\dobj.exe" install https://github.com/dobjlabs/digital-objects-network/releases/latest/download/craft-basics.pexe
+& "$env:USERPROFILE\.dobj\bin\dobj.exe" install https://github.com/0xPARC/digital-objects-network/releases/latest/download/craft-basics.pexe
 
 # Larger factory demo:
-& "$env:USERPROFILE\.dobj\bin\dobj.exe" install https://github.com/dobjlabs/digital-objects-network/releases/latest/download/craft-rocket.pexe
+& "$env:USERPROFILE\.dobj\bin\dobj.exe" install https://github.com/0xPARC/digital-objects-network/releases/latest/download/craft-rocket.pexe
 
 & "$env:USERPROFILE\.dobj\bin\dobj.exe" actions
 ```
@@ -245,7 +245,7 @@ esac
 
 # 2. Download and extract the three artifacts. Substitute a pinned tag for
 #    `latest/download` -> `download/<tag>` if you don't want the newest.
-RELEASE=https://github.com/dobjlabs/digital-objects-network/releases/latest/download
+RELEASE=https://github.com/0xPARC/digital-objects-network/releases/latest/download
 mkdir -p ~/.dobj/bin
 curl -fsSL "$RELEASE/dobjd-$TARGET.tar.gz" | tar -xz -C ~/.dobj/bin
 curl -fsSL "$RELEASE/dobj-$TARGET.tar.gz"  | tar -xz -C ~/.dobj/bin
@@ -257,7 +257,7 @@ chmod +x ~/.dobj/bin/dobjd ~/.dobj/bin/dobj ~/.dobj/bin/dobj-mcp-proxy ~/.dobj/b
 
 ```powershell
 $TARGET  = "x86_64-pc-windows-msvc"     # the only Windows target built
-$RELEASE = "https://github.com/dobjlabs/digital-objects-network/releases/latest/download"
+$RELEASE = "https://github.com/0xPARC/digital-objects-network/releases/latest/download"
 $DOBJ    = "$env:USERPROFILE\.dobj"
 New-Item -ItemType Directory -Force -Path "$DOBJ\bin" | Out-Null
 foreach ($name in @("dobjd", "dobj", "pexe")) {

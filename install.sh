@@ -1,7 +1,7 @@
 #!/bin/sh
 # Digital Objects driver installer (macOS / Linux).
 #
-#   curl -fsSL https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/0xPARC/digital-objects-network/main/install.sh | sh
 #
 # Installs `dobj` (CLI), `dobjd` (daemon), `dobj-mcp-proxy`, and `pexe` (the
 # plugin packaging tool) from the latest published release into ~/.dobj/bin.
@@ -15,7 +15,7 @@
 
 set -eu
 
-REPO="dobjlabs/digital-objects-network"
+REPO="0xPARC/digital-objects-network"
 BIN_DIR="$HOME/.dobj/bin"
 
 say() { printf '%s\n' "$*"; }
