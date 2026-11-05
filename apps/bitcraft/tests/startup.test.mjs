@@ -1427,7 +1427,7 @@ test("the Settings window shows the connection addresses read-only and runs no s
   assert.equal(field("relayer").value, "http://127.0.0.1:3200");
   assert.equal(field("synchronizer").readOnly, true);
   assert.equal(field("relayer").readOnly, true);
-  assert.equal(field("version").textContent, "Alpha 1.0");
+  assert.equal(field("version").textContent, "Alpha 1.1");
   assert.equal(document.querySelector("#settings-view img"), null, "no logo");
   for (const [id, url, text] of [
     ["website", "https://bitcraft.sh/", "https://bitcraft.sh"],
