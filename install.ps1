@@ -1,6 +1,6 @@
 # Digital Objects driver installer (Windows, PowerShell 5.1+).
 #
-#   irm https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/0xPARC/digital-objects-network/main/install.ps1 | iex
 #
 # Installs dobj.exe (CLI), dobjd.exe (daemon), dobj-mcp-proxy.exe, and
 # pexe.exe (the plugin packaging tool) from the latest published release into
@@ -14,7 +14,7 @@
 
 $ErrorActionPreference = "Stop"
 
-$Repo   = "dobjlabs/digital-objects-network"
+$Repo   = "0xPARC/digital-objects-network"
 $DobjHome = "$env:USERPROFILE\.dobj"
 $BinDir = "$DobjHome\bin"
 

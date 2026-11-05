@@ -13,7 +13,7 @@ macOS packages are signed, notarized, and stapled. Windows installers are curren
 
 Paste this to Claude Code, Cursor, or any MCP-aware agent:
 
-> Read https://raw.githubusercontent.com/dobjlabs/digital-objects-network/main/INSTALL.md, install and start the Digital Objects driver, install the craft-rocket plugin, and configure MCP for this agent if supported.
+> Read https://raw.githubusercontent.com/0xPARC/digital-objects-network/main/INSTALL.md, install and start the Digital Objects driver, install the craft-rocket plugin, and configure MCP for this agent if supported.
 
 The guide installs `dobjd`, `dobj`, `dobj-mcp-proxy`, and `pexe` into
 `~/.dobj/`. The prompt also asks the agent to install the `craft-rocket`
@@ -21,7 +21,7 @@ plugin and register MCP so you can drive Digital Objects directly.
 
 ## Manual install
 
-See [INSTALL.md](https://github.com/dobjlabs/digital-objects-network/blob/main/INSTALL.md) for the underlying steps.
+See [INSTALL.md](https://github.com/0xPARC/digital-objects-network/blob/main/INSTALL.md) for the underlying steps.
 
 ## Upgrading
 

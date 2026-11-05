@@ -65,15 +65,15 @@ build-services-docker:
     h=$(git rev-parse HEAD)
     tag="${t:+$t-}$h"
     echo "release_tag=${tag}"
-    docker build --build-arg DOBJ_RELEASE_TAG=${tag} --target synchronizer -t ghcr.io/dobjlabs/digital-objects-network/synchronizer:${tag} .
-    docker build --build-arg DOBJ_RELEASE_TAG=${tag} --target relayer      -t ghcr.io/dobjlabs/digital-objects-network/relayer:${tag} .
-    docker build --build-arg DOBJ_RELEASE_TAG=${tag} --target archiver     -t ghcr.io/dobjlabs/digital-objects-network/archiver:${tag} .
-    docker tag ghcr.io/dobjlabs/digital-objects-network/synchronizer:${tag} \
-            ghcr.io/dobjlabs/digital-objects-network/synchronizer:dev
-    docker tag ghcr.io/dobjlabs/digital-objects-network/relayer:${tag} \
-            ghcr.io/dobjlabs/digital-objects-network/relayer:dev
-    docker tag ghcr.io/dobjlabs/digital-objects-network/archiver:${tag} \
-            ghcr.io/dobjlabs/digital-objects-network/archiver:dev
+    docker build --build-arg DOBJ_RELEASE_TAG=${tag} --target synchronizer -t ghcr.io/0xparc/digital-objects-network/synchronizer:${tag} .
+    docker build --build-arg DOBJ_RELEASE_TAG=${tag} --target relayer      -t ghcr.io/0xparc/digital-objects-network/relayer:${tag} .
+    docker build --build-arg DOBJ_RELEASE_TAG=${tag} --target archiver     -t ghcr.io/0xparc/digital-objects-network/archiver:${tag} .
+    docker tag ghcr.io/0xparc/digital-objects-network/synchronizer:${tag} \
+            ghcr.io/0xparc/digital-objects-network/synchronizer:dev
+    docker tag ghcr.io/0xparc/digital-objects-network/relayer:${tag} \
+            ghcr.io/0xparc/digital-objects-network/relayer:dev
+    docker tag ghcr.io/0xparc/digital-objects-network/archiver:${tag} \
+            ghcr.io/0xparc/digital-objects-network/archiver:dev
 
 bitcraft-shell:
     cargo run --manifest-path apps/bitcraft/src-tauri/Cargo.toml --locked -- --no-runtime

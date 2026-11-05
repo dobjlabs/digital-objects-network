@@ -32,7 +32,7 @@ services:
       retries: 10
 
   synchronizer:
-    image: ghcr.io/dobjlabs/digital-objects-network/synchronizer:${IMAGE_TAG:-latest}
+    image: ghcr.io/0xparc/digital-objects-network/synchronizer:${IMAGE_TAG:-latest}
     restart: unless-stopped
     env_file: .env
     environment:
@@ -58,7 +58,7 @@ services:
         condition: service_started
 
   relayer:
-    image: ghcr.io/dobjlabs/digital-objects-network/relayer:${IMAGE_TAG:-latest}
+    image: ghcr.io/0xparc/digital-objects-network/relayer:${IMAGE_TAG:-latest}
     restart: unless-stopped
     env_file: .env
     environment:
@@ -73,7 +73,7 @@ services:
         condition: service_healthy
 
   archiver:
-    image: ghcr.io/dobjlabs/digital-objects-network/archiver:${IMAGE_TAG:-latest}
+    image: ghcr.io/0xparc/digital-objects-network/archiver:${IMAGE_TAG:-latest}
     restart: unless-stopped
     env_file: .env
     environment:
