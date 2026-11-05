@@ -34,6 +34,8 @@ whose key were the tool's nonce could be rekeyed by whoever later holds the
 tool. A new tool that mines needs `Tool::mines` to return true, so it carries
 a `nonce`.
 
+A caller can supply the mined tool's new key as the argument `<tool>_key` alongside `grind_nonce`, so that a nonce searched for before the action fits the tool state the action builds. Other rekeys stay random, since no search depends on them.
+
 A geode records the drill's new commitment as `mined`, written with
 `commitment(...)` so the geode holds no copy of the drill's entries, and
 cracking compares `mined` against the geode's gem thresholds, so the gem comes

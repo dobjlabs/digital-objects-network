@@ -175,13 +175,18 @@ enum Tag {
     CrackGeode(usize),
 }
 
-// Gives the mutated object `name` a new random key. Every mutated object is
+// Gives the mutated object `name` a new key: the argument `key_arg` when the
+// caller supplies it, otherwise a random one. Every mutated object is
 // rekeyed: its next state is then never one already spent, and whoever holds
 // a copy of its previous state cannot predict the next one.
-fn rekey(o: &mut File, name: &str) -> Result<(), io::Error> {
+fn rekey(o: &mut File, name: &str, key_arg: Option<&str>) -> Result<(), io::Error> {
+    let key = match key_arg {
+        Some(key_arg) => format!(r#"arg("{key_arg}") ?? action.random()"#),
+        None => "action.random()".to_string(),
+    };
     writeln!(
         o,
-        r#"  var {name}_key = unsafe {{ action.random() }};
+        r#"  var {name}_key = unsafe {{ {key} }};
   {name}.update("key", {name}_key);"#
     )
 }
@@ -499,7 +504,10 @@ fn main() -> Result<(), io::Error> {
         if let Some(mut_tool) = action.mut_tool {
             let name = format!("{mut_tool}").to_lowercase();
             writeln!(o, "  var {name} = action.mutate(\"{mut_tool}\");")?;
-            rekey(o, &name)?;
+            // A nonce searched for before the action is only valid for the
+            // tool state it was searched against, new key included.
+            let key_arg = (action.pow_target > 0).then(|| format!("{name}_key"));
+            rekey(o, &name, key_arg.as_deref())?;
 
             for tag in &action.tags {
                 match tag {
@@ -563,7 +571,7 @@ fn main() -> Result<(), io::Error> {
             let name = format!("{res}bucket").to_lowercase();
             let class = bucket_class(*res);
             writeln!(o, r#"  var {name} = action.mutate("{class}");"#)?;
-            rekey(o, &name)?;
+            rekey(o, &name, Option::None)?;
             writeln!(
                 o,
                 r#"  action.st_gt_eq({name}.n, {n});
@@ -587,7 +595,7 @@ fn main() -> Result<(), io::Error> {
             let name = format!("{res}bucket").to_lowercase();
             let class = bucket_class(res);
             writeln!(o, r#"  var {name} = action.mutate("{class}");"#)?;
-            rekey(o, &name)?;
+            rekey(o, &name, Option::None)?;
 
             for tag in &action.tags {
                 match tag {
